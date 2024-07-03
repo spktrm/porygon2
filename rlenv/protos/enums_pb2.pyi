@@ -1,0 +1,7157 @@
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
+from google.protobuf import descriptor as _descriptor
+from typing import ClassVar as _ClassVar
+
+DESCRIPTOR: _descriptor.FileDescriptor
+
+class pseudoWeather(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    pseudoWeather_null: _ClassVar[pseudoWeather]
+    pseudoWeather_fairylock: _ClassVar[pseudoWeather]
+    pseudoWeather_gravity: _ClassVar[pseudoWeather]
+    pseudoWeather_iondeluge: _ClassVar[pseudoWeather]
+    pseudoWeather_magicroom: _ClassVar[pseudoWeather]
+    pseudoWeather_mudsport: _ClassVar[pseudoWeather]
+    pseudoWeather_trickroom: _ClassVar[pseudoWeather]
+    pseudoWeather_watersport: _ClassVar[pseudoWeather]
+    pseudoWeather_wonderroom: _ClassVar[pseudoWeather]
+
+class volatileStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    volatileStatus_null: _ClassVar[volatileStatus]
+    volatileStatus_airballoon: _ClassVar[volatileStatus]
+    volatileStatus_allyswitch: _ClassVar[volatileStatus]
+    volatileStatus_aquaring: _ClassVar[volatileStatus]
+    volatileStatus_attract: _ClassVar[volatileStatus]
+    volatileStatus_autotomize: _ClassVar[volatileStatus]
+    volatileStatus_banefulbunker: _ClassVar[volatileStatus]
+    volatileStatus_bar: _ClassVar[volatileStatus]
+    volatileStatus_baz: _ClassVar[volatileStatus]
+    volatileStatus_beakblast: _ClassVar[volatileStatus]
+    volatileStatus_beatup: _ClassVar[volatileStatus]
+    volatileStatus_bide: _ClassVar[volatileStatus]
+    volatileStatus_bounce: _ClassVar[volatileStatus]
+    volatileStatus_burningbulwark: _ClassVar[volatileStatus]
+    volatileStatus_charge: _ClassVar[volatileStatus]
+    volatileStatus_choicelock: _ClassVar[volatileStatus]
+    volatileStatus_commanded: _ClassVar[volatileStatus]
+    volatileStatus_commanding: _ClassVar[volatileStatus]
+    volatileStatus_confusion: _ClassVar[volatileStatus]
+    volatileStatus_counter: _ClassVar[volatileStatus]
+    volatileStatus_cudchew: _ClassVar[volatileStatus]
+    volatileStatus_curse: _ClassVar[volatileStatus]
+    volatileStatus_defensecurl: _ClassVar[volatileStatus]
+    volatileStatus_destinybond: _ClassVar[volatileStatus]
+    volatileStatus_disable: _ClassVar[volatileStatus]
+    volatileStatus_doomdesire: _ClassVar[volatileStatus]
+    volatileStatus_dragoncheer: _ClassVar[volatileStatus]
+    volatileStatus_dynamax: _ClassVar[volatileStatus]
+    volatileStatus_electrify: _ClassVar[volatileStatus]
+    volatileStatus_embargo: _ClassVar[volatileStatus]
+    volatileStatus_encore: _ClassVar[volatileStatus]
+    volatileStatus_endure: _ClassVar[volatileStatus]
+    volatileStatus_fallenfallen: _ClassVar[volatileStatus]
+    volatileStatus_flashfire: _ClassVar[volatileStatus]
+    volatileStatus_flinch: _ClassVar[volatileStatus]
+    volatileStatus_fling: _ClassVar[volatileStatus]
+    volatileStatus_fly: _ClassVar[volatileStatus]
+    volatileStatus_focusenergy: _ClassVar[volatileStatus]
+    volatileStatus_focuspunch: _ClassVar[volatileStatus]
+    volatileStatus_focussash: _ClassVar[volatileStatus]
+    volatileStatus_followme: _ClassVar[volatileStatus]
+    volatileStatus_foo: _ClassVar[volatileStatus]
+    volatileStatus_foresight: _ClassVar[volatileStatus]
+    volatileStatus_formechange: _ClassVar[volatileStatus]
+    volatileStatus_furycutter: _ClassVar[volatileStatus]
+    volatileStatus_futuresight: _ClassVar[volatileStatus]
+    volatileStatus_gastroacid: _ClassVar[volatileStatus]
+    volatileStatus_gem: _ClassVar[volatileStatus]
+    volatileStatus_glaiverush: _ClassVar[volatileStatus]
+    volatileStatus_gmaxchistrike: _ClassVar[volatileStatus]
+    volatileStatus_grudge: _ClassVar[volatileStatus]
+    volatileStatus_healblock: _ClassVar[volatileStatus]
+    volatileStatus_helpinghand: _ClassVar[volatileStatus]
+    volatileStatus_iceball: _ClassVar[volatileStatus]
+    volatileStatus_imprison: _ClassVar[volatileStatus]
+    volatileStatus_ingrain: _ClassVar[volatileStatus]
+    volatileStatus_invulnerability: _ClassVar[volatileStatus]
+    volatileStatus_itemremoved: _ClassVar[volatileStatus]
+    volatileStatus_kingsshield: _ClassVar[volatileStatus]
+    volatileStatus_laserfocus: _ClassVar[volatileStatus]
+    volatileStatus_leechseed: _ClassVar[volatileStatus]
+    volatileStatus_leppaberry: _ClassVar[volatileStatus]
+    volatileStatus_lifeorb: _ClassVar[volatileStatus]
+    volatileStatus_lightscreen: _ClassVar[volatileStatus]
+    volatileStatus_lockedmove: _ClassVar[volatileStatus]
+    volatileStatus_lockon: _ClassVar[volatileStatus]
+    volatileStatus_magiccoat: _ClassVar[volatileStatus]
+    volatileStatus_magnetrise: _ClassVar[volatileStatus]
+    volatileStatus_maxguard: _ClassVar[volatileStatus]
+    volatileStatus_mefirst: _ClassVar[volatileStatus]
+    volatileStatus_metronome: _ClassVar[volatileStatus]
+    volatileStatus_micleberry: _ClassVar[volatileStatus]
+    volatileStatus_mimic: _ClassVar[volatileStatus]
+    volatileStatus_minimize: _ClassVar[volatileStatus]
+    volatileStatus_miracleeye: _ClassVar[volatileStatus]
+    volatileStatus_mirrorcoat: _ClassVar[volatileStatus]
+    volatileStatus_mist: _ClassVar[volatileStatus]
+    volatileStatus_mudsport: _ClassVar[volatileStatus]
+    volatileStatus_mustrecharge: _ClassVar[volatileStatus]
+    volatileStatus_nightmare: _ClassVar[volatileStatus]
+    volatileStatus_noretreat: _ClassVar[volatileStatus]
+    volatileStatus_obstruct: _ClassVar[volatileStatus]
+    volatileStatus_octolock: _ClassVar[volatileStatus]
+    volatileStatus_partiallytrapped: _ClassVar[volatileStatus]
+    volatileStatus_partialtrappinglock: _ClassVar[volatileStatus]
+    volatileStatus_perish0: _ClassVar[volatileStatus]
+    volatileStatus_perish3: _ClassVar[volatileStatus]
+    volatileStatus_perishduration: _ClassVar[volatileStatus]
+    volatileStatus_perishsong: _ClassVar[volatileStatus]
+    volatileStatus_powder: _ClassVar[volatileStatus]
+    volatileStatus_powershift: _ClassVar[volatileStatus]
+    volatileStatus_powertrick: _ClassVar[volatileStatus]
+    volatileStatus_protect: _ClassVar[volatileStatus]
+    volatileStatus_protosynthesis: _ClassVar[volatileStatus]
+    volatileStatus_protosynthesisthiseffectstatebeststat: _ClassVar[volatileStatus]
+    volatileStatus_quarkdrive: _ClassVar[volatileStatus]
+    volatileStatus_quarkdrivethiseffectstatebeststat: _ClassVar[volatileStatus]
+    volatileStatus_qux: _ClassVar[volatileStatus]
+    volatileStatus_rage: _ClassVar[volatileStatus]
+    volatileStatus_ragepowder: _ClassVar[volatileStatus]
+    volatileStatus_reflect: _ClassVar[volatileStatus]
+    volatileStatus_residualdmg: _ClassVar[volatileStatus]
+    volatileStatus_rollout: _ClassVar[volatileStatus]
+    volatileStatus_rolloutstorage: _ClassVar[volatileStatus]
+    volatileStatus_roost: _ClassVar[volatileStatus]
+    volatileStatus_saltcure: _ClassVar[volatileStatus]
+    volatileStatus_shelltrap: _ClassVar[volatileStatus]
+    volatileStatus_silktrap: _ClassVar[volatileStatus]
+    volatileStatus_skydrop: _ClassVar[volatileStatus]
+    volatileStatus_slowstart: _ClassVar[volatileStatus]
+    volatileStatus_smackdown: _ClassVar[volatileStatus]
+    volatileStatus_snatch: _ClassVar[volatileStatus]
+    volatileStatus_sparklingaria: _ClassVar[volatileStatus]
+    volatileStatus_spikyshield: _ClassVar[volatileStatus]
+    volatileStatus_spotlight: _ClassVar[volatileStatus]
+    volatileStatus_stall: _ClassVar[volatileStatus]
+    volatileStatus_stockpile: _ClassVar[volatileStatus]
+    volatileStatus_stockpilethiseffectstatelayers: _ClassVar[volatileStatus]
+    volatileStatus_substitute: _ClassVar[volatileStatus]
+    volatileStatus_substitutebroken: _ClassVar[volatileStatus]
+    volatileStatus_syrupbomb: _ClassVar[volatileStatus]
+    volatileStatus_tarshot: _ClassVar[volatileStatus]
+    volatileStatus_taunt: _ClassVar[volatileStatus]
+    volatileStatus_telekinesis: _ClassVar[volatileStatus]
+    volatileStatus_throatchop: _ClassVar[volatileStatus]
+    volatileStatus_torment: _ClassVar[volatileStatus]
+    volatileStatus_toxic: _ClassVar[volatileStatus]
+    volatileStatus_transform: _ClassVar[volatileStatus]
+    volatileStatus_trapped: _ClassVar[volatileStatus]
+    volatileStatus_truant: _ClassVar[volatileStatus]
+    volatileStatus_twoturnmove: _ClassVar[volatileStatus]
+    volatileStatus_typeadd: _ClassVar[volatileStatus]
+    volatileStatus_typechange: _ClassVar[volatileStatus]
+    volatileStatus_unburden: _ClassVar[volatileStatus]
+    volatileStatus_uproar: _ClassVar[volatileStatus]
+    volatileStatus_watersport: _ClassVar[volatileStatus]
+    volatileStatus_wrap: _ClassVar[volatileStatus]
+    volatileStatus_yawn: _ClassVar[volatileStatus]
+    volatileStatus_zenmode: _ClassVar[volatileStatus]
+
+class weathers(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    weathers_null: _ClassVar[weathers]
+    weathers_deltastream: _ClassVar[weathers]
+    weathers_desolateland: _ClassVar[weathers]
+    weathers_hail: _ClassVar[weathers]
+    weathers_primordialsea: _ClassVar[weathers]
+    weathers_rain: _ClassVar[weathers]
+    weathers_sand: _ClassVar[weathers]
+    weathers_snow: _ClassVar[weathers]
+    weathers_sun: _ClassVar[weathers]
+
+class terrain(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    terrain_null: _ClassVar[terrain]
+    terrain_electric: _ClassVar[terrain]
+    terrain_grassy: _ClassVar[terrain]
+    terrain_misty: _ClassVar[terrain]
+    terrain_pikachuphdflyingpresspikachulibre: _ClassVar[terrain]
+    terrain_psychic: _ClassVar[terrain]
+
+class sideConditions(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    sideConditions_null: _ClassVar[sideConditions]
+    sideConditions_auroraveil: _ClassVar[sideConditions]
+    sideConditions_firepledge: _ClassVar[sideConditions]
+    sideConditions_gmaxcannonade: _ClassVar[sideConditions]
+    sideConditions_gmaxsteelsurge: _ClassVar[sideConditions]
+    sideConditions_gmaxvinelash: _ClassVar[sideConditions]
+    sideConditions_gmaxvolcalith: _ClassVar[sideConditions]
+    sideConditions_gmaxwildfire: _ClassVar[sideConditions]
+    sideConditions_grasspledge: _ClassVar[sideConditions]
+    sideConditions_lightscreen: _ClassVar[sideConditions]
+    sideConditions_luckychant: _ClassVar[sideConditions]
+    sideConditions_mist: _ClassVar[sideConditions]
+    sideConditions_reflect: _ClassVar[sideConditions]
+    sideConditions_safeguard: _ClassVar[sideConditions]
+    sideConditions_spikes: _ClassVar[sideConditions]
+    sideConditions_stealthrock: _ClassVar[sideConditions]
+    sideConditions_stickyweb: _ClassVar[sideConditions]
+    sideConditions_tailwind: _ClassVar[sideConditions]
+    sideConditions_toxicspikes: _ClassVar[sideConditions]
+    sideConditions_waterpledge: _ClassVar[sideConditions]
+
+class species(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    species_none: _ClassVar[species]
+    species_pad: _ClassVar[species]
+    species_unk: _ClassVar[species]
+    species_ababo: _ClassVar[species]
+    species_abomasnow: _ClassVar[species]
+    species_abomasnowmega: _ClassVar[species]
+    species_abra: _ClassVar[species]
+    species_absol: _ClassVar[species]
+    species_absolmega: _ClassVar[species]
+    species_accelgor: _ClassVar[species]
+    species_aegislash: _ClassVar[species]
+    species_aegislashblade: _ClassVar[species]
+    species_aerodactyl: _ClassVar[species]
+    species_aerodactylmega: _ClassVar[species]
+    species_aggron: _ClassVar[species]
+    species_aggronmega: _ClassVar[species]
+    species_aipom: _ClassVar[species]
+    species_alakazam: _ClassVar[species]
+    species_alakazammega: _ClassVar[species]
+    species_alcremie: _ClassVar[species]
+    species_alcremiegmax: _ClassVar[species]
+    species_alomomola: _ClassVar[species]
+    species_altaria: _ClassVar[species]
+    species_altariamega: _ClassVar[species]
+    species_amaura: _ClassVar[species]
+    species_ambipom: _ClassVar[species]
+    species_amoonguss: _ClassVar[species]
+    species_ampharos: _ClassVar[species]
+    species_ampharosmega: _ClassVar[species]
+    species_annihilape: _ClassVar[species]
+    species_anorith: _ClassVar[species]
+    species_appletun: _ClassVar[species]
+    species_appletungmax: _ClassVar[species]
+    species_applin: _ClassVar[species]
+    species_araquanid: _ClassVar[species]
+    species_araquanidtotem: _ClassVar[species]
+    species_arbok: _ClassVar[species]
+    species_arboliva: _ClassVar[species]
+    species_arcanine: _ClassVar[species]
+    species_arcaninehisui: _ClassVar[species]
+    species_arceus: _ClassVar[species]
+    species_arceusbug: _ClassVar[species]
+    species_arceusdark: _ClassVar[species]
+    species_arceusdragon: _ClassVar[species]
+    species_arceuselectric: _ClassVar[species]
+    species_arceusfairy: _ClassVar[species]
+    species_arceusfighting: _ClassVar[species]
+    species_arceusfire: _ClassVar[species]
+    species_arceusflying: _ClassVar[species]
+    species_arceusghost: _ClassVar[species]
+    species_arceusgrass: _ClassVar[species]
+    species_arceusground: _ClassVar[species]
+    species_arceusice: _ClassVar[species]
+    species_arceuspoison: _ClassVar[species]
+    species_arceuspsychic: _ClassVar[species]
+    species_arceusrock: _ClassVar[species]
+    species_arceussteel: _ClassVar[species]
+    species_arceuswater: _ClassVar[species]
+    species_archaludon: _ClassVar[species]
+    species_archen: _ClassVar[species]
+    species_archeops: _ClassVar[species]
+    species_arctibax: _ClassVar[species]
+    species_arctovish: _ClassVar[species]
+    species_arctozolt: _ClassVar[species]
+    species_argalis: _ClassVar[species]
+    species_arghonaut: _ClassVar[species]
+    species_ariados: _ClassVar[species]
+    species_armaldo: _ClassVar[species]
+    species_armarouge: _ClassVar[species]
+    species_aromatisse: _ClassVar[species]
+    species_aron: _ClassVar[species]
+    species_arrokuda: _ClassVar[species]
+    species_articuno: _ClassVar[species]
+    species_articunogalar: _ClassVar[species]
+    species_astrolotl: _ClassVar[species]
+    species_audino: _ClassVar[species]
+    species_audinomega: _ClassVar[species]
+    species_aurorus: _ClassVar[species]
+    species_aurumoth: _ClassVar[species]
+    species_avalugg: _ClassVar[species]
+    species_avalugghisui: _ClassVar[species]
+    species_axew: _ClassVar[species]
+    species_azelf: _ClassVar[species]
+    species_azumarill: _ClassVar[species]
+    species_azurill: _ClassVar[species]
+    species_bagon: _ClassVar[species]
+    species_baltoy: _ClassVar[species]
+    species_banette: _ClassVar[species]
+    species_banettemega: _ClassVar[species]
+    species_barbaracle: _ClassVar[species]
+    species_barboach: _ClassVar[species]
+    species_barraskewda: _ClassVar[species]
+    species_basculegion: _ClassVar[species]
+    species_basculegionf: _ClassVar[species]
+    species_basculin: _ClassVar[species]
+    species_basculinbluestriped: _ClassVar[species]
+    species_basculinwhitestriped: _ClassVar[species]
+    species_bastiodon: _ClassVar[species]
+    species_baxcalibur: _ClassVar[species]
+    species_bayleef: _ClassVar[species]
+    species_beartic: _ClassVar[species]
+    species_beautifly: _ClassVar[species]
+    species_beedrill: _ClassVar[species]
+    species_beedrillmega: _ClassVar[species]
+    species_beheeyem: _ClassVar[species]
+    species_beldum: _ClassVar[species]
+    species_bellibolt: _ClassVar[species]
+    species_bellossom: _ClassVar[species]
+    species_bellsprout: _ClassVar[species]
+    species_bergmite: _ClassVar[species]
+    species_bewear: _ClassVar[species]
+    species_bibarel: _ClassVar[species]
+    species_bidoof: _ClassVar[species]
+    species_binacle: _ClassVar[species]
+    species_bisharp: _ClassVar[species]
+    species_blacephalon: _ClassVar[species]
+    species_blastoise: _ClassVar[species]
+    species_blastoisegmax: _ClassVar[species]
+    species_blastoisemega: _ClassVar[species]
+    species_blaziken: _ClassVar[species]
+    species_blazikenmega: _ClassVar[species]
+    species_blipbug: _ClassVar[species]
+    species_blissey: _ClassVar[species]
+    species_blitzle: _ClassVar[species]
+    species_boldore: _ClassVar[species]
+    species_boltund: _ClassVar[species]
+    species_bombirdier: _ClassVar[species]
+    species_bonsly: _ClassVar[species]
+    species_bouffalant: _ClassVar[species]
+    species_bounsweet: _ClassVar[species]
+    species_braixen: _ClassVar[species]
+    species_brambleghast: _ClassVar[species]
+    species_bramblin: _ClassVar[species]
+    species_brattler: _ClassVar[species]
+    species_braviary: _ClassVar[species]
+    species_braviaryhisui: _ClassVar[species]
+    species_breezi: _ClassVar[species]
+    species_breloom: _ClassVar[species]
+    species_brionne: _ClassVar[species]
+    species_bronzong: _ClassVar[species]
+    species_bronzor: _ClassVar[species]
+    species_brutebonnet: _ClassVar[species]
+    species_bruxish: _ClassVar[species]
+    species_budew: _ClassVar[species]
+    species_buizel: _ClassVar[species]
+    species_bulbasaur: _ClassVar[species]
+    species_buneary: _ClassVar[species]
+    species_bunnelby: _ClassVar[species]
+    species_burmy: _ClassVar[species]
+    species_butterfree: _ClassVar[species]
+    species_butterfreegmax: _ClassVar[species]
+    species_buzzwole: _ClassVar[species]
+    species_cacnea: _ClassVar[species]
+    species_cacturne: _ClassVar[species]
+    species_caimanoe: _ClassVar[species]
+    species_calyrex: _ClassVar[species]
+    species_calyrexice: _ClassVar[species]
+    species_calyrexshadow: _ClassVar[species]
+    species_camerupt: _ClassVar[species]
+    species_cameruptmega: _ClassVar[species]
+    species_capsakid: _ClassVar[species]
+    species_carbink: _ClassVar[species]
+    species_caribolt: _ClassVar[species]
+    species_carkol: _ClassVar[species]
+    species_carnivine: _ClassVar[species]
+    species_carracosta: _ClassVar[species]
+    species_carvanha: _ClassVar[species]
+    species_cascoon: _ClassVar[species]
+    species_castform: _ClassVar[species]
+    species_castformrainy: _ClassVar[species]
+    species_castformsnowy: _ClassVar[species]
+    species_castformsunny: _ClassVar[species]
+    species_caterpie: _ClassVar[species]
+    species_cawdet: _ClassVar[species]
+    species_cawmodore: _ClassVar[species]
+    species_celebi: _ClassVar[species]
+    species_celesteela: _ClassVar[species]
+    species_centiskorch: _ClassVar[species]
+    species_centiskorchgmax: _ClassVar[species]
+    species_ceruledge: _ClassVar[species]
+    species_cetitan: _ClassVar[species]
+    species_cetoddle: _ClassVar[species]
+    species_chandelure: _ClassVar[species]
+    species_chansey: _ClassVar[species]
+    species_charcadet: _ClassVar[species]
+    species_charizard: _ClassVar[species]
+    species_charizardgmax: _ClassVar[species]
+    species_charizardmegax: _ClassVar[species]
+    species_charizardmegay: _ClassVar[species]
+    species_charjabug: _ClassVar[species]
+    species_charmander: _ClassVar[species]
+    species_charmeleon: _ClassVar[species]
+    species_chatot: _ClassVar[species]
+    species_cherrim: _ClassVar[species]
+    species_cherrimsunshine: _ClassVar[species]
+    species_cherubi: _ClassVar[species]
+    species_chesnaught: _ClassVar[species]
+    species_chespin: _ClassVar[species]
+    species_chewtle: _ClassVar[species]
+    species_chienpao: _ClassVar[species]
+    species_chikorita: _ClassVar[species]
+    species_chimchar: _ClassVar[species]
+    species_chimecho: _ClassVar[species]
+    species_chinchou: _ClassVar[species]
+    species_chingling: _ClassVar[species]
+    species_chiyu: _ClassVar[species]
+    species_chromera: _ClassVar[species]
+    species_chuggalong: _ClassVar[species]
+    species_cinccino: _ClassVar[species]
+    species_cinderace: _ClassVar[species]
+    species_cinderacegmax: _ClassVar[species]
+    species_clamperl: _ClassVar[species]
+    species_clauncher: _ClassVar[species]
+    species_clawitzer: _ClassVar[species]
+    species_claydol: _ClassVar[species]
+    species_clefable: _ClassVar[species]
+    species_clefairy: _ClassVar[species]
+    species_cleffa: _ClassVar[species]
+    species_clobbopus: _ClassVar[species]
+    species_clodsire: _ClassVar[species]
+    species_cloyster: _ClassVar[species]
+    species_coalossal: _ClassVar[species]
+    species_coalossalgmax: _ClassVar[species]
+    species_cobalion: _ClassVar[species]
+    species_cofagrigus: _ClassVar[species]
+    species_colossoil: _ClassVar[species]
+    species_combee: _ClassVar[species]
+    species_combusken: _ClassVar[species]
+    species_comfey: _ClassVar[species]
+    species_conkeldurr: _ClassVar[species]
+    species_copperajah: _ClassVar[species]
+    species_copperajahgmax: _ClassVar[species]
+    species_coribalis: _ClassVar[species]
+    species_corphish: _ClassVar[species]
+    species_corsola: _ClassVar[species]
+    species_corsolagalar: _ClassVar[species]
+    species_corviknight: _ClassVar[species]
+    species_corviknightgmax: _ClassVar[species]
+    species_corvisquire: _ClassVar[species]
+    species_cosmoem: _ClassVar[species]
+    species_cosmog: _ClassVar[species]
+    species_cottonee: _ClassVar[species]
+    species_crabominable: _ClassVar[species]
+    species_crabrawler: _ClassVar[species]
+    species_cradily: _ClassVar[species]
+    species_cramorant: _ClassVar[species]
+    species_cramorantgorging: _ClassVar[species]
+    species_cramorantgulping: _ClassVar[species]
+    species_cranidos: _ClassVar[species]
+    species_crawdaunt: _ClassVar[species]
+    species_cresceidon: _ClassVar[species]
+    species_cresselia: _ClassVar[species]
+    species_croagunk: _ClassVar[species]
+    species_crobat: _ClassVar[species]
+    species_crocalor: _ClassVar[species]
+    species_croconaw: _ClassVar[species]
+    species_crucibelle: _ClassVar[species]
+    species_crucibellemega: _ClassVar[species]
+    species_crustle: _ClassVar[species]
+    species_cryogonal: _ClassVar[species]
+    species_cubchoo: _ClassVar[species]
+    species_cubone: _ClassVar[species]
+    species_cufant: _ClassVar[species]
+    species_cupra: _ClassVar[species]
+    species_cursola: _ClassVar[species]
+    species_cutiefly: _ClassVar[species]
+    species_cyclizar: _ClassVar[species]
+    species_cyclohm: _ClassVar[species]
+    species_cyndaquil: _ClassVar[species]
+    species_dachsbun: _ClassVar[species]
+    species_darkrai: _ClassVar[species]
+    species_darmanitan: _ClassVar[species]
+    species_darmanitangalar: _ClassVar[species]
+    species_darmanitangalarzen: _ClassVar[species]
+    species_darmanitanzen: _ClassVar[species]
+    species_dartrix: _ClassVar[species]
+    species_darumaka: _ClassVar[species]
+    species_darumakagalar: _ClassVar[species]
+    species_decidueye: _ClassVar[species]
+    species_decidueyehisui: _ClassVar[species]
+    species_dedenne: _ClassVar[species]
+    species_deerling: _ClassVar[species]
+    species_deino: _ClassVar[species]
+    species_delcatty: _ClassVar[species]
+    species_delibird: _ClassVar[species]
+    species_delphox: _ClassVar[species]
+    species_deoxys: _ClassVar[species]
+    species_deoxysattack: _ClassVar[species]
+    species_deoxysdefense: _ClassVar[species]
+    species_deoxysspeed: _ClassVar[species]
+    species_dewgong: _ClassVar[species]
+    species_dewott: _ClassVar[species]
+    species_dewpider: _ClassVar[species]
+    species_dhelmise: _ClassVar[species]
+    species_dialga: _ClassVar[species]
+    species_dialgaorigin: _ClassVar[species]
+    species_diancie: _ClassVar[species]
+    species_dianciemega: _ClassVar[species]
+    species_diggersby: _ClassVar[species]
+    species_diglett: _ClassVar[species]
+    species_diglettalola: _ClassVar[species]
+    species_dipplin: _ClassVar[species]
+    species_ditto: _ClassVar[species]
+    species_dodrio: _ClassVar[species]
+    species_doduo: _ClassVar[species]
+    species_dolliv: _ClassVar[species]
+    species_dondozo: _ClassVar[species]
+    species_donphan: _ClassVar[species]
+    species_dorsoil: _ClassVar[species]
+    species_dottler: _ClassVar[species]
+    species_doublade: _ClassVar[species]
+    species_dracovish: _ClassVar[species]
+    species_dracozolt: _ClassVar[species]
+    species_dragalge: _ClassVar[species]
+    species_dragapult: _ClassVar[species]
+    species_dragonair: _ClassVar[species]
+    species_dragonite: _ClassVar[species]
+    species_drakloak: _ClassVar[species]
+    species_drampa: _ClassVar[species]
+    species_drapion: _ClassVar[species]
+    species_dratini: _ClassVar[species]
+    species_drednaw: _ClassVar[species]
+    species_drednawgmax: _ClassVar[species]
+    species_dreepy: _ClassVar[species]
+    species_drifblim: _ClassVar[species]
+    species_drifloon: _ClassVar[species]
+    species_drilbur: _ClassVar[species]
+    species_drizzile: _ClassVar[species]
+    species_drowzee: _ClassVar[species]
+    species_druddigon: _ClassVar[species]
+    species_dubwool: _ClassVar[species]
+    species_ducklett: _ClassVar[species]
+    species_dudunsparce: _ClassVar[species]
+    species_dudunsparcethreesegment: _ClassVar[species]
+    species_dugtrio: _ClassVar[species]
+    species_dugtrioalola: _ClassVar[species]
+    species_dunsparce: _ClassVar[species]
+    species_duohm: _ClassVar[species]
+    species_duosion: _ClassVar[species]
+    species_duraludon: _ClassVar[species]
+    species_duraludongmax: _ClassVar[species]
+    species_durant: _ClassVar[species]
+    species_dusclops: _ClassVar[species]
+    species_dusknoir: _ClassVar[species]
+    species_duskull: _ClassVar[species]
+    species_dustox: _ClassVar[species]
+    species_dwebble: _ClassVar[species]
+    species_eelektrik: _ClassVar[species]
+    species_eelektross: _ClassVar[species]
+    species_eevee: _ClassVar[species]
+    species_eeveegmax: _ClassVar[species]
+    species_eeveestarter: _ClassVar[species]
+    species_eiscue: _ClassVar[species]
+    species_eiscuenoice: _ClassVar[species]
+    species_ekans: _ClassVar[species]
+    species_eldegoss: _ClassVar[species]
+    species_electabuzz: _ClassVar[species]
+    species_electivire: _ClassVar[species]
+    species_electrelk: _ClassVar[species]
+    species_electrike: _ClassVar[species]
+    species_electrode: _ClassVar[species]
+    species_electrodehisui: _ClassVar[species]
+    species_elekid: _ClassVar[species]
+    species_elgyem: _ClassVar[species]
+    species_embirch: _ClassVar[species]
+    species_emboar: _ClassVar[species]
+    species_emolga: _ClassVar[species]
+    species_empoleon: _ClassVar[species]
+    species_enamorus: _ClassVar[species]
+    species_enamorustherian: _ClassVar[species]
+    species_entei: _ClassVar[species]
+    species_equilibra: _ClassVar[species]
+    species_escavalier: _ClassVar[species]
+    species_espathra: _ClassVar[species]
+    species_espeon: _ClassVar[species]
+    species_espurr: _ClassVar[species]
+    species_eternatus: _ClassVar[species]
+    species_eternatuseternamax: _ClassVar[species]
+    species_excadrill: _ClassVar[species]
+    species_exeggcute: _ClassVar[species]
+    species_exeggutor: _ClassVar[species]
+    species_exeggutoralola: _ClassVar[species]
+    species_exploud: _ClassVar[species]
+    species_falinks: _ClassVar[species]
+    species_farfetchd: _ClassVar[species]
+    species_farfetchdgalar: _ClassVar[species]
+    species_farigiraf: _ClassVar[species]
+    species_fawnifer: _ClassVar[species]
+    species_fearow: _ClassVar[species]
+    species_feebas: _ClassVar[species]
+    species_fennekin: _ClassVar[species]
+    species_feraligatr: _ClassVar[species]
+    species_ferroseed: _ClassVar[species]
+    species_ferrothorn: _ClassVar[species]
+    species_fezandipiti: _ClassVar[species]
+    species_fidgit: _ClassVar[species]
+    species_fidough: _ClassVar[species]
+    species_finizen: _ClassVar[species]
+    species_finneon: _ClassVar[species]
+    species_flaaffy: _ClassVar[species]
+    species_flabebe: _ClassVar[species]
+    species_flamigo: _ClassVar[species]
+    species_flapple: _ClassVar[species]
+    species_flapplegmax: _ClassVar[species]
+    species_flarelm: _ClassVar[species]
+    species_flareon: _ClassVar[species]
+    species_fletchinder: _ClassVar[species]
+    species_fletchling: _ClassVar[species]
+    species_flittle: _ClassVar[species]
+    species_floatoy: _ClassVar[species]
+    species_floatzel: _ClassVar[species]
+    species_floette: _ClassVar[species]
+    species_floetteeternal: _ClassVar[species]
+    species_floragato: _ClassVar[species]
+    species_florges: _ClassVar[species]
+    species_fluttermane: _ClassVar[species]
+    species_flygon: _ClassVar[species]
+    species_fomantis: _ClassVar[species]
+    species_foongus: _ClassVar[species]
+    species_forretress: _ClassVar[species]
+    species_fraxure: _ClassVar[species]
+    species_frigibax: _ClassVar[species]
+    species_frillish: _ClassVar[species]
+    species_froakie: _ClassVar[species]
+    species_frogadier: _ClassVar[species]
+    species_froslass: _ClassVar[species]
+    species_frosmoth: _ClassVar[species]
+    species_fuecoco: _ClassVar[species]
+    species_furfrou: _ClassVar[species]
+    species_furret: _ClassVar[species]
+    species_gabite: _ClassVar[species]
+    species_gallade: _ClassVar[species]
+    species_gallademega: _ClassVar[species]
+    species_galvantula: _ClassVar[species]
+    species_garbodor: _ClassVar[species]
+    species_garbodorgmax: _ClassVar[species]
+    species_garchomp: _ClassVar[species]
+    species_garchompmega: _ClassVar[species]
+    species_gardevoir: _ClassVar[species]
+    species_gardevoirmega: _ClassVar[species]
+    species_garganacl: _ClassVar[species]
+    species_gastly: _ClassVar[species]
+    species_gastrodon: _ClassVar[species]
+    species_genesect: _ClassVar[species]
+    species_genesectburn: _ClassVar[species]
+    species_genesectchill: _ClassVar[species]
+    species_genesectdouse: _ClassVar[species]
+    species_genesectshock: _ClassVar[species]
+    species_gengar: _ClassVar[species]
+    species_gengargmax: _ClassVar[species]
+    species_gengarmega: _ClassVar[species]
+    species_geodude: _ClassVar[species]
+    species_geodudealola: _ClassVar[species]
+    species_gholdengo: _ClassVar[species]
+    species_gible: _ClassVar[species]
+    species_gigalith: _ClassVar[species]
+    species_gimmighoul: _ClassVar[species]
+    species_gimmighoulroaming: _ClassVar[species]
+    species_girafarig: _ClassVar[species]
+    species_giratina: _ClassVar[species]
+    species_giratinaorigin: _ClassVar[species]
+    species_glaceon: _ClassVar[species]
+    species_glalie: _ClassVar[species]
+    species_glaliemega: _ClassVar[species]
+    species_glameow: _ClassVar[species]
+    species_glastrier: _ClassVar[species]
+    species_gligar: _ClassVar[species]
+    species_glimmet: _ClassVar[species]
+    species_glimmora: _ClassVar[species]
+    species_gliscor: _ClassVar[species]
+    species_gloom: _ClassVar[species]
+    species_gogoat: _ClassVar[species]
+    species_golbat: _ClassVar[species]
+    species_goldeen: _ClassVar[species]
+    species_golduck: _ClassVar[species]
+    species_golem: _ClassVar[species]
+    species_golemalola: _ClassVar[species]
+    species_golett: _ClassVar[species]
+    species_golisopod: _ClassVar[species]
+    species_golurk: _ClassVar[species]
+    species_goodra: _ClassVar[species]
+    species_goodrahisui: _ClassVar[species]
+    species_goomy: _ClassVar[species]
+    species_gorebyss: _ClassVar[species]
+    species_gossifleur: _ClassVar[species]
+    species_gothita: _ClassVar[species]
+    species_gothitelle: _ClassVar[species]
+    species_gothorita: _ClassVar[species]
+    species_gougingfire: _ClassVar[species]
+    species_gourgeist: _ClassVar[species]
+    species_gourgeistlarge: _ClassVar[species]
+    species_gourgeistsmall: _ClassVar[species]
+    species_gourgeistsuper: _ClassVar[species]
+    species_grafaiai: _ClassVar[species]
+    species_granbull: _ClassVar[species]
+    species_grapploct: _ClassVar[species]
+    species_graveler: _ClassVar[species]
+    species_graveleralola: _ClassVar[species]
+    species_greattusk: _ClassVar[species]
+    species_greavard: _ClassVar[species]
+    species_greedent: _ClassVar[species]
+    species_greninja: _ClassVar[species]
+    species_greninjaash: _ClassVar[species]
+    species_greninjabond: _ClassVar[species]
+    species_grimer: _ClassVar[species]
+    species_grimeralola: _ClassVar[species]
+    species_grimmsnarl: _ClassVar[species]
+    species_grimmsnarlgmax: _ClassVar[species]
+    species_grookey: _ClassVar[species]
+    species_grotle: _ClassVar[species]
+    species_groudon: _ClassVar[species]
+    species_groudonprimal: _ClassVar[species]
+    species_grovyle: _ClassVar[species]
+    species_growlithe: _ClassVar[species]
+    species_growlithehisui: _ClassVar[species]
+    species_grubbin: _ClassVar[species]
+    species_grumpig: _ClassVar[species]
+    species_gulpin: _ClassVar[species]
+    species_gumshoos: _ClassVar[species]
+    species_gumshoostotem: _ClassVar[species]
+    species_gurdurr: _ClassVar[species]
+    species_guzzlord: _ClassVar[species]
+    species_gyarados: _ClassVar[species]
+    species_gyaradosmega: _ClassVar[species]
+    species_hakamoo: _ClassVar[species]
+    species_happiny: _ClassVar[species]
+    species_hariyama: _ClassVar[species]
+    species_hatenna: _ClassVar[species]
+    species_hatterene: _ClassVar[species]
+    species_hatterenegmax: _ClassVar[species]
+    species_hattrem: _ClassVar[species]
+    species_haunter: _ClassVar[species]
+    species_hawlucha: _ClassVar[species]
+    species_haxorus: _ClassVar[species]
+    species_heatmor: _ClassVar[species]
+    species_heatran: _ClassVar[species]
+    species_heliolisk: _ClassVar[species]
+    species_helioptile: _ClassVar[species]
+    species_hemogoblin: _ClassVar[species]
+    species_heracross: _ClassVar[species]
+    species_heracrossmega: _ClassVar[species]
+    species_herdier: _ClassVar[species]
+    species_hippopotas: _ClassVar[species]
+    species_hippowdon: _ClassVar[species]
+    species_hitmonchan: _ClassVar[species]
+    species_hitmonlee: _ClassVar[species]
+    species_hitmontop: _ClassVar[species]
+    species_honchkrow: _ClassVar[species]
+    species_honedge: _ClassVar[species]
+    species_hooh: _ClassVar[species]
+    species_hoopa: _ClassVar[species]
+    species_hoopaunbound: _ClassVar[species]
+    species_hoothoot: _ClassVar[species]
+    species_hoppip: _ClassVar[species]
+    species_horsea: _ClassVar[species]
+    species_houndoom: _ClassVar[species]
+    species_houndoommega: _ClassVar[species]
+    species_houndour: _ClassVar[species]
+    species_houndstone: _ClassVar[species]
+    species_huntail: _ClassVar[species]
+    species_hydrapple: _ClassVar[species]
+    species_hydreigon: _ClassVar[species]
+    species_hypno: _ClassVar[species]
+    species_igglybuff: _ClassVar[species]
+    species_illumise: _ClassVar[species]
+    species_impidimp: _ClassVar[species]
+    species_incineroar: _ClassVar[species]
+    species_indeedee: _ClassVar[species]
+    species_indeedeef: _ClassVar[species]
+    species_infernape: _ClassVar[species]
+    species_inkay: _ClassVar[species]
+    species_inteleon: _ClassVar[species]
+    species_inteleongmax: _ClassVar[species]
+    species_ironboulder: _ClassVar[species]
+    species_ironbundle: _ClassVar[species]
+    species_ironcrown: _ClassVar[species]
+    species_ironhands: _ClassVar[species]
+    species_ironjugulis: _ClassVar[species]
+    species_ironleaves: _ClassVar[species]
+    species_ironmoth: _ClassVar[species]
+    species_ironthorns: _ClassVar[species]
+    species_irontreads: _ClassVar[species]
+    species_ironvaliant: _ClassVar[species]
+    species_ivysaur: _ClassVar[species]
+    species_jangmoo: _ClassVar[species]
+    species_jellicent: _ClassVar[species]
+    species_jigglypuff: _ClassVar[species]
+    species_jirachi: _ClassVar[species]
+    species_jolteon: _ClassVar[species]
+    species_joltik: _ClassVar[species]
+    species_jumbao: _ClassVar[species]
+    species_jumpluff: _ClassVar[species]
+    species_justyke: _ClassVar[species]
+    species_jynx: _ClassVar[species]
+    species_kabuto: _ClassVar[species]
+    species_kabutops: _ClassVar[species]
+    species_kadabra: _ClassVar[species]
+    species_kakuna: _ClassVar[species]
+    species_kangaskhan: _ClassVar[species]
+    species_kangaskhanmega: _ClassVar[species]
+    species_karrablast: _ClassVar[species]
+    species_kartana: _ClassVar[species]
+    species_kecleon: _ClassVar[species]
+    species_keldeo: _ClassVar[species]
+    species_keldeoresolute: _ClassVar[species]
+    species_kerfluffle: _ClassVar[species]
+    species_kilowattrel: _ClassVar[species]
+    species_kingambit: _ClassVar[species]
+    species_kingdra: _ClassVar[species]
+    species_kingler: _ClassVar[species]
+    species_kinglergmax: _ClassVar[species]
+    species_kirlia: _ClassVar[species]
+    species_kitsunoh: _ClassVar[species]
+    species_klang: _ClassVar[species]
+    species_klawf: _ClassVar[species]
+    species_kleavor: _ClassVar[species]
+    species_klefki: _ClassVar[species]
+    species_klink: _ClassVar[species]
+    species_klinklang: _ClassVar[species]
+    species_koffing: _ClassVar[species]
+    species_komala: _ClassVar[species]
+    species_kommoo: _ClassVar[species]
+    species_kommoototem: _ClassVar[species]
+    species_koraidon: _ClassVar[species]
+    species_krabby: _ClassVar[species]
+    species_kricketot: _ClassVar[species]
+    species_kricketune: _ClassVar[species]
+    species_krilowatt: _ClassVar[species]
+    species_krokorok: _ClassVar[species]
+    species_krookodile: _ClassVar[species]
+    species_kubfu: _ClassVar[species]
+    species_kyogre: _ClassVar[species]
+    species_kyogreprimal: _ClassVar[species]
+    species_kyurem: _ClassVar[species]
+    species_kyuremblack: _ClassVar[species]
+    species_kyuremwhite: _ClassVar[species]
+    species_lairon: _ClassVar[species]
+    species_lampent: _ClassVar[species]
+    species_landorus: _ClassVar[species]
+    species_landorustherian: _ClassVar[species]
+    species_lanturn: _ClassVar[species]
+    species_lapras: _ClassVar[species]
+    species_laprasgmax: _ClassVar[species]
+    species_larvesta: _ClassVar[species]
+    species_larvitar: _ClassVar[species]
+    species_latias: _ClassVar[species]
+    species_latiasmega: _ClassVar[species]
+    species_latios: _ClassVar[species]
+    species_latiosmega: _ClassVar[species]
+    species_leafeon: _ClassVar[species]
+    species_leavanny: _ClassVar[species]
+    species_lechonk: _ClassVar[species]
+    species_ledian: _ClassVar[species]
+    species_ledyba: _ClassVar[species]
+    species_lickilicky: _ClassVar[species]
+    species_lickitung: _ClassVar[species]
+    species_liepard: _ClassVar[species]
+    species_lileep: _ClassVar[species]
+    species_lilligant: _ClassVar[species]
+    species_lilliganthisui: _ClassVar[species]
+    species_lillipup: _ClassVar[species]
+    species_linoone: _ClassVar[species]
+    species_linoonegalar: _ClassVar[species]
+    species_litleo: _ClassVar[species]
+    species_litten: _ClassVar[species]
+    species_litwick: _ClassVar[species]
+    species_lokix: _ClassVar[species]
+    species_lombre: _ClassVar[species]
+    species_lopunny: _ClassVar[species]
+    species_lopunnymega: _ClassVar[species]
+    species_lotad: _ClassVar[species]
+    species_loudred: _ClassVar[species]
+    species_lucario: _ClassVar[species]
+    species_lucariomega: _ClassVar[species]
+    species_ludicolo: _ClassVar[species]
+    species_lugia: _ClassVar[species]
+    species_lumineon: _ClassVar[species]
+    species_lunala: _ClassVar[species]
+    species_lunatone: _ClassVar[species]
+    species_lurantis: _ClassVar[species]
+    species_lurantistotem: _ClassVar[species]
+    species_luvdisc: _ClassVar[species]
+    species_luxio: _ClassVar[species]
+    species_luxray: _ClassVar[species]
+    species_lycanroc: _ClassVar[species]
+    species_lycanrocdusk: _ClassVar[species]
+    species_lycanrocmidnight: _ClassVar[species]
+    species_mabosstiff: _ClassVar[species]
+    species_machamp: _ClassVar[species]
+    species_machampgmax: _ClassVar[species]
+    species_machoke: _ClassVar[species]
+    species_machop: _ClassVar[species]
+    species_magby: _ClassVar[species]
+    species_magcargo: _ClassVar[species]
+    species_magearna: _ClassVar[species]
+    species_magearnaoriginal: _ClassVar[species]
+    species_magikarp: _ClassVar[species]
+    species_magmar: _ClassVar[species]
+    species_magmortar: _ClassVar[species]
+    species_magnemite: _ClassVar[species]
+    species_magneton: _ClassVar[species]
+    species_magnezone: _ClassVar[species]
+    species_makuhita: _ClassVar[species]
+    species_malaconda: _ClassVar[species]
+    species_malamar: _ClassVar[species]
+    species_mamoswine: _ClassVar[species]
+    species_manaphy: _ClassVar[species]
+    species_mandibuzz: _ClassVar[species]
+    species_manectric: _ClassVar[species]
+    species_manectricmega: _ClassVar[species]
+    species_mankey: _ClassVar[species]
+    species_mantine: _ClassVar[species]
+    species_mantyke: _ClassVar[species]
+    species_maractus: _ClassVar[species]
+    species_mareanie: _ClassVar[species]
+    species_mareep: _ClassVar[species]
+    species_marill: _ClassVar[species]
+    species_marowak: _ClassVar[species]
+    species_marowakalola: _ClassVar[species]
+    species_marowakalolatotem: _ClassVar[species]
+    species_marshadow: _ClassVar[species]
+    species_marshtomp: _ClassVar[species]
+    species_maschiff: _ClassVar[species]
+    species_masquerain: _ClassVar[species]
+    species_maushold: _ClassVar[species]
+    species_mausholdfour: _ClassVar[species]
+    species_mawile: _ClassVar[species]
+    species_mawilemega: _ClassVar[species]
+    species_medicham: _ClassVar[species]
+    species_medichammega: _ClassVar[species]
+    species_meditite: _ClassVar[species]
+    species_meganium: _ClassVar[species]
+    species_melmetal: _ClassVar[species]
+    species_melmetalgmax: _ClassVar[species]
+    species_meloetta: _ClassVar[species]
+    species_meloettapirouette: _ClassVar[species]
+    species_meltan: _ClassVar[species]
+    species_meowscarada: _ClassVar[species]
+    species_meowstic: _ClassVar[species]
+    species_meowsticf: _ClassVar[species]
+    species_meowth: _ClassVar[species]
+    species_meowthalola: _ClassVar[species]
+    species_meowthgalar: _ClassVar[species]
+    species_meowthgmax: _ClassVar[species]
+    species_mesprit: _ClassVar[species]
+    species_metagross: _ClassVar[species]
+    species_metagrossmega: _ClassVar[species]
+    species_metang: _ClassVar[species]
+    species_metapod: _ClassVar[species]
+    species_mew: _ClassVar[species]
+    species_mewtwo: _ClassVar[species]
+    species_mewtwomegax: _ClassVar[species]
+    species_mewtwomegay: _ClassVar[species]
+    species_miasmaw: _ClassVar[species]
+    species_miasmite: _ClassVar[species]
+    species_mienfoo: _ClassVar[species]
+    species_mienshao: _ClassVar[species]
+    species_mightyena: _ClassVar[species]
+    species_milcery: _ClassVar[species]
+    species_milotic: _ClassVar[species]
+    species_miltank: _ClassVar[species]
+    species_mimejr: _ClassVar[species]
+    species_mimikyu: _ClassVar[species]
+    species_mimikyubusted: _ClassVar[species]
+    species_mimikyubustedtotem: _ClassVar[species]
+    species_mimikyutotem: _ClassVar[species]
+    species_minccino: _ClassVar[species]
+    species_minior: _ClassVar[species]
+    species_miniormeteor: _ClassVar[species]
+    species_minun: _ClassVar[species]
+    species_miraidon: _ClassVar[species]
+    species_misdreavus: _ClassVar[species]
+    species_mismagius: _ClassVar[species]
+    species_missingno: _ClassVar[species]
+    species_mollux: _ClassVar[species]
+    species_moltres: _ClassVar[species]
+    species_moltresgalar: _ClassVar[species]
+    species_monferno: _ClassVar[species]
+    species_monohm: _ClassVar[species]
+    species_morelull: _ClassVar[species]
+    species_morgrem: _ClassVar[species]
+    species_morpeko: _ClassVar[species]
+    species_morpekohangry: _ClassVar[species]
+    species_mothim: _ClassVar[species]
+    species_mrmime: _ClassVar[species]
+    species_mrmimegalar: _ClassVar[species]
+    species_mrrime: _ClassVar[species]
+    species_mudbray: _ClassVar[species]
+    species_mudkip: _ClassVar[species]
+    species_mudsdale: _ClassVar[species]
+    species_muk: _ClassVar[species]
+    species_mukalola: _ClassVar[species]
+    species_mumbao: _ClassVar[species]
+    species_munchlax: _ClassVar[species]
+    species_munkidori: _ClassVar[species]
+    species_munna: _ClassVar[species]
+    species_murkrow: _ClassVar[species]
+    species_musharna: _ClassVar[species]
+    species_nacli: _ClassVar[species]
+    species_naclstack: _ClassVar[species]
+    species_naganadel: _ClassVar[species]
+    species_natu: _ClassVar[species]
+    species_naviathan: _ClassVar[species]
+    species_necrozma: _ClassVar[species]
+    species_necrozmadawnwings: _ClassVar[species]
+    species_necrozmaduskmane: _ClassVar[species]
+    species_necrozmaultra: _ClassVar[species]
+    species_necturine: _ClassVar[species]
+    species_necturna: _ClassVar[species]
+    species_nickit: _ClassVar[species]
+    species_nidoking: _ClassVar[species]
+    species_nidoqueen: _ClassVar[species]
+    species_nidoranf: _ClassVar[species]
+    species_nidoranm: _ClassVar[species]
+    species_nidorina: _ClassVar[species]
+    species_nidorino: _ClassVar[species]
+    species_nihilego: _ClassVar[species]
+    species_nincada: _ClassVar[species]
+    species_ninetales: _ClassVar[species]
+    species_ninetalesalola: _ClassVar[species]
+    species_ninjask: _ClassVar[species]
+    species_noctowl: _ClassVar[species]
+    species_nohface: _ClassVar[species]
+    species_noibat: _ClassVar[species]
+    species_noivern: _ClassVar[species]
+    species_nosepass: _ClassVar[species]
+    species_numel: _ClassVar[species]
+    species_nuzleaf: _ClassVar[species]
+    species_nymble: _ClassVar[species]
+    species_obstagoon: _ClassVar[species]
+    species_octillery: _ClassVar[species]
+    species_oddish: _ClassVar[species]
+    species_ogerpon: _ClassVar[species]
+    species_ogerponcornerstone: _ClassVar[species]
+    species_ogerponcornerstonetera: _ClassVar[species]
+    species_ogerponhearthflame: _ClassVar[species]
+    species_ogerponhearthflametera: _ClassVar[species]
+    species_ogerpontealtera: _ClassVar[species]
+    species_ogerponwellspring: _ClassVar[species]
+    species_ogerponwellspringtera: _ClassVar[species]
+    species_oinkologne: _ClassVar[species]
+    species_oinkolognef: _ClassVar[species]
+    species_okidogi: _ClassVar[species]
+    species_omanyte: _ClassVar[species]
+    species_omastar: _ClassVar[species]
+    species_onix: _ClassVar[species]
+    species_oranguru: _ClassVar[species]
+    species_orbeetle: _ClassVar[species]
+    species_orbeetlegmax: _ClassVar[species]
+    species_oricorio: _ClassVar[species]
+    species_oricoriopau: _ClassVar[species]
+    species_oricoriopompom: _ClassVar[species]
+    species_oricoriosensu: _ClassVar[species]
+    species_orthworm: _ClassVar[species]
+    species_oshawott: _ClassVar[species]
+    species_overqwil: _ClassVar[species]
+    species_pachirisu: _ClassVar[species]
+    species_pajantom: _ClassVar[species]
+    species_palafin: _ClassVar[species]
+    species_palafinhero: _ClassVar[species]
+    species_palkia: _ClassVar[species]
+    species_palkiaorigin: _ClassVar[species]
+    species_palossand: _ClassVar[species]
+    species_palpitoad: _ClassVar[species]
+    species_pancham: _ClassVar[species]
+    species_pangoro: _ClassVar[species]
+    species_panpour: _ClassVar[species]
+    species_pansage: _ClassVar[species]
+    species_pansear: _ClassVar[species]
+    species_paras: _ClassVar[species]
+    species_parasect: _ClassVar[species]
+    species_passimian: _ClassVar[species]
+    species_patrat: _ClassVar[species]
+    species_pawmi: _ClassVar[species]
+    species_pawmo: _ClassVar[species]
+    species_pawmot: _ClassVar[species]
+    species_pawniard: _ClassVar[species]
+    species_pecharunt: _ClassVar[species]
+    species_pelipper: _ClassVar[species]
+    species_perrserker: _ClassVar[species]
+    species_persian: _ClassVar[species]
+    species_persianalola: _ClassVar[species]
+    species_petilil: _ClassVar[species]
+    species_phanpy: _ClassVar[species]
+    species_phantump: _ClassVar[species]
+    species_pheromosa: _ClassVar[species]
+    species_phione: _ClassVar[species]
+    species_pichu: _ClassVar[species]
+    species_pichuspikyeared: _ClassVar[species]
+    species_pidgeot: _ClassVar[species]
+    species_pidgeotmega: _ClassVar[species]
+    species_pidgeotto: _ClassVar[species]
+    species_pidgey: _ClassVar[species]
+    species_pidove: _ClassVar[species]
+    species_pignite: _ClassVar[species]
+    species_pikachu: _ClassVar[species]
+    species_pikachualola: _ClassVar[species]
+    species_pikachubelle: _ClassVar[species]
+    species_pikachucosplay: _ClassVar[species]
+    species_pikachugmax: _ClassVar[species]
+    species_pikachuhoenn: _ClassVar[species]
+    species_pikachukalos: _ClassVar[species]
+    species_pikachulibre: _ClassVar[species]
+    species_pikachuoriginal: _ClassVar[species]
+    species_pikachupartner: _ClassVar[species]
+    species_pikachuphd: _ClassVar[species]
+    species_pikachupopstar: _ClassVar[species]
+    species_pikachurockstar: _ClassVar[species]
+    species_pikachusinnoh: _ClassVar[species]
+    species_pikachustarter: _ClassVar[species]
+    species_pikachuunova: _ClassVar[species]
+    species_pikachuworld: _ClassVar[species]
+    species_pikipek: _ClassVar[species]
+    species_piloswine: _ClassVar[species]
+    species_pincurchin: _ClassVar[species]
+    species_pineco: _ClassVar[species]
+    species_pinsir: _ClassVar[species]
+    species_pinsirmega: _ClassVar[species]
+    species_piplup: _ClassVar[species]
+    species_plasmanta: _ClassVar[species]
+    species_pluffle: _ClassVar[species]
+    species_plusle: _ClassVar[species]
+    species_poipole: _ClassVar[species]
+    species_pokestarblackbelt: _ClassVar[species]
+    species_pokestarblackdoor: _ClassVar[species]
+    species_pokestarbrycenman: _ClassVar[species]
+    species_pokestarf00: _ClassVar[species]
+    species_pokestarf002: _ClassVar[species]
+    species_pokestargiant: _ClassVar[species]
+    species_pokestarhumanoid: _ClassVar[species]
+    species_pokestarmonster: _ClassVar[species]
+    species_pokestarmt: _ClassVar[species]
+    species_pokestarmt2: _ClassVar[species]
+    species_pokestarsmeargle: _ClassVar[species]
+    species_pokestarspirit: _ClassVar[species]
+    species_pokestartransport: _ClassVar[species]
+    species_pokestarufo: _ClassVar[species]
+    species_pokestarufo2: _ClassVar[species]
+    species_pokestarufopropu2: _ClassVar[species]
+    species_pokestarwhitedoor: _ClassVar[species]
+    species_politoed: _ClassVar[species]
+    species_poliwag: _ClassVar[species]
+    species_poliwhirl: _ClassVar[species]
+    species_poliwrath: _ClassVar[species]
+    species_poltchageist: _ClassVar[species]
+    species_poltchageistartisan: _ClassVar[species]
+    species_polteageist: _ClassVar[species]
+    species_polteageistantique: _ClassVar[species]
+    species_ponyta: _ClassVar[species]
+    species_ponytagalar: _ClassVar[species]
+    species_poochyena: _ClassVar[species]
+    species_popplio: _ClassVar[species]
+    species_porygon: _ClassVar[species]
+    species_porygon2: _ClassVar[species]
+    species_porygonz: _ClassVar[species]
+    species_primarina: _ClassVar[species]
+    species_primeape: _ClassVar[species]
+    species_prinplup: _ClassVar[species]
+    species_privatyke: _ClassVar[species]
+    species_probopass: _ClassVar[species]
+    species_protowatt: _ClassVar[species]
+    species_psyduck: _ClassVar[species]
+    species_pumpkaboo: _ClassVar[species]
+    species_pumpkaboolarge: _ClassVar[species]
+    species_pumpkaboosmall: _ClassVar[species]
+    species_pumpkaboosuper: _ClassVar[species]
+    species_pupitar: _ClassVar[species]
+    species_purrloin: _ClassVar[species]
+    species_purugly: _ClassVar[species]
+    species_pyroak: _ClassVar[species]
+    species_pyroar: _ClassVar[species]
+    species_pyukumuku: _ClassVar[species]
+    species_quagsire: _ClassVar[species]
+    species_quaquaval: _ClassVar[species]
+    species_quaxly: _ClassVar[species]
+    species_quaxwell: _ClassVar[species]
+    species_quilava: _ClassVar[species]
+    species_quilladin: _ClassVar[species]
+    species_qwilfish: _ClassVar[species]
+    species_qwilfishhisui: _ClassVar[species]
+    species_raboot: _ClassVar[species]
+    species_rabsca: _ClassVar[species]
+    species_ragingbolt: _ClassVar[species]
+    species_raichu: _ClassVar[species]
+    species_raichualola: _ClassVar[species]
+    species_raikou: _ClassVar[species]
+    species_ralts: _ClassVar[species]
+    species_rampardos: _ClassVar[species]
+    species_rapidash: _ClassVar[species]
+    species_rapidashgalar: _ClassVar[species]
+    species_raticate: _ClassVar[species]
+    species_raticatealola: _ClassVar[species]
+    species_raticatealolatotem: _ClassVar[species]
+    species_rattata: _ClassVar[species]
+    species_rattataalola: _ClassVar[species]
+    species_rayquaza: _ClassVar[species]
+    species_rayquazamega: _ClassVar[species]
+    species_rebble: _ClassVar[species]
+    species_regice: _ClassVar[species]
+    species_regidrago: _ClassVar[species]
+    species_regieleki: _ClassVar[species]
+    species_regigigas: _ClassVar[species]
+    species_regirock: _ClassVar[species]
+    species_registeel: _ClassVar[species]
+    species_relicanth: _ClassVar[species]
+    species_rellor: _ClassVar[species]
+    species_remoraid: _ClassVar[species]
+    species_reshiram: _ClassVar[species]
+    species_reuniclus: _ClassVar[species]
+    species_revavroom: _ClassVar[species]
+    species_revenankh: _ClassVar[species]
+    species_rhydon: _ClassVar[species]
+    species_rhyhorn: _ClassVar[species]
+    species_rhyperior: _ClassVar[species]
+    species_ribombee: _ClassVar[species]
+    species_ribombeetotem: _ClassVar[species]
+    species_rillaboom: _ClassVar[species]
+    species_rillaboomgmax: _ClassVar[species]
+    species_riolu: _ClassVar[species]
+    species_roaringmoon: _ClassVar[species]
+    species_rockruff: _ClassVar[species]
+    species_roggenrola: _ClassVar[species]
+    species_rolycoly: _ClassVar[species]
+    species_rookidee: _ClassVar[species]
+    species_roselia: _ClassVar[species]
+    species_roserade: _ClassVar[species]
+    species_rotom: _ClassVar[species]
+    species_rotomfan: _ClassVar[species]
+    species_rotomfrost: _ClassVar[species]
+    species_rotomheat: _ClassVar[species]
+    species_rotommow: _ClassVar[species]
+    species_rotomwash: _ClassVar[species]
+    species_rowlet: _ClassVar[species]
+    species_rufflet: _ClassVar[species]
+    species_runerigus: _ClassVar[species]
+    species_sableye: _ClassVar[species]
+    species_sableyemega: _ClassVar[species]
+    species_saharaja: _ClassVar[species]
+    species_saharascal: _ClassVar[species]
+    species_salamence: _ClassVar[species]
+    species_salamencemega: _ClassVar[species]
+    species_salandit: _ClassVar[species]
+    species_salazzle: _ClassVar[species]
+    species_salazzletotem: _ClassVar[species]
+    species_samurott: _ClassVar[species]
+    species_samurotthisui: _ClassVar[species]
+    species_sandaconda: _ClassVar[species]
+    species_sandacondagmax: _ClassVar[species]
+    species_sandile: _ClassVar[species]
+    species_sandshrew: _ClassVar[species]
+    species_sandshrewalola: _ClassVar[species]
+    species_sandslash: _ClassVar[species]
+    species_sandslashalola: _ClassVar[species]
+    species_sandygast: _ClassVar[species]
+    species_sandyshocks: _ClassVar[species]
+    species_sawk: _ClassVar[species]
+    species_sawsbuck: _ClassVar[species]
+    species_scatterbug: _ClassVar[species]
+    species_scattervein: _ClassVar[species]
+    species_sceptile: _ClassVar[species]
+    species_sceptilemega: _ClassVar[species]
+    species_scizor: _ClassVar[species]
+    species_scizormega: _ClassVar[species]
+    species_scolipede: _ClassVar[species]
+    species_scorbunny: _ClassVar[species]
+    species_scovillain: _ClassVar[species]
+    species_scrafty: _ClassVar[species]
+    species_scraggy: _ClassVar[species]
+    species_scratchet: _ClassVar[species]
+    species_screamtail: _ClassVar[species]
+    species_scyther: _ClassVar[species]
+    species_seadra: _ClassVar[species]
+    species_seaking: _ClassVar[species]
+    species_sealeo: _ClassVar[species]
+    species_seedot: _ClassVar[species]
+    species_seel: _ClassVar[species]
+    species_seismitoad: _ClassVar[species]
+    species_sentret: _ClassVar[species]
+    species_serperior: _ClassVar[species]
+    species_servine: _ClassVar[species]
+    species_seviper: _ClassVar[species]
+    species_sewaddle: _ClassVar[species]
+    species_sharpedo: _ClassVar[species]
+    species_sharpedomega: _ClassVar[species]
+    species_shaymin: _ClassVar[species]
+    species_shayminsky: _ClassVar[species]
+    species_shedinja: _ClassVar[species]
+    species_shelgon: _ClassVar[species]
+    species_shellder: _ClassVar[species]
+    species_shellos: _ClassVar[species]
+    species_shelmet: _ClassVar[species]
+    species_shieldon: _ClassVar[species]
+    species_shiftry: _ClassVar[species]
+    species_shiinotic: _ClassVar[species]
+    species_shinx: _ClassVar[species]
+    species_shroodle: _ClassVar[species]
+    species_shroomish: _ClassVar[species]
+    species_shuckle: _ClassVar[species]
+    species_shuppet: _ClassVar[species]
+    species_sigilyph: _ClassVar[species]
+    species_silcoon: _ClassVar[species]
+    species_silicobra: _ClassVar[species]
+    species_silvally: _ClassVar[species]
+    species_silvallybug: _ClassVar[species]
+    species_silvallydark: _ClassVar[species]
+    species_silvallydragon: _ClassVar[species]
+    species_silvallyelectric: _ClassVar[species]
+    species_silvallyfairy: _ClassVar[species]
+    species_silvallyfighting: _ClassVar[species]
+    species_silvallyfire: _ClassVar[species]
+    species_silvallyflying: _ClassVar[species]
+    species_silvallyghost: _ClassVar[species]
+    species_silvallygrass: _ClassVar[species]
+    species_silvallyground: _ClassVar[species]
+    species_silvallyice: _ClassVar[species]
+    species_silvallypoison: _ClassVar[species]
+    species_silvallypsychic: _ClassVar[species]
+    species_silvallyrock: _ClassVar[species]
+    species_silvallysteel: _ClassVar[species]
+    species_silvallywater: _ClassVar[species]
+    species_simipour: _ClassVar[species]
+    species_simisage: _ClassVar[species]
+    species_simisear: _ClassVar[species]
+    species_sinistcha: _ClassVar[species]
+    species_sinistchamasterpiece: _ClassVar[species]
+    species_sinistea: _ClassVar[species]
+    species_sinisteaantique: _ClassVar[species]
+    species_sirfetchd: _ClassVar[species]
+    species_sizzlipede: _ClassVar[species]
+    species_skarmory: _ClassVar[species]
+    species_skeledirge: _ClassVar[species]
+    species_skiddo: _ClassVar[species]
+    species_skiploom: _ClassVar[species]
+    species_skitty: _ClassVar[species]
+    species_skorupi: _ClassVar[species]
+    species_skrelp: _ClassVar[species]
+    species_skuntank: _ClassVar[species]
+    species_skwovet: _ClassVar[species]
+    species_slaking: _ClassVar[species]
+    species_slakoth: _ClassVar[species]
+    species_sliggoo: _ClassVar[species]
+    species_sliggoohisui: _ClassVar[species]
+    species_slitherwing: _ClassVar[species]
+    species_slowbro: _ClassVar[species]
+    species_slowbrogalar: _ClassVar[species]
+    species_slowbromega: _ClassVar[species]
+    species_slowking: _ClassVar[species]
+    species_slowkinggalar: _ClassVar[species]
+    species_slowpoke: _ClassVar[species]
+    species_slowpokegalar: _ClassVar[species]
+    species_slugma: _ClassVar[species]
+    species_slurpuff: _ClassVar[species]
+    species_smeargle: _ClassVar[species]
+    species_smogecko: _ClassVar[species]
+    species_smoguana: _ClassVar[species]
+    species_smokomodo: _ClassVar[species]
+    species_smoliv: _ClassVar[species]
+    species_smoochum: _ClassVar[species]
+    species_snaelstrom: _ClassVar[species]
+    species_sneasel: _ClassVar[species]
+    species_sneaselhisui: _ClassVar[species]
+    species_sneasler: _ClassVar[species]
+    species_snivy: _ClassVar[species]
+    species_snom: _ClassVar[species]
+    species_snorlax: _ClassVar[species]
+    species_snorlaxgmax: _ClassVar[species]
+    species_snorunt: _ClassVar[species]
+    species_snover: _ClassVar[species]
+    species_snubbull: _ClassVar[species]
+    species_snugglow: _ClassVar[species]
+    species_sobble: _ClassVar[species]
+    species_solgaleo: _ClassVar[species]
+    species_solosis: _ClassVar[species]
+    species_solotl: _ClassVar[species]
+    species_solrock: _ClassVar[species]
+    species_spearow: _ClassVar[species]
+    species_spectrier: _ClassVar[species]
+    species_spewpa: _ClassVar[species]
+    species_spheal: _ClassVar[species]
+    species_spidops: _ClassVar[species]
+    species_spinarak: _ClassVar[species]
+    species_spinda: _ClassVar[species]
+    species_spiritomb: _ClassVar[species]
+    species_spoink: _ClassVar[species]
+    species_sprigatito: _ClassVar[species]
+    species_spritzee: _ClassVar[species]
+    species_squawkabilly: _ClassVar[species]
+    species_squawkabillyblue: _ClassVar[species]
+    species_squawkabillywhite: _ClassVar[species]
+    species_squawkabillyyellow: _ClassVar[species]
+    species_squirtle: _ClassVar[species]
+    species_stakataka: _ClassVar[species]
+    species_stantler: _ClassVar[species]
+    species_staraptor: _ClassVar[species]
+    species_staravia: _ClassVar[species]
+    species_starly: _ClassVar[species]
+    species_starmie: _ClassVar[species]
+    species_staryu: _ClassVar[species]
+    species_steelix: _ClassVar[species]
+    species_steelixmega: _ClassVar[species]
+    species_steenee: _ClassVar[species]
+    species_stonjourner: _ClassVar[species]
+    species_stoutland: _ClassVar[species]
+    species_stratagem: _ClassVar[species]
+    species_stufful: _ClassVar[species]
+    species_stunfisk: _ClassVar[species]
+    species_stunfiskgalar: _ClassVar[species]
+    species_stunky: _ClassVar[species]
+    species_sudowoodo: _ClassVar[species]
+    species_suicune: _ClassVar[species]
+    species_sunflora: _ClassVar[species]
+    species_sunkern: _ClassVar[species]
+    species_surskit: _ClassVar[species]
+    species_swablu: _ClassVar[species]
+    species_swadloon: _ClassVar[species]
+    species_swalot: _ClassVar[species]
+    species_swampert: _ClassVar[species]
+    species_swampertmega: _ClassVar[species]
+    species_swanna: _ClassVar[species]
+    species_swellow: _ClassVar[species]
+    species_swinub: _ClassVar[species]
+    species_swirlix: _ClassVar[species]
+    species_swirlpool: _ClassVar[species]
+    species_swoobat: _ClassVar[species]
+    species_syclant: _ClassVar[species]
+    species_syclar: _ClassVar[species]
+    species_sylveon: _ClassVar[species]
+    species_tactite: _ClassVar[species]
+    species_tadbulb: _ClassVar[species]
+    species_taillow: _ClassVar[species]
+    species_talonflame: _ClassVar[species]
+    species_tandemaus: _ClassVar[species]
+    species_tangela: _ClassVar[species]
+    species_tangrowth: _ClassVar[species]
+    species_tapubulu: _ClassVar[species]
+    species_tapufini: _ClassVar[species]
+    species_tapukoko: _ClassVar[species]
+    species_tapulele: _ClassVar[species]
+    species_tarountula: _ClassVar[species]
+    species_tatsugiri: _ClassVar[species]
+    species_tauros: _ClassVar[species]
+    species_taurospaldeaaqua: _ClassVar[species]
+    species_taurospaldeablaze: _ClassVar[species]
+    species_taurospaldeacombat: _ClassVar[species]
+    species_teddiursa: _ClassVar[species]
+    species_tentacool: _ClassVar[species]
+    species_tentacruel: _ClassVar[species]
+    species_tepig: _ClassVar[species]
+    species_terapagos: _ClassVar[species]
+    species_terapagosstellar: _ClassVar[species]
+    species_terapagosterastal: _ClassVar[species]
+    species_terrakion: _ClassVar[species]
+    species_thievul: _ClassVar[species]
+    species_throh: _ClassVar[species]
+    species_thundurus: _ClassVar[species]
+    species_thundurustherian: _ClassVar[species]
+    species_thwackey: _ClassVar[species]
+    species_timburr: _ClassVar[species]
+    species_tinglu: _ClassVar[species]
+    species_tinkatink: _ClassVar[species]
+    species_tinkaton: _ClassVar[species]
+    species_tinkatuff: _ClassVar[species]
+    species_tirtouga: _ClassVar[species]
+    species_toedscool: _ClassVar[species]
+    species_toedscruel: _ClassVar[species]
+    species_togedemaru: _ClassVar[species]
+    species_togedemarutotem: _ClassVar[species]
+    species_togekiss: _ClassVar[species]
+    species_togepi: _ClassVar[species]
+    species_togetic: _ClassVar[species]
+    species_tomohawk: _ClassVar[species]
+    species_torchic: _ClassVar[species]
+    species_torkoal: _ClassVar[species]
+    species_tornadus: _ClassVar[species]
+    species_tornadustherian: _ClassVar[species]
+    species_torracat: _ClassVar[species]
+    species_torterra: _ClassVar[species]
+    species_totodile: _ClassVar[species]
+    species_toucannon: _ClassVar[species]
+    species_toxapex: _ClassVar[species]
+    species_toxel: _ClassVar[species]
+    species_toxicroak: _ClassVar[species]
+    species_toxtricity: _ClassVar[species]
+    species_toxtricitygmax: _ClassVar[species]
+    species_toxtricitylowkey: _ClassVar[species]
+    species_toxtricitylowkeygmax: _ClassVar[species]
+    species_tranquill: _ClassVar[species]
+    species_trapinch: _ClassVar[species]
+    species_treecko: _ClassVar[species]
+    species_trevenant: _ClassVar[species]
+    species_tropius: _ClassVar[species]
+    species_trubbish: _ClassVar[species]
+    species_trumbeak: _ClassVar[species]
+    species_tsareena: _ClassVar[species]
+    species_turtonator: _ClassVar[species]
+    species_turtwig: _ClassVar[species]
+    species_tympole: _ClassVar[species]
+    species_tynamo: _ClassVar[species]
+    species_typenull: _ClassVar[species]
+    species_typhlosion: _ClassVar[species]
+    species_typhlosionhisui: _ClassVar[species]
+    species_tyranitar: _ClassVar[species]
+    species_tyranitarmega: _ClassVar[species]
+    species_tyrantrum: _ClassVar[species]
+    species_tyrogue: _ClassVar[species]
+    species_tyrunt: _ClassVar[species]
+    species_umbreon: _ClassVar[species]
+    species_unfezant: _ClassVar[species]
+    species_unown: _ClassVar[species]
+    species_ursaluna: _ClassVar[species]
+    species_ursalunabloodmoon: _ClassVar[species]
+    species_ursaring: _ClassVar[species]
+    species_urshifu: _ClassVar[species]
+    species_urshifugmax: _ClassVar[species]
+    species_urshifurapidstrike: _ClassVar[species]
+    species_urshifurapidstrikegmax: _ClassVar[species]
+    species_uxie: _ClassVar[species]
+    species_vanillish: _ClassVar[species]
+    species_vanillite: _ClassVar[species]
+    species_vanilluxe: _ClassVar[species]
+    species_vaporeon: _ClassVar[species]
+    species_varoom: _ClassVar[species]
+    species_veluza: _ClassVar[species]
+    species_venipede: _ClassVar[species]
+    species_venomicon: _ClassVar[species]
+    species_venomiconepilogue: _ClassVar[species]
+    species_venomoth: _ClassVar[species]
+    species_venonat: _ClassVar[species]
+    species_venusaur: _ClassVar[species]
+    species_venusaurgmax: _ClassVar[species]
+    species_venusaurmega: _ClassVar[species]
+    species_vespiquen: _ClassVar[species]
+    species_vibrava: _ClassVar[species]
+    species_victini: _ClassVar[species]
+    species_victreebel: _ClassVar[species]
+    species_vigoroth: _ClassVar[species]
+    species_vikavolt: _ClassVar[species]
+    species_vikavolttotem: _ClassVar[species]
+    species_vileplume: _ClassVar[species]
+    species_virizion: _ClassVar[species]
+    species_vivillon: _ClassVar[species]
+    species_vivillonfancy: _ClassVar[species]
+    species_vivillonpokeball: _ClassVar[species]
+    species_volbeat: _ClassVar[species]
+    species_volcanion: _ClassVar[species]
+    species_volcarona: _ClassVar[species]
+    species_volkraken: _ClassVar[species]
+    species_volkritter: _ClassVar[species]
+    species_voltorb: _ClassVar[species]
+    species_voltorbhisui: _ClassVar[species]
+    species_voodoll: _ClassVar[species]
+    species_voodoom: _ClassVar[species]
+    species_vullaby: _ClassVar[species]
+    species_vulpix: _ClassVar[species]
+    species_vulpixalola: _ClassVar[species]
+    species_wailmer: _ClassVar[species]
+    species_wailord: _ClassVar[species]
+    species_walkingwake: _ClassVar[species]
+    species_walrein: _ClassVar[species]
+    species_wartortle: _ClassVar[species]
+    species_watchog: _ClassVar[species]
+    species_wattrel: _ClassVar[species]
+    species_weavile: _ClassVar[species]
+    species_weedle: _ClassVar[species]
+    species_weepinbell: _ClassVar[species]
+    species_weezing: _ClassVar[species]
+    species_weezinggalar: _ClassVar[species]
+    species_whimsicott: _ClassVar[species]
+    species_whirlipede: _ClassVar[species]
+    species_whiscash: _ClassVar[species]
+    species_whismur: _ClassVar[species]
+    species_wigglytuff: _ClassVar[species]
+    species_wiglett: _ClassVar[species]
+    species_wimpod: _ClassVar[species]
+    species_wingull: _ClassVar[species]
+    species_wishiwashi: _ClassVar[species]
+    species_wishiwashischool: _ClassVar[species]
+    species_wobbuffet: _ClassVar[species]
+    species_wochien: _ClassVar[species]
+    species_woobat: _ClassVar[species]
+    species_wooloo: _ClassVar[species]
+    species_wooper: _ClassVar[species]
+    species_wooperpaldea: _ClassVar[species]
+    species_wormadam: _ClassVar[species]
+    species_wormadamsandy: _ClassVar[species]
+    species_wormadamtrash: _ClassVar[species]
+    species_wugtrio: _ClassVar[species]
+    species_wurmple: _ClassVar[species]
+    species_wynaut: _ClassVar[species]
+    species_wyrdeer: _ClassVar[species]
+    species_xatu: _ClassVar[species]
+    species_xerneas: _ClassVar[species]
+    species_xerneasneutral: _ClassVar[species]
+    species_xurkitree: _ClassVar[species]
+    species_yamask: _ClassVar[species]
+    species_yamaskgalar: _ClassVar[species]
+    species_yamper: _ClassVar[species]
+    species_yanma: _ClassVar[species]
+    species_yanmega: _ClassVar[species]
+    species_yungoos: _ClassVar[species]
+    species_yveltal: _ClassVar[species]
+    species_zacian: _ClassVar[species]
+    species_zaciancrowned: _ClassVar[species]
+    species_zamazenta: _ClassVar[species]
+    species_zamazentacrowned: _ClassVar[species]
+    species_zangoose: _ClassVar[species]
+    species_zapdos: _ClassVar[species]
+    species_zapdosgalar: _ClassVar[species]
+    species_zarude: _ClassVar[species]
+    species_zarudedada: _ClassVar[species]
+    species_zebstrika: _ClassVar[species]
+    species_zekrom: _ClassVar[species]
+    species_zeraora: _ClassVar[species]
+    species_zigzagoon: _ClassVar[species]
+    species_zigzagoongalar: _ClassVar[species]
+    species_zoroark: _ClassVar[species]
+    species_zoroarkhisui: _ClassVar[species]
+    species_zorua: _ClassVar[species]
+    species_zoruahisui: _ClassVar[species]
+    species_zubat: _ClassVar[species]
+    species_zweilous: _ClassVar[species]
+    species_zygarde: _ClassVar[species]
+    species_zygarde10: _ClassVar[species]
+    species_zygardecomplete: _ClassVar[species]
+
+class moves(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    moves_none: _ClassVar[moves]
+    moves_pad: _ClassVar[moves]
+    moves_switch: _ClassVar[moves]
+    moves_unk: _ClassVar[moves]
+    moves_10000000voltthunderbolt: _ClassVar[moves]
+    moves_absorb: _ClassVar[moves]
+    moves_accelerock: _ClassVar[moves]
+    moves_acid: _ClassVar[moves]
+    moves_acidarmor: _ClassVar[moves]
+    moves_aciddownpour: _ClassVar[moves]
+    moves_acidspray: _ClassVar[moves]
+    moves_acrobatics: _ClassVar[moves]
+    moves_acupressure: _ClassVar[moves]
+    moves_aerialace: _ClassVar[moves]
+    moves_aeroblast: _ClassVar[moves]
+    moves_afteryou: _ClassVar[moves]
+    moves_agility: _ClassVar[moves]
+    moves_aircutter: _ClassVar[moves]
+    moves_airslash: _ClassVar[moves]
+    moves_alloutpummeling: _ClassVar[moves]
+    moves_alluringvoice: _ClassVar[moves]
+    moves_allyswitch: _ClassVar[moves]
+    moves_amnesia: _ClassVar[moves]
+    moves_anchorshot: _ClassVar[moves]
+    moves_ancientpower: _ClassVar[moves]
+    moves_appleacid: _ClassVar[moves]
+    moves_aquacutter: _ClassVar[moves]
+    moves_aquajet: _ClassVar[moves]
+    moves_aquaring: _ClassVar[moves]
+    moves_aquastep: _ClassVar[moves]
+    moves_aquatail: _ClassVar[moves]
+    moves_armorcannon: _ClassVar[moves]
+    moves_armthrust: _ClassVar[moves]
+    moves_aromatherapy: _ClassVar[moves]
+    moves_aromaticmist: _ClassVar[moves]
+    moves_assist: _ClassVar[moves]
+    moves_assurance: _ClassVar[moves]
+    moves_astonish: _ClassVar[moves]
+    moves_astralbarrage: _ClassVar[moves]
+    moves_attackorder: _ClassVar[moves]
+    moves_attract: _ClassVar[moves]
+    moves_aurasphere: _ClassVar[moves]
+    moves_aurawheel: _ClassVar[moves]
+    moves_aurorabeam: _ClassVar[moves]
+    moves_auroraveil: _ClassVar[moves]
+    moves_autotomize: _ClassVar[moves]
+    moves_avalanche: _ClassVar[moves]
+    moves_axekick: _ClassVar[moves]
+    moves_babydolleyes: _ClassVar[moves]
+    moves_baddybad: _ClassVar[moves]
+    moves_banefulbunker: _ClassVar[moves]
+    moves_barbbarrage: _ClassVar[moves]
+    moves_barrage: _ClassVar[moves]
+    moves_barrier: _ClassVar[moves]
+    moves_batonpass: _ClassVar[moves]
+    moves_beakblast: _ClassVar[moves]
+    moves_beatup: _ClassVar[moves]
+    moves_behemothbash: _ClassVar[moves]
+    moves_behemothblade: _ClassVar[moves]
+    moves_belch: _ClassVar[moves]
+    moves_bellydrum: _ClassVar[moves]
+    moves_bestow: _ClassVar[moves]
+    moves_bide: _ClassVar[moves]
+    moves_bind: _ClassVar[moves]
+    moves_bite: _ClassVar[moves]
+    moves_bitterblade: _ClassVar[moves]
+    moves_bittermalice: _ClassVar[moves]
+    moves_blackholeeclipse: _ClassVar[moves]
+    moves_blastburn: _ClassVar[moves]
+    moves_blazekick: _ClassVar[moves]
+    moves_blazingtorque: _ClassVar[moves]
+    moves_bleakwindstorm: _ClassVar[moves]
+    moves_blizzard: _ClassVar[moves]
+    moves_block: _ClassVar[moves]
+    moves_bloodmoon: _ClassVar[moves]
+    moves_bloomdoom: _ClassVar[moves]
+    moves_blueflare: _ClassVar[moves]
+    moves_bodypress: _ClassVar[moves]
+    moves_bodyslam: _ClassVar[moves]
+    moves_boltbeak: _ClassVar[moves]
+    moves_boltstrike: _ClassVar[moves]
+    moves_boneclub: _ClassVar[moves]
+    moves_bonemerang: _ClassVar[moves]
+    moves_bonerush: _ClassVar[moves]
+    moves_boomburst: _ClassVar[moves]
+    moves_bounce: _ClassVar[moves]
+    moves_bouncybubble: _ClassVar[moves]
+    moves_branchpoke: _ClassVar[moves]
+    moves_bravebird: _ClassVar[moves]
+    moves_breakingswipe: _ClassVar[moves]
+    moves_breakneckblitz: _ClassVar[moves]
+    moves_brickbreak: _ClassVar[moves]
+    moves_brine: _ClassVar[moves]
+    moves_brutalswing: _ClassVar[moves]
+    moves_bubble: _ClassVar[moves]
+    moves_bubblebeam: _ClassVar[moves]
+    moves_bugbite: _ClassVar[moves]
+    moves_bugbuzz: _ClassVar[moves]
+    moves_bulkup: _ClassVar[moves]
+    moves_bulldoze: _ClassVar[moves]
+    moves_bulletpunch: _ClassVar[moves]
+    moves_bulletseed: _ClassVar[moves]
+    moves_burningbulwark: _ClassVar[moves]
+    moves_burningjealousy: _ClassVar[moves]
+    moves_burnup: _ClassVar[moves]
+    moves_buzzybuzz: _ClassVar[moves]
+    moves_calmmind: _ClassVar[moves]
+    moves_camouflage: _ClassVar[moves]
+    moves_captivate: _ClassVar[moves]
+    moves_catastropika: _ClassVar[moves]
+    moves_ceaselessedge: _ClassVar[moves]
+    moves_celebrate: _ClassVar[moves]
+    moves_charge: _ClassVar[moves]
+    moves_chargebeam: _ClassVar[moves]
+    moves_charm: _ClassVar[moves]
+    moves_chatter: _ClassVar[moves]
+    moves_chillingwater: _ClassVar[moves]
+    moves_chillyreception: _ClassVar[moves]
+    moves_chipaway: _ClassVar[moves]
+    moves_chloroblast: _ClassVar[moves]
+    moves_circlethrow: _ClassVar[moves]
+    moves_clamp: _ClassVar[moves]
+    moves_clangingscales: _ClassVar[moves]
+    moves_clangoroussoul: _ClassVar[moves]
+    moves_clangoroussoulblaze: _ClassVar[moves]
+    moves_clearsmog: _ClassVar[moves]
+    moves_closecombat: _ClassVar[moves]
+    moves_coaching: _ClassVar[moves]
+    moves_coil: _ClassVar[moves]
+    moves_collisioncourse: _ClassVar[moves]
+    moves_combattorque: _ClassVar[moves]
+    moves_cometpunch: _ClassVar[moves]
+    moves_comeuppance: _ClassVar[moves]
+    moves_confide: _ClassVar[moves]
+    moves_confuseray: _ClassVar[moves]
+    moves_confusion: _ClassVar[moves]
+    moves_constrict: _ClassVar[moves]
+    moves_continentalcrush: _ClassVar[moves]
+    moves_conversion: _ClassVar[moves]
+    moves_conversion2: _ClassVar[moves]
+    moves_copycat: _ClassVar[moves]
+    moves_coreenforcer: _ClassVar[moves]
+    moves_corkscrewcrash: _ClassVar[moves]
+    moves_corrosivegas: _ClassVar[moves]
+    moves_cosmicpower: _ClassVar[moves]
+    moves_cottonguard: _ClassVar[moves]
+    moves_cottonspore: _ClassVar[moves]
+    moves_counter: _ClassVar[moves]
+    moves_courtchange: _ClassVar[moves]
+    moves_covet: _ClassVar[moves]
+    moves_crabhammer: _ClassVar[moves]
+    moves_craftyshield: _ClassVar[moves]
+    moves_crosschop: _ClassVar[moves]
+    moves_crosspoison: _ClassVar[moves]
+    moves_crunch: _ClassVar[moves]
+    moves_crushclaw: _ClassVar[moves]
+    moves_crushgrip: _ClassVar[moves]
+    moves_curse: _ClassVar[moves]
+    moves_cut: _ClassVar[moves]
+    moves_darkestlariat: _ClassVar[moves]
+    moves_darkpulse: _ClassVar[moves]
+    moves_darkvoid: _ClassVar[moves]
+    moves_dazzlinggleam: _ClassVar[moves]
+    moves_decorate: _ClassVar[moves]
+    moves_defendorder: _ClassVar[moves]
+    moves_defensecurl: _ClassVar[moves]
+    moves_defog: _ClassVar[moves]
+    moves_destinybond: _ClassVar[moves]
+    moves_detect: _ClassVar[moves]
+    moves_devastatingdrake: _ClassVar[moves]
+    moves_diamondstorm: _ClassVar[moves]
+    moves_dig: _ClassVar[moves]
+    moves_direclaw: _ClassVar[moves]
+    moves_disable: _ClassVar[moves]
+    moves_disarmingvoice: _ClassVar[moves]
+    moves_discharge: _ClassVar[moves]
+    moves_dive: _ClassVar[moves]
+    moves_dizzypunch: _ClassVar[moves]
+    moves_doodle: _ClassVar[moves]
+    moves_doomdesire: _ClassVar[moves]
+    moves_doubleedge: _ClassVar[moves]
+    moves_doublehit: _ClassVar[moves]
+    moves_doubleironbash: _ClassVar[moves]
+    moves_doublekick: _ClassVar[moves]
+    moves_doubleshock: _ClassVar[moves]
+    moves_doubleslap: _ClassVar[moves]
+    moves_doubleteam: _ClassVar[moves]
+    moves_dracometeor: _ClassVar[moves]
+    moves_dragonascent: _ClassVar[moves]
+    moves_dragonbreath: _ClassVar[moves]
+    moves_dragoncheer: _ClassVar[moves]
+    moves_dragonclaw: _ClassVar[moves]
+    moves_dragondance: _ClassVar[moves]
+    moves_dragondarts: _ClassVar[moves]
+    moves_dragonenergy: _ClassVar[moves]
+    moves_dragonhammer: _ClassVar[moves]
+    moves_dragonpulse: _ClassVar[moves]
+    moves_dragonrage: _ClassVar[moves]
+    moves_dragonrush: _ClassVar[moves]
+    moves_dragontail: _ClassVar[moves]
+    moves_drainingkiss: _ClassVar[moves]
+    moves_drainpunch: _ClassVar[moves]
+    moves_dreameater: _ClassVar[moves]
+    moves_drillpeck: _ClassVar[moves]
+    moves_drillrun: _ClassVar[moves]
+    moves_drumbeating: _ClassVar[moves]
+    moves_dualchop: _ClassVar[moves]
+    moves_dualwingbeat: _ClassVar[moves]
+    moves_dynamaxcannon: _ClassVar[moves]
+    moves_dynamicpunch: _ClassVar[moves]
+    moves_earthpower: _ClassVar[moves]
+    moves_earthquake: _ClassVar[moves]
+    moves_echoedvoice: _ClassVar[moves]
+    moves_eerieimpulse: _ClassVar[moves]
+    moves_eeriespell: _ClassVar[moves]
+    moves_eggbomb: _ClassVar[moves]
+    moves_electricterrain: _ClassVar[moves]
+    moves_electrify: _ClassVar[moves]
+    moves_electroball: _ClassVar[moves]
+    moves_electrodrift: _ClassVar[moves]
+    moves_electroshot: _ClassVar[moves]
+    moves_electroweb: _ClassVar[moves]
+    moves_embargo: _ClassVar[moves]
+    moves_ember: _ClassVar[moves]
+    moves_encore: _ClassVar[moves]
+    moves_endeavor: _ClassVar[moves]
+    moves_endure: _ClassVar[moves]
+    moves_energyball: _ClassVar[moves]
+    moves_entrainment: _ClassVar[moves]
+    moves_eruption: _ClassVar[moves]
+    moves_esperwing: _ClassVar[moves]
+    moves_eternabeam: _ClassVar[moves]
+    moves_expandingforce: _ClassVar[moves]
+    moves_explosion: _ClassVar[moves]
+    moves_extrasensory: _ClassVar[moves]
+    moves_extremeevoboost: _ClassVar[moves]
+    moves_extremespeed: _ClassVar[moves]
+    moves_facade: _ClassVar[moves]
+    moves_fairylock: _ClassVar[moves]
+    moves_fairywind: _ClassVar[moves]
+    moves_fakeout: _ClassVar[moves]
+    moves_faketears: _ClassVar[moves]
+    moves_falsesurrender: _ClassVar[moves]
+    moves_falseswipe: _ClassVar[moves]
+    moves_featherdance: _ClassVar[moves]
+    moves_feint: _ClassVar[moves]
+    moves_feintattack: _ClassVar[moves]
+    moves_fellstinger: _ClassVar[moves]
+    moves_ficklebeam: _ClassVar[moves]
+    moves_fierydance: _ClassVar[moves]
+    moves_fierywrath: _ClassVar[moves]
+    moves_filletaway: _ClassVar[moves]
+    moves_finalgambit: _ClassVar[moves]
+    moves_fireblast: _ClassVar[moves]
+    moves_firefang: _ClassVar[moves]
+    moves_firelash: _ClassVar[moves]
+    moves_firepledge: _ClassVar[moves]
+    moves_firepunch: _ClassVar[moves]
+    moves_firespin: _ClassVar[moves]
+    moves_firstimpression: _ClassVar[moves]
+    moves_fishiousrend: _ClassVar[moves]
+    moves_fissure: _ClassVar[moves]
+    moves_flail: _ClassVar[moves]
+    moves_flameburst: _ClassVar[moves]
+    moves_flamecharge: _ClassVar[moves]
+    moves_flamethrower: _ClassVar[moves]
+    moves_flamewheel: _ClassVar[moves]
+    moves_flareblitz: _ClassVar[moves]
+    moves_flash: _ClassVar[moves]
+    moves_flashcannon: _ClassVar[moves]
+    moves_flatter: _ClassVar[moves]
+    moves_fleurcannon: _ClassVar[moves]
+    moves_fling: _ClassVar[moves]
+    moves_flipturn: _ClassVar[moves]
+    moves_floatyfall: _ClassVar[moves]
+    moves_floralhealing: _ClassVar[moves]
+    moves_flowershield: _ClassVar[moves]
+    moves_flowertrick: _ClassVar[moves]
+    moves_fly: _ClassVar[moves]
+    moves_flyingpress: _ClassVar[moves]
+    moves_focusblast: _ClassVar[moves]
+    moves_focusenergy: _ClassVar[moves]
+    moves_focuspunch: _ClassVar[moves]
+    moves_followme: _ClassVar[moves]
+    moves_forcepalm: _ClassVar[moves]
+    moves_foresight: _ClassVar[moves]
+    moves_forestscurse: _ClassVar[moves]
+    moves_foulplay: _ClassVar[moves]
+    moves_freezedry: _ClassVar[moves]
+    moves_freezeshock: _ClassVar[moves]
+    moves_freezingglare: _ClassVar[moves]
+    moves_freezyfrost: _ClassVar[moves]
+    moves_frenzyplant: _ClassVar[moves]
+    moves_frostbreath: _ClassVar[moves]
+    moves_frustration: _ClassVar[moves]
+    moves_furyattack: _ClassVar[moves]
+    moves_furycutter: _ClassVar[moves]
+    moves_furyswipes: _ClassVar[moves]
+    moves_fusionbolt: _ClassVar[moves]
+    moves_fusionflare: _ClassVar[moves]
+    moves_futuresight: _ClassVar[moves]
+    moves_gastroacid: _ClassVar[moves]
+    moves_geargrind: _ClassVar[moves]
+    moves_gearup: _ClassVar[moves]
+    moves_genesissupernova: _ClassVar[moves]
+    moves_geomancy: _ClassVar[moves]
+    moves_gigadrain: _ClassVar[moves]
+    moves_gigaimpact: _ClassVar[moves]
+    moves_gigatonhammer: _ClassVar[moves]
+    moves_gigavolthavoc: _ClassVar[moves]
+    moves_glaciallance: _ClassVar[moves]
+    moves_glaciate: _ClassVar[moves]
+    moves_glaiverush: _ClassVar[moves]
+    moves_glare: _ClassVar[moves]
+    moves_glitzyglow: _ClassVar[moves]
+    moves_gmaxbefuddle: _ClassVar[moves]
+    moves_gmaxcannonade: _ClassVar[moves]
+    moves_gmaxcentiferno: _ClassVar[moves]
+    moves_gmaxchistrike: _ClassVar[moves]
+    moves_gmaxcuddle: _ClassVar[moves]
+    moves_gmaxdepletion: _ClassVar[moves]
+    moves_gmaxdrumsolo: _ClassVar[moves]
+    moves_gmaxfinale: _ClassVar[moves]
+    moves_gmaxfireball: _ClassVar[moves]
+    moves_gmaxfoamburst: _ClassVar[moves]
+    moves_gmaxgoldrush: _ClassVar[moves]
+    moves_gmaxgravitas: _ClassVar[moves]
+    moves_gmaxhydrosnipe: _ClassVar[moves]
+    moves_gmaxmalodor: _ClassVar[moves]
+    moves_gmaxmeltdown: _ClassVar[moves]
+    moves_gmaxoneblow: _ClassVar[moves]
+    moves_gmaxrapidflow: _ClassVar[moves]
+    moves_gmaxreplenish: _ClassVar[moves]
+    moves_gmaxresonance: _ClassVar[moves]
+    moves_gmaxsandblast: _ClassVar[moves]
+    moves_gmaxsmite: _ClassVar[moves]
+    moves_gmaxsnooze: _ClassVar[moves]
+    moves_gmaxsteelsurge: _ClassVar[moves]
+    moves_gmaxstonesurge: _ClassVar[moves]
+    moves_gmaxstunshock: _ClassVar[moves]
+    moves_gmaxsweetness: _ClassVar[moves]
+    moves_gmaxtartness: _ClassVar[moves]
+    moves_gmaxterror: _ClassVar[moves]
+    moves_gmaxvinelash: _ClassVar[moves]
+    moves_gmaxvolcalith: _ClassVar[moves]
+    moves_gmaxvoltcrash: _ClassVar[moves]
+    moves_gmaxwildfire: _ClassVar[moves]
+    moves_gmaxwindrage: _ClassVar[moves]
+    moves_grassknot: _ClassVar[moves]
+    moves_grasspledge: _ClassVar[moves]
+    moves_grasswhistle: _ClassVar[moves]
+    moves_grassyglide: _ClassVar[moves]
+    moves_grassyterrain: _ClassVar[moves]
+    moves_gravapple: _ClassVar[moves]
+    moves_gravity: _ClassVar[moves]
+    moves_growl: _ClassVar[moves]
+    moves_growth: _ClassVar[moves]
+    moves_grudge: _ClassVar[moves]
+    moves_guardianofalola: _ClassVar[moves]
+    moves_guardsplit: _ClassVar[moves]
+    moves_guardswap: _ClassVar[moves]
+    moves_guillotine: _ClassVar[moves]
+    moves_gunkshot: _ClassVar[moves]
+    moves_gust: _ClassVar[moves]
+    moves_gyroball: _ClassVar[moves]
+    moves_hail: _ClassVar[moves]
+    moves_hammerarm: _ClassVar[moves]
+    moves_happyhour: _ClassVar[moves]
+    moves_harden: _ClassVar[moves]
+    moves_hardpress: _ClassVar[moves]
+    moves_haze: _ClassVar[moves]
+    moves_headbutt: _ClassVar[moves]
+    moves_headcharge: _ClassVar[moves]
+    moves_headlongrush: _ClassVar[moves]
+    moves_headsmash: _ClassVar[moves]
+    moves_healbell: _ClassVar[moves]
+    moves_healblock: _ClassVar[moves]
+    moves_healingwish: _ClassVar[moves]
+    moves_healorder: _ClassVar[moves]
+    moves_healpulse: _ClassVar[moves]
+    moves_heartstamp: _ClassVar[moves]
+    moves_heartswap: _ClassVar[moves]
+    moves_heatcrash: _ClassVar[moves]
+    moves_heatwave: _ClassVar[moves]
+    moves_heavyslam: _ClassVar[moves]
+    moves_helpinghand: _ClassVar[moves]
+    moves_hex: _ClassVar[moves]
+    moves_hiddenpower: _ClassVar[moves]
+    moves_hiddenpowerbug: _ClassVar[moves]
+    moves_hiddenpowerbug60: _ClassVar[moves]
+    moves_hiddenpowerbug70: _ClassVar[moves]
+    moves_hiddenpowerdark: _ClassVar[moves]
+    moves_hiddenpowerdark60: _ClassVar[moves]
+    moves_hiddenpowerdark70: _ClassVar[moves]
+    moves_hiddenpowerdragon: _ClassVar[moves]
+    moves_hiddenpowerdragon60: _ClassVar[moves]
+    moves_hiddenpowerdragon70: _ClassVar[moves]
+    moves_hiddenpowerelectric: _ClassVar[moves]
+    moves_hiddenpowerelectric60: _ClassVar[moves]
+    moves_hiddenpowerelectric70: _ClassVar[moves]
+    moves_hiddenpowerfighting: _ClassVar[moves]
+    moves_hiddenpowerfighting60: _ClassVar[moves]
+    moves_hiddenpowerfighting70: _ClassVar[moves]
+    moves_hiddenpowerfire: _ClassVar[moves]
+    moves_hiddenpowerfire60: _ClassVar[moves]
+    moves_hiddenpowerfire70: _ClassVar[moves]
+    moves_hiddenpowerflying: _ClassVar[moves]
+    moves_hiddenpowerflying60: _ClassVar[moves]
+    moves_hiddenpowerflying70: _ClassVar[moves]
+    moves_hiddenpowerghost: _ClassVar[moves]
+    moves_hiddenpowerghost60: _ClassVar[moves]
+    moves_hiddenpowerghost70: _ClassVar[moves]
+    moves_hiddenpowergrass: _ClassVar[moves]
+    moves_hiddenpowergrass60: _ClassVar[moves]
+    moves_hiddenpowergrass70: _ClassVar[moves]
+    moves_hiddenpowerground: _ClassVar[moves]
+    moves_hiddenpowerground60: _ClassVar[moves]
+    moves_hiddenpowerground70: _ClassVar[moves]
+    moves_hiddenpowerice: _ClassVar[moves]
+    moves_hiddenpowerice60: _ClassVar[moves]
+    moves_hiddenpowerice70: _ClassVar[moves]
+    moves_hiddenpowerpoison: _ClassVar[moves]
+    moves_hiddenpowerpoison60: _ClassVar[moves]
+    moves_hiddenpowerpoison70: _ClassVar[moves]
+    moves_hiddenpowerpsychic: _ClassVar[moves]
+    moves_hiddenpowerpsychic60: _ClassVar[moves]
+    moves_hiddenpowerpsychic70: _ClassVar[moves]
+    moves_hiddenpowerrock: _ClassVar[moves]
+    moves_hiddenpowerrock60: _ClassVar[moves]
+    moves_hiddenpowerrock70: _ClassVar[moves]
+    moves_hiddenpowersteel: _ClassVar[moves]
+    moves_hiddenpowersteel60: _ClassVar[moves]
+    moves_hiddenpowersteel70: _ClassVar[moves]
+    moves_hiddenpowerwater: _ClassVar[moves]
+    moves_hiddenpowerwater60: _ClassVar[moves]
+    moves_hiddenpowerwater70: _ClassVar[moves]
+    moves_highhorsepower: _ClassVar[moves]
+    moves_highjumpkick: _ClassVar[moves]
+    moves_holdback: _ClassVar[moves]
+    moves_holdhands: _ClassVar[moves]
+    moves_honeclaws: _ClassVar[moves]
+    moves_hornattack: _ClassVar[moves]
+    moves_horndrill: _ClassVar[moves]
+    moves_hornleech: _ClassVar[moves]
+    moves_howl: _ClassVar[moves]
+    moves_hurricane: _ClassVar[moves]
+    moves_hydrocannon: _ClassVar[moves]
+    moves_hydropump: _ClassVar[moves]
+    moves_hydrosteam: _ClassVar[moves]
+    moves_hydrovortex: _ClassVar[moves]
+    moves_hyperbeam: _ClassVar[moves]
+    moves_hyperdrill: _ClassVar[moves]
+    moves_hyperfang: _ClassVar[moves]
+    moves_hyperspacefury: _ClassVar[moves]
+    moves_hyperspacehole: _ClassVar[moves]
+    moves_hypervoice: _ClassVar[moves]
+    moves_hypnosis: _ClassVar[moves]
+    moves_iceball: _ClassVar[moves]
+    moves_icebeam: _ClassVar[moves]
+    moves_iceburn: _ClassVar[moves]
+    moves_icefang: _ClassVar[moves]
+    moves_icehammer: _ClassVar[moves]
+    moves_icepunch: _ClassVar[moves]
+    moves_iceshard: _ClassVar[moves]
+    moves_icespinner: _ClassVar[moves]
+    moves_iciclecrash: _ClassVar[moves]
+    moves_iciclespear: _ClassVar[moves]
+    moves_icywind: _ClassVar[moves]
+    moves_imprison: _ClassVar[moves]
+    moves_incinerate: _ClassVar[moves]
+    moves_infernalparade: _ClassVar[moves]
+    moves_inferno: _ClassVar[moves]
+    moves_infernooverdrive: _ClassVar[moves]
+    moves_infestation: _ClassVar[moves]
+    moves_ingrain: _ClassVar[moves]
+    moves_instruct: _ClassVar[moves]
+    moves_iondeluge: _ClassVar[moves]
+    moves_irondefense: _ClassVar[moves]
+    moves_ironhead: _ClassVar[moves]
+    moves_irontail: _ClassVar[moves]
+    moves_ivycudgel: _ClassVar[moves]
+    moves_jawlock: _ClassVar[moves]
+    moves_jetpunch: _ClassVar[moves]
+    moves_judgment: _ClassVar[moves]
+    moves_jumpkick: _ClassVar[moves]
+    moves_junglehealing: _ClassVar[moves]
+    moves_karatechop: _ClassVar[moves]
+    moves_kinesis: _ClassVar[moves]
+    moves_kingsshield: _ClassVar[moves]
+    moves_knockoff: _ClassVar[moves]
+    moves_kowtowcleave: _ClassVar[moves]
+    moves_landswrath: _ClassVar[moves]
+    moves_laserfocus: _ClassVar[moves]
+    moves_lashout: _ClassVar[moves]
+    moves_lastresort: _ClassVar[moves]
+    moves_lastrespects: _ClassVar[moves]
+    moves_lavaplume: _ClassVar[moves]
+    moves_leafage: _ClassVar[moves]
+    moves_leafblade: _ClassVar[moves]
+    moves_leafstorm: _ClassVar[moves]
+    moves_leaftornado: _ClassVar[moves]
+    moves_leechlife: _ClassVar[moves]
+    moves_leechseed: _ClassVar[moves]
+    moves_leer: _ClassVar[moves]
+    moves_letssnuggleforever: _ClassVar[moves]
+    moves_lick: _ClassVar[moves]
+    moves_lifedew: _ClassVar[moves]
+    moves_lightofruin: _ClassVar[moves]
+    moves_lightscreen: _ClassVar[moves]
+    moves_lightthatburnsthesky: _ClassVar[moves]
+    moves_liquidation: _ClassVar[moves]
+    moves_lockon: _ClassVar[moves]
+    moves_lovelykiss: _ClassVar[moves]
+    moves_lowkick: _ClassVar[moves]
+    moves_lowsweep: _ClassVar[moves]
+    moves_luckychant: _ClassVar[moves]
+    moves_luminacrash: _ClassVar[moves]
+    moves_lunarblessing: _ClassVar[moves]
+    moves_lunardance: _ClassVar[moves]
+    moves_lunge: _ClassVar[moves]
+    moves_lusterpurge: _ClassVar[moves]
+    moves_machpunch: _ClassVar[moves]
+    moves_magicalleaf: _ClassVar[moves]
+    moves_magicaltorque: _ClassVar[moves]
+    moves_magiccoat: _ClassVar[moves]
+    moves_magicpowder: _ClassVar[moves]
+    moves_magicroom: _ClassVar[moves]
+    moves_magmastorm: _ClassVar[moves]
+    moves_magnetbomb: _ClassVar[moves]
+    moves_magneticflux: _ClassVar[moves]
+    moves_magnetrise: _ClassVar[moves]
+    moves_magnitude: _ClassVar[moves]
+    moves_makeitrain: _ClassVar[moves]
+    moves_maliciousmoonsault: _ClassVar[moves]
+    moves_malignantchain: _ClassVar[moves]
+    moves_matblock: _ClassVar[moves]
+    moves_matchagotcha: _ClassVar[moves]
+    moves_maxairstream: _ClassVar[moves]
+    moves_maxdarkness: _ClassVar[moves]
+    moves_maxflare: _ClassVar[moves]
+    moves_maxflutterby: _ClassVar[moves]
+    moves_maxgeyser: _ClassVar[moves]
+    moves_maxguard: _ClassVar[moves]
+    moves_maxhailstorm: _ClassVar[moves]
+    moves_maxknuckle: _ClassVar[moves]
+    moves_maxlightning: _ClassVar[moves]
+    moves_maxmindstorm: _ClassVar[moves]
+    moves_maxooze: _ClassVar[moves]
+    moves_maxovergrowth: _ClassVar[moves]
+    moves_maxphantasm: _ClassVar[moves]
+    moves_maxquake: _ClassVar[moves]
+    moves_maxrockfall: _ClassVar[moves]
+    moves_maxstarfall: _ClassVar[moves]
+    moves_maxsteelspike: _ClassVar[moves]
+    moves_maxstrike: _ClassVar[moves]
+    moves_maxwyrmwind: _ClassVar[moves]
+    moves_meanlook: _ClassVar[moves]
+    moves_meditate: _ClassVar[moves]
+    moves_mefirst: _ClassVar[moves]
+    moves_megadrain: _ClassVar[moves]
+    moves_megahorn: _ClassVar[moves]
+    moves_megakick: _ClassVar[moves]
+    moves_megapunch: _ClassVar[moves]
+    moves_memento: _ClassVar[moves]
+    moves_menacingmoonrazemaelstrom: _ClassVar[moves]
+    moves_metalburst: _ClassVar[moves]
+    moves_metalclaw: _ClassVar[moves]
+    moves_metalsound: _ClassVar[moves]
+    moves_meteorassault: _ClassVar[moves]
+    moves_meteorbeam: _ClassVar[moves]
+    moves_meteormash: _ClassVar[moves]
+    moves_metronome: _ClassVar[moves]
+    moves_mightycleave: _ClassVar[moves]
+    moves_milkdrink: _ClassVar[moves]
+    moves_mimic: _ClassVar[moves]
+    moves_mindblown: _ClassVar[moves]
+    moves_mindreader: _ClassVar[moves]
+    moves_minimize: _ClassVar[moves]
+    moves_miracleeye: _ClassVar[moves]
+    moves_mirrorcoat: _ClassVar[moves]
+    moves_mirrormove: _ClassVar[moves]
+    moves_mirrorshot: _ClassVar[moves]
+    moves_mist: _ClassVar[moves]
+    moves_mistball: _ClassVar[moves]
+    moves_mistyexplosion: _ClassVar[moves]
+    moves_mistyterrain: _ClassVar[moves]
+    moves_moonblast: _ClassVar[moves]
+    moves_moongeistbeam: _ClassVar[moves]
+    moves_moonlight: _ClassVar[moves]
+    moves_morningsun: _ClassVar[moves]
+    moves_mortalspin: _ClassVar[moves]
+    moves_mountaingale: _ClassVar[moves]
+    moves_mudbomb: _ClassVar[moves]
+    moves_muddywater: _ClassVar[moves]
+    moves_mudshot: _ClassVar[moves]
+    moves_mudslap: _ClassVar[moves]
+    moves_mudsport: _ClassVar[moves]
+    moves_multiattack: _ClassVar[moves]
+    moves_mysticalfire: _ClassVar[moves]
+    moves_mysticalpower: _ClassVar[moves]
+    moves_nastyplot: _ClassVar[moves]
+    moves_naturalgift: _ClassVar[moves]
+    moves_naturepower: _ClassVar[moves]
+    moves_naturesmadness: _ClassVar[moves]
+    moves_needlearm: _ClassVar[moves]
+    moves_neverendingnightmare: _ClassVar[moves]
+    moves_nightdaze: _ClassVar[moves]
+    moves_nightmare: _ClassVar[moves]
+    moves_nightshade: _ClassVar[moves]
+    moves_nightslash: _ClassVar[moves]
+    moves_nobleroar: _ClassVar[moves]
+    moves_noretreat: _ClassVar[moves]
+    moves_noxioustorque: _ClassVar[moves]
+    moves_nuzzle: _ClassVar[moves]
+    moves_oblivionwing: _ClassVar[moves]
+    moves_obstruct: _ClassVar[moves]
+    moves_oceanicoperetta: _ClassVar[moves]
+    moves_octazooka: _ClassVar[moves]
+    moves_octolock: _ClassVar[moves]
+    moves_odorsleuth: _ClassVar[moves]
+    moves_ominouswind: _ClassVar[moves]
+    moves_orderup: _ClassVar[moves]
+    moves_originpulse: _ClassVar[moves]
+    moves_outrage: _ClassVar[moves]
+    moves_overdrive: _ClassVar[moves]
+    moves_overheat: _ClassVar[moves]
+    moves_painsplit: _ClassVar[moves]
+    moves_paleowave: _ClassVar[moves]
+    moves_paraboliccharge: _ClassVar[moves]
+    moves_partingshot: _ClassVar[moves]
+    moves_payback: _ClassVar[moves]
+    moves_payday: _ClassVar[moves]
+    moves_peck: _ClassVar[moves]
+    moves_perishsong: _ClassVar[moves]
+    moves_petalblizzard: _ClassVar[moves]
+    moves_petaldance: _ClassVar[moves]
+    moves_phantomforce: _ClassVar[moves]
+    moves_photongeyser: _ClassVar[moves]
+    moves_pikapapow: _ClassVar[moves]
+    moves_pinmissile: _ClassVar[moves]
+    moves_plasmafists: _ClassVar[moves]
+    moves_playnice: _ClassVar[moves]
+    moves_playrough: _ClassVar[moves]
+    moves_pluck: _ClassVar[moves]
+    moves_poisonfang: _ClassVar[moves]
+    moves_poisongas: _ClassVar[moves]
+    moves_poisonjab: _ClassVar[moves]
+    moves_poisonpowder: _ClassVar[moves]
+    moves_poisonsting: _ClassVar[moves]
+    moves_poisontail: _ClassVar[moves]
+    moves_pollenpuff: _ClassVar[moves]
+    moves_poltergeist: _ClassVar[moves]
+    moves_populationbomb: _ClassVar[moves]
+    moves_pounce: _ClassVar[moves]
+    moves_pound: _ClassVar[moves]
+    moves_powder: _ClassVar[moves]
+    moves_powdersnow: _ClassVar[moves]
+    moves_powergem: _ClassVar[moves]
+    moves_powershift: _ClassVar[moves]
+    moves_powersplit: _ClassVar[moves]
+    moves_powerswap: _ClassVar[moves]
+    moves_powertrick: _ClassVar[moves]
+    moves_powertrip: _ClassVar[moves]
+    moves_poweruppunch: _ClassVar[moves]
+    moves_powerwhip: _ClassVar[moves]
+    moves_precipiceblades: _ClassVar[moves]
+    moves_present: _ClassVar[moves]
+    moves_prismaticlaser: _ClassVar[moves]
+    moves_protect: _ClassVar[moves]
+    moves_psybeam: _ClassVar[moves]
+    moves_psyblade: _ClassVar[moves]
+    moves_psychic: _ClassVar[moves]
+    moves_psychicfangs: _ClassVar[moves]
+    moves_psychicnoise: _ClassVar[moves]
+    moves_psychicterrain: _ClassVar[moves]
+    moves_psychoboost: _ClassVar[moves]
+    moves_psychocut: _ClassVar[moves]
+    moves_psychoshift: _ClassVar[moves]
+    moves_psychup: _ClassVar[moves]
+    moves_psyshieldbash: _ClassVar[moves]
+    moves_psyshock: _ClassVar[moves]
+    moves_psystrike: _ClassVar[moves]
+    moves_psywave: _ClassVar[moves]
+    moves_pulverizingpancake: _ClassVar[moves]
+    moves_punishment: _ClassVar[moves]
+    moves_purify: _ClassVar[moves]
+    moves_pursuit: _ClassVar[moves]
+    moves_pyroball: _ClassVar[moves]
+    moves_quash: _ClassVar[moves]
+    moves_quickattack: _ClassVar[moves]
+    moves_quickguard: _ClassVar[moves]
+    moves_quiverdance: _ClassVar[moves]
+    moves_rage: _ClassVar[moves]
+    moves_ragefist: _ClassVar[moves]
+    moves_ragepowder: _ClassVar[moves]
+    moves_ragingbull: _ClassVar[moves]
+    moves_ragingfury: _ClassVar[moves]
+    moves_raindance: _ClassVar[moves]
+    moves_rapidspin: _ClassVar[moves]
+    moves_razorleaf: _ClassVar[moves]
+    moves_razorshell: _ClassVar[moves]
+    moves_razorwind: _ClassVar[moves]
+    moves_recharge: _ClassVar[moves]
+    moves_recover: _ClassVar[moves]
+    moves_recycle: _ClassVar[moves]
+    moves_reflect: _ClassVar[moves]
+    moves_reflecttype: _ClassVar[moves]
+    moves_refresh: _ClassVar[moves]
+    moves_relicsong: _ClassVar[moves]
+    moves_rest: _ClassVar[moves]
+    moves_retaliate: _ClassVar[moves]
+    moves_return: _ClassVar[moves]
+    moves_return102: _ClassVar[moves]
+    moves_revelationdance: _ClassVar[moves]
+    moves_revenge: _ClassVar[moves]
+    moves_reversal: _ClassVar[moves]
+    moves_revivalblessing: _ClassVar[moves]
+    moves_risingvoltage: _ClassVar[moves]
+    moves_roar: _ClassVar[moves]
+    moves_roaroftime: _ClassVar[moves]
+    moves_rockblast: _ClassVar[moves]
+    moves_rockclimb: _ClassVar[moves]
+    moves_rockpolish: _ClassVar[moves]
+    moves_rockslide: _ClassVar[moves]
+    moves_rocksmash: _ClassVar[moves]
+    moves_rockthrow: _ClassVar[moves]
+    moves_rocktomb: _ClassVar[moves]
+    moves_rockwrecker: _ClassVar[moves]
+    moves_roleplay: _ClassVar[moves]
+    moves_rollingkick: _ClassVar[moves]
+    moves_rollout: _ClassVar[moves]
+    moves_roost: _ClassVar[moves]
+    moves_rototiller: _ClassVar[moves]
+    moves_round: _ClassVar[moves]
+    moves_ruination: _ClassVar[moves]
+    moves_sacredfire: _ClassVar[moves]
+    moves_sacredsword: _ClassVar[moves]
+    moves_safeguard: _ClassVar[moves]
+    moves_saltcure: _ClassVar[moves]
+    moves_sandattack: _ClassVar[moves]
+    moves_sandsearstorm: _ClassVar[moves]
+    moves_sandstorm: _ClassVar[moves]
+    moves_sandtomb: _ClassVar[moves]
+    moves_sappyseed: _ClassVar[moves]
+    moves_savagespinout: _ClassVar[moves]
+    moves_scald: _ClassVar[moves]
+    moves_scaleshot: _ClassVar[moves]
+    moves_scaryface: _ClassVar[moves]
+    moves_scorchingsands: _ClassVar[moves]
+    moves_scratch: _ClassVar[moves]
+    moves_screech: _ClassVar[moves]
+    moves_searingshot: _ClassVar[moves]
+    moves_searingsunrazesmash: _ClassVar[moves]
+    moves_secretpower: _ClassVar[moves]
+    moves_secretsword: _ClassVar[moves]
+    moves_seedbomb: _ClassVar[moves]
+    moves_seedflare: _ClassVar[moves]
+    moves_seismictoss: _ClassVar[moves]
+    moves_selfdestruct: _ClassVar[moves]
+    moves_shadowball: _ClassVar[moves]
+    moves_shadowbone: _ClassVar[moves]
+    moves_shadowclaw: _ClassVar[moves]
+    moves_shadowforce: _ClassVar[moves]
+    moves_shadowpunch: _ClassVar[moves]
+    moves_shadowsneak: _ClassVar[moves]
+    moves_shadowstrike: _ClassVar[moves]
+    moves_sharpen: _ClassVar[moves]
+    moves_shatteredpsyche: _ClassVar[moves]
+    moves_shedtail: _ClassVar[moves]
+    moves_sheercold: _ClassVar[moves]
+    moves_shellsidearm: _ClassVar[moves]
+    moves_shellsmash: _ClassVar[moves]
+    moves_shelltrap: _ClassVar[moves]
+    moves_shelter: _ClassVar[moves]
+    moves_shiftgear: _ClassVar[moves]
+    moves_shockwave: _ClassVar[moves]
+    moves_shoreup: _ClassVar[moves]
+    moves_signalbeam: _ClassVar[moves]
+    moves_silktrap: _ClassVar[moves]
+    moves_silverwind: _ClassVar[moves]
+    moves_simplebeam: _ClassVar[moves]
+    moves_sing: _ClassVar[moves]
+    moves_sinisterarrowraid: _ClassVar[moves]
+    moves_sizzlyslide: _ClassVar[moves]
+    moves_sketch: _ClassVar[moves]
+    moves_skillswap: _ClassVar[moves]
+    moves_skittersmack: _ClassVar[moves]
+    moves_skullbash: _ClassVar[moves]
+    moves_skyattack: _ClassVar[moves]
+    moves_skydrop: _ClassVar[moves]
+    moves_skyuppercut: _ClassVar[moves]
+    moves_slackoff: _ClassVar[moves]
+    moves_slam: _ClassVar[moves]
+    moves_slash: _ClassVar[moves]
+    moves_sleeppowder: _ClassVar[moves]
+    moves_sleeptalk: _ClassVar[moves]
+    moves_sludge: _ClassVar[moves]
+    moves_sludgebomb: _ClassVar[moves]
+    moves_sludgewave: _ClassVar[moves]
+    moves_smackdown: _ClassVar[moves]
+    moves_smartstrike: _ClassVar[moves]
+    moves_smellingsalts: _ClassVar[moves]
+    moves_smog: _ClassVar[moves]
+    moves_smokescreen: _ClassVar[moves]
+    moves_snaptrap: _ClassVar[moves]
+    moves_snarl: _ClassVar[moves]
+    moves_snatch: _ClassVar[moves]
+    moves_snipeshot: _ClassVar[moves]
+    moves_snore: _ClassVar[moves]
+    moves_snowscape: _ClassVar[moves]
+    moves_soak: _ClassVar[moves]
+    moves_softboiled: _ClassVar[moves]
+    moves_solarbeam: _ClassVar[moves]
+    moves_solarblade: _ClassVar[moves]
+    moves_sonicboom: _ClassVar[moves]
+    moves_soulstealing7starstrike: _ClassVar[moves]
+    moves_spacialrend: _ClassVar[moves]
+    moves_spark: _ClassVar[moves]
+    moves_sparklingaria: _ClassVar[moves]
+    moves_sparklyswirl: _ClassVar[moves]
+    moves_spectralthief: _ClassVar[moves]
+    moves_speedswap: _ClassVar[moves]
+    moves_spicyextract: _ClassVar[moves]
+    moves_spiderweb: _ClassVar[moves]
+    moves_spikecannon: _ClassVar[moves]
+    moves_spikes: _ClassVar[moves]
+    moves_spikyshield: _ClassVar[moves]
+    moves_spinout: _ClassVar[moves]
+    moves_spiritbreak: _ClassVar[moves]
+    moves_spiritshackle: _ClassVar[moves]
+    moves_spite: _ClassVar[moves]
+    moves_spitup: _ClassVar[moves]
+    moves_splash: _ClassVar[moves]
+    moves_splinteredstormshards: _ClassVar[moves]
+    moves_splishysplash: _ClassVar[moves]
+    moves_spore: _ClassVar[moves]
+    moves_spotlight: _ClassVar[moves]
+    moves_springtidestorm: _ClassVar[moves]
+    moves_stealthrock: _ClassVar[moves]
+    moves_steameruption: _ClassVar[moves]
+    moves_steamroller: _ClassVar[moves]
+    moves_steelbeam: _ClassVar[moves]
+    moves_steelroller: _ClassVar[moves]
+    moves_steelwing: _ClassVar[moves]
+    moves_stickyweb: _ClassVar[moves]
+    moves_stockpile: _ClassVar[moves]
+    moves_stokedsparksurfer: _ClassVar[moves]
+    moves_stomp: _ClassVar[moves]
+    moves_stompingtantrum: _ClassVar[moves]
+    moves_stoneaxe: _ClassVar[moves]
+    moves_stoneedge: _ClassVar[moves]
+    moves_storedpower: _ClassVar[moves]
+    moves_stormthrow: _ClassVar[moves]
+    moves_strangesteam: _ClassVar[moves]
+    moves_strength: _ClassVar[moves]
+    moves_strengthsap: _ClassVar[moves]
+    moves_stringshot: _ClassVar[moves]
+    moves_struggle: _ClassVar[moves]
+    moves_strugglebug: _ClassVar[moves]
+    moves_stuffcheeks: _ClassVar[moves]
+    moves_stunspore: _ClassVar[moves]
+    moves_submission: _ClassVar[moves]
+    moves_substitute: _ClassVar[moves]
+    moves_subzeroslammer: _ClassVar[moves]
+    moves_suckerpunch: _ClassVar[moves]
+    moves_sunnyday: _ClassVar[moves]
+    moves_sunsteelstrike: _ClassVar[moves]
+    moves_supercellslam: _ClassVar[moves]
+    moves_superfang: _ClassVar[moves]
+    moves_superpower: _ClassVar[moves]
+    moves_supersonic: _ClassVar[moves]
+    moves_supersonicskystrike: _ClassVar[moves]
+    moves_surf: _ClassVar[moves]
+    moves_surgingstrikes: _ClassVar[moves]
+    moves_swagger: _ClassVar[moves]
+    moves_swallow: _ClassVar[moves]
+    moves_sweetkiss: _ClassVar[moves]
+    moves_sweetscent: _ClassVar[moves]
+    moves_swift: _ClassVar[moves]
+    moves_switcheroo: _ClassVar[moves]
+    moves_swordsdance: _ClassVar[moves]
+    moves_synchronoise: _ClassVar[moves]
+    moves_synthesis: _ClassVar[moves]
+    moves_syrupbomb: _ClassVar[moves]
+    moves_tachyoncutter: _ClassVar[moves]
+    moves_tackle: _ClassVar[moves]
+    moves_tailglow: _ClassVar[moves]
+    moves_tailslap: _ClassVar[moves]
+    moves_tailwhip: _ClassVar[moves]
+    moves_tailwind: _ClassVar[moves]
+    moves_takedown: _ClassVar[moves]
+    moves_takeheart: _ClassVar[moves]
+    moves_tarshot: _ClassVar[moves]
+    moves_taunt: _ClassVar[moves]
+    moves_tearfullook: _ClassVar[moves]
+    moves_teatime: _ClassVar[moves]
+    moves_technoblast: _ClassVar[moves]
+    moves_tectonicrage: _ClassVar[moves]
+    moves_teeterdance: _ClassVar[moves]
+    moves_telekinesis: _ClassVar[moves]
+    moves_teleport: _ClassVar[moves]
+    moves_temperflare: _ClassVar[moves]
+    moves_terablast: _ClassVar[moves]
+    moves_terastarstorm: _ClassVar[moves]
+    moves_terrainpulse: _ClassVar[moves]
+    moves_thief: _ClassVar[moves]
+    moves_thousandarrows: _ClassVar[moves]
+    moves_thousandwaves: _ClassVar[moves]
+    moves_thrash: _ClassVar[moves]
+    moves_throatchop: _ClassVar[moves]
+    moves_thunder: _ClassVar[moves]
+    moves_thunderbolt: _ClassVar[moves]
+    moves_thundercage: _ClassVar[moves]
+    moves_thunderclap: _ClassVar[moves]
+    moves_thunderfang: _ClassVar[moves]
+    moves_thunderouskick: _ClassVar[moves]
+    moves_thunderpunch: _ClassVar[moves]
+    moves_thundershock: _ClassVar[moves]
+    moves_thunderwave: _ClassVar[moves]
+    moves_tickle: _ClassVar[moves]
+    moves_tidyup: _ClassVar[moves]
+    moves_topsyturvy: _ClassVar[moves]
+    moves_torchsong: _ClassVar[moves]
+    moves_torment: _ClassVar[moves]
+    moves_toxic: _ClassVar[moves]
+    moves_toxicspikes: _ClassVar[moves]
+    moves_toxicthread: _ClassVar[moves]
+    moves_trailblaze: _ClassVar[moves]
+    moves_transform: _ClassVar[moves]
+    moves_triattack: _ClassVar[moves]
+    moves_trick: _ClassVar[moves]
+    moves_trickortreat: _ClassVar[moves]
+    moves_trickroom: _ClassVar[moves]
+    moves_triplearrows: _ClassVar[moves]
+    moves_tripleaxel: _ClassVar[moves]
+    moves_tripledive: _ClassVar[moves]
+    moves_triplekick: _ClassVar[moves]
+    moves_tropkick: _ClassVar[moves]
+    moves_trumpcard: _ClassVar[moves]
+    moves_twinbeam: _ClassVar[moves]
+    moves_twineedle: _ClassVar[moves]
+    moves_twinkletackle: _ClassVar[moves]
+    moves_twister: _ClassVar[moves]
+    moves_upperhand: _ClassVar[moves]
+    moves_uproar: _ClassVar[moves]
+    moves_uturn: _ClassVar[moves]
+    moves_vacuumwave: _ClassVar[moves]
+    moves_vcreate: _ClassVar[moves]
+    moves_veeveevolley: _ClassVar[moves]
+    moves_venomdrench: _ClassVar[moves]
+    moves_venoshock: _ClassVar[moves]
+    moves_victorydance: _ClassVar[moves]
+    moves_vinewhip: _ClassVar[moves]
+    moves_visegrip: _ClassVar[moves]
+    moves_vitalthrow: _ClassVar[moves]
+    moves_voltswitch: _ClassVar[moves]
+    moves_volttackle: _ClassVar[moves]
+    moves_wakeupslap: _ClassVar[moves]
+    moves_waterfall: _ClassVar[moves]
+    moves_watergun: _ClassVar[moves]
+    moves_waterpledge: _ClassVar[moves]
+    moves_waterpulse: _ClassVar[moves]
+    moves_watershuriken: _ClassVar[moves]
+    moves_watersport: _ClassVar[moves]
+    moves_waterspout: _ClassVar[moves]
+    moves_wavecrash: _ClassVar[moves]
+    moves_weatherball: _ClassVar[moves]
+    moves_whirlpool: _ClassVar[moves]
+    moves_whirlwind: _ClassVar[moves]
+    moves_wickedblow: _ClassVar[moves]
+    moves_wickedtorque: _ClassVar[moves]
+    moves_wideguard: _ClassVar[moves]
+    moves_wildboltstorm: _ClassVar[moves]
+    moves_wildcharge: _ClassVar[moves]
+    moves_willowisp: _ClassVar[moves]
+    moves_wingattack: _ClassVar[moves]
+    moves_wish: _ClassVar[moves]
+    moves_withdraw: _ClassVar[moves]
+    moves_wonderroom: _ClassVar[moves]
+    moves_woodhammer: _ClassVar[moves]
+    moves_workup: _ClassVar[moves]
+    moves_worryseed: _ClassVar[moves]
+    moves_wrap: _ClassVar[moves]
+    moves_wringout: _ClassVar[moves]
+    moves_xscissor: _ClassVar[moves]
+    moves_yawn: _ClassVar[moves]
+    moves_zapcannon: _ClassVar[moves]
+    moves_zenheadbutt: _ClassVar[moves]
+    moves_zingzap: _ClassVar[moves]
+    moves_zippyzap: _ClassVar[moves]
+
+class abilities(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    abilities_none: _ClassVar[abilities]
+    abilities_pad: _ClassVar[abilities]
+    abilities_unk: _ClassVar[abilities]
+    abilities_adaptability: _ClassVar[abilities]
+    abilities_aerilate: _ClassVar[abilities]
+    abilities_aftermath: _ClassVar[abilities]
+    abilities_airlock: _ClassVar[abilities]
+    abilities_analytic: _ClassVar[abilities]
+    abilities_angerpoint: _ClassVar[abilities]
+    abilities_angershell: _ClassVar[abilities]
+    abilities_anticipation: _ClassVar[abilities]
+    abilities_arenatrap: _ClassVar[abilities]
+    abilities_armortail: _ClassVar[abilities]
+    abilities_aromaveil: _ClassVar[abilities]
+    abilities_asoneglastrier: _ClassVar[abilities]
+    abilities_asonespectrier: _ClassVar[abilities]
+    abilities_aurabreak: _ClassVar[abilities]
+    abilities_baddreams: _ClassVar[abilities]
+    abilities_ballfetch: _ClassVar[abilities]
+    abilities_battery: _ClassVar[abilities]
+    abilities_battlearmor: _ClassVar[abilities]
+    abilities_battlebond: _ClassVar[abilities]
+    abilities_beadsofruin: _ClassVar[abilities]
+    abilities_beastboost: _ClassVar[abilities]
+    abilities_berserk: _ClassVar[abilities]
+    abilities_bigpecks: _ClassVar[abilities]
+    abilities_blaze: _ClassVar[abilities]
+    abilities_bulletproof: _ClassVar[abilities]
+    abilities_cheekpouch: _ClassVar[abilities]
+    abilities_chillingneigh: _ClassVar[abilities]
+    abilities_chlorophyll: _ClassVar[abilities]
+    abilities_clearbody: _ClassVar[abilities]
+    abilities_cloudnine: _ClassVar[abilities]
+    abilities_colorchange: _ClassVar[abilities]
+    abilities_comatose: _ClassVar[abilities]
+    abilities_commander: _ClassVar[abilities]
+    abilities_competitive: _ClassVar[abilities]
+    abilities_compoundeyes: _ClassVar[abilities]
+    abilities_contrary: _ClassVar[abilities]
+    abilities_corrosion: _ClassVar[abilities]
+    abilities_costar: _ClassVar[abilities]
+    abilities_cottondown: _ClassVar[abilities]
+    abilities_cudchew: _ClassVar[abilities]
+    abilities_curiousmedicine: _ClassVar[abilities]
+    abilities_cursedbody: _ClassVar[abilities]
+    abilities_cutecharm: _ClassVar[abilities]
+    abilities_damp: _ClassVar[abilities]
+    abilities_dancer: _ClassVar[abilities]
+    abilities_darkaura: _ClassVar[abilities]
+    abilities_dauntlessshield: _ClassVar[abilities]
+    abilities_dazzling: _ClassVar[abilities]
+    abilities_defeatist: _ClassVar[abilities]
+    abilities_defiant: _ClassVar[abilities]
+    abilities_deltastream: _ClassVar[abilities]
+    abilities_desolateland: _ClassVar[abilities]
+    abilities_disguise: _ClassVar[abilities]
+    abilities_download: _ClassVar[abilities]
+    abilities_dragonsmaw: _ClassVar[abilities]
+    abilities_drizzle: _ClassVar[abilities]
+    abilities_drought: _ClassVar[abilities]
+    abilities_dryskin: _ClassVar[abilities]
+    abilities_earlybird: _ClassVar[abilities]
+    abilities_eartheater: _ClassVar[abilities]
+    abilities_effectspore: _ClassVar[abilities]
+    abilities_electricsurge: _ClassVar[abilities]
+    abilities_electromorphosis: _ClassVar[abilities]
+    abilities_embodyaspectcornerstone: _ClassVar[abilities]
+    abilities_embodyaspecthearthflame: _ClassVar[abilities]
+    abilities_embodyaspectteal: _ClassVar[abilities]
+    abilities_embodyaspectwellspring: _ClassVar[abilities]
+    abilities_emergencyexit: _ClassVar[abilities]
+    abilities_fairyaura: _ClassVar[abilities]
+    abilities_filter: _ClassVar[abilities]
+    abilities_flamebody: _ClassVar[abilities]
+    abilities_flareboost: _ClassVar[abilities]
+    abilities_flashfire: _ClassVar[abilities]
+    abilities_flowergift: _ClassVar[abilities]
+    abilities_flowerveil: _ClassVar[abilities]
+    abilities_fluffy: _ClassVar[abilities]
+    abilities_forecast: _ClassVar[abilities]
+    abilities_forewarn: _ClassVar[abilities]
+    abilities_friendguard: _ClassVar[abilities]
+    abilities_frisk: _ClassVar[abilities]
+    abilities_fullmetalbody: _ClassVar[abilities]
+    abilities_furcoat: _ClassVar[abilities]
+    abilities_galewings: _ClassVar[abilities]
+    abilities_galvanize: _ClassVar[abilities]
+    abilities_gluttony: _ClassVar[abilities]
+    abilities_goodasgold: _ClassVar[abilities]
+    abilities_gooey: _ClassVar[abilities]
+    abilities_gorillatactics: _ClassVar[abilities]
+    abilities_grasspelt: _ClassVar[abilities]
+    abilities_grassysurge: _ClassVar[abilities]
+    abilities_grimneigh: _ClassVar[abilities]
+    abilities_guarddog: _ClassVar[abilities]
+    abilities_gulpmissile: _ClassVar[abilities]
+    abilities_guts: _ClassVar[abilities]
+    abilities_hadronengine: _ClassVar[abilities]
+    abilities_harvest: _ClassVar[abilities]
+    abilities_healer: _ClassVar[abilities]
+    abilities_heatproof: _ClassVar[abilities]
+    abilities_heavymetal: _ClassVar[abilities]
+    abilities_honeygather: _ClassVar[abilities]
+    abilities_hospitality: _ClassVar[abilities]
+    abilities_hugepower: _ClassVar[abilities]
+    abilities_hungerswitch: _ClassVar[abilities]
+    abilities_hustle: _ClassVar[abilities]
+    abilities_hydration: _ClassVar[abilities]
+    abilities_hypercutter: _ClassVar[abilities]
+    abilities_icebody: _ClassVar[abilities]
+    abilities_iceface: _ClassVar[abilities]
+    abilities_icescales: _ClassVar[abilities]
+    abilities_illuminate: _ClassVar[abilities]
+    abilities_illusion: _ClassVar[abilities]
+    abilities_immunity: _ClassVar[abilities]
+    abilities_imposter: _ClassVar[abilities]
+    abilities_infiltrator: _ClassVar[abilities]
+    abilities_innardsout: _ClassVar[abilities]
+    abilities_innerfocus: _ClassVar[abilities]
+    abilities_insomnia: _ClassVar[abilities]
+    abilities_intimidate: _ClassVar[abilities]
+    abilities_intrepidsword: _ClassVar[abilities]
+    abilities_ironbarbs: _ClassVar[abilities]
+    abilities_ironfist: _ClassVar[abilities]
+    abilities_justified: _ClassVar[abilities]
+    abilities_keeneye: _ClassVar[abilities]
+    abilities_klutz: _ClassVar[abilities]
+    abilities_leafguard: _ClassVar[abilities]
+    abilities_levitate: _ClassVar[abilities]
+    abilities_libero: _ClassVar[abilities]
+    abilities_lightmetal: _ClassVar[abilities]
+    abilities_lightningrod: _ClassVar[abilities]
+    abilities_limber: _ClassVar[abilities]
+    abilities_lingeringaroma: _ClassVar[abilities]
+    abilities_liquidooze: _ClassVar[abilities]
+    abilities_liquidvoice: _ClassVar[abilities]
+    abilities_longreach: _ClassVar[abilities]
+    abilities_magicbounce: _ClassVar[abilities]
+    abilities_magicguard: _ClassVar[abilities]
+    abilities_magician: _ClassVar[abilities]
+    abilities_magmaarmor: _ClassVar[abilities]
+    abilities_magnetpull: _ClassVar[abilities]
+    abilities_marvelscale: _ClassVar[abilities]
+    abilities_megalauncher: _ClassVar[abilities]
+    abilities_merciless: _ClassVar[abilities]
+    abilities_mimicry: _ClassVar[abilities]
+    abilities_mindseye: _ClassVar[abilities]
+    abilities_minus: _ClassVar[abilities]
+    abilities_mirrorarmor: _ClassVar[abilities]
+    abilities_mistysurge: _ClassVar[abilities]
+    abilities_moldbreaker: _ClassVar[abilities]
+    abilities_moody: _ClassVar[abilities]
+    abilities_motordrive: _ClassVar[abilities]
+    abilities_mountaineer: _ClassVar[abilities]
+    abilities_moxie: _ClassVar[abilities]
+    abilities_multiscale: _ClassVar[abilities]
+    abilities_multitype: _ClassVar[abilities]
+    abilities_mummy: _ClassVar[abilities]
+    abilities_myceliummight: _ClassVar[abilities]
+    abilities_naturalcure: _ClassVar[abilities]
+    abilities_neuroforce: _ClassVar[abilities]
+    abilities_neutralizinggas: _ClassVar[abilities]
+    abilities_noability: _ClassVar[abilities]
+    abilities_noguard: _ClassVar[abilities]
+    abilities_normalize: _ClassVar[abilities]
+    abilities_oblivious: _ClassVar[abilities]
+    abilities_opportunist: _ClassVar[abilities]
+    abilities_orichalcumpulse: _ClassVar[abilities]
+    abilities_overcoat: _ClassVar[abilities]
+    abilities_overgrow: _ClassVar[abilities]
+    abilities_owntempo: _ClassVar[abilities]
+    abilities_parentalbond: _ClassVar[abilities]
+    abilities_pastelveil: _ClassVar[abilities]
+    abilities_perishbody: _ClassVar[abilities]
+    abilities_persistent: _ClassVar[abilities]
+    abilities_pickpocket: _ClassVar[abilities]
+    abilities_pickup: _ClassVar[abilities]
+    abilities_pixilate: _ClassVar[abilities]
+    abilities_plus: _ClassVar[abilities]
+    abilities_poisonheal: _ClassVar[abilities]
+    abilities_poisonpoint: _ClassVar[abilities]
+    abilities_poisonpuppeteer: _ClassVar[abilities]
+    abilities_poisontouch: _ClassVar[abilities]
+    abilities_powerconstruct: _ClassVar[abilities]
+    abilities_powerofalchemy: _ClassVar[abilities]
+    abilities_powerspot: _ClassVar[abilities]
+    abilities_prankster: _ClassVar[abilities]
+    abilities_pressure: _ClassVar[abilities]
+    abilities_primordialsea: _ClassVar[abilities]
+    abilities_prismarmor: _ClassVar[abilities]
+    abilities_propellertail: _ClassVar[abilities]
+    abilities_protean: _ClassVar[abilities]
+    abilities_protosynthesis: _ClassVar[abilities]
+    abilities_psychicsurge: _ClassVar[abilities]
+    abilities_punkrock: _ClassVar[abilities]
+    abilities_purepower: _ClassVar[abilities]
+    abilities_purifyingsalt: _ClassVar[abilities]
+    abilities_quarkdrive: _ClassVar[abilities]
+    abilities_queenlymajesty: _ClassVar[abilities]
+    abilities_quickdraw: _ClassVar[abilities]
+    abilities_quickfeet: _ClassVar[abilities]
+    abilities_raindish: _ClassVar[abilities]
+    abilities_rattled: _ClassVar[abilities]
+    abilities_rebound: _ClassVar[abilities]
+    abilities_receiver: _ClassVar[abilities]
+    abilities_reckless: _ClassVar[abilities]
+    abilities_refrigerate: _ClassVar[abilities]
+    abilities_regenerator: _ClassVar[abilities]
+    abilities_ripen: _ClassVar[abilities]
+    abilities_rivalry: _ClassVar[abilities]
+    abilities_rkssystem: _ClassVar[abilities]
+    abilities_rockhead: _ClassVar[abilities]
+    abilities_rockypayload: _ClassVar[abilities]
+    abilities_roughskin: _ClassVar[abilities]
+    abilities_runaway: _ClassVar[abilities]
+    abilities_sandforce: _ClassVar[abilities]
+    abilities_sandrush: _ClassVar[abilities]
+    abilities_sandspit: _ClassVar[abilities]
+    abilities_sandstream: _ClassVar[abilities]
+    abilities_sandveil: _ClassVar[abilities]
+    abilities_sapsipper: _ClassVar[abilities]
+    abilities_schooling: _ClassVar[abilities]
+    abilities_scrappy: _ClassVar[abilities]
+    abilities_screencleaner: _ClassVar[abilities]
+    abilities_seedsower: _ClassVar[abilities]
+    abilities_serenegrace: _ClassVar[abilities]
+    abilities_shadowshield: _ClassVar[abilities]
+    abilities_shadowtag: _ClassVar[abilities]
+    abilities_sharpness: _ClassVar[abilities]
+    abilities_shedskin: _ClassVar[abilities]
+    abilities_sheerforce: _ClassVar[abilities]
+    abilities_shellarmor: _ClassVar[abilities]
+    abilities_shielddust: _ClassVar[abilities]
+    abilities_shieldsdown: _ClassVar[abilities]
+    abilities_simple: _ClassVar[abilities]
+    abilities_skilllink: _ClassVar[abilities]
+    abilities_slowstart: _ClassVar[abilities]
+    abilities_slushrush: _ClassVar[abilities]
+    abilities_sniper: _ClassVar[abilities]
+    abilities_snowcloak: _ClassVar[abilities]
+    abilities_snowwarning: _ClassVar[abilities]
+    abilities_solarpower: _ClassVar[abilities]
+    abilities_solidrock: _ClassVar[abilities]
+    abilities_soulheart: _ClassVar[abilities]
+    abilities_soundproof: _ClassVar[abilities]
+    abilities_speedboost: _ClassVar[abilities]
+    abilities_stakeout: _ClassVar[abilities]
+    abilities_stall: _ClassVar[abilities]
+    abilities_stalwart: _ClassVar[abilities]
+    abilities_stamina: _ClassVar[abilities]
+    abilities_stancechange: _ClassVar[abilities]
+    abilities_static: _ClassVar[abilities]
+    abilities_steadfast: _ClassVar[abilities]
+    abilities_steamengine: _ClassVar[abilities]
+    abilities_steelworker: _ClassVar[abilities]
+    abilities_steelyspirit: _ClassVar[abilities]
+    abilities_stench: _ClassVar[abilities]
+    abilities_stickyhold: _ClassVar[abilities]
+    abilities_stormdrain: _ClassVar[abilities]
+    abilities_strongjaw: _ClassVar[abilities]
+    abilities_sturdy: _ClassVar[abilities]
+    abilities_suctioncups: _ClassVar[abilities]
+    abilities_superluck: _ClassVar[abilities]
+    abilities_supersweetsyrup: _ClassVar[abilities]
+    abilities_supremeoverlord: _ClassVar[abilities]
+    abilities_surgesurfer: _ClassVar[abilities]
+    abilities_swarm: _ClassVar[abilities]
+    abilities_sweetveil: _ClassVar[abilities]
+    abilities_swiftswim: _ClassVar[abilities]
+    abilities_swordofruin: _ClassVar[abilities]
+    abilities_symbiosis: _ClassVar[abilities]
+    abilities_synchronize: _ClassVar[abilities]
+    abilities_tabletsofruin: _ClassVar[abilities]
+    abilities_tangledfeet: _ClassVar[abilities]
+    abilities_tanglinghair: _ClassVar[abilities]
+    abilities_technician: _ClassVar[abilities]
+    abilities_telepathy: _ClassVar[abilities]
+    abilities_teraformzero: _ClassVar[abilities]
+    abilities_terashell: _ClassVar[abilities]
+    abilities_terashift: _ClassVar[abilities]
+    abilities_teravolt: _ClassVar[abilities]
+    abilities_thermalexchange: _ClassVar[abilities]
+    abilities_thickfat: _ClassVar[abilities]
+    abilities_tintedlens: _ClassVar[abilities]
+    abilities_torrent: _ClassVar[abilities]
+    abilities_toughclaws: _ClassVar[abilities]
+    abilities_toxicboost: _ClassVar[abilities]
+    abilities_toxicchain: _ClassVar[abilities]
+    abilities_toxicdebris: _ClassVar[abilities]
+    abilities_trace: _ClassVar[abilities]
+    abilities_transistor: _ClassVar[abilities]
+    abilities_triage: _ClassVar[abilities]
+    abilities_truant: _ClassVar[abilities]
+    abilities_turboblaze: _ClassVar[abilities]
+    abilities_unaware: _ClassVar[abilities]
+    abilities_unburden: _ClassVar[abilities]
+    abilities_unnerve: _ClassVar[abilities]
+    abilities_unseenfist: _ClassVar[abilities]
+    abilities_vesselofruin: _ClassVar[abilities]
+    abilities_victorystar: _ClassVar[abilities]
+    abilities_vitalspirit: _ClassVar[abilities]
+    abilities_voltabsorb: _ClassVar[abilities]
+    abilities_wanderingspirit: _ClassVar[abilities]
+    abilities_waterabsorb: _ClassVar[abilities]
+    abilities_waterbubble: _ClassVar[abilities]
+    abilities_watercompaction: _ClassVar[abilities]
+    abilities_waterveil: _ClassVar[abilities]
+    abilities_weakarmor: _ClassVar[abilities]
+    abilities_wellbakedbody: _ClassVar[abilities]
+    abilities_whitesmoke: _ClassVar[abilities]
+    abilities_wimpout: _ClassVar[abilities]
+    abilities_windpower: _ClassVar[abilities]
+    abilities_windrider: _ClassVar[abilities]
+    abilities_wonderguard: _ClassVar[abilities]
+    abilities_wonderskin: _ClassVar[abilities]
+    abilities_zenmode: _ClassVar[abilities]
+    abilities_zerotohero: _ClassVar[abilities]
+
+class items(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    items_none: _ClassVar[items]
+    items_null: _ClassVar[items]
+    items_pad: _ClassVar[items]
+    items_unk: _ClassVar[items]
+    items_abilityshield: _ClassVar[items]
+    items_abomasite: _ClassVar[items]
+    items_absolite: _ClassVar[items]
+    items_absorbbulb: _ClassVar[items]
+    items_adamantcrystal: _ClassVar[items]
+    items_adamantorb: _ClassVar[items]
+    items_adrenalineorb: _ClassVar[items]
+    items_aerodactylite: _ClassVar[items]
+    items_aggronite: _ClassVar[items]
+    items_aguavberry: _ClassVar[items]
+    items_airballoon: _ClassVar[items]
+    items_alakazite: _ClassVar[items]
+    items_aloraichiumz: _ClassVar[items]
+    items_altarianite: _ClassVar[items]
+    items_ampharosite: _ClassVar[items]
+    items_apicotberry: _ClassVar[items]
+    items_armorfossil: _ClassVar[items]
+    items_aspearberry: _ClassVar[items]
+    items_assaultvest: _ClassVar[items]
+    items_audinite: _ClassVar[items]
+    items_auspiciousarmor: _ClassVar[items]
+    items_babiriberry: _ClassVar[items]
+    items_banettite: _ClassVar[items]
+    items_beastball: _ClassVar[items]
+    items_beedrillite: _ClassVar[items]
+    items_belueberry: _ClassVar[items]
+    items_berry: _ClassVar[items]
+    items_berryjuice: _ClassVar[items]
+    items_berrysweet: _ClassVar[items]
+    items_berserkgene: _ClassVar[items]
+    items_bignugget: _ClassVar[items]
+    items_bigroot: _ClassVar[items]
+    items_bindingband: _ClassVar[items]
+    items_bitterberry: _ClassVar[items]
+    items_blackbelt: _ClassVar[items]
+    items_blackglasses: _ClassVar[items]
+    items_blacksludge: _ClassVar[items]
+    items_blastoisinite: _ClassVar[items]
+    items_blazikenite: _ClassVar[items]
+    items_blueorb: _ClassVar[items]
+    items_blukberry: _ClassVar[items]
+    items_blunderpolicy: _ClassVar[items]
+    items_boosterenergy: _ClassVar[items]
+    items_bottlecap: _ClassVar[items]
+    items_brightpowder: _ClassVar[items]
+    items_buggem: _ClassVar[items]
+    items_buginiumz: _ClassVar[items]
+    items_bugmemory: _ClassVar[items]
+    items_burndrive: _ClassVar[items]
+    items_burntberry: _ClassVar[items]
+    items_cameruptite: _ClassVar[items]
+    items_cellbattery: _ClassVar[items]
+    items_charcoal: _ClassVar[items]
+    items_charizarditex: _ClassVar[items]
+    items_charizarditey: _ClassVar[items]
+    items_chartiberry: _ClassVar[items]
+    items_cheriberry: _ClassVar[items]
+    items_cherishball: _ClassVar[items]
+    items_chestoberry: _ClassVar[items]
+    items_chilanberry: _ClassVar[items]
+    items_chilldrive: _ClassVar[items]
+    items_chippedpot: _ClassVar[items]
+    items_choiceband: _ClassVar[items]
+    items_choicescarf: _ClassVar[items]
+    items_choicespecs: _ClassVar[items]
+    items_chopleberry: _ClassVar[items]
+    items_clawfossil: _ClassVar[items]
+    items_clearamulet: _ClassVar[items]
+    items_cloversweet: _ClassVar[items]
+    items_cobaberry: _ClassVar[items]
+    items_colburberry: _ClassVar[items]
+    items_cornerstonemask: _ClassVar[items]
+    items_cornnberry: _ClassVar[items]
+    items_coverfossil: _ClassVar[items]
+    items_covertcloak: _ClassVar[items]
+    items_crackedpot: _ClassVar[items]
+    items_crucibellite: _ClassVar[items]
+    items_custapberry: _ClassVar[items]
+    items_damprock: _ClassVar[items]
+    items_darkgem: _ClassVar[items]
+    items_darkiniumz: _ClassVar[items]
+    items_darkmemory: _ClassVar[items]
+    items_dawnstone: _ClassVar[items]
+    items_decidiumz: _ClassVar[items]
+    items_deepseascale: _ClassVar[items]
+    items_deepseatooth: _ClassVar[items]
+    items_destinyknot: _ClassVar[items]
+    items_diancite: _ClassVar[items]
+    items_diveball: _ClassVar[items]
+    items_domefossil: _ClassVar[items]
+    items_dousedrive: _ClassVar[items]
+    items_dracoplate: _ClassVar[items]
+    items_dragonfang: _ClassVar[items]
+    items_dragongem: _ClassVar[items]
+    items_dragoniumz: _ClassVar[items]
+    items_dragonmemory: _ClassVar[items]
+    items_dragonscale: _ClassVar[items]
+    items_dreadplate: _ClassVar[items]
+    items_dreamball: _ClassVar[items]
+    items_dubiousdisc: _ClassVar[items]
+    items_durinberry: _ClassVar[items]
+    items_duskball: _ClassVar[items]
+    items_duskstone: _ClassVar[items]
+    items_earthplate: _ClassVar[items]
+    items_eeviumz: _ClassVar[items]
+    items_ejectbutton: _ClassVar[items]
+    items_ejectpack: _ClassVar[items]
+    items_electirizer: _ClassVar[items]
+    items_electricgem: _ClassVar[items]
+    items_electricmemory: _ClassVar[items]
+    items_electricseed: _ClassVar[items]
+    items_electriumz: _ClassVar[items]
+    items_enigmaberry: _ClassVar[items]
+    items_eviolite: _ClassVar[items]
+    items_expertbelt: _ClassVar[items]
+    items_fairiumz: _ClassVar[items]
+    items_fairyfeather: _ClassVar[items]
+    items_fairygem: _ClassVar[items]
+    items_fairymemory: _ClassVar[items]
+    items_fastball: _ClassVar[items]
+    items_fightinggem: _ClassVar[items]
+    items_fightingmemory: _ClassVar[items]
+    items_fightiniumz: _ClassVar[items]
+    items_figyberry: _ClassVar[items]
+    items_firegem: _ClassVar[items]
+    items_firememory: _ClassVar[items]
+    items_firestone: _ClassVar[items]
+    items_firiumz: _ClassVar[items]
+    items_fistplate: _ClassVar[items]
+    items_flameorb: _ClassVar[items]
+    items_flameplate: _ClassVar[items]
+    items_floatstone: _ClassVar[items]
+    items_flowersweet: _ClassVar[items]
+    items_flyinggem: _ClassVar[items]
+    items_flyingmemory: _ClassVar[items]
+    items_flyiniumz: _ClassVar[items]
+    items_focusband: _ClassVar[items]
+    items_focussash: _ClassVar[items]
+    items_fossilizedbird: _ClassVar[items]
+    items_fossilizeddino: _ClassVar[items]
+    items_fossilizeddrake: _ClassVar[items]
+    items_fossilizedfish: _ClassVar[items]
+    items_friendball: _ClassVar[items]
+    items_fullincense: _ClassVar[items]
+    items_galaricacuff: _ClassVar[items]
+    items_galaricawreath: _ClassVar[items]
+    items_galladite: _ClassVar[items]
+    items_ganlonberry: _ClassVar[items]
+    items_garchompite: _ClassVar[items]
+    items_gardevoirite: _ClassVar[items]
+    items_gengarite: _ClassVar[items]
+    items_ghostgem: _ClassVar[items]
+    items_ghostiumz: _ClassVar[items]
+    items_ghostmemory: _ClassVar[items]
+    items_glalitite: _ClassVar[items]
+    items_goldberry: _ClassVar[items]
+    items_goldbottlecap: _ClassVar[items]
+    items_grassgem: _ClassVar[items]
+    items_grassiumz: _ClassVar[items]
+    items_grassmemory: _ClassVar[items]
+    items_grassyseed: _ClassVar[items]
+    items_greatball: _ClassVar[items]
+    items_grepaberry: _ClassVar[items]
+    items_gripclaw: _ClassVar[items]
+    items_griseouscore: _ClassVar[items]
+    items_griseousorb: _ClassVar[items]
+    items_groundgem: _ClassVar[items]
+    items_groundiumz: _ClassVar[items]
+    items_groundmemory: _ClassVar[items]
+    items_gyaradosite: _ClassVar[items]
+    items_habanberry: _ClassVar[items]
+    items_hardstone: _ClassVar[items]
+    items_healball: _ClassVar[items]
+    items_hearthflamemask: _ClassVar[items]
+    items_heatrock: _ClassVar[items]
+    items_heavyball: _ClassVar[items]
+    items_heavydutyboots: _ClassVar[items]
+    items_helixfossil: _ClassVar[items]
+    items_heracronite: _ClassVar[items]
+    items_hondewberry: _ClassVar[items]
+    items_houndoominite: _ClassVar[items]
+    items_iapapaberry: _ClassVar[items]
+    items_iceberry: _ClassVar[items]
+    items_icegem: _ClassVar[items]
+    items_icememory: _ClassVar[items]
+    items_icestone: _ClassVar[items]
+    items_icicleplate: _ClassVar[items]
+    items_iciumz: _ClassVar[items]
+    items_icyrock: _ClassVar[items]
+    items_inciniumz: _ClassVar[items]
+    items_insectplate: _ClassVar[items]
+    items_ironball: _ClassVar[items]
+    items_ironplate: _ClassVar[items]
+    items_jabocaberry: _ClassVar[items]
+    items_jawfossil: _ClassVar[items]
+    items_kangaskhanite: _ClassVar[items]
+    items_kasibberry: _ClassVar[items]
+    items_kebiaberry: _ClassVar[items]
+    items_keeberry: _ClassVar[items]
+    items_kelpsyberry: _ClassVar[items]
+    items_kingsrock: _ClassVar[items]
+    items_kommoniumz: _ClassVar[items]
+    items_laggingtail: _ClassVar[items]
+    items_lansatberry: _ClassVar[items]
+    items_latiasite: _ClassVar[items]
+    items_latiosite: _ClassVar[items]
+    items_laxincense: _ClassVar[items]
+    items_leafstone: _ClassVar[items]
+    items_leek: _ClassVar[items]
+    items_leftovers: _ClassVar[items]
+    items_leppaberry: _ClassVar[items]
+    items_levelball: _ClassVar[items]
+    items_liechiberry: _ClassVar[items]
+    items_lifeorb: _ClassVar[items]
+    items_lightball: _ClassVar[items]
+    items_lightclay: _ClassVar[items]
+    items_loadeddice: _ClassVar[items]
+    items_lopunnite: _ClassVar[items]
+    items_loveball: _ClassVar[items]
+    items_lovesweet: _ClassVar[items]
+    items_lucarionite: _ClassVar[items]
+    items_luckypunch: _ClassVar[items]
+    items_lumberry: _ClassVar[items]
+    items_luminousmoss: _ClassVar[items]
+    items_lunaliumz: _ClassVar[items]
+    items_lureball: _ClassVar[items]
+    items_lustrousglobe: _ClassVar[items]
+    items_lustrousorb: _ClassVar[items]
+    items_luxuryball: _ClassVar[items]
+    items_lycaniumz: _ClassVar[items]
+    items_machobrace: _ClassVar[items]
+    items_magmarizer: _ClassVar[items]
+    items_magnet: _ClassVar[items]
+    items_magoberry: _ClassVar[items]
+    items_magostberry: _ClassVar[items]
+    items_mail: _ClassVar[items]
+    items_maliciousarmor: _ClassVar[items]
+    items_manectite: _ClassVar[items]
+    items_marangaberry: _ClassVar[items]
+    items_marshadiumz: _ClassVar[items]
+    items_masterball: _ClassVar[items]
+    items_masterpieceteacup: _ClassVar[items]
+    items_mawilite: _ClassVar[items]
+    items_meadowplate: _ClassVar[items]
+    items_medichamite: _ClassVar[items]
+    items_mentalherb: _ClassVar[items]
+    items_metagrossite: _ClassVar[items]
+    items_metalalloy: _ClassVar[items]
+    items_metalcoat: _ClassVar[items]
+    items_metalpowder: _ClassVar[items]
+    items_metronome: _ClassVar[items]
+    items_mewniumz: _ClassVar[items]
+    items_mewtwonitex: _ClassVar[items]
+    items_mewtwonitey: _ClassVar[items]
+    items_micleberry: _ClassVar[items]
+    items_mimikiumz: _ClassVar[items]
+    items_mindplate: _ClassVar[items]
+    items_mintberry: _ClassVar[items]
+    items_miracleberry: _ClassVar[items]
+    items_miracleseed: _ClassVar[items]
+    items_mirrorherb: _ClassVar[items]
+    items_mistyseed: _ClassVar[items]
+    items_moonball: _ClassVar[items]
+    items_moonstone: _ClassVar[items]
+    items_muscleband: _ClassVar[items]
+    items_mysteryberry: _ClassVar[items]
+    items_mysticwater: _ClassVar[items]
+    items_nanabberry: _ClassVar[items]
+    items_nestball: _ClassVar[items]
+    items_netball: _ClassVar[items]
+    items_nevermeltice: _ClassVar[items]
+    items_nomelberry: _ClassVar[items]
+    items_normalgem: _ClassVar[items]
+    items_normaliumz: _ClassVar[items]
+    items_occaberry: _ClassVar[items]
+    items_oddincense: _ClassVar[items]
+    items_oldamber: _ClassVar[items]
+    items_oranberry: _ClassVar[items]
+    items_ovalstone: _ClassVar[items]
+    items_pamtreberry: _ClassVar[items]
+    items_parkball: _ClassVar[items]
+    items_passhoberry: _ClassVar[items]
+    items_payapaberry: _ClassVar[items]
+    items_pechaberry: _ClassVar[items]
+    items_persimberry: _ClassVar[items]
+    items_petayaberry: _ClassVar[items]
+    items_pidgeotite: _ClassVar[items]
+    items_pikaniumz: _ClassVar[items]
+    items_pikashuniumz: _ClassVar[items]
+    items_pinapberry: _ClassVar[items]
+    items_pinkbow: _ClassVar[items]
+    items_pinsirite: _ClassVar[items]
+    items_pixieplate: _ClassVar[items]
+    items_plumefossil: _ClassVar[items]
+    items_poisonbarb: _ClassVar[items]
+    items_poisongem: _ClassVar[items]
+    items_poisoniumz: _ClassVar[items]
+    items_poisonmemory: _ClassVar[items]
+    items_pokeball: _ClassVar[items]
+    items_polkadotbow: _ClassVar[items]
+    items_pomegberry: _ClassVar[items]
+    items_poweranklet: _ClassVar[items]
+    items_powerband: _ClassVar[items]
+    items_powerbelt: _ClassVar[items]
+    items_powerbracer: _ClassVar[items]
+    items_powerherb: _ClassVar[items]
+    items_powerlens: _ClassVar[items]
+    items_powerweight: _ClassVar[items]
+    items_premierball: _ClassVar[items]
+    items_primariumz: _ClassVar[items]
+    items_prismscale: _ClassVar[items]
+    items_protectivepads: _ClassVar[items]
+    items_protector: _ClassVar[items]
+    items_przcureberry: _ClassVar[items]
+    items_psncureberry: _ClassVar[items]
+    items_psychicgem: _ClassVar[items]
+    items_psychicmemory: _ClassVar[items]
+    items_psychicseed: _ClassVar[items]
+    items_psychiumz: _ClassVar[items]
+    items_punchingglove: _ClassVar[items]
+    items_qualotberry: _ClassVar[items]
+    items_quickball: _ClassVar[items]
+    items_quickclaw: _ClassVar[items]
+    items_quickpowder: _ClassVar[items]
+    items_rabutaberry: _ClassVar[items]
+    items_rarebone: _ClassVar[items]
+    items_rawstberry: _ClassVar[items]
+    items_razorclaw: _ClassVar[items]
+    items_razorfang: _ClassVar[items]
+    items_razzberry: _ClassVar[items]
+    items_reapercloth: _ClassVar[items]
+    items_redcard: _ClassVar[items]
+    items_redorb: _ClassVar[items]
+    items_repeatball: _ClassVar[items]
+    items_ribbonsweet: _ClassVar[items]
+    items_rindoberry: _ClassVar[items]
+    items_ringtarget: _ClassVar[items]
+    items_rockgem: _ClassVar[items]
+    items_rockincense: _ClassVar[items]
+    items_rockiumz: _ClassVar[items]
+    items_rockmemory: _ClassVar[items]
+    items_rockyhelmet: _ClassVar[items]
+    items_roomservice: _ClassVar[items]
+    items_rootfossil: _ClassVar[items]
+    items_roseincense: _ClassVar[items]
+    items_roseliberry: _ClassVar[items]
+    items_rowapberry: _ClassVar[items]
+    items_rustedshield: _ClassVar[items]
+    items_rustedsword: _ClassVar[items]
+    items_sablenite: _ClassVar[items]
+    items_sachet: _ClassVar[items]
+    items_safariball: _ClassVar[items]
+    items_safetygoggles: _ClassVar[items]
+    items_sailfossil: _ClassVar[items]
+    items_salacberry: _ClassVar[items]
+    items_salamencite: _ClassVar[items]
+    items_sceptilite: _ClassVar[items]
+    items_scizorite: _ClassVar[items]
+    items_scopelens: _ClassVar[items]
+    items_seaincense: _ClassVar[items]
+    items_sharpbeak: _ClassVar[items]
+    items_sharpedonite: _ClassVar[items]
+    items_shedshell: _ClassVar[items]
+    items_shellbell: _ClassVar[items]
+    items_shinystone: _ClassVar[items]
+    items_shockdrive: _ClassVar[items]
+    items_shucaberry: _ClassVar[items]
+    items_silkscarf: _ClassVar[items]
+    items_silverpowder: _ClassVar[items]
+    items_sitrusberry: _ClassVar[items]
+    items_skullfossil: _ClassVar[items]
+    items_skyplate: _ClassVar[items]
+    items_slowbronite: _ClassVar[items]
+    items_smoothrock: _ClassVar[items]
+    items_snorliumz: _ClassVar[items]
+    items_snowball: _ClassVar[items]
+    items_softsand: _ClassVar[items]
+    items_solganiumz: _ClassVar[items]
+    items_souldew: _ClassVar[items]
+    items_spelltag: _ClassVar[items]
+    items_spelonberry: _ClassVar[items]
+    items_splashplate: _ClassVar[items]
+    items_spookyplate: _ClassVar[items]
+    items_sportball: _ClassVar[items]
+    items_starfberry: _ClassVar[items]
+    items_starsweet: _ClassVar[items]
+    items_steelgem: _ClassVar[items]
+    items_steeliumz: _ClassVar[items]
+    items_steelixite: _ClassVar[items]
+    items_steelmemory: _ClassVar[items]
+    items_stick: _ClassVar[items]
+    items_stickybarb: _ClassVar[items]
+    items_stoneplate: _ClassVar[items]
+    items_strangeball: _ClassVar[items]
+    items_strawberrysweet: _ClassVar[items]
+    items_sunstone: _ClassVar[items]
+    items_swampertite: _ClassVar[items]
+    items_sweetapple: _ClassVar[items]
+    items_syrupyapple: _ClassVar[items]
+    items_tamatoberry: _ClassVar[items]
+    items_tangaberry: _ClassVar[items]
+    items_tapuniumz: _ClassVar[items]
+    items_tartapple: _ClassVar[items]
+    items_terrainextender: _ClassVar[items]
+    items_thickclub: _ClassVar[items]
+    items_throatspray: _ClassVar[items]
+    items_thunderstone: _ClassVar[items]
+    items_timerball: _ClassVar[items]
+    items_toxicorb: _ClassVar[items]
+    items_toxicplate: _ClassVar[items]
+    items_tr00: _ClassVar[items]
+    items_tr01: _ClassVar[items]
+    items_tr02: _ClassVar[items]
+    items_tr03: _ClassVar[items]
+    items_tr04: _ClassVar[items]
+    items_tr05: _ClassVar[items]
+    items_tr06: _ClassVar[items]
+    items_tr07: _ClassVar[items]
+    items_tr08: _ClassVar[items]
+    items_tr09: _ClassVar[items]
+    items_tr10: _ClassVar[items]
+    items_tr11: _ClassVar[items]
+    items_tr12: _ClassVar[items]
+    items_tr13: _ClassVar[items]
+    items_tr14: _ClassVar[items]
+    items_tr15: _ClassVar[items]
+    items_tr16: _ClassVar[items]
+    items_tr17: _ClassVar[items]
+    items_tr18: _ClassVar[items]
+    items_tr19: _ClassVar[items]
+    items_tr20: _ClassVar[items]
+    items_tr21: _ClassVar[items]
+    items_tr22: _ClassVar[items]
+    items_tr23: _ClassVar[items]
+    items_tr24: _ClassVar[items]
+    items_tr25: _ClassVar[items]
+    items_tr26: _ClassVar[items]
+    items_tr27: _ClassVar[items]
+    items_tr28: _ClassVar[items]
+    items_tr29: _ClassVar[items]
+    items_tr30: _ClassVar[items]
+    items_tr31: _ClassVar[items]
+    items_tr32: _ClassVar[items]
+    items_tr33: _ClassVar[items]
+    items_tr34: _ClassVar[items]
+    items_tr35: _ClassVar[items]
+    items_tr36: _ClassVar[items]
+    items_tr37: _ClassVar[items]
+    items_tr38: _ClassVar[items]
+    items_tr39: _ClassVar[items]
+    items_tr40: _ClassVar[items]
+    items_tr41: _ClassVar[items]
+    items_tr42: _ClassVar[items]
+    items_tr43: _ClassVar[items]
+    items_tr44: _ClassVar[items]
+    items_tr45: _ClassVar[items]
+    items_tr46: _ClassVar[items]
+    items_tr47: _ClassVar[items]
+    items_tr48: _ClassVar[items]
+    items_tr49: _ClassVar[items]
+    items_tr50: _ClassVar[items]
+    items_tr51: _ClassVar[items]
+    items_tr52: _ClassVar[items]
+    items_tr53: _ClassVar[items]
+    items_tr54: _ClassVar[items]
+    items_tr55: _ClassVar[items]
+    items_tr56: _ClassVar[items]
+    items_tr57: _ClassVar[items]
+    items_tr58: _ClassVar[items]
+    items_tr59: _ClassVar[items]
+    items_tr60: _ClassVar[items]
+    items_tr61: _ClassVar[items]
+    items_tr62: _ClassVar[items]
+    items_tr63: _ClassVar[items]
+    items_tr64: _ClassVar[items]
+    items_tr65: _ClassVar[items]
+    items_tr66: _ClassVar[items]
+    items_tr67: _ClassVar[items]
+    items_tr68: _ClassVar[items]
+    items_tr69: _ClassVar[items]
+    items_tr70: _ClassVar[items]
+    items_tr71: _ClassVar[items]
+    items_tr72: _ClassVar[items]
+    items_tr73: _ClassVar[items]
+    items_tr74: _ClassVar[items]
+    items_tr75: _ClassVar[items]
+    items_tr76: _ClassVar[items]
+    items_tr77: _ClassVar[items]
+    items_tr78: _ClassVar[items]
+    items_tr79: _ClassVar[items]
+    items_tr80: _ClassVar[items]
+    items_tr81: _ClassVar[items]
+    items_tr82: _ClassVar[items]
+    items_tr83: _ClassVar[items]
+    items_tr84: _ClassVar[items]
+    items_tr85: _ClassVar[items]
+    items_tr86: _ClassVar[items]
+    items_tr87: _ClassVar[items]
+    items_tr88: _ClassVar[items]
+    items_tr89: _ClassVar[items]
+    items_tr90: _ClassVar[items]
+    items_tr91: _ClassVar[items]
+    items_tr92: _ClassVar[items]
+    items_tr93: _ClassVar[items]
+    items_tr94: _ClassVar[items]
+    items_tr95: _ClassVar[items]
+    items_tr96: _ClassVar[items]
+    items_tr97: _ClassVar[items]
+    items_tr98: _ClassVar[items]
+    items_tr99: _ClassVar[items]
+    items_twistedspoon: _ClassVar[items]
+    items_tyranitarite: _ClassVar[items]
+    items_ultraball: _ClassVar[items]
+    items_ultranecroziumz: _ClassVar[items]
+    items_unremarkableteacup: _ClassVar[items]
+    items_upgrade: _ClassVar[items]
+    items_utilityumbrella: _ClassVar[items]
+    items_venusaurite: _ClassVar[items]
+    items_vilevial: _ClassVar[items]
+    items_wacanberry: _ClassVar[items]
+    items_watergem: _ClassVar[items]
+    items_wateriumz: _ClassVar[items]
+    items_watermemory: _ClassVar[items]
+    items_waterstone: _ClassVar[items]
+    items_watmelberry: _ClassVar[items]
+    items_waveincense: _ClassVar[items]
+    items_weaknesspolicy: _ClassVar[items]
+    items_wellspringmask: _ClassVar[items]
+    items_wepearberry: _ClassVar[items]
+    items_whippeddream: _ClassVar[items]
+    items_whiteherb: _ClassVar[items]
+    items_widelens: _ClassVar[items]
+    items_wikiberry: _ClassVar[items]
+    items_wiseglasses: _ClassVar[items]
+    items_yacheberry: _ClassVar[items]
+    items_zapplate: _ClassVar[items]
+    items_zoomlens: _ClassVar[items]
+
+class statuses(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    statuses_null: _ClassVar[statuses]
+    statuses_brn: _ClassVar[statuses]
+    statuses_frz: _ClassVar[statuses]
+    statuses_par: _ClassVar[statuses]
+    statuses_psn: _ClassVar[statuses]
+    statuses_slp: _ClassVar[statuses]
+    statuses_tox: _ClassVar[statuses]
+
+class boosts(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    boosts_accuracy: _ClassVar[boosts]
+    boosts_atk: _ClassVar[boosts]
+    boosts_def: _ClassVar[boosts]
+    boosts_evasion: _ClassVar[boosts]
+    boosts_spa: _ClassVar[boosts]
+    boosts_spd: _ClassVar[boosts]
+    boosts_spe: _ClassVar[boosts]
+
+class types(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    types_none: _ClassVar[types]
+    types_pad: _ClassVar[types]
+    types_unk: _ClassVar[types]
+    types_bug: _ClassVar[types]
+    types_dark: _ClassVar[types]
+    types_dragon: _ClassVar[types]
+    types_electric: _ClassVar[types]
+    types_fairy: _ClassVar[types]
+    types_fighting: _ClassVar[types]
+    types_fire: _ClassVar[types]
+    types_flying: _ClassVar[types]
+    types_ghost: _ClassVar[types]
+    types_grass: _ClassVar[types]
+    types_ground: _ClassVar[types]
+    types_ice: _ClassVar[types]
+    types_normal: _ClassVar[types]
+    types_poison: _ClassVar[types]
+    types_psychic: _ClassVar[types]
+    types_rock: _ClassVar[types]
+    types_steel: _ClassVar[types]
+    types_stellar: _ClassVar[types]
+    types_water: _ClassVar[types]
+
+class genders(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    genders_unk: _ClassVar[genders]
+    genders_f: _ClassVar[genders]
+    genders_m: _ClassVar[genders]
+    genders_n: _ClassVar[genders]
+
+class hyphenArgs(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    hyphenArgs_unk: _ClassVar[hyphenArgs]
+    hyphenArgs_ability: _ClassVar[hyphenArgs]
+    hyphenArgs_activate: _ClassVar[hyphenArgs]
+    hyphenArgs_anim: _ClassVar[hyphenArgs]
+    hyphenArgs_block: _ClassVar[hyphenArgs]
+    hyphenArgs_boost: _ClassVar[hyphenArgs]
+    hyphenArgs_burst: _ClassVar[hyphenArgs]
+    hyphenArgs_candynamax: _ClassVar[hyphenArgs]
+    hyphenArgs_center: _ClassVar[hyphenArgs]
+    hyphenArgs_clearallboost: _ClassVar[hyphenArgs]
+    hyphenArgs_clearboost: _ClassVar[hyphenArgs]
+    hyphenArgs_clearnegativeboost: _ClassVar[hyphenArgs]
+    hyphenArgs_clearpositiveboost: _ClassVar[hyphenArgs]
+    hyphenArgs_combine: _ClassVar[hyphenArgs]
+    hyphenArgs_copyboost: _ClassVar[hyphenArgs]
+    hyphenArgs_crit: _ClassVar[hyphenArgs]
+    hyphenArgs_curestatus: _ClassVar[hyphenArgs]
+    hyphenArgs_cureteam: _ClassVar[hyphenArgs]
+    hyphenArgs_damage: _ClassVar[hyphenArgs]
+    hyphenArgs_end: _ClassVar[hyphenArgs]
+    hyphenArgs_endability: _ClassVar[hyphenArgs]
+    hyphenArgs_enditem: _ClassVar[hyphenArgs]
+    hyphenArgs_fail: _ClassVar[hyphenArgs]
+    hyphenArgs_fieldactivate: _ClassVar[hyphenArgs]
+    hyphenArgs_fieldend: _ClassVar[hyphenArgs]
+    hyphenArgs_fieldstart: _ClassVar[hyphenArgs]
+    hyphenArgs_formechange: _ClassVar[hyphenArgs]
+    hyphenArgs_heal: _ClassVar[hyphenArgs]
+    hyphenArgs_hint: _ClassVar[hyphenArgs]
+    hyphenArgs_hitcount: _ClassVar[hyphenArgs]
+    hyphenArgs_immune: _ClassVar[hyphenArgs]
+    hyphenArgs_invertboost: _ClassVar[hyphenArgs]
+    hyphenArgs_item: _ClassVar[hyphenArgs]
+    hyphenArgs_mega: _ClassVar[hyphenArgs]
+    hyphenArgs_message: _ClassVar[hyphenArgs]
+    hyphenArgs_miss: _ClassVar[hyphenArgs]
+    hyphenArgs_mustrecharge: _ClassVar[hyphenArgs]
+    hyphenArgs_notarget: _ClassVar[hyphenArgs]
+    hyphenArgs_ohko: _ClassVar[hyphenArgs]
+    hyphenArgs_prepare: _ClassVar[hyphenArgs]
+    hyphenArgs_primal: _ClassVar[hyphenArgs]
+    hyphenArgs_resisted: _ClassVar[hyphenArgs]
+    hyphenArgs_setboost: _ClassVar[hyphenArgs]
+    hyphenArgs_sethp: _ClassVar[hyphenArgs]
+    hyphenArgs_sideend: _ClassVar[hyphenArgs]
+    hyphenArgs_sidestart: _ClassVar[hyphenArgs]
+    hyphenArgs_singlemove: _ClassVar[hyphenArgs]
+    hyphenArgs_singleturn: _ClassVar[hyphenArgs]
+    hyphenArgs_start: _ClassVar[hyphenArgs]
+    hyphenArgs_status: _ClassVar[hyphenArgs]
+    hyphenArgs_supereffective: _ClassVar[hyphenArgs]
+    hyphenArgs_swapboost: _ClassVar[hyphenArgs]
+    hyphenArgs_swapsideconditions: _ClassVar[hyphenArgs]
+    hyphenArgs_terastallize: _ClassVar[hyphenArgs]
+    hyphenArgs_transform: _ClassVar[hyphenArgs]
+    hyphenArgs_unboost: _ClassVar[hyphenArgs]
+    hyphenArgs_waiting: _ClassVar[hyphenArgs]
+    hyphenArgs_weather: _ClassVar[hyphenArgs]
+    hyphenArgs_zbroken: _ClassVar[hyphenArgs]
+    hyphenArgs_zpower: _ClassVar[hyphenArgs]
+pseudoWeather_null: pseudoWeather
+pseudoWeather_fairylock: pseudoWeather
+pseudoWeather_gravity: pseudoWeather
+pseudoWeather_iondeluge: pseudoWeather
+pseudoWeather_magicroom: pseudoWeather
+pseudoWeather_mudsport: pseudoWeather
+pseudoWeather_trickroom: pseudoWeather
+pseudoWeather_watersport: pseudoWeather
+pseudoWeather_wonderroom: pseudoWeather
+volatileStatus_null: volatileStatus
+volatileStatus_airballoon: volatileStatus
+volatileStatus_allyswitch: volatileStatus
+volatileStatus_aquaring: volatileStatus
+volatileStatus_attract: volatileStatus
+volatileStatus_autotomize: volatileStatus
+volatileStatus_banefulbunker: volatileStatus
+volatileStatus_bar: volatileStatus
+volatileStatus_baz: volatileStatus
+volatileStatus_beakblast: volatileStatus
+volatileStatus_beatup: volatileStatus
+volatileStatus_bide: volatileStatus
+volatileStatus_bounce: volatileStatus
+volatileStatus_burningbulwark: volatileStatus
+volatileStatus_charge: volatileStatus
+volatileStatus_choicelock: volatileStatus
+volatileStatus_commanded: volatileStatus
+volatileStatus_commanding: volatileStatus
+volatileStatus_confusion: volatileStatus
+volatileStatus_counter: volatileStatus
+volatileStatus_cudchew: volatileStatus
+volatileStatus_curse: volatileStatus
+volatileStatus_defensecurl: volatileStatus
+volatileStatus_destinybond: volatileStatus
+volatileStatus_disable: volatileStatus
+volatileStatus_doomdesire: volatileStatus
+volatileStatus_dragoncheer: volatileStatus
+volatileStatus_dynamax: volatileStatus
+volatileStatus_electrify: volatileStatus
+volatileStatus_embargo: volatileStatus
+volatileStatus_encore: volatileStatus
+volatileStatus_endure: volatileStatus
+volatileStatus_fallenfallen: volatileStatus
+volatileStatus_flashfire: volatileStatus
+volatileStatus_flinch: volatileStatus
+volatileStatus_fling: volatileStatus
+volatileStatus_fly: volatileStatus
+volatileStatus_focusenergy: volatileStatus
+volatileStatus_focuspunch: volatileStatus
+volatileStatus_focussash: volatileStatus
+volatileStatus_followme: volatileStatus
+volatileStatus_foo: volatileStatus
+volatileStatus_foresight: volatileStatus
+volatileStatus_formechange: volatileStatus
+volatileStatus_furycutter: volatileStatus
+volatileStatus_futuresight: volatileStatus
+volatileStatus_gastroacid: volatileStatus
+volatileStatus_gem: volatileStatus
+volatileStatus_glaiverush: volatileStatus
+volatileStatus_gmaxchistrike: volatileStatus
+volatileStatus_grudge: volatileStatus
+volatileStatus_healblock: volatileStatus
+volatileStatus_helpinghand: volatileStatus
+volatileStatus_iceball: volatileStatus
+volatileStatus_imprison: volatileStatus
+volatileStatus_ingrain: volatileStatus
+volatileStatus_invulnerability: volatileStatus
+volatileStatus_itemremoved: volatileStatus
+volatileStatus_kingsshield: volatileStatus
+volatileStatus_laserfocus: volatileStatus
+volatileStatus_leechseed: volatileStatus
+volatileStatus_leppaberry: volatileStatus
+volatileStatus_lifeorb: volatileStatus
+volatileStatus_lightscreen: volatileStatus
+volatileStatus_lockedmove: volatileStatus
+volatileStatus_lockon: volatileStatus
+volatileStatus_magiccoat: volatileStatus
+volatileStatus_magnetrise: volatileStatus
+volatileStatus_maxguard: volatileStatus
+volatileStatus_mefirst: volatileStatus
+volatileStatus_metronome: volatileStatus
+volatileStatus_micleberry: volatileStatus
+volatileStatus_mimic: volatileStatus
+volatileStatus_minimize: volatileStatus
+volatileStatus_miracleeye: volatileStatus
+volatileStatus_mirrorcoat: volatileStatus
+volatileStatus_mist: volatileStatus
+volatileStatus_mudsport: volatileStatus
+volatileStatus_mustrecharge: volatileStatus
+volatileStatus_nightmare: volatileStatus
+volatileStatus_noretreat: volatileStatus
+volatileStatus_obstruct: volatileStatus
+volatileStatus_octolock: volatileStatus
+volatileStatus_partiallytrapped: volatileStatus
+volatileStatus_partialtrappinglock: volatileStatus
+volatileStatus_perish0: volatileStatus
+volatileStatus_perish3: volatileStatus
+volatileStatus_perishduration: volatileStatus
+volatileStatus_perishsong: volatileStatus
+volatileStatus_powder: volatileStatus
+volatileStatus_powershift: volatileStatus
+volatileStatus_powertrick: volatileStatus
+volatileStatus_protect: volatileStatus
+volatileStatus_protosynthesis: volatileStatus
+volatileStatus_protosynthesisthiseffectstatebeststat: volatileStatus
+volatileStatus_quarkdrive: volatileStatus
+volatileStatus_quarkdrivethiseffectstatebeststat: volatileStatus
+volatileStatus_qux: volatileStatus
+volatileStatus_rage: volatileStatus
+volatileStatus_ragepowder: volatileStatus
+volatileStatus_reflect: volatileStatus
+volatileStatus_residualdmg: volatileStatus
+volatileStatus_rollout: volatileStatus
+volatileStatus_rolloutstorage: volatileStatus
+volatileStatus_roost: volatileStatus
+volatileStatus_saltcure: volatileStatus
+volatileStatus_shelltrap: volatileStatus
+volatileStatus_silktrap: volatileStatus
+volatileStatus_skydrop: volatileStatus
+volatileStatus_slowstart: volatileStatus
+volatileStatus_smackdown: volatileStatus
+volatileStatus_snatch: volatileStatus
+volatileStatus_sparklingaria: volatileStatus
+volatileStatus_spikyshield: volatileStatus
+volatileStatus_spotlight: volatileStatus
+volatileStatus_stall: volatileStatus
+volatileStatus_stockpile: volatileStatus
+volatileStatus_stockpilethiseffectstatelayers: volatileStatus
+volatileStatus_substitute: volatileStatus
+volatileStatus_substitutebroken: volatileStatus
+volatileStatus_syrupbomb: volatileStatus
+volatileStatus_tarshot: volatileStatus
+volatileStatus_taunt: volatileStatus
+volatileStatus_telekinesis: volatileStatus
+volatileStatus_throatchop: volatileStatus
+volatileStatus_torment: volatileStatus
+volatileStatus_toxic: volatileStatus
+volatileStatus_transform: volatileStatus
+volatileStatus_trapped: volatileStatus
+volatileStatus_truant: volatileStatus
+volatileStatus_twoturnmove: volatileStatus
+volatileStatus_typeadd: volatileStatus
+volatileStatus_typechange: volatileStatus
+volatileStatus_unburden: volatileStatus
+volatileStatus_uproar: volatileStatus
+volatileStatus_watersport: volatileStatus
+volatileStatus_wrap: volatileStatus
+volatileStatus_yawn: volatileStatus
+volatileStatus_zenmode: volatileStatus
+weathers_null: weathers
+weathers_deltastream: weathers
+weathers_desolateland: weathers
+weathers_hail: weathers
+weathers_primordialsea: weathers
+weathers_rain: weathers
+weathers_sand: weathers
+weathers_snow: weathers
+weathers_sun: weathers
+terrain_null: terrain
+terrain_electric: terrain
+terrain_grassy: terrain
+terrain_misty: terrain
+terrain_pikachuphdflyingpresspikachulibre: terrain
+terrain_psychic: terrain
+sideConditions_null: sideConditions
+sideConditions_auroraveil: sideConditions
+sideConditions_firepledge: sideConditions
+sideConditions_gmaxcannonade: sideConditions
+sideConditions_gmaxsteelsurge: sideConditions
+sideConditions_gmaxvinelash: sideConditions
+sideConditions_gmaxvolcalith: sideConditions
+sideConditions_gmaxwildfire: sideConditions
+sideConditions_grasspledge: sideConditions
+sideConditions_lightscreen: sideConditions
+sideConditions_luckychant: sideConditions
+sideConditions_mist: sideConditions
+sideConditions_reflect: sideConditions
+sideConditions_safeguard: sideConditions
+sideConditions_spikes: sideConditions
+sideConditions_stealthrock: sideConditions
+sideConditions_stickyweb: sideConditions
+sideConditions_tailwind: sideConditions
+sideConditions_toxicspikes: sideConditions
+sideConditions_waterpledge: sideConditions
+species_none: species
+species_pad: species
+species_unk: species
+species_ababo: species
+species_abomasnow: species
+species_abomasnowmega: species
+species_abra: species
+species_absol: species
+species_absolmega: species
+species_accelgor: species
+species_aegislash: species
+species_aegislashblade: species
+species_aerodactyl: species
+species_aerodactylmega: species
+species_aggron: species
+species_aggronmega: species
+species_aipom: species
+species_alakazam: species
+species_alakazammega: species
+species_alcremie: species
+species_alcremiegmax: species
+species_alomomola: species
+species_altaria: species
+species_altariamega: species
+species_amaura: species
+species_ambipom: species
+species_amoonguss: species
+species_ampharos: species
+species_ampharosmega: species
+species_annihilape: species
+species_anorith: species
+species_appletun: species
+species_appletungmax: species
+species_applin: species
+species_araquanid: species
+species_araquanidtotem: species
+species_arbok: species
+species_arboliva: species
+species_arcanine: species
+species_arcaninehisui: species
+species_arceus: species
+species_arceusbug: species
+species_arceusdark: species
+species_arceusdragon: species
+species_arceuselectric: species
+species_arceusfairy: species
+species_arceusfighting: species
+species_arceusfire: species
+species_arceusflying: species
+species_arceusghost: species
+species_arceusgrass: species
+species_arceusground: species
+species_arceusice: species
+species_arceuspoison: species
+species_arceuspsychic: species
+species_arceusrock: species
+species_arceussteel: species
+species_arceuswater: species
+species_archaludon: species
+species_archen: species
+species_archeops: species
+species_arctibax: species
+species_arctovish: species
+species_arctozolt: species
+species_argalis: species
+species_arghonaut: species
+species_ariados: species
+species_armaldo: species
+species_armarouge: species
+species_aromatisse: species
+species_aron: species
+species_arrokuda: species
+species_articuno: species
+species_articunogalar: species
+species_astrolotl: species
+species_audino: species
+species_audinomega: species
+species_aurorus: species
+species_aurumoth: species
+species_avalugg: species
+species_avalugghisui: species
+species_axew: species
+species_azelf: species
+species_azumarill: species
+species_azurill: species
+species_bagon: species
+species_baltoy: species
+species_banette: species
+species_banettemega: species
+species_barbaracle: species
+species_barboach: species
+species_barraskewda: species
+species_basculegion: species
+species_basculegionf: species
+species_basculin: species
+species_basculinbluestriped: species
+species_basculinwhitestriped: species
+species_bastiodon: species
+species_baxcalibur: species
+species_bayleef: species
+species_beartic: species
+species_beautifly: species
+species_beedrill: species
+species_beedrillmega: species
+species_beheeyem: species
+species_beldum: species
+species_bellibolt: species
+species_bellossom: species
+species_bellsprout: species
+species_bergmite: species
+species_bewear: species
+species_bibarel: species
+species_bidoof: species
+species_binacle: species
+species_bisharp: species
+species_blacephalon: species
+species_blastoise: species
+species_blastoisegmax: species
+species_blastoisemega: species
+species_blaziken: species
+species_blazikenmega: species
+species_blipbug: species
+species_blissey: species
+species_blitzle: species
+species_boldore: species
+species_boltund: species
+species_bombirdier: species
+species_bonsly: species
+species_bouffalant: species
+species_bounsweet: species
+species_braixen: species
+species_brambleghast: species
+species_bramblin: species
+species_brattler: species
+species_braviary: species
+species_braviaryhisui: species
+species_breezi: species
+species_breloom: species
+species_brionne: species
+species_bronzong: species
+species_bronzor: species
+species_brutebonnet: species
+species_bruxish: species
+species_budew: species
+species_buizel: species
+species_bulbasaur: species
+species_buneary: species
+species_bunnelby: species
+species_burmy: species
+species_butterfree: species
+species_butterfreegmax: species
+species_buzzwole: species
+species_cacnea: species
+species_cacturne: species
+species_caimanoe: species
+species_calyrex: species
+species_calyrexice: species
+species_calyrexshadow: species
+species_camerupt: species
+species_cameruptmega: species
+species_capsakid: species
+species_carbink: species
+species_caribolt: species
+species_carkol: species
+species_carnivine: species
+species_carracosta: species
+species_carvanha: species
+species_cascoon: species
+species_castform: species
+species_castformrainy: species
+species_castformsnowy: species
+species_castformsunny: species
+species_caterpie: species
+species_cawdet: species
+species_cawmodore: species
+species_celebi: species
+species_celesteela: species
+species_centiskorch: species
+species_centiskorchgmax: species
+species_ceruledge: species
+species_cetitan: species
+species_cetoddle: species
+species_chandelure: species
+species_chansey: species
+species_charcadet: species
+species_charizard: species
+species_charizardgmax: species
+species_charizardmegax: species
+species_charizardmegay: species
+species_charjabug: species
+species_charmander: species
+species_charmeleon: species
+species_chatot: species
+species_cherrim: species
+species_cherrimsunshine: species
+species_cherubi: species
+species_chesnaught: species
+species_chespin: species
+species_chewtle: species
+species_chienpao: species
+species_chikorita: species
+species_chimchar: species
+species_chimecho: species
+species_chinchou: species
+species_chingling: species
+species_chiyu: species
+species_chromera: species
+species_chuggalong: species
+species_cinccino: species
+species_cinderace: species
+species_cinderacegmax: species
+species_clamperl: species
+species_clauncher: species
+species_clawitzer: species
+species_claydol: species
+species_clefable: species
+species_clefairy: species
+species_cleffa: species
+species_clobbopus: species
+species_clodsire: species
+species_cloyster: species
+species_coalossal: species
+species_coalossalgmax: species
+species_cobalion: species
+species_cofagrigus: species
+species_colossoil: species
+species_combee: species
+species_combusken: species
+species_comfey: species
+species_conkeldurr: species
+species_copperajah: species
+species_copperajahgmax: species
+species_coribalis: species
+species_corphish: species
+species_corsola: species
+species_corsolagalar: species
+species_corviknight: species
+species_corviknightgmax: species
+species_corvisquire: species
+species_cosmoem: species
+species_cosmog: species
+species_cottonee: species
+species_crabominable: species
+species_crabrawler: species
+species_cradily: species
+species_cramorant: species
+species_cramorantgorging: species
+species_cramorantgulping: species
+species_cranidos: species
+species_crawdaunt: species
+species_cresceidon: species
+species_cresselia: species
+species_croagunk: species
+species_crobat: species
+species_crocalor: species
+species_croconaw: species
+species_crucibelle: species
+species_crucibellemega: species
+species_crustle: species
+species_cryogonal: species
+species_cubchoo: species
+species_cubone: species
+species_cufant: species
+species_cupra: species
+species_cursola: species
+species_cutiefly: species
+species_cyclizar: species
+species_cyclohm: species
+species_cyndaquil: species
+species_dachsbun: species
+species_darkrai: species
+species_darmanitan: species
+species_darmanitangalar: species
+species_darmanitangalarzen: species
+species_darmanitanzen: species
+species_dartrix: species
+species_darumaka: species
+species_darumakagalar: species
+species_decidueye: species
+species_decidueyehisui: species
+species_dedenne: species
+species_deerling: species
+species_deino: species
+species_delcatty: species
+species_delibird: species
+species_delphox: species
+species_deoxys: species
+species_deoxysattack: species
+species_deoxysdefense: species
+species_deoxysspeed: species
+species_dewgong: species
+species_dewott: species
+species_dewpider: species
+species_dhelmise: species
+species_dialga: species
+species_dialgaorigin: species
+species_diancie: species
+species_dianciemega: species
+species_diggersby: species
+species_diglett: species
+species_diglettalola: species
+species_dipplin: species
+species_ditto: species
+species_dodrio: species
+species_doduo: species
+species_dolliv: species
+species_dondozo: species
+species_donphan: species
+species_dorsoil: species
+species_dottler: species
+species_doublade: species
+species_dracovish: species
+species_dracozolt: species
+species_dragalge: species
+species_dragapult: species
+species_dragonair: species
+species_dragonite: species
+species_drakloak: species
+species_drampa: species
+species_drapion: species
+species_dratini: species
+species_drednaw: species
+species_drednawgmax: species
+species_dreepy: species
+species_drifblim: species
+species_drifloon: species
+species_drilbur: species
+species_drizzile: species
+species_drowzee: species
+species_druddigon: species
+species_dubwool: species
+species_ducklett: species
+species_dudunsparce: species
+species_dudunsparcethreesegment: species
+species_dugtrio: species
+species_dugtrioalola: species
+species_dunsparce: species
+species_duohm: species
+species_duosion: species
+species_duraludon: species
+species_duraludongmax: species
+species_durant: species
+species_dusclops: species
+species_dusknoir: species
+species_duskull: species
+species_dustox: species
+species_dwebble: species
+species_eelektrik: species
+species_eelektross: species
+species_eevee: species
+species_eeveegmax: species
+species_eeveestarter: species
+species_eiscue: species
+species_eiscuenoice: species
+species_ekans: species
+species_eldegoss: species
+species_electabuzz: species
+species_electivire: species
+species_electrelk: species
+species_electrike: species
+species_electrode: species
+species_electrodehisui: species
+species_elekid: species
+species_elgyem: species
+species_embirch: species
+species_emboar: species
+species_emolga: species
+species_empoleon: species
+species_enamorus: species
+species_enamorustherian: species
+species_entei: species
+species_equilibra: species
+species_escavalier: species
+species_espathra: species
+species_espeon: species
+species_espurr: species
+species_eternatus: species
+species_eternatuseternamax: species
+species_excadrill: species
+species_exeggcute: species
+species_exeggutor: species
+species_exeggutoralola: species
+species_exploud: species
+species_falinks: species
+species_farfetchd: species
+species_farfetchdgalar: species
+species_farigiraf: species
+species_fawnifer: species
+species_fearow: species
+species_feebas: species
+species_fennekin: species
+species_feraligatr: species
+species_ferroseed: species
+species_ferrothorn: species
+species_fezandipiti: species
+species_fidgit: species
+species_fidough: species
+species_finizen: species
+species_finneon: species
+species_flaaffy: species
+species_flabebe: species
+species_flamigo: species
+species_flapple: species
+species_flapplegmax: species
+species_flarelm: species
+species_flareon: species
+species_fletchinder: species
+species_fletchling: species
+species_flittle: species
+species_floatoy: species
+species_floatzel: species
+species_floette: species
+species_floetteeternal: species
+species_floragato: species
+species_florges: species
+species_fluttermane: species
+species_flygon: species
+species_fomantis: species
+species_foongus: species
+species_forretress: species
+species_fraxure: species
+species_frigibax: species
+species_frillish: species
+species_froakie: species
+species_frogadier: species
+species_froslass: species
+species_frosmoth: species
+species_fuecoco: species
+species_furfrou: species
+species_furret: species
+species_gabite: species
+species_gallade: species
+species_gallademega: species
+species_galvantula: species
+species_garbodor: species
+species_garbodorgmax: species
+species_garchomp: species
+species_garchompmega: species
+species_gardevoir: species
+species_gardevoirmega: species
+species_garganacl: species
+species_gastly: species
+species_gastrodon: species
+species_genesect: species
+species_genesectburn: species
+species_genesectchill: species
+species_genesectdouse: species
+species_genesectshock: species
+species_gengar: species
+species_gengargmax: species
+species_gengarmega: species
+species_geodude: species
+species_geodudealola: species
+species_gholdengo: species
+species_gible: species
+species_gigalith: species
+species_gimmighoul: species
+species_gimmighoulroaming: species
+species_girafarig: species
+species_giratina: species
+species_giratinaorigin: species
+species_glaceon: species
+species_glalie: species
+species_glaliemega: species
+species_glameow: species
+species_glastrier: species
+species_gligar: species
+species_glimmet: species
+species_glimmora: species
+species_gliscor: species
+species_gloom: species
+species_gogoat: species
+species_golbat: species
+species_goldeen: species
+species_golduck: species
+species_golem: species
+species_golemalola: species
+species_golett: species
+species_golisopod: species
+species_golurk: species
+species_goodra: species
+species_goodrahisui: species
+species_goomy: species
+species_gorebyss: species
+species_gossifleur: species
+species_gothita: species
+species_gothitelle: species
+species_gothorita: species
+species_gougingfire: species
+species_gourgeist: species
+species_gourgeistlarge: species
+species_gourgeistsmall: species
+species_gourgeistsuper: species
+species_grafaiai: species
+species_granbull: species
+species_grapploct: species
+species_graveler: species
+species_graveleralola: species
+species_greattusk: species
+species_greavard: species
+species_greedent: species
+species_greninja: species
+species_greninjaash: species
+species_greninjabond: species
+species_grimer: species
+species_grimeralola: species
+species_grimmsnarl: species
+species_grimmsnarlgmax: species
+species_grookey: species
+species_grotle: species
+species_groudon: species
+species_groudonprimal: species
+species_grovyle: species
+species_growlithe: species
+species_growlithehisui: species
+species_grubbin: species
+species_grumpig: species
+species_gulpin: species
+species_gumshoos: species
+species_gumshoostotem: species
+species_gurdurr: species
+species_guzzlord: species
+species_gyarados: species
+species_gyaradosmega: species
+species_hakamoo: species
+species_happiny: species
+species_hariyama: species
+species_hatenna: species
+species_hatterene: species
+species_hatterenegmax: species
+species_hattrem: species
+species_haunter: species
+species_hawlucha: species
+species_haxorus: species
+species_heatmor: species
+species_heatran: species
+species_heliolisk: species
+species_helioptile: species
+species_hemogoblin: species
+species_heracross: species
+species_heracrossmega: species
+species_herdier: species
+species_hippopotas: species
+species_hippowdon: species
+species_hitmonchan: species
+species_hitmonlee: species
+species_hitmontop: species
+species_honchkrow: species
+species_honedge: species
+species_hooh: species
+species_hoopa: species
+species_hoopaunbound: species
+species_hoothoot: species
+species_hoppip: species
+species_horsea: species
+species_houndoom: species
+species_houndoommega: species
+species_houndour: species
+species_houndstone: species
+species_huntail: species
+species_hydrapple: species
+species_hydreigon: species
+species_hypno: species
+species_igglybuff: species
+species_illumise: species
+species_impidimp: species
+species_incineroar: species
+species_indeedee: species
+species_indeedeef: species
+species_infernape: species
+species_inkay: species
+species_inteleon: species
+species_inteleongmax: species
+species_ironboulder: species
+species_ironbundle: species
+species_ironcrown: species
+species_ironhands: species
+species_ironjugulis: species
+species_ironleaves: species
+species_ironmoth: species
+species_ironthorns: species
+species_irontreads: species
+species_ironvaliant: species
+species_ivysaur: species
+species_jangmoo: species
+species_jellicent: species
+species_jigglypuff: species
+species_jirachi: species
+species_jolteon: species
+species_joltik: species
+species_jumbao: species
+species_jumpluff: species
+species_justyke: species
+species_jynx: species
+species_kabuto: species
+species_kabutops: species
+species_kadabra: species
+species_kakuna: species
+species_kangaskhan: species
+species_kangaskhanmega: species
+species_karrablast: species
+species_kartana: species
+species_kecleon: species
+species_keldeo: species
+species_keldeoresolute: species
+species_kerfluffle: species
+species_kilowattrel: species
+species_kingambit: species
+species_kingdra: species
+species_kingler: species
+species_kinglergmax: species
+species_kirlia: species
+species_kitsunoh: species
+species_klang: species
+species_klawf: species
+species_kleavor: species
+species_klefki: species
+species_klink: species
+species_klinklang: species
+species_koffing: species
+species_komala: species
+species_kommoo: species
+species_kommoototem: species
+species_koraidon: species
+species_krabby: species
+species_kricketot: species
+species_kricketune: species
+species_krilowatt: species
+species_krokorok: species
+species_krookodile: species
+species_kubfu: species
+species_kyogre: species
+species_kyogreprimal: species
+species_kyurem: species
+species_kyuremblack: species
+species_kyuremwhite: species
+species_lairon: species
+species_lampent: species
+species_landorus: species
+species_landorustherian: species
+species_lanturn: species
+species_lapras: species
+species_laprasgmax: species
+species_larvesta: species
+species_larvitar: species
+species_latias: species
+species_latiasmega: species
+species_latios: species
+species_latiosmega: species
+species_leafeon: species
+species_leavanny: species
+species_lechonk: species
+species_ledian: species
+species_ledyba: species
+species_lickilicky: species
+species_lickitung: species
+species_liepard: species
+species_lileep: species
+species_lilligant: species
+species_lilliganthisui: species
+species_lillipup: species
+species_linoone: species
+species_linoonegalar: species
+species_litleo: species
+species_litten: species
+species_litwick: species
+species_lokix: species
+species_lombre: species
+species_lopunny: species
+species_lopunnymega: species
+species_lotad: species
+species_loudred: species
+species_lucario: species
+species_lucariomega: species
+species_ludicolo: species
+species_lugia: species
+species_lumineon: species
+species_lunala: species
+species_lunatone: species
+species_lurantis: species
+species_lurantistotem: species
+species_luvdisc: species
+species_luxio: species
+species_luxray: species
+species_lycanroc: species
+species_lycanrocdusk: species
+species_lycanrocmidnight: species
+species_mabosstiff: species
+species_machamp: species
+species_machampgmax: species
+species_machoke: species
+species_machop: species
+species_magby: species
+species_magcargo: species
+species_magearna: species
+species_magearnaoriginal: species
+species_magikarp: species
+species_magmar: species
+species_magmortar: species
+species_magnemite: species
+species_magneton: species
+species_magnezone: species
+species_makuhita: species
+species_malaconda: species
+species_malamar: species
+species_mamoswine: species
+species_manaphy: species
+species_mandibuzz: species
+species_manectric: species
+species_manectricmega: species
+species_mankey: species
+species_mantine: species
+species_mantyke: species
+species_maractus: species
+species_mareanie: species
+species_mareep: species
+species_marill: species
+species_marowak: species
+species_marowakalola: species
+species_marowakalolatotem: species
+species_marshadow: species
+species_marshtomp: species
+species_maschiff: species
+species_masquerain: species
+species_maushold: species
+species_mausholdfour: species
+species_mawile: species
+species_mawilemega: species
+species_medicham: species
+species_medichammega: species
+species_meditite: species
+species_meganium: species
+species_melmetal: species
+species_melmetalgmax: species
+species_meloetta: species
+species_meloettapirouette: species
+species_meltan: species
+species_meowscarada: species
+species_meowstic: species
+species_meowsticf: species
+species_meowth: species
+species_meowthalola: species
+species_meowthgalar: species
+species_meowthgmax: species
+species_mesprit: species
+species_metagross: species
+species_metagrossmega: species
+species_metang: species
+species_metapod: species
+species_mew: species
+species_mewtwo: species
+species_mewtwomegax: species
+species_mewtwomegay: species
+species_miasmaw: species
+species_miasmite: species
+species_mienfoo: species
+species_mienshao: species
+species_mightyena: species
+species_milcery: species
+species_milotic: species
+species_miltank: species
+species_mimejr: species
+species_mimikyu: species
+species_mimikyubusted: species
+species_mimikyubustedtotem: species
+species_mimikyutotem: species
+species_minccino: species
+species_minior: species
+species_miniormeteor: species
+species_minun: species
+species_miraidon: species
+species_misdreavus: species
+species_mismagius: species
+species_missingno: species
+species_mollux: species
+species_moltres: species
+species_moltresgalar: species
+species_monferno: species
+species_monohm: species
+species_morelull: species
+species_morgrem: species
+species_morpeko: species
+species_morpekohangry: species
+species_mothim: species
+species_mrmime: species
+species_mrmimegalar: species
+species_mrrime: species
+species_mudbray: species
+species_mudkip: species
+species_mudsdale: species
+species_muk: species
+species_mukalola: species
+species_mumbao: species
+species_munchlax: species
+species_munkidori: species
+species_munna: species
+species_murkrow: species
+species_musharna: species
+species_nacli: species
+species_naclstack: species
+species_naganadel: species
+species_natu: species
+species_naviathan: species
+species_necrozma: species
+species_necrozmadawnwings: species
+species_necrozmaduskmane: species
+species_necrozmaultra: species
+species_necturine: species
+species_necturna: species
+species_nickit: species
+species_nidoking: species
+species_nidoqueen: species
+species_nidoranf: species
+species_nidoranm: species
+species_nidorina: species
+species_nidorino: species
+species_nihilego: species
+species_nincada: species
+species_ninetales: species
+species_ninetalesalola: species
+species_ninjask: species
+species_noctowl: species
+species_nohface: species
+species_noibat: species
+species_noivern: species
+species_nosepass: species
+species_numel: species
+species_nuzleaf: species
+species_nymble: species
+species_obstagoon: species
+species_octillery: species
+species_oddish: species
+species_ogerpon: species
+species_ogerponcornerstone: species
+species_ogerponcornerstonetera: species
+species_ogerponhearthflame: species
+species_ogerponhearthflametera: species
+species_ogerpontealtera: species
+species_ogerponwellspring: species
+species_ogerponwellspringtera: species
+species_oinkologne: species
+species_oinkolognef: species
+species_okidogi: species
+species_omanyte: species
+species_omastar: species
+species_onix: species
+species_oranguru: species
+species_orbeetle: species
+species_orbeetlegmax: species
+species_oricorio: species
+species_oricoriopau: species
+species_oricoriopompom: species
+species_oricoriosensu: species
+species_orthworm: species
+species_oshawott: species
+species_overqwil: species
+species_pachirisu: species
+species_pajantom: species
+species_palafin: species
+species_palafinhero: species
+species_palkia: species
+species_palkiaorigin: species
+species_palossand: species
+species_palpitoad: species
+species_pancham: species
+species_pangoro: species
+species_panpour: species
+species_pansage: species
+species_pansear: species
+species_paras: species
+species_parasect: species
+species_passimian: species
+species_patrat: species
+species_pawmi: species
+species_pawmo: species
+species_pawmot: species
+species_pawniard: species
+species_pecharunt: species
+species_pelipper: species
+species_perrserker: species
+species_persian: species
+species_persianalola: species
+species_petilil: species
+species_phanpy: species
+species_phantump: species
+species_pheromosa: species
+species_phione: species
+species_pichu: species
+species_pichuspikyeared: species
+species_pidgeot: species
+species_pidgeotmega: species
+species_pidgeotto: species
+species_pidgey: species
+species_pidove: species
+species_pignite: species
+species_pikachu: species
+species_pikachualola: species
+species_pikachubelle: species
+species_pikachucosplay: species
+species_pikachugmax: species
+species_pikachuhoenn: species
+species_pikachukalos: species
+species_pikachulibre: species
+species_pikachuoriginal: species
+species_pikachupartner: species
+species_pikachuphd: species
+species_pikachupopstar: species
+species_pikachurockstar: species
+species_pikachusinnoh: species
+species_pikachustarter: species
+species_pikachuunova: species
+species_pikachuworld: species
+species_pikipek: species
+species_piloswine: species
+species_pincurchin: species
+species_pineco: species
+species_pinsir: species
+species_pinsirmega: species
+species_piplup: species
+species_plasmanta: species
+species_pluffle: species
+species_plusle: species
+species_poipole: species
+species_pokestarblackbelt: species
+species_pokestarblackdoor: species
+species_pokestarbrycenman: species
+species_pokestarf00: species
+species_pokestarf002: species
+species_pokestargiant: species
+species_pokestarhumanoid: species
+species_pokestarmonster: species
+species_pokestarmt: species
+species_pokestarmt2: species
+species_pokestarsmeargle: species
+species_pokestarspirit: species
+species_pokestartransport: species
+species_pokestarufo: species
+species_pokestarufo2: species
+species_pokestarufopropu2: species
+species_pokestarwhitedoor: species
+species_politoed: species
+species_poliwag: species
+species_poliwhirl: species
+species_poliwrath: species
+species_poltchageist: species
+species_poltchageistartisan: species
+species_polteageist: species
+species_polteageistantique: species
+species_ponyta: species
+species_ponytagalar: species
+species_poochyena: species
+species_popplio: species
+species_porygon: species
+species_porygon2: species
+species_porygonz: species
+species_primarina: species
+species_primeape: species
+species_prinplup: species
+species_privatyke: species
+species_probopass: species
+species_protowatt: species
+species_psyduck: species
+species_pumpkaboo: species
+species_pumpkaboolarge: species
+species_pumpkaboosmall: species
+species_pumpkaboosuper: species
+species_pupitar: species
+species_purrloin: species
+species_purugly: species
+species_pyroak: species
+species_pyroar: species
+species_pyukumuku: species
+species_quagsire: species
+species_quaquaval: species
+species_quaxly: species
+species_quaxwell: species
+species_quilava: species
+species_quilladin: species
+species_qwilfish: species
+species_qwilfishhisui: species
+species_raboot: species
+species_rabsca: species
+species_ragingbolt: species
+species_raichu: species
+species_raichualola: species
+species_raikou: species
+species_ralts: species
+species_rampardos: species
+species_rapidash: species
+species_rapidashgalar: species
+species_raticate: species
+species_raticatealola: species
+species_raticatealolatotem: species
+species_rattata: species
+species_rattataalola: species
+species_rayquaza: species
+species_rayquazamega: species
+species_rebble: species
+species_regice: species
+species_regidrago: species
+species_regieleki: species
+species_regigigas: species
+species_regirock: species
+species_registeel: species
+species_relicanth: species
+species_rellor: species
+species_remoraid: species
+species_reshiram: species
+species_reuniclus: species
+species_revavroom: species
+species_revenankh: species
+species_rhydon: species
+species_rhyhorn: species
+species_rhyperior: species
+species_ribombee: species
+species_ribombeetotem: species
+species_rillaboom: species
+species_rillaboomgmax: species
+species_riolu: species
+species_roaringmoon: species
+species_rockruff: species
+species_roggenrola: species
+species_rolycoly: species
+species_rookidee: species
+species_roselia: species
+species_roserade: species
+species_rotom: species
+species_rotomfan: species
+species_rotomfrost: species
+species_rotomheat: species
+species_rotommow: species
+species_rotomwash: species
+species_rowlet: species
+species_rufflet: species
+species_runerigus: species
+species_sableye: species
+species_sableyemega: species
+species_saharaja: species
+species_saharascal: species
+species_salamence: species
+species_salamencemega: species
+species_salandit: species
+species_salazzle: species
+species_salazzletotem: species
+species_samurott: species
+species_samurotthisui: species
+species_sandaconda: species
+species_sandacondagmax: species
+species_sandile: species
+species_sandshrew: species
+species_sandshrewalola: species
+species_sandslash: species
+species_sandslashalola: species
+species_sandygast: species
+species_sandyshocks: species
+species_sawk: species
+species_sawsbuck: species
+species_scatterbug: species
+species_scattervein: species
+species_sceptile: species
+species_sceptilemega: species
+species_scizor: species
+species_scizormega: species
+species_scolipede: species
+species_scorbunny: species
+species_scovillain: species
+species_scrafty: species
+species_scraggy: species
+species_scratchet: species
+species_screamtail: species
+species_scyther: species
+species_seadra: species
+species_seaking: species
+species_sealeo: species
+species_seedot: species
+species_seel: species
+species_seismitoad: species
+species_sentret: species
+species_serperior: species
+species_servine: species
+species_seviper: species
+species_sewaddle: species
+species_sharpedo: species
+species_sharpedomega: species
+species_shaymin: species
+species_shayminsky: species
+species_shedinja: species
+species_shelgon: species
+species_shellder: species
+species_shellos: species
+species_shelmet: species
+species_shieldon: species
+species_shiftry: species
+species_shiinotic: species
+species_shinx: species
+species_shroodle: species
+species_shroomish: species
+species_shuckle: species
+species_shuppet: species
+species_sigilyph: species
+species_silcoon: species
+species_silicobra: species
+species_silvally: species
+species_silvallybug: species
+species_silvallydark: species
+species_silvallydragon: species
+species_silvallyelectric: species
+species_silvallyfairy: species
+species_silvallyfighting: species
+species_silvallyfire: species
+species_silvallyflying: species
+species_silvallyghost: species
+species_silvallygrass: species
+species_silvallyground: species
+species_silvallyice: species
+species_silvallypoison: species
+species_silvallypsychic: species
+species_silvallyrock: species
+species_silvallysteel: species
+species_silvallywater: species
+species_simipour: species
+species_simisage: species
+species_simisear: species
+species_sinistcha: species
+species_sinistchamasterpiece: species
+species_sinistea: species
+species_sinisteaantique: species
+species_sirfetchd: species
+species_sizzlipede: species
+species_skarmory: species
+species_skeledirge: species
+species_skiddo: species
+species_skiploom: species
+species_skitty: species
+species_skorupi: species
+species_skrelp: species
+species_skuntank: species
+species_skwovet: species
+species_slaking: species
+species_slakoth: species
+species_sliggoo: species
+species_sliggoohisui: species
+species_slitherwing: species
+species_slowbro: species
+species_slowbrogalar: species
+species_slowbromega: species
+species_slowking: species
+species_slowkinggalar: species
+species_slowpoke: species
+species_slowpokegalar: species
+species_slugma: species
+species_slurpuff: species
+species_smeargle: species
+species_smogecko: species
+species_smoguana: species
+species_smokomodo: species
+species_smoliv: species
+species_smoochum: species
+species_snaelstrom: species
+species_sneasel: species
+species_sneaselhisui: species
+species_sneasler: species
+species_snivy: species
+species_snom: species
+species_snorlax: species
+species_snorlaxgmax: species
+species_snorunt: species
+species_snover: species
+species_snubbull: species
+species_snugglow: species
+species_sobble: species
+species_solgaleo: species
+species_solosis: species
+species_solotl: species
+species_solrock: species
+species_spearow: species
+species_spectrier: species
+species_spewpa: species
+species_spheal: species
+species_spidops: species
+species_spinarak: species
+species_spinda: species
+species_spiritomb: species
+species_spoink: species
+species_sprigatito: species
+species_spritzee: species
+species_squawkabilly: species
+species_squawkabillyblue: species
+species_squawkabillywhite: species
+species_squawkabillyyellow: species
+species_squirtle: species
+species_stakataka: species
+species_stantler: species
+species_staraptor: species
+species_staravia: species
+species_starly: species
+species_starmie: species
+species_staryu: species
+species_steelix: species
+species_steelixmega: species
+species_steenee: species
+species_stonjourner: species
+species_stoutland: species
+species_stratagem: species
+species_stufful: species
+species_stunfisk: species
+species_stunfiskgalar: species
+species_stunky: species
+species_sudowoodo: species
+species_suicune: species
+species_sunflora: species
+species_sunkern: species
+species_surskit: species
+species_swablu: species
+species_swadloon: species
+species_swalot: species
+species_swampert: species
+species_swampertmega: species
+species_swanna: species
+species_swellow: species
+species_swinub: species
+species_swirlix: species
+species_swirlpool: species
+species_swoobat: species
+species_syclant: species
+species_syclar: species
+species_sylveon: species
+species_tactite: species
+species_tadbulb: species
+species_taillow: species
+species_talonflame: species
+species_tandemaus: species
+species_tangela: species
+species_tangrowth: species
+species_tapubulu: species
+species_tapufini: species
+species_tapukoko: species
+species_tapulele: species
+species_tarountula: species
+species_tatsugiri: species
+species_tauros: species
+species_taurospaldeaaqua: species
+species_taurospaldeablaze: species
+species_taurospaldeacombat: species
+species_teddiursa: species
+species_tentacool: species
+species_tentacruel: species
+species_tepig: species
+species_terapagos: species
+species_terapagosstellar: species
+species_terapagosterastal: species
+species_terrakion: species
+species_thievul: species
+species_throh: species
+species_thundurus: species
+species_thundurustherian: species
+species_thwackey: species
+species_timburr: species
+species_tinglu: species
+species_tinkatink: species
+species_tinkaton: species
+species_tinkatuff: species
+species_tirtouga: species
+species_toedscool: species
+species_toedscruel: species
+species_togedemaru: species
+species_togedemarutotem: species
+species_togekiss: species
+species_togepi: species
+species_togetic: species
+species_tomohawk: species
+species_torchic: species
+species_torkoal: species
+species_tornadus: species
+species_tornadustherian: species
+species_torracat: species
+species_torterra: species
+species_totodile: species
+species_toucannon: species
+species_toxapex: species
+species_toxel: species
+species_toxicroak: species
+species_toxtricity: species
+species_toxtricitygmax: species
+species_toxtricitylowkey: species
+species_toxtricitylowkeygmax: species
+species_tranquill: species
+species_trapinch: species
+species_treecko: species
+species_trevenant: species
+species_tropius: species
+species_trubbish: species
+species_trumbeak: species
+species_tsareena: species
+species_turtonator: species
+species_turtwig: species
+species_tympole: species
+species_tynamo: species
+species_typenull: species
+species_typhlosion: species
+species_typhlosionhisui: species
+species_tyranitar: species
+species_tyranitarmega: species
+species_tyrantrum: species
+species_tyrogue: species
+species_tyrunt: species
+species_umbreon: species
+species_unfezant: species
+species_unown: species
+species_ursaluna: species
+species_ursalunabloodmoon: species
+species_ursaring: species
+species_urshifu: species
+species_urshifugmax: species
+species_urshifurapidstrike: species
+species_urshifurapidstrikegmax: species
+species_uxie: species
+species_vanillish: species
+species_vanillite: species
+species_vanilluxe: species
+species_vaporeon: species
+species_varoom: species
+species_veluza: species
+species_venipede: species
+species_venomicon: species
+species_venomiconepilogue: species
+species_venomoth: species
+species_venonat: species
+species_venusaur: species
+species_venusaurgmax: species
+species_venusaurmega: species
+species_vespiquen: species
+species_vibrava: species
+species_victini: species
+species_victreebel: species
+species_vigoroth: species
+species_vikavolt: species
+species_vikavolttotem: species
+species_vileplume: species
+species_virizion: species
+species_vivillon: species
+species_vivillonfancy: species
+species_vivillonpokeball: species
+species_volbeat: species
+species_volcanion: species
+species_volcarona: species
+species_volkraken: species
+species_volkritter: species
+species_voltorb: species
+species_voltorbhisui: species
+species_voodoll: species
+species_voodoom: species
+species_vullaby: species
+species_vulpix: species
+species_vulpixalola: species
+species_wailmer: species
+species_wailord: species
+species_walkingwake: species
+species_walrein: species
+species_wartortle: species
+species_watchog: species
+species_wattrel: species
+species_weavile: species
+species_weedle: species
+species_weepinbell: species
+species_weezing: species
+species_weezinggalar: species
+species_whimsicott: species
+species_whirlipede: species
+species_whiscash: species
+species_whismur: species
+species_wigglytuff: species
+species_wiglett: species
+species_wimpod: species
+species_wingull: species
+species_wishiwashi: species
+species_wishiwashischool: species
+species_wobbuffet: species
+species_wochien: species
+species_woobat: species
+species_wooloo: species
+species_wooper: species
+species_wooperpaldea: species
+species_wormadam: species
+species_wormadamsandy: species
+species_wormadamtrash: species
+species_wugtrio: species
+species_wurmple: species
+species_wynaut: species
+species_wyrdeer: species
+species_xatu: species
+species_xerneas: species
+species_xerneasneutral: species
+species_xurkitree: species
+species_yamask: species
+species_yamaskgalar: species
+species_yamper: species
+species_yanma: species
+species_yanmega: species
+species_yungoos: species
+species_yveltal: species
+species_zacian: species
+species_zaciancrowned: species
+species_zamazenta: species
+species_zamazentacrowned: species
+species_zangoose: species
+species_zapdos: species
+species_zapdosgalar: species
+species_zarude: species
+species_zarudedada: species
+species_zebstrika: species
+species_zekrom: species
+species_zeraora: species
+species_zigzagoon: species
+species_zigzagoongalar: species
+species_zoroark: species
+species_zoroarkhisui: species
+species_zorua: species
+species_zoruahisui: species
+species_zubat: species
+species_zweilous: species
+species_zygarde: species
+species_zygarde10: species
+species_zygardecomplete: species
+moves_none: moves
+moves_pad: moves
+moves_switch: moves
+moves_unk: moves
+moves_10000000voltthunderbolt: moves
+moves_absorb: moves
+moves_accelerock: moves
+moves_acid: moves
+moves_acidarmor: moves
+moves_aciddownpour: moves
+moves_acidspray: moves
+moves_acrobatics: moves
+moves_acupressure: moves
+moves_aerialace: moves
+moves_aeroblast: moves
+moves_afteryou: moves
+moves_agility: moves
+moves_aircutter: moves
+moves_airslash: moves
+moves_alloutpummeling: moves
+moves_alluringvoice: moves
+moves_allyswitch: moves
+moves_amnesia: moves
+moves_anchorshot: moves
+moves_ancientpower: moves
+moves_appleacid: moves
+moves_aquacutter: moves
+moves_aquajet: moves
+moves_aquaring: moves
+moves_aquastep: moves
+moves_aquatail: moves
+moves_armorcannon: moves
+moves_armthrust: moves
+moves_aromatherapy: moves
+moves_aromaticmist: moves
+moves_assist: moves
+moves_assurance: moves
+moves_astonish: moves
+moves_astralbarrage: moves
+moves_attackorder: moves
+moves_attract: moves
+moves_aurasphere: moves
+moves_aurawheel: moves
+moves_aurorabeam: moves
+moves_auroraveil: moves
+moves_autotomize: moves
+moves_avalanche: moves
+moves_axekick: moves
+moves_babydolleyes: moves
+moves_baddybad: moves
+moves_banefulbunker: moves
+moves_barbbarrage: moves
+moves_barrage: moves
+moves_barrier: moves
+moves_batonpass: moves
+moves_beakblast: moves
+moves_beatup: moves
+moves_behemothbash: moves
+moves_behemothblade: moves
+moves_belch: moves
+moves_bellydrum: moves
+moves_bestow: moves
+moves_bide: moves
+moves_bind: moves
+moves_bite: moves
+moves_bitterblade: moves
+moves_bittermalice: moves
+moves_blackholeeclipse: moves
+moves_blastburn: moves
+moves_blazekick: moves
+moves_blazingtorque: moves
+moves_bleakwindstorm: moves
+moves_blizzard: moves
+moves_block: moves
+moves_bloodmoon: moves
+moves_bloomdoom: moves
+moves_blueflare: moves
+moves_bodypress: moves
+moves_bodyslam: moves
+moves_boltbeak: moves
+moves_boltstrike: moves
+moves_boneclub: moves
+moves_bonemerang: moves
+moves_bonerush: moves
+moves_boomburst: moves
+moves_bounce: moves
+moves_bouncybubble: moves
+moves_branchpoke: moves
+moves_bravebird: moves
+moves_breakingswipe: moves
+moves_breakneckblitz: moves
+moves_brickbreak: moves
+moves_brine: moves
+moves_brutalswing: moves
+moves_bubble: moves
+moves_bubblebeam: moves
+moves_bugbite: moves
+moves_bugbuzz: moves
+moves_bulkup: moves
+moves_bulldoze: moves
+moves_bulletpunch: moves
+moves_bulletseed: moves
+moves_burningbulwark: moves
+moves_burningjealousy: moves
+moves_burnup: moves
+moves_buzzybuzz: moves
+moves_calmmind: moves
+moves_camouflage: moves
+moves_captivate: moves
+moves_catastropika: moves
+moves_ceaselessedge: moves
+moves_celebrate: moves
+moves_charge: moves
+moves_chargebeam: moves
+moves_charm: moves
+moves_chatter: moves
+moves_chillingwater: moves
+moves_chillyreception: moves
+moves_chipaway: moves
+moves_chloroblast: moves
+moves_circlethrow: moves
+moves_clamp: moves
+moves_clangingscales: moves
+moves_clangoroussoul: moves
+moves_clangoroussoulblaze: moves
+moves_clearsmog: moves
+moves_closecombat: moves
+moves_coaching: moves
+moves_coil: moves
+moves_collisioncourse: moves
+moves_combattorque: moves
+moves_cometpunch: moves
+moves_comeuppance: moves
+moves_confide: moves
+moves_confuseray: moves
+moves_confusion: moves
+moves_constrict: moves
+moves_continentalcrush: moves
+moves_conversion: moves
+moves_conversion2: moves
+moves_copycat: moves
+moves_coreenforcer: moves
+moves_corkscrewcrash: moves
+moves_corrosivegas: moves
+moves_cosmicpower: moves
+moves_cottonguard: moves
+moves_cottonspore: moves
+moves_counter: moves
+moves_courtchange: moves
+moves_covet: moves
+moves_crabhammer: moves
+moves_craftyshield: moves
+moves_crosschop: moves
+moves_crosspoison: moves
+moves_crunch: moves
+moves_crushclaw: moves
+moves_crushgrip: moves
+moves_curse: moves
+moves_cut: moves
+moves_darkestlariat: moves
+moves_darkpulse: moves
+moves_darkvoid: moves
+moves_dazzlinggleam: moves
+moves_decorate: moves
+moves_defendorder: moves
+moves_defensecurl: moves
+moves_defog: moves
+moves_destinybond: moves
+moves_detect: moves
+moves_devastatingdrake: moves
+moves_diamondstorm: moves
+moves_dig: moves
+moves_direclaw: moves
+moves_disable: moves
+moves_disarmingvoice: moves
+moves_discharge: moves
+moves_dive: moves
+moves_dizzypunch: moves
+moves_doodle: moves
+moves_doomdesire: moves
+moves_doubleedge: moves
+moves_doublehit: moves
+moves_doubleironbash: moves
+moves_doublekick: moves
+moves_doubleshock: moves
+moves_doubleslap: moves
+moves_doubleteam: moves
+moves_dracometeor: moves
+moves_dragonascent: moves
+moves_dragonbreath: moves
+moves_dragoncheer: moves
+moves_dragonclaw: moves
+moves_dragondance: moves
+moves_dragondarts: moves
+moves_dragonenergy: moves
+moves_dragonhammer: moves
+moves_dragonpulse: moves
+moves_dragonrage: moves
+moves_dragonrush: moves
+moves_dragontail: moves
+moves_drainingkiss: moves
+moves_drainpunch: moves
+moves_dreameater: moves
+moves_drillpeck: moves
+moves_drillrun: moves
+moves_drumbeating: moves
+moves_dualchop: moves
+moves_dualwingbeat: moves
+moves_dynamaxcannon: moves
+moves_dynamicpunch: moves
+moves_earthpower: moves
+moves_earthquake: moves
+moves_echoedvoice: moves
+moves_eerieimpulse: moves
+moves_eeriespell: moves
+moves_eggbomb: moves
+moves_electricterrain: moves
+moves_electrify: moves
+moves_electroball: moves
+moves_electrodrift: moves
+moves_electroshot: moves
+moves_electroweb: moves
+moves_embargo: moves
+moves_ember: moves
+moves_encore: moves
+moves_endeavor: moves
+moves_endure: moves
+moves_energyball: moves
+moves_entrainment: moves
+moves_eruption: moves
+moves_esperwing: moves
+moves_eternabeam: moves
+moves_expandingforce: moves
+moves_explosion: moves
+moves_extrasensory: moves
+moves_extremeevoboost: moves
+moves_extremespeed: moves
+moves_facade: moves
+moves_fairylock: moves
+moves_fairywind: moves
+moves_fakeout: moves
+moves_faketears: moves
+moves_falsesurrender: moves
+moves_falseswipe: moves
+moves_featherdance: moves
+moves_feint: moves
+moves_feintattack: moves
+moves_fellstinger: moves
+moves_ficklebeam: moves
+moves_fierydance: moves
+moves_fierywrath: moves
+moves_filletaway: moves
+moves_finalgambit: moves
+moves_fireblast: moves
+moves_firefang: moves
+moves_firelash: moves
+moves_firepledge: moves
+moves_firepunch: moves
+moves_firespin: moves
+moves_firstimpression: moves
+moves_fishiousrend: moves
+moves_fissure: moves
+moves_flail: moves
+moves_flameburst: moves
+moves_flamecharge: moves
+moves_flamethrower: moves
+moves_flamewheel: moves
+moves_flareblitz: moves
+moves_flash: moves
+moves_flashcannon: moves
+moves_flatter: moves
+moves_fleurcannon: moves
+moves_fling: moves
+moves_flipturn: moves
+moves_floatyfall: moves
+moves_floralhealing: moves
+moves_flowershield: moves
+moves_flowertrick: moves
+moves_fly: moves
+moves_flyingpress: moves
+moves_focusblast: moves
+moves_focusenergy: moves
+moves_focuspunch: moves
+moves_followme: moves
+moves_forcepalm: moves
+moves_foresight: moves
+moves_forestscurse: moves
+moves_foulplay: moves
+moves_freezedry: moves
+moves_freezeshock: moves
+moves_freezingglare: moves
+moves_freezyfrost: moves
+moves_frenzyplant: moves
+moves_frostbreath: moves
+moves_frustration: moves
+moves_furyattack: moves
+moves_furycutter: moves
+moves_furyswipes: moves
+moves_fusionbolt: moves
+moves_fusionflare: moves
+moves_futuresight: moves
+moves_gastroacid: moves
+moves_geargrind: moves
+moves_gearup: moves
+moves_genesissupernova: moves
+moves_geomancy: moves
+moves_gigadrain: moves
+moves_gigaimpact: moves
+moves_gigatonhammer: moves
+moves_gigavolthavoc: moves
+moves_glaciallance: moves
+moves_glaciate: moves
+moves_glaiverush: moves
+moves_glare: moves
+moves_glitzyglow: moves
+moves_gmaxbefuddle: moves
+moves_gmaxcannonade: moves
+moves_gmaxcentiferno: moves
+moves_gmaxchistrike: moves
+moves_gmaxcuddle: moves
+moves_gmaxdepletion: moves
+moves_gmaxdrumsolo: moves
+moves_gmaxfinale: moves
+moves_gmaxfireball: moves
+moves_gmaxfoamburst: moves
+moves_gmaxgoldrush: moves
+moves_gmaxgravitas: moves
+moves_gmaxhydrosnipe: moves
+moves_gmaxmalodor: moves
+moves_gmaxmeltdown: moves
+moves_gmaxoneblow: moves
+moves_gmaxrapidflow: moves
+moves_gmaxreplenish: moves
+moves_gmaxresonance: moves
+moves_gmaxsandblast: moves
+moves_gmaxsmite: moves
+moves_gmaxsnooze: moves
+moves_gmaxsteelsurge: moves
+moves_gmaxstonesurge: moves
+moves_gmaxstunshock: moves
+moves_gmaxsweetness: moves
+moves_gmaxtartness: moves
+moves_gmaxterror: moves
+moves_gmaxvinelash: moves
+moves_gmaxvolcalith: moves
+moves_gmaxvoltcrash: moves
+moves_gmaxwildfire: moves
+moves_gmaxwindrage: moves
+moves_grassknot: moves
+moves_grasspledge: moves
+moves_grasswhistle: moves
+moves_grassyglide: moves
+moves_grassyterrain: moves
+moves_gravapple: moves
+moves_gravity: moves
+moves_growl: moves
+moves_growth: moves
+moves_grudge: moves
+moves_guardianofalola: moves
+moves_guardsplit: moves
+moves_guardswap: moves
+moves_guillotine: moves
+moves_gunkshot: moves
+moves_gust: moves
+moves_gyroball: moves
+moves_hail: moves
+moves_hammerarm: moves
+moves_happyhour: moves
+moves_harden: moves
+moves_hardpress: moves
+moves_haze: moves
+moves_headbutt: moves
+moves_headcharge: moves
+moves_headlongrush: moves
+moves_headsmash: moves
+moves_healbell: moves
+moves_healblock: moves
+moves_healingwish: moves
+moves_healorder: moves
+moves_healpulse: moves
+moves_heartstamp: moves
+moves_heartswap: moves
+moves_heatcrash: moves
+moves_heatwave: moves
+moves_heavyslam: moves
+moves_helpinghand: moves
+moves_hex: moves
+moves_hiddenpower: moves
+moves_hiddenpowerbug: moves
+moves_hiddenpowerbug60: moves
+moves_hiddenpowerbug70: moves
+moves_hiddenpowerdark: moves
+moves_hiddenpowerdark60: moves
+moves_hiddenpowerdark70: moves
+moves_hiddenpowerdragon: moves
+moves_hiddenpowerdragon60: moves
+moves_hiddenpowerdragon70: moves
+moves_hiddenpowerelectric: moves
+moves_hiddenpowerelectric60: moves
+moves_hiddenpowerelectric70: moves
+moves_hiddenpowerfighting: moves
+moves_hiddenpowerfighting60: moves
+moves_hiddenpowerfighting70: moves
+moves_hiddenpowerfire: moves
+moves_hiddenpowerfire60: moves
+moves_hiddenpowerfire70: moves
+moves_hiddenpowerflying: moves
+moves_hiddenpowerflying60: moves
+moves_hiddenpowerflying70: moves
+moves_hiddenpowerghost: moves
+moves_hiddenpowerghost60: moves
+moves_hiddenpowerghost70: moves
+moves_hiddenpowergrass: moves
+moves_hiddenpowergrass60: moves
+moves_hiddenpowergrass70: moves
+moves_hiddenpowerground: moves
+moves_hiddenpowerground60: moves
+moves_hiddenpowerground70: moves
+moves_hiddenpowerice: moves
+moves_hiddenpowerice60: moves
+moves_hiddenpowerice70: moves
+moves_hiddenpowerpoison: moves
+moves_hiddenpowerpoison60: moves
+moves_hiddenpowerpoison70: moves
+moves_hiddenpowerpsychic: moves
+moves_hiddenpowerpsychic60: moves
+moves_hiddenpowerpsychic70: moves
+moves_hiddenpowerrock: moves
+moves_hiddenpowerrock60: moves
+moves_hiddenpowerrock70: moves
+moves_hiddenpowersteel: moves
+moves_hiddenpowersteel60: moves
+moves_hiddenpowersteel70: moves
+moves_hiddenpowerwater: moves
+moves_hiddenpowerwater60: moves
+moves_hiddenpowerwater70: moves
+moves_highhorsepower: moves
+moves_highjumpkick: moves
+moves_holdback: moves
+moves_holdhands: moves
+moves_honeclaws: moves
+moves_hornattack: moves
+moves_horndrill: moves
+moves_hornleech: moves
+moves_howl: moves
+moves_hurricane: moves
+moves_hydrocannon: moves
+moves_hydropump: moves
+moves_hydrosteam: moves
+moves_hydrovortex: moves
+moves_hyperbeam: moves
+moves_hyperdrill: moves
+moves_hyperfang: moves
+moves_hyperspacefury: moves
+moves_hyperspacehole: moves
+moves_hypervoice: moves
+moves_hypnosis: moves
+moves_iceball: moves
+moves_icebeam: moves
+moves_iceburn: moves
+moves_icefang: moves
+moves_icehammer: moves
+moves_icepunch: moves
+moves_iceshard: moves
+moves_icespinner: moves
+moves_iciclecrash: moves
+moves_iciclespear: moves
+moves_icywind: moves
+moves_imprison: moves
+moves_incinerate: moves
+moves_infernalparade: moves
+moves_inferno: moves
+moves_infernooverdrive: moves
+moves_infestation: moves
+moves_ingrain: moves
+moves_instruct: moves
+moves_iondeluge: moves
+moves_irondefense: moves
+moves_ironhead: moves
+moves_irontail: moves
+moves_ivycudgel: moves
+moves_jawlock: moves
+moves_jetpunch: moves
+moves_judgment: moves
+moves_jumpkick: moves
+moves_junglehealing: moves
+moves_karatechop: moves
+moves_kinesis: moves
+moves_kingsshield: moves
+moves_knockoff: moves
+moves_kowtowcleave: moves
+moves_landswrath: moves
+moves_laserfocus: moves
+moves_lashout: moves
+moves_lastresort: moves
+moves_lastrespects: moves
+moves_lavaplume: moves
+moves_leafage: moves
+moves_leafblade: moves
+moves_leafstorm: moves
+moves_leaftornado: moves
+moves_leechlife: moves
+moves_leechseed: moves
+moves_leer: moves
+moves_letssnuggleforever: moves
+moves_lick: moves
+moves_lifedew: moves
+moves_lightofruin: moves
+moves_lightscreen: moves
+moves_lightthatburnsthesky: moves
+moves_liquidation: moves
+moves_lockon: moves
+moves_lovelykiss: moves
+moves_lowkick: moves
+moves_lowsweep: moves
+moves_luckychant: moves
+moves_luminacrash: moves
+moves_lunarblessing: moves
+moves_lunardance: moves
+moves_lunge: moves
+moves_lusterpurge: moves
+moves_machpunch: moves
+moves_magicalleaf: moves
+moves_magicaltorque: moves
+moves_magiccoat: moves
+moves_magicpowder: moves
+moves_magicroom: moves
+moves_magmastorm: moves
+moves_magnetbomb: moves
+moves_magneticflux: moves
+moves_magnetrise: moves
+moves_magnitude: moves
+moves_makeitrain: moves
+moves_maliciousmoonsault: moves
+moves_malignantchain: moves
+moves_matblock: moves
+moves_matchagotcha: moves
+moves_maxairstream: moves
+moves_maxdarkness: moves
+moves_maxflare: moves
+moves_maxflutterby: moves
+moves_maxgeyser: moves
+moves_maxguard: moves
+moves_maxhailstorm: moves
+moves_maxknuckle: moves
+moves_maxlightning: moves
+moves_maxmindstorm: moves
+moves_maxooze: moves
+moves_maxovergrowth: moves
+moves_maxphantasm: moves
+moves_maxquake: moves
+moves_maxrockfall: moves
+moves_maxstarfall: moves
+moves_maxsteelspike: moves
+moves_maxstrike: moves
+moves_maxwyrmwind: moves
+moves_meanlook: moves
+moves_meditate: moves
+moves_mefirst: moves
+moves_megadrain: moves
+moves_megahorn: moves
+moves_megakick: moves
+moves_megapunch: moves
+moves_memento: moves
+moves_menacingmoonrazemaelstrom: moves
+moves_metalburst: moves
+moves_metalclaw: moves
+moves_metalsound: moves
+moves_meteorassault: moves
+moves_meteorbeam: moves
+moves_meteormash: moves
+moves_metronome: moves
+moves_mightycleave: moves
+moves_milkdrink: moves
+moves_mimic: moves
+moves_mindblown: moves
+moves_mindreader: moves
+moves_minimize: moves
+moves_miracleeye: moves
+moves_mirrorcoat: moves
+moves_mirrormove: moves
+moves_mirrorshot: moves
+moves_mist: moves
+moves_mistball: moves
+moves_mistyexplosion: moves
+moves_mistyterrain: moves
+moves_moonblast: moves
+moves_moongeistbeam: moves
+moves_moonlight: moves
+moves_morningsun: moves
+moves_mortalspin: moves
+moves_mountaingale: moves
+moves_mudbomb: moves
+moves_muddywater: moves
+moves_mudshot: moves
+moves_mudslap: moves
+moves_mudsport: moves
+moves_multiattack: moves
+moves_mysticalfire: moves
+moves_mysticalpower: moves
+moves_nastyplot: moves
+moves_naturalgift: moves
+moves_naturepower: moves
+moves_naturesmadness: moves
+moves_needlearm: moves
+moves_neverendingnightmare: moves
+moves_nightdaze: moves
+moves_nightmare: moves
+moves_nightshade: moves
+moves_nightslash: moves
+moves_nobleroar: moves
+moves_noretreat: moves
+moves_noxioustorque: moves
+moves_nuzzle: moves
+moves_oblivionwing: moves
+moves_obstruct: moves
+moves_oceanicoperetta: moves
+moves_octazooka: moves
+moves_octolock: moves
+moves_odorsleuth: moves
+moves_ominouswind: moves
+moves_orderup: moves
+moves_originpulse: moves
+moves_outrage: moves
+moves_overdrive: moves
+moves_overheat: moves
+moves_painsplit: moves
+moves_paleowave: moves
+moves_paraboliccharge: moves
+moves_partingshot: moves
+moves_payback: moves
+moves_payday: moves
+moves_peck: moves
+moves_perishsong: moves
+moves_petalblizzard: moves
+moves_petaldance: moves
+moves_phantomforce: moves
+moves_photongeyser: moves
+moves_pikapapow: moves
+moves_pinmissile: moves
+moves_plasmafists: moves
+moves_playnice: moves
+moves_playrough: moves
+moves_pluck: moves
+moves_poisonfang: moves
+moves_poisongas: moves
+moves_poisonjab: moves
+moves_poisonpowder: moves
+moves_poisonsting: moves
+moves_poisontail: moves
+moves_pollenpuff: moves
+moves_poltergeist: moves
+moves_populationbomb: moves
+moves_pounce: moves
+moves_pound: moves
+moves_powder: moves
+moves_powdersnow: moves
+moves_powergem: moves
+moves_powershift: moves
+moves_powersplit: moves
+moves_powerswap: moves
+moves_powertrick: moves
+moves_powertrip: moves
+moves_poweruppunch: moves
+moves_powerwhip: moves
+moves_precipiceblades: moves
+moves_present: moves
+moves_prismaticlaser: moves
+moves_protect: moves
+moves_psybeam: moves
+moves_psyblade: moves
+moves_psychic: moves
+moves_psychicfangs: moves
+moves_psychicnoise: moves
+moves_psychicterrain: moves
+moves_psychoboost: moves
+moves_psychocut: moves
+moves_psychoshift: moves
+moves_psychup: moves
+moves_psyshieldbash: moves
+moves_psyshock: moves
+moves_psystrike: moves
+moves_psywave: moves
+moves_pulverizingpancake: moves
+moves_punishment: moves
+moves_purify: moves
+moves_pursuit: moves
+moves_pyroball: moves
+moves_quash: moves
+moves_quickattack: moves
+moves_quickguard: moves
+moves_quiverdance: moves
+moves_rage: moves
+moves_ragefist: moves
+moves_ragepowder: moves
+moves_ragingbull: moves
+moves_ragingfury: moves
+moves_raindance: moves
+moves_rapidspin: moves
+moves_razorleaf: moves
+moves_razorshell: moves
+moves_razorwind: moves
+moves_recharge: moves
+moves_recover: moves
+moves_recycle: moves
+moves_reflect: moves
+moves_reflecttype: moves
+moves_refresh: moves
+moves_relicsong: moves
+moves_rest: moves
+moves_retaliate: moves
+moves_return: moves
+moves_return102: moves
+moves_revelationdance: moves
+moves_revenge: moves
+moves_reversal: moves
+moves_revivalblessing: moves
+moves_risingvoltage: moves
+moves_roar: moves
+moves_roaroftime: moves
+moves_rockblast: moves
+moves_rockclimb: moves
+moves_rockpolish: moves
+moves_rockslide: moves
+moves_rocksmash: moves
+moves_rockthrow: moves
+moves_rocktomb: moves
+moves_rockwrecker: moves
+moves_roleplay: moves
+moves_rollingkick: moves
+moves_rollout: moves
+moves_roost: moves
+moves_rototiller: moves
+moves_round: moves
+moves_ruination: moves
+moves_sacredfire: moves
+moves_sacredsword: moves
+moves_safeguard: moves
+moves_saltcure: moves
+moves_sandattack: moves
+moves_sandsearstorm: moves
+moves_sandstorm: moves
+moves_sandtomb: moves
+moves_sappyseed: moves
+moves_savagespinout: moves
+moves_scald: moves
+moves_scaleshot: moves
+moves_scaryface: moves
+moves_scorchingsands: moves
+moves_scratch: moves
+moves_screech: moves
+moves_searingshot: moves
+moves_searingsunrazesmash: moves
+moves_secretpower: moves
+moves_secretsword: moves
+moves_seedbomb: moves
+moves_seedflare: moves
+moves_seismictoss: moves
+moves_selfdestruct: moves
+moves_shadowball: moves
+moves_shadowbone: moves
+moves_shadowclaw: moves
+moves_shadowforce: moves
+moves_shadowpunch: moves
+moves_shadowsneak: moves
+moves_shadowstrike: moves
+moves_sharpen: moves
+moves_shatteredpsyche: moves
+moves_shedtail: moves
+moves_sheercold: moves
+moves_shellsidearm: moves
+moves_shellsmash: moves
+moves_shelltrap: moves
+moves_shelter: moves
+moves_shiftgear: moves
+moves_shockwave: moves
+moves_shoreup: moves
+moves_signalbeam: moves
+moves_silktrap: moves
+moves_silverwind: moves
+moves_simplebeam: moves
+moves_sing: moves
+moves_sinisterarrowraid: moves
+moves_sizzlyslide: moves
+moves_sketch: moves
+moves_skillswap: moves
+moves_skittersmack: moves
+moves_skullbash: moves
+moves_skyattack: moves
+moves_skydrop: moves
+moves_skyuppercut: moves
+moves_slackoff: moves
+moves_slam: moves
+moves_slash: moves
+moves_sleeppowder: moves
+moves_sleeptalk: moves
+moves_sludge: moves
+moves_sludgebomb: moves
+moves_sludgewave: moves
+moves_smackdown: moves
+moves_smartstrike: moves
+moves_smellingsalts: moves
+moves_smog: moves
+moves_smokescreen: moves
+moves_snaptrap: moves
+moves_snarl: moves
+moves_snatch: moves
+moves_snipeshot: moves
+moves_snore: moves
+moves_snowscape: moves
+moves_soak: moves
+moves_softboiled: moves
+moves_solarbeam: moves
+moves_solarblade: moves
+moves_sonicboom: moves
+moves_soulstealing7starstrike: moves
+moves_spacialrend: moves
+moves_spark: moves
+moves_sparklingaria: moves
+moves_sparklyswirl: moves
+moves_spectralthief: moves
+moves_speedswap: moves
+moves_spicyextract: moves
+moves_spiderweb: moves
+moves_spikecannon: moves
+moves_spikes: moves
+moves_spikyshield: moves
+moves_spinout: moves
+moves_spiritbreak: moves
+moves_spiritshackle: moves
+moves_spite: moves
+moves_spitup: moves
+moves_splash: moves
+moves_splinteredstormshards: moves
+moves_splishysplash: moves
+moves_spore: moves
+moves_spotlight: moves
+moves_springtidestorm: moves
+moves_stealthrock: moves
+moves_steameruption: moves
+moves_steamroller: moves
+moves_steelbeam: moves
+moves_steelroller: moves
+moves_steelwing: moves
+moves_stickyweb: moves
+moves_stockpile: moves
+moves_stokedsparksurfer: moves
+moves_stomp: moves
+moves_stompingtantrum: moves
+moves_stoneaxe: moves
+moves_stoneedge: moves
+moves_storedpower: moves
+moves_stormthrow: moves
+moves_strangesteam: moves
+moves_strength: moves
+moves_strengthsap: moves
+moves_stringshot: moves
+moves_struggle: moves
+moves_strugglebug: moves
+moves_stuffcheeks: moves
+moves_stunspore: moves
+moves_submission: moves
+moves_substitute: moves
+moves_subzeroslammer: moves
+moves_suckerpunch: moves
+moves_sunnyday: moves
+moves_sunsteelstrike: moves
+moves_supercellslam: moves
+moves_superfang: moves
+moves_superpower: moves
+moves_supersonic: moves
+moves_supersonicskystrike: moves
+moves_surf: moves
+moves_surgingstrikes: moves
+moves_swagger: moves
+moves_swallow: moves
+moves_sweetkiss: moves
+moves_sweetscent: moves
+moves_swift: moves
+moves_switcheroo: moves
+moves_swordsdance: moves
+moves_synchronoise: moves
+moves_synthesis: moves
+moves_syrupbomb: moves
+moves_tachyoncutter: moves
+moves_tackle: moves
+moves_tailglow: moves
+moves_tailslap: moves
+moves_tailwhip: moves
+moves_tailwind: moves
+moves_takedown: moves
+moves_takeheart: moves
+moves_tarshot: moves
+moves_taunt: moves
+moves_tearfullook: moves
+moves_teatime: moves
+moves_technoblast: moves
+moves_tectonicrage: moves
+moves_teeterdance: moves
+moves_telekinesis: moves
+moves_teleport: moves
+moves_temperflare: moves
+moves_terablast: moves
+moves_terastarstorm: moves
+moves_terrainpulse: moves
+moves_thief: moves
+moves_thousandarrows: moves
+moves_thousandwaves: moves
+moves_thrash: moves
+moves_throatchop: moves
+moves_thunder: moves
+moves_thunderbolt: moves
+moves_thundercage: moves
+moves_thunderclap: moves
+moves_thunderfang: moves
+moves_thunderouskick: moves
+moves_thunderpunch: moves
+moves_thundershock: moves
+moves_thunderwave: moves
+moves_tickle: moves
+moves_tidyup: moves
+moves_topsyturvy: moves
+moves_torchsong: moves
+moves_torment: moves
+moves_toxic: moves
+moves_toxicspikes: moves
+moves_toxicthread: moves
+moves_trailblaze: moves
+moves_transform: moves
+moves_triattack: moves
+moves_trick: moves
+moves_trickortreat: moves
+moves_trickroom: moves
+moves_triplearrows: moves
+moves_tripleaxel: moves
+moves_tripledive: moves
+moves_triplekick: moves
+moves_tropkick: moves
+moves_trumpcard: moves
+moves_twinbeam: moves
+moves_twineedle: moves
+moves_twinkletackle: moves
+moves_twister: moves
+moves_upperhand: moves
+moves_uproar: moves
+moves_uturn: moves
+moves_vacuumwave: moves
+moves_vcreate: moves
+moves_veeveevolley: moves
+moves_venomdrench: moves
+moves_venoshock: moves
+moves_victorydance: moves
+moves_vinewhip: moves
+moves_visegrip: moves
+moves_vitalthrow: moves
+moves_voltswitch: moves
+moves_volttackle: moves
+moves_wakeupslap: moves
+moves_waterfall: moves
+moves_watergun: moves
+moves_waterpledge: moves
+moves_waterpulse: moves
+moves_watershuriken: moves
+moves_watersport: moves
+moves_waterspout: moves
+moves_wavecrash: moves
+moves_weatherball: moves
+moves_whirlpool: moves
+moves_whirlwind: moves
+moves_wickedblow: moves
+moves_wickedtorque: moves
+moves_wideguard: moves
+moves_wildboltstorm: moves
+moves_wildcharge: moves
+moves_willowisp: moves
+moves_wingattack: moves
+moves_wish: moves
+moves_withdraw: moves
+moves_wonderroom: moves
+moves_woodhammer: moves
+moves_workup: moves
+moves_worryseed: moves
+moves_wrap: moves
+moves_wringout: moves
+moves_xscissor: moves
+moves_yawn: moves
+moves_zapcannon: moves
+moves_zenheadbutt: moves
+moves_zingzap: moves
+moves_zippyzap: moves
+abilities_none: abilities
+abilities_pad: abilities
+abilities_unk: abilities
+abilities_adaptability: abilities
+abilities_aerilate: abilities
+abilities_aftermath: abilities
+abilities_airlock: abilities
+abilities_analytic: abilities
+abilities_angerpoint: abilities
+abilities_angershell: abilities
+abilities_anticipation: abilities
+abilities_arenatrap: abilities
+abilities_armortail: abilities
+abilities_aromaveil: abilities
+abilities_asoneglastrier: abilities
+abilities_asonespectrier: abilities
+abilities_aurabreak: abilities
+abilities_baddreams: abilities
+abilities_ballfetch: abilities
+abilities_battery: abilities
+abilities_battlearmor: abilities
+abilities_battlebond: abilities
+abilities_beadsofruin: abilities
+abilities_beastboost: abilities
+abilities_berserk: abilities
+abilities_bigpecks: abilities
+abilities_blaze: abilities
+abilities_bulletproof: abilities
+abilities_cheekpouch: abilities
+abilities_chillingneigh: abilities
+abilities_chlorophyll: abilities
+abilities_clearbody: abilities
+abilities_cloudnine: abilities
+abilities_colorchange: abilities
+abilities_comatose: abilities
+abilities_commander: abilities
+abilities_competitive: abilities
+abilities_compoundeyes: abilities
+abilities_contrary: abilities
+abilities_corrosion: abilities
+abilities_costar: abilities
+abilities_cottondown: abilities
+abilities_cudchew: abilities
+abilities_curiousmedicine: abilities
+abilities_cursedbody: abilities
+abilities_cutecharm: abilities
+abilities_damp: abilities
+abilities_dancer: abilities
+abilities_darkaura: abilities
+abilities_dauntlessshield: abilities
+abilities_dazzling: abilities
+abilities_defeatist: abilities
+abilities_defiant: abilities
+abilities_deltastream: abilities
+abilities_desolateland: abilities
+abilities_disguise: abilities
+abilities_download: abilities
+abilities_dragonsmaw: abilities
+abilities_drizzle: abilities
+abilities_drought: abilities
+abilities_dryskin: abilities
+abilities_earlybird: abilities
+abilities_eartheater: abilities
+abilities_effectspore: abilities
+abilities_electricsurge: abilities
+abilities_electromorphosis: abilities
+abilities_embodyaspectcornerstone: abilities
+abilities_embodyaspecthearthflame: abilities
+abilities_embodyaspectteal: abilities
+abilities_embodyaspectwellspring: abilities
+abilities_emergencyexit: abilities
+abilities_fairyaura: abilities
+abilities_filter: abilities
+abilities_flamebody: abilities
+abilities_flareboost: abilities
+abilities_flashfire: abilities
+abilities_flowergift: abilities
+abilities_flowerveil: abilities
+abilities_fluffy: abilities
+abilities_forecast: abilities
+abilities_forewarn: abilities
+abilities_friendguard: abilities
+abilities_frisk: abilities
+abilities_fullmetalbody: abilities
+abilities_furcoat: abilities
+abilities_galewings: abilities
+abilities_galvanize: abilities
+abilities_gluttony: abilities
+abilities_goodasgold: abilities
+abilities_gooey: abilities
+abilities_gorillatactics: abilities
+abilities_grasspelt: abilities
+abilities_grassysurge: abilities
+abilities_grimneigh: abilities
+abilities_guarddog: abilities
+abilities_gulpmissile: abilities
+abilities_guts: abilities
+abilities_hadronengine: abilities
+abilities_harvest: abilities
+abilities_healer: abilities
+abilities_heatproof: abilities
+abilities_heavymetal: abilities
+abilities_honeygather: abilities
+abilities_hospitality: abilities
+abilities_hugepower: abilities
+abilities_hungerswitch: abilities
+abilities_hustle: abilities
+abilities_hydration: abilities
+abilities_hypercutter: abilities
+abilities_icebody: abilities
+abilities_iceface: abilities
+abilities_icescales: abilities
+abilities_illuminate: abilities
+abilities_illusion: abilities
+abilities_immunity: abilities
+abilities_imposter: abilities
+abilities_infiltrator: abilities
+abilities_innardsout: abilities
+abilities_innerfocus: abilities
+abilities_insomnia: abilities
+abilities_intimidate: abilities
+abilities_intrepidsword: abilities
+abilities_ironbarbs: abilities
+abilities_ironfist: abilities
+abilities_justified: abilities
+abilities_keeneye: abilities
+abilities_klutz: abilities
+abilities_leafguard: abilities
+abilities_levitate: abilities
+abilities_libero: abilities
+abilities_lightmetal: abilities
+abilities_lightningrod: abilities
+abilities_limber: abilities
+abilities_lingeringaroma: abilities
+abilities_liquidooze: abilities
+abilities_liquidvoice: abilities
+abilities_longreach: abilities
+abilities_magicbounce: abilities
+abilities_magicguard: abilities
+abilities_magician: abilities
+abilities_magmaarmor: abilities
+abilities_magnetpull: abilities
+abilities_marvelscale: abilities
+abilities_megalauncher: abilities
+abilities_merciless: abilities
+abilities_mimicry: abilities
+abilities_mindseye: abilities
+abilities_minus: abilities
+abilities_mirrorarmor: abilities
+abilities_mistysurge: abilities
+abilities_moldbreaker: abilities
+abilities_moody: abilities
+abilities_motordrive: abilities
+abilities_mountaineer: abilities
+abilities_moxie: abilities
+abilities_multiscale: abilities
+abilities_multitype: abilities
+abilities_mummy: abilities
+abilities_myceliummight: abilities
+abilities_naturalcure: abilities
+abilities_neuroforce: abilities
+abilities_neutralizinggas: abilities
+abilities_noability: abilities
+abilities_noguard: abilities
+abilities_normalize: abilities
+abilities_oblivious: abilities
+abilities_opportunist: abilities
+abilities_orichalcumpulse: abilities
+abilities_overcoat: abilities
+abilities_overgrow: abilities
+abilities_owntempo: abilities
+abilities_parentalbond: abilities
+abilities_pastelveil: abilities
+abilities_perishbody: abilities
+abilities_persistent: abilities
+abilities_pickpocket: abilities
+abilities_pickup: abilities
+abilities_pixilate: abilities
+abilities_plus: abilities
+abilities_poisonheal: abilities
+abilities_poisonpoint: abilities
+abilities_poisonpuppeteer: abilities
+abilities_poisontouch: abilities
+abilities_powerconstruct: abilities
+abilities_powerofalchemy: abilities
+abilities_powerspot: abilities
+abilities_prankster: abilities
+abilities_pressure: abilities
+abilities_primordialsea: abilities
+abilities_prismarmor: abilities
+abilities_propellertail: abilities
+abilities_protean: abilities
+abilities_protosynthesis: abilities
+abilities_psychicsurge: abilities
+abilities_punkrock: abilities
+abilities_purepower: abilities
+abilities_purifyingsalt: abilities
+abilities_quarkdrive: abilities
+abilities_queenlymajesty: abilities
+abilities_quickdraw: abilities
+abilities_quickfeet: abilities
+abilities_raindish: abilities
+abilities_rattled: abilities
+abilities_rebound: abilities
+abilities_receiver: abilities
+abilities_reckless: abilities
+abilities_refrigerate: abilities
+abilities_regenerator: abilities
+abilities_ripen: abilities
+abilities_rivalry: abilities
+abilities_rkssystem: abilities
+abilities_rockhead: abilities
+abilities_rockypayload: abilities
+abilities_roughskin: abilities
+abilities_runaway: abilities
+abilities_sandforce: abilities
+abilities_sandrush: abilities
+abilities_sandspit: abilities
+abilities_sandstream: abilities
+abilities_sandveil: abilities
+abilities_sapsipper: abilities
+abilities_schooling: abilities
+abilities_scrappy: abilities
+abilities_screencleaner: abilities
+abilities_seedsower: abilities
+abilities_serenegrace: abilities
+abilities_shadowshield: abilities
+abilities_shadowtag: abilities
+abilities_sharpness: abilities
+abilities_shedskin: abilities
+abilities_sheerforce: abilities
+abilities_shellarmor: abilities
+abilities_shielddust: abilities
+abilities_shieldsdown: abilities
+abilities_simple: abilities
+abilities_skilllink: abilities
+abilities_slowstart: abilities
+abilities_slushrush: abilities
+abilities_sniper: abilities
+abilities_snowcloak: abilities
+abilities_snowwarning: abilities
+abilities_solarpower: abilities
+abilities_solidrock: abilities
+abilities_soulheart: abilities
+abilities_soundproof: abilities
+abilities_speedboost: abilities
+abilities_stakeout: abilities
+abilities_stall: abilities
+abilities_stalwart: abilities
+abilities_stamina: abilities
+abilities_stancechange: abilities
+abilities_static: abilities
+abilities_steadfast: abilities
+abilities_steamengine: abilities
+abilities_steelworker: abilities
+abilities_steelyspirit: abilities
+abilities_stench: abilities
+abilities_stickyhold: abilities
+abilities_stormdrain: abilities
+abilities_strongjaw: abilities
+abilities_sturdy: abilities
+abilities_suctioncups: abilities
+abilities_superluck: abilities
+abilities_supersweetsyrup: abilities
+abilities_supremeoverlord: abilities
+abilities_surgesurfer: abilities
+abilities_swarm: abilities
+abilities_sweetveil: abilities
+abilities_swiftswim: abilities
+abilities_swordofruin: abilities
+abilities_symbiosis: abilities
+abilities_synchronize: abilities
+abilities_tabletsofruin: abilities
+abilities_tangledfeet: abilities
+abilities_tanglinghair: abilities
+abilities_technician: abilities
+abilities_telepathy: abilities
+abilities_teraformzero: abilities
+abilities_terashell: abilities
+abilities_terashift: abilities
+abilities_teravolt: abilities
+abilities_thermalexchange: abilities
+abilities_thickfat: abilities
+abilities_tintedlens: abilities
+abilities_torrent: abilities
+abilities_toughclaws: abilities
+abilities_toxicboost: abilities
+abilities_toxicchain: abilities
+abilities_toxicdebris: abilities
+abilities_trace: abilities
+abilities_transistor: abilities
+abilities_triage: abilities
+abilities_truant: abilities
+abilities_turboblaze: abilities
+abilities_unaware: abilities
+abilities_unburden: abilities
+abilities_unnerve: abilities
+abilities_unseenfist: abilities
+abilities_vesselofruin: abilities
+abilities_victorystar: abilities
+abilities_vitalspirit: abilities
+abilities_voltabsorb: abilities
+abilities_wanderingspirit: abilities
+abilities_waterabsorb: abilities
+abilities_waterbubble: abilities
+abilities_watercompaction: abilities
+abilities_waterveil: abilities
+abilities_weakarmor: abilities
+abilities_wellbakedbody: abilities
+abilities_whitesmoke: abilities
+abilities_wimpout: abilities
+abilities_windpower: abilities
+abilities_windrider: abilities
+abilities_wonderguard: abilities
+abilities_wonderskin: abilities
+abilities_zenmode: abilities
+abilities_zerotohero: abilities
+items_none: items
+items_null: items
+items_pad: items
+items_unk: items
+items_abilityshield: items
+items_abomasite: items
+items_absolite: items
+items_absorbbulb: items
+items_adamantcrystal: items
+items_adamantorb: items
+items_adrenalineorb: items
+items_aerodactylite: items
+items_aggronite: items
+items_aguavberry: items
+items_airballoon: items
+items_alakazite: items
+items_aloraichiumz: items
+items_altarianite: items
+items_ampharosite: items
+items_apicotberry: items
+items_armorfossil: items
+items_aspearberry: items
+items_assaultvest: items
+items_audinite: items
+items_auspiciousarmor: items
+items_babiriberry: items
+items_banettite: items
+items_beastball: items
+items_beedrillite: items
+items_belueberry: items
+items_berry: items
+items_berryjuice: items
+items_berrysweet: items
+items_berserkgene: items
+items_bignugget: items
+items_bigroot: items
+items_bindingband: items
+items_bitterberry: items
+items_blackbelt: items
+items_blackglasses: items
+items_blacksludge: items
+items_blastoisinite: items
+items_blazikenite: items
+items_blueorb: items
+items_blukberry: items
+items_blunderpolicy: items
+items_boosterenergy: items
+items_bottlecap: items
+items_brightpowder: items
+items_buggem: items
+items_buginiumz: items
+items_bugmemory: items
+items_burndrive: items
+items_burntberry: items
+items_cameruptite: items
+items_cellbattery: items
+items_charcoal: items
+items_charizarditex: items
+items_charizarditey: items
+items_chartiberry: items
+items_cheriberry: items
+items_cherishball: items
+items_chestoberry: items
+items_chilanberry: items
+items_chilldrive: items
+items_chippedpot: items
+items_choiceband: items
+items_choicescarf: items
+items_choicespecs: items
+items_chopleberry: items
+items_clawfossil: items
+items_clearamulet: items
+items_cloversweet: items
+items_cobaberry: items
+items_colburberry: items
+items_cornerstonemask: items
+items_cornnberry: items
+items_coverfossil: items
+items_covertcloak: items
+items_crackedpot: items
+items_crucibellite: items
+items_custapberry: items
+items_damprock: items
+items_darkgem: items
+items_darkiniumz: items
+items_darkmemory: items
+items_dawnstone: items
+items_decidiumz: items
+items_deepseascale: items
+items_deepseatooth: items
+items_destinyknot: items
+items_diancite: items
+items_diveball: items
+items_domefossil: items
+items_dousedrive: items
+items_dracoplate: items
+items_dragonfang: items
+items_dragongem: items
+items_dragoniumz: items
+items_dragonmemory: items
+items_dragonscale: items
+items_dreadplate: items
+items_dreamball: items
+items_dubiousdisc: items
+items_durinberry: items
+items_duskball: items
+items_duskstone: items
+items_earthplate: items
+items_eeviumz: items
+items_ejectbutton: items
+items_ejectpack: items
+items_electirizer: items
+items_electricgem: items
+items_electricmemory: items
+items_electricseed: items
+items_electriumz: items
+items_enigmaberry: items
+items_eviolite: items
+items_expertbelt: items
+items_fairiumz: items
+items_fairyfeather: items
+items_fairygem: items
+items_fairymemory: items
+items_fastball: items
+items_fightinggem: items
+items_fightingmemory: items
+items_fightiniumz: items
+items_figyberry: items
+items_firegem: items
+items_firememory: items
+items_firestone: items
+items_firiumz: items
+items_fistplate: items
+items_flameorb: items
+items_flameplate: items
+items_floatstone: items
+items_flowersweet: items
+items_flyinggem: items
+items_flyingmemory: items
+items_flyiniumz: items
+items_focusband: items
+items_focussash: items
+items_fossilizedbird: items
+items_fossilizeddino: items
+items_fossilizeddrake: items
+items_fossilizedfish: items
+items_friendball: items
+items_fullincense: items
+items_galaricacuff: items
+items_galaricawreath: items
+items_galladite: items
+items_ganlonberry: items
+items_garchompite: items
+items_gardevoirite: items
+items_gengarite: items
+items_ghostgem: items
+items_ghostiumz: items
+items_ghostmemory: items
+items_glalitite: items
+items_goldberry: items
+items_goldbottlecap: items
+items_grassgem: items
+items_grassiumz: items
+items_grassmemory: items
+items_grassyseed: items
+items_greatball: items
+items_grepaberry: items
+items_gripclaw: items
+items_griseouscore: items
+items_griseousorb: items
+items_groundgem: items
+items_groundiumz: items
+items_groundmemory: items
+items_gyaradosite: items
+items_habanberry: items
+items_hardstone: items
+items_healball: items
+items_hearthflamemask: items
+items_heatrock: items
+items_heavyball: items
+items_heavydutyboots: items
+items_helixfossil: items
+items_heracronite: items
+items_hondewberry: items
+items_houndoominite: items
+items_iapapaberry: items
+items_iceberry: items
+items_icegem: items
+items_icememory: items
+items_icestone: items
+items_icicleplate: items
+items_iciumz: items
+items_icyrock: items
+items_inciniumz: items
+items_insectplate: items
+items_ironball: items
+items_ironplate: items
+items_jabocaberry: items
+items_jawfossil: items
+items_kangaskhanite: items
+items_kasibberry: items
+items_kebiaberry: items
+items_keeberry: items
+items_kelpsyberry: items
+items_kingsrock: items
+items_kommoniumz: items
+items_laggingtail: items
+items_lansatberry: items
+items_latiasite: items
+items_latiosite: items
+items_laxincense: items
+items_leafstone: items
+items_leek: items
+items_leftovers: items
+items_leppaberry: items
+items_levelball: items
+items_liechiberry: items
+items_lifeorb: items
+items_lightball: items
+items_lightclay: items
+items_loadeddice: items
+items_lopunnite: items
+items_loveball: items
+items_lovesweet: items
+items_lucarionite: items
+items_luckypunch: items
+items_lumberry: items
+items_luminousmoss: items
+items_lunaliumz: items
+items_lureball: items
+items_lustrousglobe: items
+items_lustrousorb: items
+items_luxuryball: items
+items_lycaniumz: items
+items_machobrace: items
+items_magmarizer: items
+items_magnet: items
+items_magoberry: items
+items_magostberry: items
+items_mail: items
+items_maliciousarmor: items
+items_manectite: items
+items_marangaberry: items
+items_marshadiumz: items
+items_masterball: items
+items_masterpieceteacup: items
+items_mawilite: items
+items_meadowplate: items
+items_medichamite: items
+items_mentalherb: items
+items_metagrossite: items
+items_metalalloy: items
+items_metalcoat: items
+items_metalpowder: items
+items_metronome: items
+items_mewniumz: items
+items_mewtwonitex: items
+items_mewtwonitey: items
+items_micleberry: items
+items_mimikiumz: items
+items_mindplate: items
+items_mintberry: items
+items_miracleberry: items
+items_miracleseed: items
+items_mirrorherb: items
+items_mistyseed: items
+items_moonball: items
+items_moonstone: items
+items_muscleband: items
+items_mysteryberry: items
+items_mysticwater: items
+items_nanabberry: items
+items_nestball: items
+items_netball: items
+items_nevermeltice: items
+items_nomelberry: items
+items_normalgem: items
+items_normaliumz: items
+items_occaberry: items
+items_oddincense: items
+items_oldamber: items
+items_oranberry: items
+items_ovalstone: items
+items_pamtreberry: items
+items_parkball: items
+items_passhoberry: items
+items_payapaberry: items
+items_pechaberry: items
+items_persimberry: items
+items_petayaberry: items
+items_pidgeotite: items
+items_pikaniumz: items
+items_pikashuniumz: items
+items_pinapberry: items
+items_pinkbow: items
+items_pinsirite: items
+items_pixieplate: items
+items_plumefossil: items
+items_poisonbarb: items
+items_poisongem: items
+items_poisoniumz: items
+items_poisonmemory: items
+items_pokeball: items
+items_polkadotbow: items
+items_pomegberry: items
+items_poweranklet: items
+items_powerband: items
+items_powerbelt: items
+items_powerbracer: items
+items_powerherb: items
+items_powerlens: items
+items_powerweight: items
+items_premierball: items
+items_primariumz: items
+items_prismscale: items
+items_protectivepads: items
+items_protector: items
+items_przcureberry: items
+items_psncureberry: items
+items_psychicgem: items
+items_psychicmemory: items
+items_psychicseed: items
+items_psychiumz: items
+items_punchingglove: items
+items_qualotberry: items
+items_quickball: items
+items_quickclaw: items
+items_quickpowder: items
+items_rabutaberry: items
+items_rarebone: items
+items_rawstberry: items
+items_razorclaw: items
+items_razorfang: items
+items_razzberry: items
+items_reapercloth: items
+items_redcard: items
+items_redorb: items
+items_repeatball: items
+items_ribbonsweet: items
+items_rindoberry: items
+items_ringtarget: items
+items_rockgem: items
+items_rockincense: items
+items_rockiumz: items
+items_rockmemory: items
+items_rockyhelmet: items
+items_roomservice: items
+items_rootfossil: items
+items_roseincense: items
+items_roseliberry: items
+items_rowapberry: items
+items_rustedshield: items
+items_rustedsword: items
+items_sablenite: items
+items_sachet: items
+items_safariball: items
+items_safetygoggles: items
+items_sailfossil: items
+items_salacberry: items
+items_salamencite: items
+items_sceptilite: items
+items_scizorite: items
+items_scopelens: items
+items_seaincense: items
+items_sharpbeak: items
+items_sharpedonite: items
+items_shedshell: items
+items_shellbell: items
+items_shinystone: items
+items_shockdrive: items
+items_shucaberry: items
+items_silkscarf: items
+items_silverpowder: items
+items_sitrusberry: items
+items_skullfossil: items
+items_skyplate: items
+items_slowbronite: items
+items_smoothrock: items
+items_snorliumz: items
+items_snowball: items
+items_softsand: items
+items_solganiumz: items
+items_souldew: items
+items_spelltag: items
+items_spelonberry: items
+items_splashplate: items
+items_spookyplate: items
+items_sportball: items
+items_starfberry: items
+items_starsweet: items
+items_steelgem: items
+items_steeliumz: items
+items_steelixite: items
+items_steelmemory: items
+items_stick: items
+items_stickybarb: items
+items_stoneplate: items
+items_strangeball: items
+items_strawberrysweet: items
+items_sunstone: items
+items_swampertite: items
+items_sweetapple: items
+items_syrupyapple: items
+items_tamatoberry: items
+items_tangaberry: items
+items_tapuniumz: items
+items_tartapple: items
+items_terrainextender: items
+items_thickclub: items
+items_throatspray: items
+items_thunderstone: items
+items_timerball: items
+items_toxicorb: items
+items_toxicplate: items
+items_tr00: items
+items_tr01: items
+items_tr02: items
+items_tr03: items
+items_tr04: items
+items_tr05: items
+items_tr06: items
+items_tr07: items
+items_tr08: items
+items_tr09: items
+items_tr10: items
+items_tr11: items
+items_tr12: items
+items_tr13: items
+items_tr14: items
+items_tr15: items
+items_tr16: items
+items_tr17: items
+items_tr18: items
+items_tr19: items
+items_tr20: items
+items_tr21: items
+items_tr22: items
+items_tr23: items
+items_tr24: items
+items_tr25: items
+items_tr26: items
+items_tr27: items
+items_tr28: items
+items_tr29: items
+items_tr30: items
+items_tr31: items
+items_tr32: items
+items_tr33: items
+items_tr34: items
+items_tr35: items
+items_tr36: items
+items_tr37: items
+items_tr38: items
+items_tr39: items
+items_tr40: items
+items_tr41: items
+items_tr42: items
+items_tr43: items
+items_tr44: items
+items_tr45: items
+items_tr46: items
+items_tr47: items
+items_tr48: items
+items_tr49: items
+items_tr50: items
+items_tr51: items
+items_tr52: items
+items_tr53: items
+items_tr54: items
+items_tr55: items
+items_tr56: items
+items_tr57: items
+items_tr58: items
+items_tr59: items
+items_tr60: items
+items_tr61: items
+items_tr62: items
+items_tr63: items
+items_tr64: items
+items_tr65: items
+items_tr66: items
+items_tr67: items
+items_tr68: items
+items_tr69: items
+items_tr70: items
+items_tr71: items
+items_tr72: items
+items_tr73: items
+items_tr74: items
+items_tr75: items
+items_tr76: items
+items_tr77: items
+items_tr78: items
+items_tr79: items
+items_tr80: items
+items_tr81: items
+items_tr82: items
+items_tr83: items
+items_tr84: items
+items_tr85: items
+items_tr86: items
+items_tr87: items
+items_tr88: items
+items_tr89: items
+items_tr90: items
+items_tr91: items
+items_tr92: items
+items_tr93: items
+items_tr94: items
+items_tr95: items
+items_tr96: items
+items_tr97: items
+items_tr98: items
+items_tr99: items
+items_twistedspoon: items
+items_tyranitarite: items
+items_ultraball: items
+items_ultranecroziumz: items
+items_unremarkableteacup: items
+items_upgrade: items
+items_utilityumbrella: items
+items_venusaurite: items
+items_vilevial: items
+items_wacanberry: items
+items_watergem: items
+items_wateriumz: items
+items_watermemory: items
+items_waterstone: items
+items_watmelberry: items
+items_waveincense: items
+items_weaknesspolicy: items
+items_wellspringmask: items
+items_wepearberry: items
+items_whippeddream: items
+items_whiteherb: items
+items_widelens: items
+items_wikiberry: items
+items_wiseglasses: items
+items_yacheberry: items
+items_zapplate: items
+items_zoomlens: items
+statuses_null: statuses
+statuses_brn: statuses
+statuses_frz: statuses
+statuses_par: statuses
+statuses_psn: statuses
+statuses_slp: statuses
+statuses_tox: statuses
+boosts_accuracy: boosts
+boosts_atk: boosts
+boosts_def: boosts
+boosts_evasion: boosts
+boosts_spa: boosts
+boosts_spd: boosts
+boosts_spe: boosts
+types_none: types
+types_pad: types
+types_unk: types
+types_bug: types
+types_dark: types
+types_dragon: types
+types_electric: types
+types_fairy: types
+types_fighting: types
+types_fire: types
+types_flying: types
+types_ghost: types
+types_grass: types
+types_ground: types
+types_ice: types
+types_normal: types
+types_poison: types
+types_psychic: types
+types_rock: types
+types_steel: types
+types_stellar: types
+types_water: types
+genders_unk: genders
+genders_f: genders
+genders_m: genders
+genders_n: genders
+hyphenArgs_unk: hyphenArgs
+hyphenArgs_ability: hyphenArgs
+hyphenArgs_activate: hyphenArgs
+hyphenArgs_anim: hyphenArgs
+hyphenArgs_block: hyphenArgs
+hyphenArgs_boost: hyphenArgs
+hyphenArgs_burst: hyphenArgs
+hyphenArgs_candynamax: hyphenArgs
+hyphenArgs_center: hyphenArgs
+hyphenArgs_clearallboost: hyphenArgs
+hyphenArgs_clearboost: hyphenArgs
+hyphenArgs_clearnegativeboost: hyphenArgs
+hyphenArgs_clearpositiveboost: hyphenArgs
+hyphenArgs_combine: hyphenArgs
+hyphenArgs_copyboost: hyphenArgs
+hyphenArgs_crit: hyphenArgs
+hyphenArgs_curestatus: hyphenArgs
+hyphenArgs_cureteam: hyphenArgs
+hyphenArgs_damage: hyphenArgs
+hyphenArgs_end: hyphenArgs
+hyphenArgs_endability: hyphenArgs
+hyphenArgs_enditem: hyphenArgs
+hyphenArgs_fail: hyphenArgs
+hyphenArgs_fieldactivate: hyphenArgs
+hyphenArgs_fieldend: hyphenArgs
+hyphenArgs_fieldstart: hyphenArgs
+hyphenArgs_formechange: hyphenArgs
+hyphenArgs_heal: hyphenArgs
+hyphenArgs_hint: hyphenArgs
+hyphenArgs_hitcount: hyphenArgs
+hyphenArgs_immune: hyphenArgs
+hyphenArgs_invertboost: hyphenArgs
+hyphenArgs_item: hyphenArgs
+hyphenArgs_mega: hyphenArgs
+hyphenArgs_message: hyphenArgs
+hyphenArgs_miss: hyphenArgs
+hyphenArgs_mustrecharge: hyphenArgs
+hyphenArgs_notarget: hyphenArgs
+hyphenArgs_ohko: hyphenArgs
+hyphenArgs_prepare: hyphenArgs
+hyphenArgs_primal: hyphenArgs
+hyphenArgs_resisted: hyphenArgs
+hyphenArgs_setboost: hyphenArgs
+hyphenArgs_sethp: hyphenArgs
+hyphenArgs_sideend: hyphenArgs
+hyphenArgs_sidestart: hyphenArgs
+hyphenArgs_singlemove: hyphenArgs
+hyphenArgs_singleturn: hyphenArgs
+hyphenArgs_start: hyphenArgs
+hyphenArgs_status: hyphenArgs
+hyphenArgs_supereffective: hyphenArgs
+hyphenArgs_swapboost: hyphenArgs
+hyphenArgs_swapsideconditions: hyphenArgs
+hyphenArgs_terastallize: hyphenArgs
+hyphenArgs_transform: hyphenArgs
+hyphenArgs_unboost: hyphenArgs
+hyphenArgs_waiting: hyphenArgs
+hyphenArgs_weather: hyphenArgs
+hyphenArgs_zbroken: hyphenArgs
+hyphenArgs_zpower: hyphenArgs

@@ -8,7 +8,7 @@ if [ $? -ne 0 ]; then
   echo "TypeScript Protobuf compilation failed!"
   exit 1
 fi
-cd ../client
+cd ../rlenv
 
 # Run the Python Protobuf compilation command
 echo "Compiling Protobuf files for Python..."

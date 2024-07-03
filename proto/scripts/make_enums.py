@@ -9,12 +9,16 @@ def toid(string: str) -> str:
 
 
 def generate_enum(title: str, data: dict[str, int]):
-    data = [f"\t{toid(key)} = {value + 1};" for key, value in data.items()]
+    data = [f"\t{title}_{toid(key)} = {value};" for key, value in data.items()]
     return f"enum {title} {{\n" + "\n".join(data) + "\n}"
 
 
 def main():
-    enum_data = 'syntax = "proto3";\n\n'
+    enum_data = """syntax = "proto3";
+
+package enums;
+
+"""
 
     for key, value in DATA.items():
         enum_data += generate_enum(key, value)
