@@ -1,0 +1,27 @@
+{
+    "name": "websocket-server",
+    "version": "1.0.0",
+    "main": "src/index.ts",
+    "scripts": {
+        "start": "rm -rf ./dist && tsc && node dist/index.js",
+        "compile-proto": "./scripts/compile_proto.sh"
+    },
+    "dependencies": {
+        "@types/ws": "^8.5.10",
+        "google-protobuf": "^3.19.1",
+        "ts-protoc-gen": "^0.15.0",
+        "ws": "^8.17.1",
+        "@pkmn/client": "^0.6.25",
+        "@pkmn/data": "^0.9.4",
+        "@pkmn/dex": "^0.9.4",
+        "@pkmn/protocol": "^0.6.25",
+        "@pkmn/randoms": "^0.9.5",
+        "@pkmn/sim": "^0.8.9",
+        "@pkmn/types": "^4.0.0",
+        "@types/node": "^20.11.20"
+    },
+    "devDependencies": {
+        "ts-node": "^10.4.0",
+        "typescript": "^4.5.4"
+    }
+}

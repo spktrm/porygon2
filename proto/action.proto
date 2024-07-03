@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package rlenv;
+
+message Action {
+  int32 gameId = 1;
+  bool playerIndex = 2;
+  int32 index = 3;
+  string text = 4;
+}

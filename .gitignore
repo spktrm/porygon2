@@ -1,0 +1,8 @@
+env/
+
+server/dist
+server/node_modules
+
+__pycache__/
+
+.vscode/
