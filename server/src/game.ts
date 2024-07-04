@@ -5,14 +5,14 @@ import { Dex } from "@pkmn/dex";
 import { TeamGenerators } from "@pkmn/randoms";
 import { AnyObject, BattleStreams, Teams } from "@pkmn/sim";
 import { ObjectReadWriteStream } from "@pkmn/streams";
+import { Protocol } from "@pkmn/protocol";
 
 import { AsyncQueue } from "./utils";
-import { Protocol } from "@pkmn/protocol";
+import { AllValidActions, StateHandler } from "./state";
 import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
-import { AllValidActions, StateHandler } from "./state";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -163,9 +163,12 @@ export class Game {
                         if (x !== "omniscient") this.sendState(state);
                     },
                     recvFn: async () => {
-                        return x !== "omniscient"
-                            ? await this.queues[x].dequeue()
-                            : undefined;
+                        if (x !== "omniscient") {
+                            const action = await this.queues[x].dequeue();
+                            return action;
+                        } else {
+                            return undefined;
+                        }
                     },
                 }),
             ])
@@ -199,7 +202,7 @@ export class Game {
         const isDone = this.isDone();
         let info = state.getInfo();
         if (isDone && info) {
-            info.setDone(this.dones === 2);
+            info.setDone(isDone);
             const [r1, r2] = this.getRewards();
             info.setPlayeronereward(r1);
             info.setPlayertworeward(r2);
@@ -227,7 +230,9 @@ export class Game {
                 this.handleAction(stream, action);
             }
         }
-        this.dones += 1;
+        if (id !== "omniscient") {
+            this.dones += 1;
+        }
         const isDone = this.isDone();
         if (isDone) {
             await handler.stateActionStep(isDone);
