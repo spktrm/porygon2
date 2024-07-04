@@ -1,16 +1,10 @@
 import assert from "assert";
 
 import { Action } from "../../protos/action_pb";
-import { LegalActions, State } from "../../protos/state_pb";
 import { Game } from "../game";
 import { port } from "./utils";
-
-function chooseRandom(legalActions: LegalActions): number {
-    const legalIndices = Object.values(legalActions.toObject()).flatMap(
-        (v, i) => (v ? [i] : [])
-    );
-    return legalIndices[Math.floor(Math.random() * legalIndices.length)];
-}
+import { State } from "../../protos/state_pb";
+import { chooseRandom } from "../utils";
 
 async function runGame(game: Game) {
     await game.run();
