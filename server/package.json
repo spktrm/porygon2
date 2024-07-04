@@ -5,7 +5,7 @@
     "scripts": {
         "start": "rm -rf ./dist && tsc && node dist/index.js",
         "compile-proto": "./scripts/compile_proto.sh",
-        "test": "ts-node src/tests/smoke.ts"
+        "test": "rm -rf ./dist && tsc && node dist/tests/smoke.js"
     },
     "dependencies": {
         "@pkmn/client": "^0.6.25",
@@ -16,8 +16,10 @@
         "@pkmn/sim": "^0.8.9",
         "@pkmn/types": "^4.0.0",
         "@types/node": "^20.11.20",
+        "@types/progress": "^2.0.7",
         "@types/ws": "^8.5.10",
         "google-protobuf": "^3.19.1",
+        "progress": "^2.0.3",
         "ts-protoc-gen": "^0.15.0",
         "ws": "^8.17.1"
     },

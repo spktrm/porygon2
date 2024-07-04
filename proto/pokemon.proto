@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package pokemon;
+
+import "enums.proto";
+
+message Move {
+    enums.MovesEnum moveId = 1;
+    int32 ppUsed = 2;
+}
+
+message Pokemon {
+    enums.SpeciesEnum species = 1;
+    enums.ItemsEnum item = 2;
+    enums.AbilitiesEnum ability = 3;
+    repeated Move moveset = 4;
+    float hpRatio = 5;
+    bool active = 6;
+    bool fainted = 7;
+    int32 level = 8;
+    enums.GendersEnum gender = 9;
+}

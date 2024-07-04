@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package history;
+
+import "pokemon.proto";
+import "enums.proto";
+
+message Boost {
+    enums.BoostsEnum stat = 1;
+    int32 value = 2;
+}
+
+message SideCondition {
+    enums.SideconditionsEnum type = 1;
+    int32 value = 2;
+}
+
+message HistorySide {
+    pokemon.Pokemon active = 1;
+    repeated Boost boosts = 2;
+    repeated SideCondition sideConditions = 3;
+    repeated enums.VolatilestatusEnum volatileStatus = 4;
+}
+
+enum ActionTypeEnum {
+    move = 0;
+    switch = 1;
+}
+
+message HistoryStep {
+    HistorySide p1 = 1;
+    HistorySide p2 = 2;
+    enums.WeathersEnum weather = 3;
+    repeated enums.PseudoweatherEnum pseudoweather = 4;
+    ActionTypeEnum action = 5;
+    enums.MovesEnum move = 6;
+    repeated enums.HyphenargsEnum hyphenArgs = 7;
+}

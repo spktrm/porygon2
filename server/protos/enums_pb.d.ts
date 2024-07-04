@@ -3,7 +3,7 @@
 
 import * as jspb from "google-protobuf";
 
-export interface pseudoWeatherMap {
+export interface PseudoweatherEnumMap {
   PSEUDOWEATHER_NULL: 0;
   PSEUDOWEATHER_FAIRYLOCK: 1;
   PSEUDOWEATHER_GRAVITY: 2;
@@ -15,9 +15,9 @@ export interface pseudoWeatherMap {
   PSEUDOWEATHER_WONDERROOM: 8;
 }
 
-export const pseudoWeather: pseudoWeatherMap;
+export const PseudoweatherEnum: PseudoweatherEnumMap;
 
-export interface volatileStatusMap {
+export interface VolatilestatusEnumMap {
   VOLATILESTATUS_NULL: 0;
   VOLATILESTATUS_AIRBALLOON: 1;
   VOLATILESTATUS_ALLYSWITCH: 2;
@@ -159,9 +159,9 @@ export interface volatileStatusMap {
   VOLATILESTATUS_ZENMODE: 138;
 }
 
-export const volatileStatus: volatileStatusMap;
+export const VolatilestatusEnum: VolatilestatusEnumMap;
 
-export interface weathersMap {
+export interface WeathersEnumMap {
   WEATHERS_NULL: 0;
   WEATHERS_DELTASTREAM: 1;
   WEATHERS_DESOLATELAND: 2;
@@ -173,9 +173,9 @@ export interface weathersMap {
   WEATHERS_SUN: 8;
 }
 
-export const weathers: weathersMap;
+export const WeathersEnum: WeathersEnumMap;
 
-export interface terrainMap {
+export interface TerrainEnumMap {
   TERRAIN_NULL: 0;
   TERRAIN_ELECTRIC: 1;
   TERRAIN_GRASSY: 3;
@@ -184,9 +184,9 @@ export interface terrainMap {
   TERRAIN_PSYCHIC: 8;
 }
 
-export const terrain: terrainMap;
+export const TerrainEnum: TerrainEnumMap;
 
-export interface sideConditionsMap {
+export interface SideconditionsEnumMap {
   SIDECONDITIONS_NULL: 0;
   SIDECONDITIONS_AURORAVEIL: 1;
   SIDECONDITIONS_FIREPLEDGE: 2;
@@ -209,9 +209,9 @@ export interface sideConditionsMap {
   SIDECONDITIONS_WATERPLEDGE: 19;
 }
 
-export const sideConditions: sideConditionsMap;
+export const SideconditionsEnum: SideconditionsEnumMap;
 
-export interface speciesMap {
+export interface SpeciesEnumMap {
   SPECIES_NONE: 0;
   SPECIES_PAD: 1;
   SPECIES_UNK: 2;
@@ -1638,9 +1638,9 @@ export interface speciesMap {
   SPECIES_ZYGARDECOMPLETE: 1423;
 }
 
-export const species: speciesMap;
+export const SpeciesEnum: SpeciesEnumMap;
 
-export interface movesMap {
+export interface MovesEnumMap {
   MOVES_NONE: 0;
   MOVES_PAD: 1;
   MOVES_SWITCH: 2;
@@ -2633,9 +2633,9 @@ export interface movesMap {
   MOVES_ZIPPYZAP: 989;
 }
 
-export const moves: movesMap;
+export const MovesEnum: MovesEnumMap;
 
-export interface abilitiesMap {
+export interface AbilitiesEnumMap {
   ABILITIES_NONE: 0;
   ABILITIES_PAD: 1;
   ABILITIES_UNK: 2;
@@ -2955,9 +2955,9 @@ export interface abilitiesMap {
   ABILITIES_ZEROTOHERO: 316;
 }
 
-export const abilities: abilitiesMap;
+export const AbilitiesEnum: AbilitiesEnumMap;
 
-export interface itemsMap {
+export interface ItemsEnumMap {
   ITEMS_NONE: 0;
   ITEMS_NULL: 1;
   ITEMS_PAD: 2;
@@ -3501,9 +3501,9 @@ export interface itemsMap {
   ITEMS_ZOOMLENS: 540;
 }
 
-export const items: itemsMap;
+export const ItemsEnum: ItemsEnumMap;
 
-export interface statusesMap {
+export interface StatusesEnumMap {
   STATUSES_NULL: 0;
   STATUSES_BRN: 1;
   STATUSES_FRZ: 2;
@@ -3513,9 +3513,9 @@ export interface statusesMap {
   STATUSES_TOX: 6;
 }
 
-export const statuses: statusesMap;
+export const StatusesEnum: StatusesEnumMap;
 
-export interface boostsMap {
+export interface BoostsEnumMap {
   BOOSTS_ACCURACY: 0;
   BOOSTS_ATK: 1;
   BOOSTS_DEF: 2;
@@ -3525,9 +3525,9 @@ export interface boostsMap {
   BOOSTS_SPE: 6;
 }
 
-export const boosts: boostsMap;
+export const BoostsEnum: BoostsEnumMap;
 
-export interface typesMap {
+export interface TypesEnumMap {
   TYPES_NONE: 0;
   TYPES_PAD: 1;
   TYPES_UNK: 2;
@@ -3552,18 +3552,18 @@ export interface typesMap {
   TYPES_WATER: 21;
 }
 
-export const types: typesMap;
+export const TypesEnum: TypesEnumMap;
 
-export interface gendersMap {
+export interface GendersEnumMap {
   GENDERS_UNK: 0;
   GENDERS_F: 1;
   GENDERS_M: 2;
   GENDERS_N: 3;
 }
 
-export const genders: gendersMap;
+export const GendersEnum: GendersEnumMap;
 
-export interface hyphenArgsMap {
+export interface HyphenargsEnumMap {
   HYPHENARGS_UNK: 0;
   HYPHENARGS_ABILITY: 1;
   HYPHENARGS_ACTIVATE: 2;
@@ -3626,5 +3626,5 @@ export interface hyphenArgsMap {
   HYPHENARGS_ZPOWER: 59;
 }
 
-export const hyphenArgs: hyphenArgsMap;
+export const HyphenargsEnum: HyphenargsEnumMap;
 

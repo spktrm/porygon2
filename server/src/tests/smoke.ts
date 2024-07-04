@@ -5,6 +5,7 @@ import { Game } from "../game";
 import { port } from "./utils";
 import { State } from "../../protos/state_pb";
 import { chooseRandom } from "../utils";
+import ProgressBar from "progress";
 
 async function runGame(game: Game) {
     await game.run();
@@ -17,8 +18,11 @@ async function runGame(game: Game) {
     return game;
 }
 
-async function main() {
+const bar = new ProgressBar(":bar", { total: 1000 });
+
+async function main(verbose: boolean = false) {
     let game = new Game({ port: port, gameId: 0 });
+
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
         const info = state.getInfo();
@@ -35,7 +39,9 @@ async function main() {
                 game.queues[`p${playerIndex ? 2 : 1}`].enqueue(action);
             } else {
                 const wasTie = game.world?.winner === "";
-                console.log(game.world?.log.slice(-10));
+                if (verbose) {
+                    console.log(game.world?.log.slice(-10));
+                }
                 const [r1, r2] = [
                     info.getPlayeronereward(),
                     info.getPlayertworeward(),
@@ -51,9 +57,11 @@ async function main() {
             }
         }
     };
+
     for (let runIdx = 0; runIdx < 1000; runIdx++) {
         game = await runGame(game);
+        bar.tick();
     }
 }
 
-main();
+main(false);

@@ -8,7 +8,7 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 import { Protocol } from "@pkmn/protocol";
 
 import { AsyncQueue } from "./utils";
-import { AllValidActions, StateHandler } from "./state";
+import { AllValidActions, EventHandler, StateHandler } from "./state";
 import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
@@ -26,8 +26,13 @@ export class StreamHandler {
     sendFn: sendFnType;
     recvFn: recvFnType;
 
+    log: string[];
     gameId: number;
-    battle: Battle;
+
+    publicBattle: Battle;
+    privatebattle: Battle;
+    eventHandler: EventHandler;
+
     rqid: string | undefined;
     queue: AsyncQueue<Action>;
     playerIndex: number | undefined;
@@ -40,21 +45,41 @@ export class StreamHandler {
         const { gameId, sendFn, recvFn } = args;
 
         this.gameId = gameId;
-        this.battle = new Battle(generations);
+        this.log = [];
+
+        this.publicBattle = new Battle(generations);
+        this.privatebattle = new Battle(generations);
+        this.eventHandler = new EventHandler(this);
+
         this.rqid = undefined;
-        this.queue = new AsyncQueue();
         this.playerIndex = undefined;
+        this.queue = new AsyncQueue();
 
         this.sendFn = sendFn;
         this.recvFn = recvFn;
     }
 
     ingestLine(line: string) {
-        this.battle.add(line);
+        this.publicBattle.add(line);
+        this.privatebattle.add(line);
+        this.log.push(line);
+        this.ingestEvent(line);
+    }
+
+    ingestEvent(line: string) {
+        const { args, kwArgs } = Protocol.parseBattleLine(line);
+        const key = Protocol.key(args);
+        if (!key) return;
+        if (key in this.eventHandler) {
+            (this.eventHandler as any)[key](args, kwArgs);
+        }
+        if (line.startsWith("|-")) {
+            this.eventHandler.handleHyphenLine(args, kwArgs);
+        }
     }
 
     isActionRequired(chunk: string): boolean {
-        const request = (this.battle.request ?? {}) as AnyObject;
+        const request = (this.privatebattle.request ?? {}) as AnyObject;
         this.rqid = request.rqid;
         if (request === undefined) {
             return false;
@@ -75,7 +100,7 @@ export class StreamHandler {
     }
 
     getRequest(): requestType {
-        return this.battle.request as requestType;
+        return this.privatebattle.request as requestType;
     }
 
     getState(): State {
@@ -83,7 +108,7 @@ export class StreamHandler {
     }
 
     getPlayerIndex(): number | undefined {
-        const request = this.battle.request;
+        const request = this.privatebattle.request;
         if (request) {
             if (this.playerIndex) {
                 return this.playerIndex;
@@ -115,9 +140,14 @@ export class StreamHandler {
     }
 
     reset() {
+        this.log = [];
+
+        this.publicBattle = new Battle(generations);
+        this.privatebattle = new Battle(generations);
+        this.eventHandler.reset();
+
         this.rqid = undefined;
-        this.battle = new Battle(generations);
-        return;
+        this.playerIndex = undefined;
     }
 }
 
@@ -155,20 +185,15 @@ export class Game {
 
         this.queues = { p1: new AsyncQueue(), p2: new AsyncQueue() };
         this.handlers = Object.fromEntries(
-            ["p1", "p2", "omniscient"].map((x) => [
+            ["p1", "p2"].map((x) => [
                 x,
                 new StreamHandler({
                     gameId,
                     sendFn: (state) => {
-                        if (x !== "omniscient") this.sendState(state);
+                        this.sendState(state);
                     },
                     recvFn: async () => {
-                        if (x !== "omniscient") {
-                            const action = await this.queues[x].dequeue();
-                            return action;
-                        } else {
-                            return undefined;
-                        }
+                        return await this.queues[x].dequeue();
                     },
                 }),
             ])
@@ -181,10 +206,10 @@ export class Game {
         }
     }
 
-    getRewards(): [number, number] {
+    getRewards(sideId: "p1" | "p2"): [number, number] {
         const winner = this.getWinner();
-        const omniscientHandler = this.handlers["omniscient"];
-        const publicBattle = omniscientHandler.battle;
+        const omniscientHandler = this.handlers[sideId];
+        const publicBattle = omniscientHandler.publicBattle;
         if (winner) {
             const p1Reward = publicBattle.p1.name === winner ? 1 : -1;
             const p2Reward = publicBattle.p2.name === winner ? 1 : -1;
@@ -203,7 +228,8 @@ export class Game {
         let info = state.getInfo();
         if (isDone && info) {
             info.setDone(isDone);
-            const [r1, r2] = this.getRewards();
+            const sideId = info.getPlayerindex() ? "p2" : "p1";
+            const [r1, r2] = this.getRewards(sideId);
             info.setPlayeronereward(r1);
             info.setPlayertworeward(r2);
             state.setInfo(info);
@@ -219,7 +245,7 @@ export class Game {
     }
 
     async runPlayer(args: {
-        id: "omniscient" | "p1" | "p2";
+        id: "p1" | "p2";
         stream: ObjectReadWriteStream<string>;
     }) {
         const { id, stream } = args;
@@ -230,9 +256,7 @@ export class Game {
                 this.handleAction(stream, action);
             }
         }
-        if (id !== "omniscient") {
-            this.dones += 1;
-        }
+        this.dones += 1;
         const isDone = this.isDone();
         if (isDone) {
             await handler.stateActionStep(isDone);
@@ -252,10 +276,6 @@ export class Game {
             this.runPlayer({
                 id: "p2",
                 stream: streams.p2,
-            }),
-            this.runPlayer({
-                id: "omniscient",
-                stream: streams.omniscient,
             }),
         ]);
 

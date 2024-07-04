@@ -2,6 +2,7 @@
 // file: state.proto
 
 import * as jspb from "google-protobuf";
+import * as history_pb from "./history_pb";
 
 export class LegalActions extends jspb.Message {
   getMove1(): boolean;
@@ -110,6 +111,11 @@ export class State extends jspb.Message {
   getLegalactions(): LegalActions | undefined;
   setLegalactions(value?: LegalActions): void;
 
+  clearHistoryList(): void;
+  getHistoryList(): Array<history_pb.HistoryStep>;
+  setHistoryList(value: Array<history_pb.HistoryStep>): void;
+  addHistory(value?: history_pb.HistoryStep, index?: number): history_pb.HistoryStep;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
   static toObject(includeInstance: boolean, msg: State): State.AsObject;
@@ -124,6 +130,7 @@ export namespace State {
   export type AsObject = {
     info?: Info.AsObject,
     legalactions?: LegalActions.AsObject,
+    historyList: Array<history_pb.HistoryStep.AsObject>,
   }
 }
 

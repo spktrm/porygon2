@@ -1,6 +1,8 @@
+import history_pb2 as _history_pb2
+from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from typing import ClassVar as _ClassVar, Mapping as _Mapping, Optional as _Optional, Union as _Union
+from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -45,9 +47,11 @@ class Info(_message.Message):
     def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerOneReward: _Optional[float] = ..., playerTwoReward: _Optional[float] = ..., playerIndex: bool = ..., turn: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
-    __slots__ = ("info", "legalActions")
+    __slots__ = ("info", "legalActions", "history")
     INFO_FIELD_NUMBER: _ClassVar[int]
     LEGALACTIONS_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_FIELD_NUMBER: _ClassVar[int]
     info: Info
     legalActions: LegalActions
-    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legalActions: _Optional[_Union[LegalActions, _Mapping]] = ...) -> None: ...
+    history: _containers.RepeatedCompositeFieldContainer[_history_pb2.HistoryStep]
+    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legalActions: _Optional[_Union[LegalActions, _Mapping]] = ..., history: _Optional[_Iterable[_Union[_history_pb2.HistoryStep, _Mapping]]] = ...) -> None: ...

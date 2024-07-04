@@ -15,24 +15,24 @@ var jspb = require('google-protobuf');
 var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
-goog.exportSymbol('proto.enums.abilities', null, global);
-goog.exportSymbol('proto.enums.boosts', null, global);
-goog.exportSymbol('proto.enums.genders', null, global);
-goog.exportSymbol('proto.enums.hyphenArgs', null, global);
-goog.exportSymbol('proto.enums.items', null, global);
-goog.exportSymbol('proto.enums.moves', null, global);
-goog.exportSymbol('proto.enums.pseudoWeather', null, global);
-goog.exportSymbol('proto.enums.sideConditions', null, global);
-goog.exportSymbol('proto.enums.species', null, global);
-goog.exportSymbol('proto.enums.statuses', null, global);
-goog.exportSymbol('proto.enums.terrain', null, global);
-goog.exportSymbol('proto.enums.types', null, global);
-goog.exportSymbol('proto.enums.volatileStatus', null, global);
-goog.exportSymbol('proto.enums.weathers', null, global);
+goog.exportSymbol('proto.enums.AbilitiesEnum', null, global);
+goog.exportSymbol('proto.enums.BoostsEnum', null, global);
+goog.exportSymbol('proto.enums.GendersEnum', null, global);
+goog.exportSymbol('proto.enums.HyphenargsEnum', null, global);
+goog.exportSymbol('proto.enums.ItemsEnum', null, global);
+goog.exportSymbol('proto.enums.MovesEnum', null, global);
+goog.exportSymbol('proto.enums.PseudoweatherEnum', null, global);
+goog.exportSymbol('proto.enums.SideconditionsEnum', null, global);
+goog.exportSymbol('proto.enums.SpeciesEnum', null, global);
+goog.exportSymbol('proto.enums.StatusesEnum', null, global);
+goog.exportSymbol('proto.enums.TerrainEnum', null, global);
+goog.exportSymbol('proto.enums.TypesEnum', null, global);
+goog.exportSymbol('proto.enums.VolatilestatusEnum', null, global);
+goog.exportSymbol('proto.enums.WeathersEnum', null, global);
 /**
  * @enum {number}
  */
-proto.enums.pseudoWeather = {
+proto.enums.PseudoweatherEnum = {
   PSEUDOWEATHER_NULL: 0,
   PSEUDOWEATHER_FAIRYLOCK: 1,
   PSEUDOWEATHER_GRAVITY: 2,
@@ -47,7 +47,7 @@ proto.enums.pseudoWeather = {
 /**
  * @enum {number}
  */
-proto.enums.volatileStatus = {
+proto.enums.VolatilestatusEnum = {
   VOLATILESTATUS_NULL: 0,
   VOLATILESTATUS_AIRBALLOON: 1,
   VOLATILESTATUS_ALLYSWITCH: 2,
@@ -192,7 +192,7 @@ proto.enums.volatileStatus = {
 /**
  * @enum {number}
  */
-proto.enums.weathers = {
+proto.enums.WeathersEnum = {
   WEATHERS_NULL: 0,
   WEATHERS_DELTASTREAM: 1,
   WEATHERS_DESOLATELAND: 2,
@@ -207,7 +207,7 @@ proto.enums.weathers = {
 /**
  * @enum {number}
  */
-proto.enums.terrain = {
+proto.enums.TerrainEnum = {
   TERRAIN_NULL: 0,
   TERRAIN_ELECTRIC: 1,
   TERRAIN_GRASSY: 3,
@@ -219,7 +219,7 @@ proto.enums.terrain = {
 /**
  * @enum {number}
  */
-proto.enums.sideConditions = {
+proto.enums.SideconditionsEnum = {
   SIDECONDITIONS_NULL: 0,
   SIDECONDITIONS_AURORAVEIL: 1,
   SIDECONDITIONS_FIREPLEDGE: 2,
@@ -245,7 +245,7 @@ proto.enums.sideConditions = {
 /**
  * @enum {number}
  */
-proto.enums.species = {
+proto.enums.SpeciesEnum = {
   SPECIES_NONE: 0,
   SPECIES_PAD: 1,
   SPECIES_UNK: 2,
@@ -1675,7 +1675,7 @@ proto.enums.species = {
 /**
  * @enum {number}
  */
-proto.enums.moves = {
+proto.enums.MovesEnum = {
   MOVES_NONE: 0,
   MOVES_PAD: 1,
   MOVES_SWITCH: 2,
@@ -2671,7 +2671,7 @@ proto.enums.moves = {
 /**
  * @enum {number}
  */
-proto.enums.abilities = {
+proto.enums.AbilitiesEnum = {
   ABILITIES_NONE: 0,
   ABILITIES_PAD: 1,
   ABILITIES_UNK: 2,
@@ -2994,7 +2994,7 @@ proto.enums.abilities = {
 /**
  * @enum {number}
  */
-proto.enums.items = {
+proto.enums.ItemsEnum = {
   ITEMS_NONE: 0,
   ITEMS_NULL: 1,
   ITEMS_PAD: 2,
@@ -3541,7 +3541,7 @@ proto.enums.items = {
 /**
  * @enum {number}
  */
-proto.enums.statuses = {
+proto.enums.StatusesEnum = {
   STATUSES_NULL: 0,
   STATUSES_BRN: 1,
   STATUSES_FRZ: 2,
@@ -3554,7 +3554,7 @@ proto.enums.statuses = {
 /**
  * @enum {number}
  */
-proto.enums.boosts = {
+proto.enums.BoostsEnum = {
   BOOSTS_ACCURACY: 0,
   BOOSTS_ATK: 1,
   BOOSTS_DEF: 2,
@@ -3567,7 +3567,7 @@ proto.enums.boosts = {
 /**
  * @enum {number}
  */
-proto.enums.types = {
+proto.enums.TypesEnum = {
   TYPES_NONE: 0,
   TYPES_PAD: 1,
   TYPES_UNK: 2,
@@ -3595,7 +3595,7 @@ proto.enums.types = {
 /**
  * @enum {number}
  */
-proto.enums.genders = {
+proto.enums.GendersEnum = {
   GENDERS_UNK: 0,
   GENDERS_F: 1,
   GENDERS_M: 2,
@@ -3605,7 +3605,7 @@ proto.enums.genders = {
 /**
  * @enum {number}
  */
-proto.enums.hyphenArgs = {
+proto.enums.HyphenargsEnum = {
   HYPHENARGS_UNK: 0,
   HYPHENARGS_ABILITY: 1,
   HYPHENARGS_ACTIVATE: 2,

@@ -15,6 +15,8 @@ var jspb = require('google-protobuf');
 var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
+var history_pb = require('./history_pb.js');
+goog.object.extend(proto, history_pb);
 goog.exportSymbol('proto.rlenv.Info', null, global);
 goog.exportSymbol('proto.rlenv.LegalActions', null, global);
 goog.exportSymbol('proto.rlenv.State', null, global);
@@ -71,7 +73,7 @@ if (goog.DEBUG && !COMPILED) {
  * @constructor
  */
 proto.rlenv.State = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, null, null);
+  jspb.Message.initialize(this, opt_data, 0, -1, proto.rlenv.State.repeatedFields_, null);
 };
 goog.inherits(proto.rlenv.State, jspb.Message);
 if (goog.DEBUG && !COMPILED) {
@@ -762,6 +764,13 @@ proto.rlenv.Info.prototype.setTurn = function(value) {
 
 
 
+/**
+ * List of repeated fields within this message type.
+ * @private {!Array<number>}
+ * @const
+ */
+proto.rlenv.State.repeatedFields_ = [3];
+
 
 
 if (jspb.Message.GENERATE_TO_OBJECT) {
@@ -794,7 +803,9 @@ proto.rlenv.State.prototype.toObject = function(opt_includeInstance) {
 proto.rlenv.State.toObject = function(includeInstance, msg) {
   var f, obj = {
     info: (f = msg.getInfo()) && proto.rlenv.Info.toObject(includeInstance, f),
-    legalactions: (f = msg.getLegalactions()) && proto.rlenv.LegalActions.toObject(includeInstance, f)
+    legalactions: (f = msg.getLegalactions()) && proto.rlenv.LegalActions.toObject(includeInstance, f),
+    historyList: jspb.Message.toObjectList(msg.getHistoryList(),
+    history_pb.HistoryStep.toObject, includeInstance)
   };
 
   if (includeInstance) {
@@ -841,6 +852,11 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
       reader.readMessage(value,proto.rlenv.LegalActions.deserializeBinaryFromReader);
       msg.setLegalactions(value);
       break;
+    case 3:
+      var value = new history_pb.HistoryStep;
+      reader.readMessage(value,history_pb.HistoryStep.deserializeBinaryFromReader);
+      msg.addHistory(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -884,6 +900,14 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
       2,
       f,
       proto.rlenv.LegalActions.serializeBinaryToWriter
+    );
+  }
+  f = message.getHistoryList();
+  if (f.length > 0) {
+    writer.writeRepeatedMessage(
+      3,
+      f,
+      history_pb.HistoryStep.serializeBinaryToWriter
     );
   }
 };
@@ -960,6 +984,44 @@ proto.rlenv.State.prototype.clearLegalactions = function() {
  */
 proto.rlenv.State.prototype.hasLegalactions = function() {
   return jspb.Message.getField(this, 2) != null;
+};
+
+
+/**
+ * repeated history.HistoryStep history = 3;
+ * @return {!Array<!proto.history.HistoryStep>}
+ */
+proto.rlenv.State.prototype.getHistoryList = function() {
+  return /** @type{!Array<!proto.history.HistoryStep>} */ (
+    jspb.Message.getRepeatedWrapperField(this, history_pb.HistoryStep, 3));
+};
+
+
+/**
+ * @param {!Array<!proto.history.HistoryStep>} value
+ * @return {!proto.rlenv.State} returns this
+*/
+proto.rlenv.State.prototype.setHistoryList = function(value) {
+  return jspb.Message.setRepeatedWrapperField(this, 3, value);
+};
+
+
+/**
+ * @param {!proto.history.HistoryStep=} opt_value
+ * @param {number=} opt_index
+ * @return {!proto.history.HistoryStep}
+ */
+proto.rlenv.State.prototype.addHistory = function(opt_value, opt_index) {
+  return jspb.Message.addToRepeatedWrapperField(this, 3, opt_value, proto.history.HistoryStep, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.clearHistoryList = function() {
+  return this.setHistoryList([]);
 };
 
 

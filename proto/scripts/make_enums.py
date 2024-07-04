@@ -10,7 +10,7 @@ def toid(string: str) -> str:
 
 def generate_enum(title: str, data: dict[str, int]):
     data = [f"\t{title}_{toid(key)} = {value};" for key, value in data.items()]
-    return f"enum {title} {{\n" + "\n".join(data) + "\n}"
+    return f"enum {title.capitalize()}Enum {{\n" + "\n".join(data) + "\n}"
 
 
 def main():
