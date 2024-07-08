@@ -1,26 +1,26 @@
-import asyncio
-import struct
 import chex
-
+import struct
+import asyncio
+import uvloop
 import numpy as np
-
-from google.protobuf.descriptor import FieldDescriptor
 
 from typing import Any, Sequence, Tuple
 
+from google.protobuf.descriptor import FieldDescriptor
 
 from rlenv.data import (
     NUM_BOOSTS_FIELDS,
     NUM_POKEMON_FIELDS,
     NUM_PSEUDOWEATHER_FIELDS,
     NUM_SIDE_CONDITION_FIELDS,
+    NUM_HYPHEN_ARGS_FIELDS,
     NUM_VOLATILE_STATUS_FIELDS,
 )
-
-
 from rlenv.protos.history_pb2 import Boost, Sidecondition, Volatilestatus
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
+
+uvloop.install()
 
 
 @chex.dataclass(frozen=True)
@@ -33,6 +33,7 @@ class EnvStep:
     boosts: chex.Array = ()
     side_conditions: chex.Array = ()
     volatile_status: chex.Array = ()
+    hyphen_args: chex.Array = ()
     additional_features: chex.Array = ()
     terrain: chex.Array = ()
     pseudoweather: chex.Array = ()
@@ -87,6 +88,9 @@ def get_history(state: State, num_history: int = 8):
         (num_history, 2, NUM_VOLATILE_STATUS_FIELDS), dtype=np.int32
     )
     history_boosts = np.zeros((num_history, 2, NUM_BOOSTS_FIELDS), dtype=np.int32)
+    history_hyphen_args = np.zeros(
+        (num_history, 2, NUM_HYPHEN_ARGS_FIELDS), dtype=np.int32
+    )
 
     history_weather = np.zeros((num_history,), dtype=np.int32)
     history_pseudoweather = np.zeros(
@@ -111,6 +115,9 @@ def get_history(state: State, num_history: int = 8):
                 history_side_conditions, side.sideConditions, (step_idx, side_idx)
             )
             set_tensor_from_repeated(history_boosts, side.boosts, (step_idx, side_idx))
+            set_tensor_from_repeated(
+                history_hyphen_args, side.hyphenArgs, (step_idx, side_idx)
+            )
 
     return (
         history_active_entities,
@@ -119,6 +126,7 @@ def get_history(state: State, num_history: int = 8):
         history_boosts,
         history_weather,
         history_pseudoweather,
+        history_hyphen_args,
     )
 
 
@@ -130,6 +138,7 @@ def process_state(state: State) -> EnvStep:
         boosts,
         weather,
         pseudoweather,
+        hyphen_args,
     ) = get_history(state)
     return EnvStep(
         valid=not state.info.done,
@@ -160,6 +169,7 @@ def process_state(state: State) -> EnvStep:
         boosts=boosts,
         weather=weather,
         pseudoweather=pseudoweather,
+        hyphen_args=hyphen_args,
     )
 
 

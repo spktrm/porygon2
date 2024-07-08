@@ -21,11 +21,17 @@ message Volatilestatus {
     int32 value = 2;
 }
 
+message HyphenArg {
+    enums.HyphenargsEnum index = 1;
+    bool value = 2;
+}
+
 message HistorySide {
     pokemon.Pokemon active = 1;
     repeated Boost boosts = 2;
     repeated Sidecondition sideConditions = 3;
     repeated Volatilestatus volatileStatus = 4;
+    repeated HyphenArg hyphenArgs = 5;
 }
 
 enum ActionTypeEnum {
@@ -40,5 +46,4 @@ message HistoryStep {
     messages.PseudoweatherMessage pseudoweather = 4;
     ActionTypeEnum action = 5;
     enums.MovesEnum move = 6;
-    messages.HyphenargsMessage hyphenArgs = 7;
 }

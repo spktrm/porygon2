@@ -9,6 +9,8 @@ import {
     AbilitiesEnumMap,
     BoostsEnum,
     BoostsEnumMap,
+    HyphenargsEnum,
+    HyphenargsEnumMap,
     ItemsEnum,
     ItemsEnumMap,
     MovesEnum,
@@ -30,6 +32,7 @@ import {
     Boost,
     Volatilestatus,
     Sidecondition,
+    HyphenArg,
 } from "../protos/history_pb";
 import {
     BoostsMessage,
@@ -210,16 +213,35 @@ export class EventHandler implements Protocol.Handler {
     }
 
     handleHyphenLine(args: Protocol.ArgType, kwArgs?: {}) {
-        const prevState = this.history.pop();
+        const prevState = this.history.pop() as HistoryStep;
         const newState = this.getPublicState();
-        const prevAction = prevState?.getAction();
-        const hyphenArgs = prevState?.getHyphenargs();
-        if (hyphenArgs) {
-            const arg = args[0].slice(1);
-            const key = `${arg.toUpperCase()}${arg.slice(1)}`;
-            hyphenArgs[`SET${key}` as keyof SettersOf<HyphenargsMessage>](true);
-            newState.setHyphenargs(hyphenArgs);
+        const prevAction = prevState.getAction();
+        const playerIndex = this.handler.playerIndex as 0 | 1;
+
+        const users = [];
+        if (args[1]) {
+            const potentialUser = (parseInt((args[1] as string).slice(1, 2)) -
+                1) as 0 | 1;
+            users.push(potentialUser);
+        } else {
+            users.push(...[0, 1]);
         }
+        for (const user of users) {
+            const side = (
+                playerIndex === user ? prevState.getP1() : prevState.getP2()
+            ) as HistorySide;
+
+            const hyphenArg = new HyphenArg();
+            const hyphenArgKey = `HYPHENARGS_${args[0].slice(1).toUpperCase()}`;
+            hyphenArg.setIndex(
+                HyphenargsEnum[hyphenArgKey as keyof HyphenargsEnumMap]
+            );
+            hyphenArg.setValue(true);
+            side.addHyphenargs(hyphenArg);
+
+            playerIndex === user ? newState.setP1(side) : newState.setP2(side);
+        }
+
         if (prevAction) {
             newState.setAction(prevAction);
         }

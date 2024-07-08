@@ -1,7 +1,5 @@
-import asyncio
 import jax
 import chex
-import uvloop
 import functools
 import numpy as np
 
@@ -13,8 +11,6 @@ from rlenv.env import ParallelEnvironment, EnvStep, ActorStep, TimeStep
 from ml.config import RNaDConfig
 from ml.model import get_model
 from ml.utils import Params
-
-uvloop.install()
 
 
 @jax.jit

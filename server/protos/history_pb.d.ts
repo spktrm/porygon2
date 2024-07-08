@@ -78,6 +78,30 @@ export namespace Volatilestatus {
   }
 }
 
+export class HyphenArg extends jspb.Message {
+  getIndex(): enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap];
+  setIndex(value: enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap]): void;
+
+  getValue(): boolean;
+  setValue(value: boolean): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): HyphenArg.AsObject;
+  static toObject(includeInstance: boolean, msg: HyphenArg): HyphenArg.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: HyphenArg, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): HyphenArg;
+  static deserializeBinaryFromReader(message: HyphenArg, reader: jspb.BinaryReader): HyphenArg;
+}
+
+export namespace HyphenArg {
+  export type AsObject = {
+    index: enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap],
+    value: boolean,
+  }
+}
+
 export class HistorySide extends jspb.Message {
   hasActive(): boolean;
   clearActive(): void;
@@ -99,6 +123,11 @@ export class HistorySide extends jspb.Message {
   setVolatilestatusList(value: Array<Volatilestatus>): void;
   addVolatilestatus(value?: Volatilestatus, index?: number): Volatilestatus;
 
+  clearHyphenargsList(): void;
+  getHyphenargsList(): Array<HyphenArg>;
+  setHyphenargsList(value: Array<HyphenArg>): void;
+  addHyphenargs(value?: HyphenArg, index?: number): HyphenArg;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): HistorySide.AsObject;
   static toObject(includeInstance: boolean, msg: HistorySide): HistorySide.AsObject;
@@ -115,6 +144,7 @@ export namespace HistorySide {
     boostsList: Array<Boost.AsObject>,
     sideconditionsList: Array<Sidecondition.AsObject>,
     volatilestatusList: Array<Volatilestatus.AsObject>,
+    hyphenargsList: Array<HyphenArg.AsObject>,
   }
 }
 
@@ -143,11 +173,6 @@ export class HistoryStep extends jspb.Message {
   getMove(): enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap];
   setMove(value: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap]): void;
 
-  hasHyphenargs(): boolean;
-  clearHyphenargs(): void;
-  getHyphenargs(): messages_pb.HyphenargsMessage | undefined;
-  setHyphenargs(value?: messages_pb.HyphenargsMessage): void;
-
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): HistoryStep.AsObject;
   static toObject(includeInstance: boolean, msg: HistoryStep): HistoryStep.AsObject;
@@ -166,7 +191,6 @@ export namespace HistoryStep {
     pseudoweather?: messages_pb.PseudoweatherMessage.AsObject,
     action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
     move: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap],
-    hyphenargs?: messages_pb.HyphenargsMessage.AsObject,
   }
 }
 
