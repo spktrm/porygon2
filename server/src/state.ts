@@ -3,20 +3,24 @@ import { StreamHandler } from "./game";
 import { Args, KWArgs, Protocol } from "@pkmn/protocol";
 
 import { Info, LegalActions, State } from "../protos/state_pb";
-import { Move, Pokemon } from "../protos/pokemon_pb";
+import { Pokemon } from "../protos/pokemon_pb";
 import {
     AbilitiesEnum,
     AbilitiesEnumMap,
     BoostsEnum,
     BoostsEnumMap,
-    HyphenargsEnum,
-    HyphenargsEnumMap,
     ItemsEnum,
     ItemsEnumMap,
     MovesEnum,
     MovesEnumMap,
+    SideconditionsEnum,
+    SideconditionsEnumMap,
     SpeciesEnum,
     SpeciesEnumMap,
+    VolatilestatusEnum,
+    VolatilestatusEnumMap,
+    WeathersEnum,
+    WeathersEnumMap,
 } from "../protos/enums_pb";
 import {
     HistoryStep,
@@ -24,7 +28,24 @@ import {
     ActionTypeEnum,
     ActionTypeEnumMap,
     Boost,
+    Volatilestatus,
+    Sidecondition,
 } from "../protos/history_pb";
+import {
+    BoostsMessage,
+    SideconditionsMessage,
+    VolatilestatusMessage,
+    PseudoweatherMessage,
+    HyphenargsMessage,
+} from "../protos/messages_pb";
+
+type SettersOf<T> = {
+    [K in keyof T as K extends `set${string}` ? K : never]: T[K] extends (
+        ...args: any[]
+    ) => any
+        ? T[K]
+        : never;
+};
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);
@@ -45,7 +66,7 @@ export class EventHandler implements Protocol.Handler {
     switchCounter: number;
     historyMaxSize: number;
 
-    constructor(handler: StreamHandler, historyMaxSize: number = 5) {
+    constructor(handler: StreamHandler, historyMaxSize: number = 8) {
         this.handler = handler;
         this.history = [];
         this.moveCounter = 0;
@@ -78,25 +99,56 @@ export class EventHandler implements Protocol.Handler {
             ) as keyof AbilitiesEnumMap;
             activeProto.setAbility(AbilitiesEnum[abilityKey]);
 
-            for (const move of active.moveSlots) {
+            for (const [moveIndex_, move] of active.moveSlots
+                .slice(-4)
+                .entries()) {
                 const { id, ppUsed } = move;
-                const moveSlot = new Move();
                 const moveKey =
                     `MOVES_${id.toUpperCase()}` as keyof MovesEnumMap;
-                moveSlot.setMoveid(MovesEnum[moveKey]);
-                moveSlot.setPpused(ppUsed);
-                activeProto.addMoveset(moveSlot);
+                const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
+                activeProto[`setMove${moveIndex}id`](MovesEnum[moveKey]);
+                activeProto[`setPp${moveIndex}used`](ppUsed);
             }
 
             historySide.setActive(activeProto);
 
             for (const [stat, value] of Object.entries(active.boosts)) {
-                const boostsKey =
-                    `BOOSTS_${stat.toUpperCase()}` as keyof BoostsEnumMap;
                 const boost = new Boost();
-                boost.setStat(BoostsEnum[boostsKey]);
+                boost.setIndex(
+                    BoostsEnum[
+                        `BOOSTS_${stat.toUpperCase()}` as keyof BoostsEnumMap
+                    ]
+                );
                 boost.setValue(value);
                 historySide.addBoosts(boost);
+            }
+
+            for (const [stat, state] of Object.entries(active.volatiles)) {
+                const volatileStatus = new Volatilestatus();
+                const indexValue =
+                    VolatilestatusEnum[
+                        `VOLATILESTATUS_${stat.toUpperCase()}` as keyof VolatilestatusEnumMap
+                    ];
+                if (indexValue === undefined) {
+                    throw new Error();
+                }
+                volatileStatus.setIndex(indexValue);
+                volatileStatus.setValue(state.level ?? 1);
+                historySide.addVolatilestatus(volatileStatus);
+            }
+
+            for (const [stat, state] of Object.entries(side.sideConditions)) {
+                const sideCondition = new Sidecondition();
+                const indexValue =
+                    SideconditionsEnum[
+                        `SIDECONDITIONS_${stat.toUpperCase()}` as keyof SideconditionsEnumMap
+                    ];
+                if (indexValue === undefined) {
+                    throw new Error();
+                }
+                sideCondition.setIndex(indexValue);
+                sideCondition.setValue(state.level ?? 1);
+                historySide.addSideconditions(sideCondition);
             }
         }
 
@@ -108,6 +160,8 @@ export class EventHandler implements Protocol.Handler {
         move?: MovesEnumMap[keyof MovesEnumMap]
     ): HistoryStep {
         const playerIndex = this.handler.playerIndex as number;
+        const battle = this.handler.publicBattle;
+        const weather = battle.currentWeather().toString().toUpperCase();
         const step = new HistoryStep();
         step.setP1(this.getPublicSide(playerIndex));
         step.setP2(this.getPublicSide(1 - playerIndex));
@@ -115,6 +169,20 @@ export class EventHandler implements Protocol.Handler {
             step.setAction(action);
         }
         step.setMove(move ?? MovesEnum.MOVES_NONE);
+        step.setWeather(
+            WeathersEnum[
+                `WEATHERS_${
+                    weather ? weather : "NULL"
+                }` as keyof WeathersEnumMap
+            ]
+        );
+        const pseudoweather = new PseudoweatherMessage();
+        for (const [pseudoWeatherId, pseudoWeatherState] of Object.entries(
+            battle.field.pseudoWeather
+        )) {
+            const { minDuration, maxDuration, level } = pseudoWeatherState;
+        }
+        step.setPseudoweather(pseudoweather);
         return step;
     }
 
@@ -145,13 +213,12 @@ export class EventHandler implements Protocol.Handler {
         const prevState = this.history.pop();
         const newState = this.getPublicState();
         const prevAction = prevState?.getAction();
-        const hyphenArgs = prevState?.getHyphenargsList();
+        const hyphenArgs = prevState?.getHyphenargs();
         if (hyphenArgs) {
-            const hyphenArgKey = `HYPHENARGS_${args[0]
-                .slice(1)
-                .toUpperCase()}` as keyof HyphenargsEnumMap;
-            newState.setHyphenargsList(hyphenArgs);
-            newState.addHyphenargs(HyphenargsEnum[hyphenArgKey]);
+            const arg = args[0].slice(1);
+            const key = `${arg.toUpperCase()}${arg.slice(1)}`;
+            hyphenArgs[`SET${key}` as keyof SettersOf<HyphenargsMessage>](true);
+            newState.setHyphenargs(hyphenArgs);
         }
         if (prevAction) {
             newState.setAction(prevAction);

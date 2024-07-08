@@ -4,10 +4,11 @@
 import * as jspb from "google-protobuf";
 import * as pokemon_pb from "./pokemon_pb";
 import * as enums_pb from "./enums_pb";
+import * as messages_pb from "./messages_pb";
 
 export class Boost extends jspb.Message {
-  getStat(): enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap];
-  setStat(value: enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap]): void;
+  getIndex(): enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap];
+  setIndex(value: enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap]): void;
 
   getValue(): number;
   setValue(value: number): void;
@@ -24,31 +25,55 @@ export class Boost extends jspb.Message {
 
 export namespace Boost {
   export type AsObject = {
-    stat: enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap],
+    index: enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap],
     value: number,
   }
 }
 
-export class SideCondition extends jspb.Message {
-  getType(): enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap];
-  setType(value: enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap]): void;
+export class Sidecondition extends jspb.Message {
+  getIndex(): enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap];
+  setIndex(value: enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap]): void;
 
   getValue(): number;
   setValue(value: number): void;
 
   serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): SideCondition.AsObject;
-  static toObject(includeInstance: boolean, msg: SideCondition): SideCondition.AsObject;
+  toObject(includeInstance?: boolean): Sidecondition.AsObject;
+  static toObject(includeInstance: boolean, msg: Sidecondition): Sidecondition.AsObject;
   static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
   static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: SideCondition, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): SideCondition;
-  static deserializeBinaryFromReader(message: SideCondition, reader: jspb.BinaryReader): SideCondition;
+  static serializeBinaryToWriter(message: Sidecondition, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Sidecondition;
+  static deserializeBinaryFromReader(message: Sidecondition, reader: jspb.BinaryReader): Sidecondition;
 }
 
-export namespace SideCondition {
+export namespace Sidecondition {
   export type AsObject = {
-    type: enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap],
+    index: enums_pb.SideconditionsEnumMap[keyof enums_pb.SideconditionsEnumMap],
+    value: number,
+  }
+}
+
+export class Volatilestatus extends jspb.Message {
+  getIndex(): enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap];
+  setIndex(value: enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap]): void;
+
+  getValue(): number;
+  setValue(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Volatilestatus.AsObject;
+  static toObject(includeInstance: boolean, msg: Volatilestatus): Volatilestatus.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Volatilestatus, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Volatilestatus;
+  static deserializeBinaryFromReader(message: Volatilestatus, reader: jspb.BinaryReader): Volatilestatus;
+}
+
+export namespace Volatilestatus {
+  export type AsObject = {
+    index: enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap],
     value: number,
   }
 }
@@ -65,14 +90,14 @@ export class HistorySide extends jspb.Message {
   addBoosts(value?: Boost, index?: number): Boost;
 
   clearSideconditionsList(): void;
-  getSideconditionsList(): Array<SideCondition>;
-  setSideconditionsList(value: Array<SideCondition>): void;
-  addSideconditions(value?: SideCondition, index?: number): SideCondition;
+  getSideconditionsList(): Array<Sidecondition>;
+  setSideconditionsList(value: Array<Sidecondition>): void;
+  addSideconditions(value?: Sidecondition, index?: number): Sidecondition;
 
   clearVolatilestatusList(): void;
-  getVolatilestatusList(): Array<enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap]>;
-  setVolatilestatusList(value: Array<enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap]>): void;
-  addVolatilestatus(value: enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap], index?: number): enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap];
+  getVolatilestatusList(): Array<Volatilestatus>;
+  setVolatilestatusList(value: Array<Volatilestatus>): void;
+  addVolatilestatus(value?: Volatilestatus, index?: number): Volatilestatus;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): HistorySide.AsObject;
@@ -88,8 +113,8 @@ export namespace HistorySide {
   export type AsObject = {
     active?: pokemon_pb.Pokemon.AsObject,
     boostsList: Array<Boost.AsObject>,
-    sideconditionsList: Array<SideCondition.AsObject>,
-    volatilestatusList: Array<enums_pb.VolatilestatusEnumMap[keyof enums_pb.VolatilestatusEnumMap]>,
+    sideconditionsList: Array<Sidecondition.AsObject>,
+    volatilestatusList: Array<Volatilestatus.AsObject>,
   }
 }
 
@@ -107,10 +132,10 @@ export class HistoryStep extends jspb.Message {
   getWeather(): enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap];
   setWeather(value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap]): void;
 
-  clearPseudoweatherList(): void;
-  getPseudoweatherList(): Array<enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap]>;
-  setPseudoweatherList(value: Array<enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap]>): void;
-  addPseudoweather(value: enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap], index?: number): enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap];
+  hasPseudoweather(): boolean;
+  clearPseudoweather(): void;
+  getPseudoweather(): messages_pb.PseudoweatherMessage | undefined;
+  setPseudoweather(value?: messages_pb.PseudoweatherMessage): void;
 
   getAction(): ActionTypeEnumMap[keyof ActionTypeEnumMap];
   setAction(value: ActionTypeEnumMap[keyof ActionTypeEnumMap]): void;
@@ -118,10 +143,10 @@ export class HistoryStep extends jspb.Message {
   getMove(): enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap];
   setMove(value: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap]): void;
 
-  clearHyphenargsList(): void;
-  getHyphenargsList(): Array<enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap]>;
-  setHyphenargsList(value: Array<enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap]>): void;
-  addHyphenargs(value: enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap], index?: number): enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap];
+  hasHyphenargs(): boolean;
+  clearHyphenargs(): void;
+  getHyphenargs(): messages_pb.HyphenargsMessage | undefined;
+  setHyphenargs(value?: messages_pb.HyphenargsMessage): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): HistoryStep.AsObject;
@@ -138,10 +163,10 @@ export namespace HistoryStep {
     p1?: HistorySide.AsObject,
     p2?: HistorySide.AsObject,
     weather: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap],
-    pseudoweatherList: Array<enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap]>,
+    pseudoweather?: messages_pb.PseudoweatherMessage.AsObject,
     action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
     move: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap],
-    hyphenargsList: Array<enums_pb.HyphenargsEnumMap[keyof enums_pb.HyphenargsEnumMap]>,
+    hyphenargs?: messages_pb.HyphenargsMessage.AsObject,
   }
 }
 

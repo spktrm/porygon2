@@ -7,10 +7,13 @@ import { State } from "../../protos/state_pb";
 import { chooseRandom } from "../utils";
 import ProgressBar from "progress";
 
+const totalTest = 10000;
+// const bar = new ProgressBar(":bar", { total: totalTest });
+
 async function runGame(game: Game) {
     await game.run();
 
-    assert(game.dones === 2);
+    assert(game.done);
     assert(game.queues.p1.size() === 0);
     assert(game.queues.p2.size() === 0);
 
@@ -18,13 +21,27 @@ async function runGame(game: Game) {
     return game;
 }
 
-const bar = new ProgressBar(":bar", { total: 1000 });
+function assertTrajectory(trajectory: State[]) {
+    let prevTurn = undefined;
+    for (const state of trajectory) {
+        const stateObject = state.toObject();
+
+        const currentTurn = stateObject?.info?.turn;
+        assert(!!currentTurn >= !!prevTurn);
+        prevTurn = currentTurn;
+    }
+    return;
+}
 
 async function main(verbose: boolean = false) {
     let game = new Game({ port: port, gameId: 0 });
 
+    let trajectory: State[] = [];
+
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
+        trajectory.push(state);
+
         const info = state.getInfo();
         const legalActions = state.getLegalactions();
         if (info && legalActions) {
@@ -58,9 +75,12 @@ async function main(verbose: boolean = false) {
         }
     };
 
-    for (let runIdx = 0; runIdx < 1000; runIdx++) {
+    for (let runIdx = 0; runIdx < totalTest; runIdx++) {
         game = await runGame(game);
-        bar.tick();
+        assertTrajectory(trajectory);
+        trajectory = [];
+        // bar.tick();
+        console.log(runIdx);
     }
 }
 

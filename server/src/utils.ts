@@ -9,31 +9,43 @@ export function chooseRandom(legalActions: LegalActions): number {
 }
 export class AsyncQueue<T> {
     private queue: T[];
-    private eventEmitter: EventEmitter;
+    private waitingDequeuePromises: ((value: T) => void)[];
+    private isProcessing: boolean;
 
     constructor() {
         this.queue = [];
-        this.eventEmitter = new EventEmitter();
+        this.waitingDequeuePromises = [];
+        this.isProcessing = false;
     }
 
     enqueue(item: T): void {
-        this.queue.push(item);
-        this.eventEmitter.emit("itemAdded");
+        if (this.waitingDequeuePromises.length > 0) {
+            const resolve = this.waitingDequeuePromises.shift();
+            if (resolve) {
+                resolve(item);
+            }
+        } else {
+            this.queue.push(item);
+        }
     }
 
     async dequeue(): Promise<T> {
         if (this.queue.length > 0) {
-            return this.queue.shift()!;
-        } else {
-            return new Promise<T>((resolve) => {
-                this.eventEmitter.once("itemAdded", () => {
-                    resolve(this.queue.shift()!);
-                });
-            });
+            return Promise.resolve(this.queue.shift()!);
         }
+
+        return new Promise<T>((resolve) => {
+            this.waitingDequeuePromises.push(resolve);
+        });
     }
 
     size(): number {
         return this.queue.length;
+    }
+
+    clear(): void {
+        this.queue = [];
+        this.waitingDequeuePromises.forEach((resolve) => resolve(null as any));
+        this.waitingDequeuePromises = [];
     }
 }

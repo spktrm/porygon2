@@ -1,9 +1,11 @@
+import asyncio
 import jax
 import chex
 import uvloop
 import functools
 import numpy as np
 
+from jax import numpy as jnp
 from typing import Sequence
 
 from rlenv.env import ParallelEnvironment, EnvStep, ActorStep, TimeStep
@@ -13,6 +15,11 @@ from ml.model import get_model
 from ml.utils import Params
 
 uvloop.install()
+
+
+@jax.jit
+def tree_map(timesteps):
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *timesteps)
 
 
 class BatchCollector:
@@ -52,6 +59,8 @@ class BatchCollector:
     def actor_step(self, env_step: EnvStep):
         # pi = self._network_jit_apply(self.params, env_step)
         # pi = np.asarray(pi).astype("float64")
+        if np.any(env_step.legal.sum(-1) == 0):
+            raise ValueError()
 
         pi = env_step.legal
         # TODO(author18): is this policy normalization really needed?
@@ -75,7 +84,8 @@ class BatchCollector:
         timesteps = []
         env_step = self._batch_of_states_as_env_step(states)
 
-        for i in range(self.config.trajectory_max):
+        n = 0
+        while True:
             prev_env_step = env_step
             a, actor_step = self.actor_step(env_step)
 
@@ -91,8 +101,10 @@ class BatchCollector:
             )
             timesteps.append(timestep)
 
-            if (env_step.valid == 0).all() and i % resolution == 0:
+            if (~env_step.valid).all() and n % resolution == 0:
                 break
 
+            n += 1
+
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
-        return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *timesteps)
+        return tree_map(timesteps)

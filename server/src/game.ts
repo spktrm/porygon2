@@ -13,19 +13,22 @@ import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
+import { rejects } from "assert";
+import { resolve } from "path";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 const generations = new Generations(Dex);
 
 type sendFnType = (state: State) => void;
-type recvFnType = (playerIndex: number) => Promise<Action | undefined>;
+type recvFnType = () => Promise<Action | undefined>;
 type requestType = Protocol.MoveRequest;
 
 export class StreamHandler {
     sendFn: sendFnType;
     recvFn: recvFnType;
 
+    ts: number;
     log: string[];
     gameId: number;
 
@@ -44,6 +47,7 @@ export class StreamHandler {
     }) {
         const { gameId, sendFn, recvFn } = args;
 
+        this.ts = Date.now();
         this.gameId = gameId;
         this.log = [];
 
@@ -119,23 +123,41 @@ export class StreamHandler {
         }
     }
 
-    async stateActionStep(done: boolean = false): Promise<Action | undefined> {
+    async stateActionStep(): Promise<Action | undefined> {
         const state = this.getState();
-        this.sendFn(state);
-        const playerIndex = this.getPlayerIndex();
-        if (playerIndex !== undefined && !done) {
-            return await this.recvFn(playerIndex);
+        const legalActions = state.getLegalactions();
+        if (legalActions) {
+            const legalObj = legalActions.toObject();
+
+            const allMoves = Object.keys(legalObj);
+            const validMoves = Object.fromEntries(
+                Object.entries(legalObj).filter(([i, v]) => v)
+            );
+
+            if (Object.values(validMoves).length === 1) {
+                const action = new Action();
+                action.setGameid(this.gameId);
+                action.setIndex(
+                    allMoves.indexOf(Object.keys(validMoves).at(0) ?? "")
+                );
+                return action;
+            }
         }
+        this.sendFn(state);
+        return await this.recvFn();
     }
 
     async ingestChunk(chunk: string) {
         if (chunk) {
+            if (chunk.startsWith("|error")) {
+                console.log(chunk);
+            }
             for (const line of chunk.split("\n")) {
                 this.ingestLine(line);
             }
-        }
-        if (this.isActionRequired(chunk)) {
-            return await this.stateActionStep();
+            if (this.isActionRequired(chunk)) {
+                return await this.stateActionStep();
+            }
         }
     }
 
@@ -164,10 +186,12 @@ const actionIndexMapping: { [k: number]: string } = {
     9: "switch 6",
 };
 
+const MAX_TS = 100;
+
 export class Game {
     port: MessagePort | null;
+    done: boolean;
     gameId: number;
-    dones: number;
     handlers: {
         [k: string]: StreamHandler;
     };
@@ -175,13 +199,15 @@ export class Game {
         [k: string]: AsyncQueue<Action>;
     };
     world: World | null;
+    ts: number;
 
     constructor(args: { port: MessagePort | null; gameId: number }) {
         const { gameId, port } = args;
         this.port = port;
+        this.done = false;
         this.gameId = gameId;
-        this.dones = 0;
         this.world = null;
+        this.ts = 0;
 
         this.queues = { p1: new AsyncQueue(), p2: new AsyncQueue() };
         this.handlers = Object.fromEntries(
@@ -201,12 +227,26 @@ export class Game {
     }
 
     getWinner() {
-        if (this.world && this.isDone()) {
+        if (this.world && this.done) {
             return this.world.winner;
         }
     }
 
-    getRewards(sideId: "p1" | "p2"): [number, number] {
+    getRewardFromHpDiff(sideId: "p1" | "p2"): [number, number] {
+        const omniscientHandler = this.handlers[sideId];
+        const publicBattle = omniscientHandler.publicBattle;
+        const sideHpSums = publicBattle.sides.map((side) =>
+            side.team
+                .map((pokemon) => pokemon.hp / pokemon.maxhp)
+                .reduce((a, b) => a + b)
+        );
+        return [
+            sideHpSums[0] > sideHpSums[1] ? 1 : -1,
+            sideHpSums[1] > sideHpSums[0] ? 1 : -1,
+        ];
+    }
+
+    getRewardFromFinish(sideId: "p1" | "p2"): [number, number] {
         const winner = this.getWinner();
         const omniscientHandler = this.handlers[sideId];
         const publicBattle = omniscientHandler.publicBattle;
@@ -219,12 +259,13 @@ export class Game {
         }
     }
 
-    isDone() {
-        return this.dones === 2;
+    getRewards(sideId: "p1" | "p2"): [number, number] {
+        return this.getRewardFromHpDiff(sideId);
+        return this.getRewardFromFinish(sideId);
     }
 
     sendState(state: State) {
-        const isDone = this.isDone();
+        const isDone = this.done;
         let info = state.getInfo();
         if (isDone && info) {
             info.setDone(isDone);
@@ -236,6 +277,7 @@ export class Game {
             state.setLegalactions(AllValidActions);
         }
         const stateArr = state.serializeBinary();
+        this.ts += 1;
         return this.port?.postMessage(stateArr, [stateArr.buffer]);
     }
 
@@ -255,11 +297,9 @@ export class Game {
             if (action !== undefined) {
                 this.handleAction(stream, action);
             }
-        }
-        this.dones += 1;
-        const isDone = this.isDone();
-        if (isDone) {
-            await handler.stateActionStep(isDone);
+            if (this.ts > MAX_TS) {
+                break;
+            }
         }
     }
 
@@ -293,14 +333,19 @@ export class Game {
 >player p2 ${JSON.stringify(p2spec)}`);
         this.world = stream.battle;
 
-        return await players;
+        await players;
+
+        this.done = true;
+        const state = this.handlers.p1.getState();
+        this.sendState(state);
     }
 
     reset() {
         for (const handlerId of Object.keys(this.handlers)) {
             this.handlers[handlerId].reset();
         }
-        this.dones = 0;
-        return;
+        this.done = false;
+        this.world = null;
+        this.ts = 0;
     }
 }

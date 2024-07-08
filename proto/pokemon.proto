@@ -4,19 +4,21 @@ package pokemon;
 
 import "enums.proto";
 
-message Move {
-    enums.MovesEnum moveId = 1;
-    int32 ppUsed = 2;
-}
-
 message Pokemon {
     enums.SpeciesEnum species = 1;
     enums.ItemsEnum item = 2;
     enums.AbilitiesEnum ability = 3;
-    repeated Move moveset = 4;
-    float hpRatio = 5;
-    bool active = 6;
-    bool fainted = 7;
-    int32 level = 8;
-    enums.GendersEnum gender = 9;
+    enums.MovesEnum move1Id = 4;
+    enums.MovesEnum move2Id = 5;
+    enums.MovesEnum move3Id = 6;
+    enums.MovesEnum move4Id = 7;
+    int32 pp1Used = 8;
+    int32 pp2Used = 9;
+    int32 pp3Used = 10;
+    int32 pp4Used = 11;
+    float hpRatio = 12;
+    bool active = 13;
+    bool fainted = 14;
+    int32 level = 15;
+    enums.GendersEnum gender = 16;
 }
