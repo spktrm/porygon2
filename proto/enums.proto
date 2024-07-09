@@ -160,7 +160,7 @@ enum VolatilestatusEnum {
 }
 
 enum ItemeffectEnum {
-	itemEffect_null = 0;
+	itemEffect_unk = 0;
 	itemEffect_bestowed = 1;
 	itemEffect_consumed = 2;
 	itemEffect_disturbed = 3;

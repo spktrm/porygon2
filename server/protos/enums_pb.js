@@ -194,7 +194,7 @@ proto.enums.VolatilestatusEnum = {
  * @enum {number}
  */
 proto.enums.ItemeffectEnum = {
-  ITEMEFFECT_NULL: 0,
+  ITEMEFFECT_UNK: 0,
   ITEMEFFECT_BESTOWED: 1,
   ITEMEFFECT_CONSUMED: 2,
   ITEMEFFECT_DISTURBED: 3,

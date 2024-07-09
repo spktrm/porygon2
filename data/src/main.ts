@@ -275,7 +275,7 @@ async function main(): Promise<void> {
     const data = {
         pseudoWeather: enumerate([nullToken, ...pseudoweather.sort()]),
         volatileStatus: enumerate([nullToken, ...volatileStatus.sort()]),
-        itemEffect: enumerate([nullToken, ...itemEffects.sort()]),
+        itemEffect: enumerate([unkToken, ...itemEffects.sort()]),
         weathers: enumerate([nullToken, ...weathers.sort()]),
         terrain: enumerate([nullToken, ...terrain.sort()]),
         sideConditions: enumerate([nullToken, ...sideConditions.sort()]),
