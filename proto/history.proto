@@ -39,11 +39,23 @@ enum ActionTypeEnum {
     switch = 1;
 }
 
+message Weather {
+    enums.WeathersEnum value = 1;
+}
+
+message PseudoWeather {
+    messages.PseudoweatherMessage value = 1;
+}
+
 message HistoryStep {
     HistorySide p1 = 1;
     HistorySide p2 = 2;
-    enums.WeathersEnum weather = 3;
-    messages.PseudoweatherMessage pseudoweather = 4;
+    Weather weather = 3;
+    PseudoWeather pseudoweather = 4;
     ActionTypeEnum action = 5;
     enums.MovesEnum move = 6;
+    bool isMyTurn = 7;
+    int32 moveCounter = 8;
+    int32 switchCounter = 9;
+    int32 turn = 10;
 }

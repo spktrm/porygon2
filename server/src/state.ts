@@ -178,6 +178,10 @@ export class EventHandler implements Protocol.Handler {
                 sideCondition.setValue(state.level ?? 1);
                 historySide.addSideconditions(sideCondition);
             }
+        } else {
+            const pb = new PokemonPb();
+            pb.setSpecies(SpeciesEnum.SPECIES_NONE);
+            historySide.setActive(pb);
         }
 
         return historySide;

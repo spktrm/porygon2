@@ -62,18 +62,38 @@ class HistorySide(_message.Message):
     hyphenArgs: _containers.RepeatedCompositeFieldContainer[HyphenArg]
     def __init__(self, active: _Optional[_Union[_pokemon_pb2.Pokemon, _Mapping]] = ..., boosts: _Optional[_Iterable[_Union[Boost, _Mapping]]] = ..., sideConditions: _Optional[_Iterable[_Union[Sidecondition, _Mapping]]] = ..., volatileStatus: _Optional[_Iterable[_Union[Volatilestatus, _Mapping]]] = ..., hyphenArgs: _Optional[_Iterable[_Union[HyphenArg, _Mapping]]] = ...) -> None: ...
 
+class Weather(_message.Message):
+    __slots__ = ("value",)
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    value: _enums_pb2.WeathersEnum
+    def __init__(self, value: _Optional[_Union[_enums_pb2.WeathersEnum, str]] = ...) -> None: ...
+
+class PseudoWeather(_message.Message):
+    __slots__ = ("value",)
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    value: _messages_pb2.PseudoweatherMessage
+    def __init__(self, value: _Optional[_Union[_messages_pb2.PseudoweatherMessage, _Mapping]] = ...) -> None: ...
+
 class HistoryStep(_message.Message):
-    __slots__ = ("p1", "p2", "weather", "pseudoweather", "action", "move")
+    __slots__ = ("p1", "p2", "weather", "pseudoweather", "action", "move", "isMyTurn", "moveCounter", "switchCounter", "turn")
     P1_FIELD_NUMBER: _ClassVar[int]
     P2_FIELD_NUMBER: _ClassVar[int]
     WEATHER_FIELD_NUMBER: _ClassVar[int]
     PSEUDOWEATHER_FIELD_NUMBER: _ClassVar[int]
     ACTION_FIELD_NUMBER: _ClassVar[int]
     MOVE_FIELD_NUMBER: _ClassVar[int]
+    ISMYTURN_FIELD_NUMBER: _ClassVar[int]
+    MOVECOUNTER_FIELD_NUMBER: _ClassVar[int]
+    SWITCHCOUNTER_FIELD_NUMBER: _ClassVar[int]
+    TURN_FIELD_NUMBER: _ClassVar[int]
     p1: HistorySide
     p2: HistorySide
-    weather: _enums_pb2.WeathersEnum
-    pseudoweather: _messages_pb2.PseudoweatherMessage
+    weather: Weather
+    pseudoweather: PseudoWeather
     action: ActionTypeEnum
     move: _enums_pb2.MovesEnum
-    def __init__(self, p1: _Optional[_Union[HistorySide, _Mapping]] = ..., p2: _Optional[_Union[HistorySide, _Mapping]] = ..., weather: _Optional[_Union[_enums_pb2.WeathersEnum, str]] = ..., pseudoweather: _Optional[_Union[_messages_pb2.PseudoweatherMessage, _Mapping]] = ..., action: _Optional[_Union[ActionTypeEnum, str]] = ..., move: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ...) -> None: ...
+    isMyTurn: bool
+    moveCounter: int
+    switchCounter: int
+    turn: int
+    def __init__(self, p1: _Optional[_Union[HistorySide, _Mapping]] = ..., p2: _Optional[_Union[HistorySide, _Mapping]] = ..., weather: _Optional[_Union[Weather, _Mapping]] = ..., pseudoweather: _Optional[_Union[PseudoWeather, _Mapping]] = ..., action: _Optional[_Union[ActionTypeEnum, str]] = ..., move: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., isMyTurn: bool = ..., moveCounter: _Optional[int] = ..., switchCounter: _Optional[int] = ..., turn: _Optional[int] = ...) -> None: ...

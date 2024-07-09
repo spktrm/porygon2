@@ -148,6 +148,48 @@ export namespace HistorySide {
   }
 }
 
+export class Weather extends jspb.Message {
+  getValue(): enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap];
+  setValue(value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap]): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Weather.AsObject;
+  static toObject(includeInstance: boolean, msg: Weather): Weather.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Weather, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Weather;
+  static deserializeBinaryFromReader(message: Weather, reader: jspb.BinaryReader): Weather;
+}
+
+export namespace Weather {
+  export type AsObject = {
+    value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap],
+  }
+}
+
+export class PseudoWeather extends jspb.Message {
+  hasValue(): boolean;
+  clearValue(): void;
+  getValue(): messages_pb.PseudoweatherMessage | undefined;
+  setValue(value?: messages_pb.PseudoweatherMessage): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): PseudoWeather.AsObject;
+  static toObject(includeInstance: boolean, msg: PseudoWeather): PseudoWeather.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: PseudoWeather, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): PseudoWeather;
+  static deserializeBinaryFromReader(message: PseudoWeather, reader: jspb.BinaryReader): PseudoWeather;
+}
+
+export namespace PseudoWeather {
+  export type AsObject = {
+    value?: messages_pb.PseudoweatherMessage.AsObject,
+  }
+}
+
 export class HistoryStep extends jspb.Message {
   hasP1(): boolean;
   clearP1(): void;
@@ -159,19 +201,33 @@ export class HistoryStep extends jspb.Message {
   getP2(): HistorySide | undefined;
   setP2(value?: HistorySide): void;
 
-  getWeather(): enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap];
-  setWeather(value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap]): void;
+  hasWeather(): boolean;
+  clearWeather(): void;
+  getWeather(): Weather | undefined;
+  setWeather(value?: Weather): void;
 
   hasPseudoweather(): boolean;
   clearPseudoweather(): void;
-  getPseudoweather(): messages_pb.PseudoweatherMessage | undefined;
-  setPseudoweather(value?: messages_pb.PseudoweatherMessage): void;
+  getPseudoweather(): PseudoWeather | undefined;
+  setPseudoweather(value?: PseudoWeather): void;
 
   getAction(): ActionTypeEnumMap[keyof ActionTypeEnumMap];
   setAction(value: ActionTypeEnumMap[keyof ActionTypeEnumMap]): void;
 
   getMove(): enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap];
   setMove(value: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap]): void;
+
+  getIsmyturn(): boolean;
+  setIsmyturn(value: boolean): void;
+
+  getMovecounter(): number;
+  setMovecounter(value: number): void;
+
+  getSwitchcounter(): number;
+  setSwitchcounter(value: number): void;
+
+  getTurn(): number;
+  setTurn(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): HistoryStep.AsObject;
@@ -187,10 +243,14 @@ export namespace HistoryStep {
   export type AsObject = {
     p1?: HistorySide.AsObject,
     p2?: HistorySide.AsObject,
-    weather: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap],
-    pseudoweather?: messages_pb.PseudoweatherMessage.AsObject,
+    weather?: Weather.AsObject,
+    pseudoweather?: PseudoWeather.AsObject,
     action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
     move: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap],
+    ismyturn: boolean,
+    movecounter: number,
+    switchcounter: number,
+    turn: number,
   }
 }
 
