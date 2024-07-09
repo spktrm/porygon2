@@ -160,7 +160,7 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 
 class ItemeffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    itemEffect_unk: _ClassVar[ItemeffectEnum]
+    itemEffect_null: _ClassVar[ItemeffectEnum]
     itemEffect_bestowed: _ClassVar[ItemeffectEnum]
     itemEffect_consumed: _ClassVar[ItemeffectEnum]
     itemEffect_disturbed: _ClassVar[ItemeffectEnum]
@@ -3766,7 +3766,7 @@ volatileStatus_watersport: VolatilestatusEnum
 volatileStatus_wrap: VolatilestatusEnum
 volatileStatus_yawn: VolatilestatusEnum
 volatileStatus_zenmode: VolatilestatusEnum
-itemEffect_unk: ItemeffectEnum
+itemEffect_null: ItemeffectEnum
 itemEffect_bestowed: ItemeffectEnum
 itemEffect_consumed: ItemeffectEnum
 itemEffect_disturbed: ItemeffectEnum

@@ -4,7 +4,6 @@
 import * as jspb from "google-protobuf";
 import * as pokemon_pb from "./pokemon_pb";
 import * as enums_pb from "./enums_pb";
-import * as messages_pb from "./messages_pb";
 
 export class Boost extends jspb.Message {
   getIndex(): enums_pb.BoostsEnumMap[keyof enums_pb.BoostsEnumMap];
@@ -149,8 +148,14 @@ export namespace HistorySide {
 }
 
 export class Weather extends jspb.Message {
-  getValue(): enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap];
-  setValue(value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap]): void;
+  getIndex(): enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap];
+  setIndex(value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap]): void;
+
+  getMinduration(): number;
+  setMinduration(value: number): void;
+
+  getMaxduration(): number;
+  setMaxduration(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Weather.AsObject;
@@ -164,15 +169,21 @@ export class Weather extends jspb.Message {
 
 export namespace Weather {
   export type AsObject = {
-    value: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap],
+    index: enums_pb.WeathersEnumMap[keyof enums_pb.WeathersEnumMap],
+    minduration: number,
+    maxduration: number,
   }
 }
 
 export class PseudoWeather extends jspb.Message {
-  hasValue(): boolean;
-  clearValue(): void;
-  getValue(): messages_pb.PseudoweatherMessage | undefined;
-  setValue(value?: messages_pb.PseudoweatherMessage): void;
+  getIndex(): enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap];
+  setIndex(value: enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap]): void;
+
+  getMinduration(): number;
+  setMinduration(value: number): void;
+
+  getMaxduration(): number;
+  setMaxduration(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): PseudoWeather.AsObject;
@@ -186,7 +197,9 @@ export class PseudoWeather extends jspb.Message {
 
 export namespace PseudoWeather {
   export type AsObject = {
-    value?: messages_pb.PseudoweatherMessage.AsObject,
+    index: enums_pb.PseudoweatherEnumMap[keyof enums_pb.PseudoweatherEnumMap],
+    minduration: number,
+    maxduration: number,
   }
 }
 
@@ -206,10 +219,10 @@ export class HistoryStep extends jspb.Message {
   getWeather(): Weather | undefined;
   setWeather(value?: Weather): void;
 
-  hasPseudoweather(): boolean;
-  clearPseudoweather(): void;
-  getPseudoweather(): PseudoWeather | undefined;
-  setPseudoweather(value?: PseudoWeather): void;
+  clearPseudoweatherList(): void;
+  getPseudoweatherList(): Array<PseudoWeather>;
+  setPseudoweatherList(value: Array<PseudoWeather>): void;
+  addPseudoweather(value?: PseudoWeather, index?: number): PseudoWeather;
 
   getAction(): ActionTypeEnumMap[keyof ActionTypeEnumMap];
   setAction(value: ActionTypeEnumMap[keyof ActionTypeEnumMap]): void;
@@ -244,7 +257,7 @@ export namespace HistoryStep {
     p1?: HistorySide.AsObject,
     p2?: HistorySide.AsObject,
     weather?: Weather.AsObject,
-    pseudoweather?: PseudoWeather.AsObject,
+    pseudoweatherList: Array<PseudoWeather.AsObject>,
     action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
     move: enums_pb.MovesEnumMap[keyof enums_pb.MovesEnumMap],
     ismyturn: boolean,

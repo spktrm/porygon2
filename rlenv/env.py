@@ -16,7 +16,7 @@ from rlenv.data import (
     NUM_HYPHEN_ARGS_FIELDS,
     NUM_VOLATILE_STATUS_FIELDS,
 )
-from rlenv.protos.history_pb2 import Boost, Sidecondition, Volatilestatus
+from rlenv.protos.history_pb2 import Boost, PseudoWeather, Sidecondition, Volatilestatus
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
 
@@ -83,6 +83,17 @@ def set_tensor_from_repeated(
     return arr
 
 
+def set_tensor_from_repeated_multiple_values(
+    arr: np.ndarray,
+    proto_list: Sequence[PseudoWeather],
+    pre_idx: Sequence[int],
+) -> None:
+    for item in proto_list:
+        arr[*pre_idx, item.index, 0] = item.minDuration
+        arr[*pre_idx, item.index, 1] = item.maxDuration
+    return arr
+
+
 def get_history(state: State, num_history: int = 8):
     history = state.history
     history_active_entities = np.zeros(
@@ -101,14 +112,14 @@ def get_history(state: State, num_history: int = 8):
 
     history_weather = np.zeros((num_history,), dtype=np.int32)
     history_pseudoweather = np.zeros(
-        (num_history, NUM_PSEUDOWEATHER_FIELDS), dtype=np.int32
+        (num_history, NUM_PSEUDOWEATHER_FIELDS, 2), dtype=np.int32
     )
 
     for step_idx, step in enumerate(history):
-        history_weather[step_idx] = step.weather
+        history_weather[step_idx] = step.weather.index
 
-        history_pseudoweather = set_tensor_from_fields(
-            history_pseudoweather, step.pseudoweather.ListFields(), (step_idx,)
+        history_pseudoweather = set_tensor_from_repeated(
+            history_pseudoweather, step.pseudoweather, (step_idx,)
         )
 
         for side_idx, side in enumerate([step.p1, step.p2]):

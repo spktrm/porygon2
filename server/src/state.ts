@@ -12,6 +12,7 @@ import {
     ItemeffectEnum,
     ItemsEnum,
     MovesEnum,
+    PseudoweatherEnum,
     SideconditionsEnum,
     SpeciesEnum,
     StatusesEnum,
@@ -27,8 +28,9 @@ import {
     Volatilestatus,
     Sidecondition,
     HyphenArg,
+    Weather as WeatherPb,
+    PseudoWeather as PseudoWeatherPb,
 } from "../protos/history_pb";
-import { PseudoweatherMessage } from "../protos/messages_pb";
 import { MappingLookup, EnumKeyMapping, EnumMappings, Mappings } from "./data";
 import { Pokemon } from "@pkmn/client";
 
@@ -115,10 +117,12 @@ export class EventHandler implements Protocol.Handler {
             )
         );
         pb.setItemeffect(
-            IndexValueFromEnum<typeof ItemeffectEnum>(
-                "ItemEffects",
-                itemEffect === "" ? "unk" : itemEffect
-            )
+            itemEffect === ""
+                ? IndexValueFromEnum<typeof ItemeffectEnum>(
+                      "ItemEffects",
+                      itemEffect
+                  )
+                : ItemeffectEnum.ITEMEFFECT_UNK
         );
 
         const ability = pokemon.ability;
@@ -205,19 +209,33 @@ export class EventHandler implements Protocol.Handler {
                 ? IndexValueFromEnum<typeof MovesEnum>("Moves", move)
                 : MovesEnum.MOVES_NONE
         );
-        step.setWeather(
-            IndexValueFromEnum<typeof WeathersEnum>(
-                "Weathers",
-                weather ? weather : "null"
-            )
-        );
-        const pseudoweather = new PseudoweatherMessage();
+
+        const weatherpb = new WeatherPb();
+        if (weather) {
+            const weatherState = battle.field.weatherState;
+            weatherpb.setIndex(
+                IndexValueFromEnum<typeof WeathersEnum>("Weathers", weather)
+            );
+            weatherpb.setMinduration(weatherState.minDuration);
+            weatherpb.setMaxduration(weatherState.maxDuration);
+        }
+        step.setWeather(weatherpb);
+
         for (const [pseudoWeatherId, pseudoWeatherState] of Object.entries(
             battle.field.pseudoWeather
         )) {
+            const pseudoweather = new PseudoWeatherPb();
             const { minDuration, maxDuration, level } = pseudoWeatherState;
+            pseudoweather.setIndex(
+                IndexValueFromEnum<typeof PseudoweatherEnum>(
+                    "PseudoWeathers",
+                    pseudoWeatherId
+                )
+            );
+            pseudoweather.setMinduration(minDuration);
+            pseudoweather.setMaxduration(maxDuration);
+            step.addPseudoweather(pseudoweather);
         }
-        step.setPseudoweather(pseudoweather);
         return step;
     }
 

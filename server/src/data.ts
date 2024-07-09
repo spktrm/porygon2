@@ -6,6 +6,7 @@ import {
     ItemeffectEnum,
     ItemsEnum,
     MovesEnum,
+    PseudoweatherEnum,
     SideconditionsEnum,
     SpeciesEnum,
     StatusesEnum,
@@ -24,6 +25,7 @@ export type EnumMappings =
     | typeof VolatilestatusEnum
     | typeof SideconditionsEnum
     | typeof WeathersEnum
+    | typeof PseudoweatherEnum
     | typeof GendersEnum
     | typeof HyphenargsEnum;
 
@@ -50,6 +52,7 @@ export const MappingLookup = {
     Volatilestatus: VolatilestatusEnum,
     Sideconditions: SideconditionsEnum,
     Weathers: WeathersEnum,
+    PseudoWeathers: PseudoweatherEnum,
     Hyphenargs: HyphenargsEnum,
 };
 

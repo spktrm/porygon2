@@ -10,3 +10,6 @@ __pycache__/
 data/data/**/*.json
 
 **/*.ipynb
+
+rlenv/protos/
+server/protos/

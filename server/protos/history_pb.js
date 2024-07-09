@@ -19,8 +19,6 @@ var pokemon_pb = require('./pokemon_pb.js');
 goog.object.extend(proto, pokemon_pb);
 var enums_pb = require('./enums_pb.js');
 goog.object.extend(proto, enums_pb);
-var messages_pb = require('./messages_pb.js');
-goog.object.extend(proto, messages_pb);
 goog.exportSymbol('proto.history.ActionTypeEnum', null, global);
 goog.exportSymbol('proto.history.Boost', null, global);
 goog.exportSymbol('proto.history.HistorySide', null, global);
@@ -188,7 +186,7 @@ if (goog.DEBUG && !COMPILED) {
  * @constructor
  */
 proto.history.HistoryStep = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, null, null);
+  jspb.Message.initialize(this, opt_data, 0, -1, proto.history.HistoryStep.repeatedFields_, null);
 };
 goog.inherits(proto.history.HistoryStep, jspb.Message);
 if (goog.DEBUG && !COMPILED) {
@@ -1240,7 +1238,9 @@ proto.history.Weather.prototype.toObject = function(opt_includeInstance) {
  */
 proto.history.Weather.toObject = function(includeInstance, msg) {
   var f, obj = {
-    value: jspb.Message.getFieldWithDefault(msg, 1, 0)
+    index: jspb.Message.getFieldWithDefault(msg, 1, 0),
+    minduration: jspb.Message.getFieldWithDefault(msg, 2, 0),
+    maxduration: jspb.Message.getFieldWithDefault(msg, 3, 0)
   };
 
   if (includeInstance) {
@@ -1279,7 +1279,15 @@ proto.history.Weather.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {!proto.enums.WeathersEnum} */ (reader.readEnum());
-      msg.setValue(value);
+      msg.setIndex(value);
+      break;
+    case 2:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setMinduration(value);
+      break;
+    case 3:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setMaxduration(value);
       break;
     default:
       reader.skipField();
@@ -1310,10 +1318,24 @@ proto.history.Weather.prototype.serializeBinary = function() {
  */
 proto.history.Weather.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getValue();
+  f = message.getIndex();
   if (f !== 0.0) {
     writer.writeEnum(
       1,
+      f
+    );
+  }
+  f = message.getMinduration();
+  if (f !== 0) {
+    writer.writeInt32(
+      2,
+      f
+    );
+  }
+  f = message.getMaxduration();
+  if (f !== 0) {
+    writer.writeInt32(
+      3,
       f
     );
   }
@@ -1321,10 +1343,10 @@ proto.history.Weather.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional enums.WeathersEnum value = 1;
+ * optional enums.WeathersEnum index = 1;
  * @return {!proto.enums.WeathersEnum}
  */
-proto.history.Weather.prototype.getValue = function() {
+proto.history.Weather.prototype.getIndex = function() {
   return /** @type {!proto.enums.WeathersEnum} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
@@ -1333,8 +1355,44 @@ proto.history.Weather.prototype.getValue = function() {
  * @param {!proto.enums.WeathersEnum} value
  * @return {!proto.history.Weather} returns this
  */
-proto.history.Weather.prototype.setValue = function(value) {
+proto.history.Weather.prototype.setIndex = function(value) {
   return jspb.Message.setProto3EnumField(this, 1, value);
+};
+
+
+/**
+ * optional int32 minDuration = 2;
+ * @return {number}
+ */
+proto.history.Weather.prototype.getMinduration = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.history.Weather} returns this
+ */
+proto.history.Weather.prototype.setMinduration = function(value) {
+  return jspb.Message.setProto3IntField(this, 2, value);
+};
+
+
+/**
+ * optional int32 maxDuration = 3;
+ * @return {number}
+ */
+proto.history.Weather.prototype.getMaxduration = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 3, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.history.Weather} returns this
+ */
+proto.history.Weather.prototype.setMaxduration = function(value) {
+  return jspb.Message.setProto3IntField(this, 3, value);
 };
 
 
@@ -1370,7 +1428,9 @@ proto.history.PseudoWeather.prototype.toObject = function(opt_includeInstance) {
  */
 proto.history.PseudoWeather.toObject = function(includeInstance, msg) {
   var f, obj = {
-    value: (f = msg.getValue()) && messages_pb.PseudoweatherMessage.toObject(includeInstance, f)
+    index: jspb.Message.getFieldWithDefault(msg, 1, 0),
+    minduration: jspb.Message.getFieldWithDefault(msg, 2, 0),
+    maxduration: jspb.Message.getFieldWithDefault(msg, 3, 0)
   };
 
   if (includeInstance) {
@@ -1408,9 +1468,16 @@ proto.history.PseudoWeather.deserializeBinaryFromReader = function(msg, reader) 
     var field = reader.getFieldNumber();
     switch (field) {
     case 1:
-      var value = new messages_pb.PseudoweatherMessage;
-      reader.readMessage(value,messages_pb.PseudoweatherMessage.deserializeBinaryFromReader);
-      msg.setValue(value);
+      var value = /** @type {!proto.enums.PseudoweatherEnum} */ (reader.readEnum());
+      msg.setIndex(value);
+      break;
+    case 2:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setMinduration(value);
+      break;
+    case 3:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setMaxduration(value);
       break;
     default:
       reader.skipField();
@@ -1441,54 +1508,91 @@ proto.history.PseudoWeather.prototype.serializeBinary = function() {
  */
 proto.history.PseudoWeather.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getValue();
-  if (f != null) {
-    writer.writeMessage(
+  f = message.getIndex();
+  if (f !== 0.0) {
+    writer.writeEnum(
       1,
-      f,
-      messages_pb.PseudoweatherMessage.serializeBinaryToWriter
+      f
+    );
+  }
+  f = message.getMinduration();
+  if (f !== 0) {
+    writer.writeInt32(
+      2,
+      f
+    );
+  }
+  f = message.getMaxduration();
+  if (f !== 0) {
+    writer.writeInt32(
+      3,
+      f
     );
   }
 };
 
 
 /**
- * optional messages.PseudoweatherMessage value = 1;
- * @return {?proto.messages.PseudoweatherMessage}
+ * optional enums.PseudoweatherEnum index = 1;
+ * @return {!proto.enums.PseudoweatherEnum}
  */
-proto.history.PseudoWeather.prototype.getValue = function() {
-  return /** @type{?proto.messages.PseudoweatherMessage} */ (
-    jspb.Message.getWrapperField(this, messages_pb.PseudoweatherMessage, 1));
+proto.history.PseudoWeather.prototype.getIndex = function() {
+  return /** @type {!proto.enums.PseudoweatherEnum} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
 
 /**
- * @param {?proto.messages.PseudoweatherMessage|undefined} value
- * @return {!proto.history.PseudoWeather} returns this
-*/
-proto.history.PseudoWeather.prototype.setValue = function(value) {
-  return jspb.Message.setWrapperField(this, 1, value);
-};
-
-
-/**
- * Clears the message field making it undefined.
+ * @param {!proto.enums.PseudoweatherEnum} value
  * @return {!proto.history.PseudoWeather} returns this
  */
-proto.history.PseudoWeather.prototype.clearValue = function() {
-  return this.setValue(undefined);
+proto.history.PseudoWeather.prototype.setIndex = function(value) {
+  return jspb.Message.setProto3EnumField(this, 1, value);
 };
 
 
 /**
- * Returns whether this field is set.
- * @return {boolean}
+ * optional int32 minDuration = 2;
+ * @return {number}
  */
-proto.history.PseudoWeather.prototype.hasValue = function() {
-  return jspb.Message.getField(this, 1) != null;
+proto.history.PseudoWeather.prototype.getMinduration = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
 };
 
 
+/**
+ * @param {number} value
+ * @return {!proto.history.PseudoWeather} returns this
+ */
+proto.history.PseudoWeather.prototype.setMinduration = function(value) {
+  return jspb.Message.setProto3IntField(this, 2, value);
+};
+
+
+/**
+ * optional int32 maxDuration = 3;
+ * @return {number}
+ */
+proto.history.PseudoWeather.prototype.getMaxduration = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 3, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.history.PseudoWeather} returns this
+ */
+proto.history.PseudoWeather.prototype.setMaxduration = function(value) {
+  return jspb.Message.setProto3IntField(this, 3, value);
+};
+
+
+
+/**
+ * List of repeated fields within this message type.
+ * @private {!Array<number>}
+ * @const
+ */
+proto.history.HistoryStep.repeatedFields_ = [4];
 
 
 
@@ -1524,7 +1628,8 @@ proto.history.HistoryStep.toObject = function(includeInstance, msg) {
     p1: (f = msg.getP1()) && proto.history.HistorySide.toObject(includeInstance, f),
     p2: (f = msg.getP2()) && proto.history.HistorySide.toObject(includeInstance, f),
     weather: (f = msg.getWeather()) && proto.history.Weather.toObject(includeInstance, f),
-    pseudoweather: (f = msg.getPseudoweather()) && proto.history.PseudoWeather.toObject(includeInstance, f),
+    pseudoweatherList: jspb.Message.toObjectList(msg.getPseudoweatherList(),
+    proto.history.PseudoWeather.toObject, includeInstance),
     action: jspb.Message.getFieldWithDefault(msg, 5, 0),
     move: jspb.Message.getFieldWithDefault(msg, 6, 0),
     ismyturn: jspb.Message.getBooleanFieldWithDefault(msg, 7, false),
@@ -1585,7 +1690,7 @@ proto.history.HistoryStep.deserializeBinaryFromReader = function(msg, reader) {
     case 4:
       var value = new proto.history.PseudoWeather;
       reader.readMessage(value,proto.history.PseudoWeather.deserializeBinaryFromReader);
-      msg.setPseudoweather(value);
+      msg.addPseudoweather(value);
       break;
     case 5:
       var value = /** @type {!proto.history.ActionTypeEnum} */ (reader.readEnum());
@@ -1664,9 +1769,9 @@ proto.history.HistoryStep.serializeBinaryToWriter = function(message, writer) {
       proto.history.Weather.serializeBinaryToWriter
     );
   }
-  f = message.getPseudoweather();
-  if (f != null) {
-    writer.writeMessage(
+  f = message.getPseudoweatherList();
+  if (f.length > 0) {
+    writer.writeRepeatedMessage(
       4,
       f,
       proto.history.PseudoWeather.serializeBinaryToWriter
@@ -1829,39 +1934,40 @@ proto.history.HistoryStep.prototype.hasWeather = function() {
 
 
 /**
- * optional PseudoWeather pseudoweather = 4;
- * @return {?proto.history.PseudoWeather}
+ * repeated PseudoWeather pseudoweather = 4;
+ * @return {!Array<!proto.history.PseudoWeather>}
  */
-proto.history.HistoryStep.prototype.getPseudoweather = function() {
-  return /** @type{?proto.history.PseudoWeather} */ (
-    jspb.Message.getWrapperField(this, proto.history.PseudoWeather, 4));
+proto.history.HistoryStep.prototype.getPseudoweatherList = function() {
+  return /** @type{!Array<!proto.history.PseudoWeather>} */ (
+    jspb.Message.getRepeatedWrapperField(this, proto.history.PseudoWeather, 4));
 };
 
 
 /**
- * @param {?proto.history.PseudoWeather|undefined} value
+ * @param {!Array<!proto.history.PseudoWeather>} value
  * @return {!proto.history.HistoryStep} returns this
 */
-proto.history.HistoryStep.prototype.setPseudoweather = function(value) {
-  return jspb.Message.setWrapperField(this, 4, value);
+proto.history.HistoryStep.prototype.setPseudoweatherList = function(value) {
+  return jspb.Message.setRepeatedWrapperField(this, 4, value);
 };
 
 
 /**
- * Clears the message field making it undefined.
+ * @param {!proto.history.PseudoWeather=} opt_value
+ * @param {number=} opt_index
+ * @return {!proto.history.PseudoWeather}
+ */
+proto.history.HistoryStep.prototype.addPseudoweather = function(opt_value, opt_index) {
+  return jspb.Message.addToRepeatedWrapperField(this, 4, opt_value, proto.history.PseudoWeather, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
  * @return {!proto.history.HistoryStep} returns this
  */
-proto.history.HistoryStep.prototype.clearPseudoweather = function() {
-  return this.setPseudoweather(undefined);
-};
-
-
-/**
- * Returns whether this field is set.
- * @return {boolean}
- */
-proto.history.HistoryStep.prototype.hasPseudoweather = function() {
-  return jspb.Message.getField(this, 4) != null;
+proto.history.HistoryStep.prototype.clearPseudoweatherList = function() {
+  return this.setPseudoweatherList([]);
 };
 
 

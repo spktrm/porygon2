@@ -4,7 +4,6 @@ package history;
 
 import "pokemon.proto";
 import "enums.proto";
-import "messages.proto";
 
 message Boost {
     enums.BoostsEnum index = 1;
@@ -40,18 +39,22 @@ enum ActionTypeEnum {
 }
 
 message Weather {
-    enums.WeathersEnum value = 1;
+    enums.WeathersEnum index = 1;
+    int32 minDuration = 2;
+    int32 maxDuration = 3;
 }
 
 message PseudoWeather {
-    messages.PseudoweatherMessage value = 1;
+    enums.PseudoweatherEnum index = 1;
+    int32 minDuration = 2;
+    int32 maxDuration = 3;
 }
 
 message HistoryStep {
     HistorySide p1 = 1;
     HistorySide p2 = 2;
     Weather weather = 3;
-    PseudoWeather pseudoweather = 4;
+    repeated PseudoWeather pseudoweather = 4;
     ActionTypeEnum action = 5;
     enums.MovesEnum move = 6;
     bool isMyTurn = 7;

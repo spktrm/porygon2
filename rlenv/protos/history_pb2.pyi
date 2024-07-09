@@ -1,6 +1,5 @@
 import pokemon_pb2 as _pokemon_pb2
 import enums_pb2 as _enums_pb2
-import messages_pb2 as _messages_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -63,16 +62,24 @@ class HistorySide(_message.Message):
     def __init__(self, active: _Optional[_Union[_pokemon_pb2.Pokemon, _Mapping]] = ..., boosts: _Optional[_Iterable[_Union[Boost, _Mapping]]] = ..., sideConditions: _Optional[_Iterable[_Union[Sidecondition, _Mapping]]] = ..., volatileStatus: _Optional[_Iterable[_Union[Volatilestatus, _Mapping]]] = ..., hyphenArgs: _Optional[_Iterable[_Union[HyphenArg, _Mapping]]] = ...) -> None: ...
 
 class Weather(_message.Message):
-    __slots__ = ("value",)
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    value: _enums_pb2.WeathersEnum
-    def __init__(self, value: _Optional[_Union[_enums_pb2.WeathersEnum, str]] = ...) -> None: ...
+    __slots__ = ("index", "minDuration", "maxDuration")
+    INDEX_FIELD_NUMBER: _ClassVar[int]
+    MINDURATION_FIELD_NUMBER: _ClassVar[int]
+    MAXDURATION_FIELD_NUMBER: _ClassVar[int]
+    index: _enums_pb2.WeathersEnum
+    minDuration: int
+    maxDuration: int
+    def __init__(self, index: _Optional[_Union[_enums_pb2.WeathersEnum, str]] = ..., minDuration: _Optional[int] = ..., maxDuration: _Optional[int] = ...) -> None: ...
 
 class PseudoWeather(_message.Message):
-    __slots__ = ("value",)
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    value: _messages_pb2.PseudoweatherMessage
-    def __init__(self, value: _Optional[_Union[_messages_pb2.PseudoweatherMessage, _Mapping]] = ...) -> None: ...
+    __slots__ = ("index", "minDuration", "maxDuration")
+    INDEX_FIELD_NUMBER: _ClassVar[int]
+    MINDURATION_FIELD_NUMBER: _ClassVar[int]
+    MAXDURATION_FIELD_NUMBER: _ClassVar[int]
+    index: _enums_pb2.PseudoweatherEnum
+    minDuration: int
+    maxDuration: int
+    def __init__(self, index: _Optional[_Union[_enums_pb2.PseudoweatherEnum, str]] = ..., minDuration: _Optional[int] = ..., maxDuration: _Optional[int] = ...) -> None: ...
 
 class HistoryStep(_message.Message):
     __slots__ = ("p1", "p2", "weather", "pseudoweather", "action", "move", "isMyTurn", "moveCounter", "switchCounter", "turn")
@@ -89,11 +96,11 @@ class HistoryStep(_message.Message):
     p1: HistorySide
     p2: HistorySide
     weather: Weather
-    pseudoweather: PseudoWeather
+    pseudoweather: _containers.RepeatedCompositeFieldContainer[PseudoWeather]
     action: ActionTypeEnum
     move: _enums_pb2.MovesEnum
     isMyTurn: bool
     moveCounter: int
     switchCounter: int
     turn: int
-    def __init__(self, p1: _Optional[_Union[HistorySide, _Mapping]] = ..., p2: _Optional[_Union[HistorySide, _Mapping]] = ..., weather: _Optional[_Union[Weather, _Mapping]] = ..., pseudoweather: _Optional[_Union[PseudoWeather, _Mapping]] = ..., action: _Optional[_Union[ActionTypeEnum, str]] = ..., move: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., isMyTurn: bool = ..., moveCounter: _Optional[int] = ..., switchCounter: _Optional[int] = ..., turn: _Optional[int] = ...) -> None: ...
+    def __init__(self, p1: _Optional[_Union[HistorySide, _Mapping]] = ..., p2: _Optional[_Union[HistorySide, _Mapping]] = ..., weather: _Optional[_Union[Weather, _Mapping]] = ..., pseudoweather: _Optional[_Iterable[_Union[PseudoWeather, _Mapping]]] = ..., action: _Optional[_Union[ActionTypeEnum, str]] = ..., move: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., isMyTurn: bool = ..., moveCounter: _Optional[int] = ..., switchCounter: _Optional[int] = ..., turn: _Optional[int] = ...) -> None: ...
