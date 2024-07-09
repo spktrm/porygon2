@@ -57,7 +57,7 @@ function toId(string: string): string {
 
 // Helper function to reduce an array to unique, sorted identifiers
 function reduce(arr: string[]): string[] {
-    return Array.from(new Set(arr.map(toId))).sort();
+    return Array.from(new Set(arr.map(toId).filter((x) => !!x))).sort();
 }
 
 // function findDuplicates(arr: string[]): string[] {
@@ -193,6 +193,11 @@ async function main(): Promise<void> {
     const terrainPattern = /terrain:\s*['|"](.*)['|"],/g;
     const pseudoWeatherPattern = /pseudoWeather:\s['|"](.*?)['|"]/g;
 
+    const itemEffectPatterns = [
+        /itemEffect = ['|"](.*?)['|"]/g,
+        /lastItemEffect = ['|"](.*?)['|"]/g,
+    ];
+
     // Define patterns for volatile status
     const volatileStatusPatterns = [
         /removeVolatile\('([^']+)'/g,
@@ -252,12 +257,25 @@ async function main(): Promise<void> {
     let pseudoweather = extractPatterns(src, pseudoWeatherPattern);
     pseudoweather = reduce(pseudoweather);
 
+    let itemEffects = [];
+    for (const pattern of itemEffectPatterns) {
+        itemEffects.push(...extractPatterns(src, pattern));
+    }
+    itemEffects = reduce([
+        "eaten",
+        "popped",
+        "consumed",
+        "held up",
+        ...itemEffects,
+    ]);
+
     const genData = await getGenData(9);
 
     // Create the data object
     const data = {
         pseudoWeather: enumerate([nullToken, ...pseudoweather.sort()]),
         volatileStatus: enumerate([nullToken, ...volatileStatus.sort()]),
+        itemEffect: enumerate([nullToken, ...itemEffects.sort()]),
         weathers: enumerate([nullToken, ...weathers.sort()]),
         terrain: enumerate([nullToken, ...terrain.sort()]),
         sideConditions: enumerate([nullToken, ...sideConditions.sort()]),

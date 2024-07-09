@@ -21,4 +21,5 @@ message Pokemon {
     bool fainted = 14;
     int32 level = 15;
     enums.GendersEnum gender = 16;
+    enums.ItemeffectEnum itemEffect = 17;
 }

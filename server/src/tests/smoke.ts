@@ -55,7 +55,7 @@ async function main(verbose: boolean = false) {
                 action.setIndex(randomIndex);
                 game.queues[`p${playerIndex ? 2 : 1}`].enqueue(action);
             } else {
-                const wasTie = game.world?.winner === "";
+                const wasTie = game.world?.winner === "" || game.tied;
                 if (verbose) {
                     console.log(game.world?.log.slice(-10));
                 }

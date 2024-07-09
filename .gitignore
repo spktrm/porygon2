@@ -1,10 +1,12 @@
 env/
 
-server/dist
-server/node_modules
+**/dist
+**/node_modules
 
 __pycache__/
 
 .vscode/
 
 data/data/**/*.json
+
+**/*.ipynb

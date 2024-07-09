@@ -13,8 +13,6 @@ import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
-import { rejects } from "assert";
-import { resolve } from "path";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -200,6 +198,7 @@ export class Game {
     };
     world: World | null;
     ts: number;
+    tied: boolean;
 
     constructor(args: { port: MessagePort | null; gameId: number }) {
         const { gameId, port } = args;
@@ -208,6 +207,7 @@ export class Game {
         this.gameId = gameId;
         this.world = null;
         this.ts = 0;
+        this.tied = false;
 
         this.queues = { p1: new AsyncQueue(), p2: new AsyncQueue() };
         this.handlers = Object.fromEntries(
@@ -240,6 +240,10 @@ export class Game {
                 .map((pokemon) => pokemon.hp / pokemon.maxhp)
                 .reduce((a, b) => a + b)
         );
+        if (sideHpSums[0] === sideHpSums[1]) {
+            this.tied = true;
+            return [0, 0];
+        }
         return [
             sideHpSums[0] > sideHpSums[1] ? 1 : -1,
             sideHpSums[1] > sideHpSums[0] ? 1 : -1,
@@ -255,6 +259,7 @@ export class Game {
             const p2Reward = publicBattle.p2.name === winner ? 1 : -1;
             return [p1Reward, p2Reward];
         } else {
+            this.tied = true;
             return [0, 0];
         }
     }
@@ -347,5 +352,6 @@ export class Game {
         this.done = false;
         this.world = null;
         this.ts = 0;
+        this.tied = false;
     }
 }

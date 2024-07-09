@@ -53,6 +53,9 @@ export class Pokemon extends jspb.Message {
   getGender(): enums_pb.GendersEnumMap[keyof enums_pb.GendersEnumMap];
   setGender(value: enums_pb.GendersEnumMap[keyof enums_pb.GendersEnumMap]): void;
 
+  getItemeffect(): enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap];
+  setItemeffect(value: enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap]): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Pokemon.AsObject;
   static toObject(includeInstance: boolean, msg: Pokemon): Pokemon.AsObject;
@@ -81,6 +84,7 @@ export namespace Pokemon {
     fainted: boolean,
     level: number,
     gender: enums_pb.GendersEnumMap[keyof enums_pb.GendersEnumMap],
+    itemeffect: enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap],
   }
 }
 

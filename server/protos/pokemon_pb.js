@@ -86,7 +86,8 @@ proto.pokemon.Pokemon.toObject = function(includeInstance, msg) {
     active: jspb.Message.getBooleanFieldWithDefault(msg, 13, false),
     fainted: jspb.Message.getBooleanFieldWithDefault(msg, 14, false),
     level: jspb.Message.getFieldWithDefault(msg, 15, 0),
-    gender: jspb.Message.getFieldWithDefault(msg, 16, 0)
+    gender: jspb.Message.getFieldWithDefault(msg, 16, 0),
+    itemeffect: jspb.Message.getFieldWithDefault(msg, 17, 0)
   };
 
   if (includeInstance) {
@@ -186,6 +187,10 @@ proto.pokemon.Pokemon.deserializeBinaryFromReader = function(msg, reader) {
     case 16:
       var value = /** @type {!proto.enums.GendersEnum} */ (reader.readEnum());
       msg.setGender(value);
+      break;
+    case 17:
+      var value = /** @type {!proto.enums.ItemeffectEnum} */ (reader.readEnum());
+      msg.setItemeffect(value);
       break;
     default:
       reader.skipField();
@@ -325,6 +330,13 @@ proto.pokemon.Pokemon.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeEnum(
       16,
+      f
+    );
+  }
+  f = message.getItemeffect();
+  if (f !== 0.0) {
+    writer.writeEnum(
+      17,
       f
     );
   }
@@ -616,6 +628,24 @@ proto.pokemon.Pokemon.prototype.getGender = function() {
  */
 proto.pokemon.Pokemon.prototype.setGender = function(value) {
   return jspb.Message.setProto3EnumField(this, 16, value);
+};
+
+
+/**
+ * optional enums.ItemeffectEnum itemEffect = 17;
+ * @return {!proto.enums.ItemeffectEnum}
+ */
+proto.pokemon.Pokemon.prototype.getItemeffect = function() {
+  return /** @type {!proto.enums.ItemeffectEnum} */ (jspb.Message.getFieldWithDefault(this, 17, 0));
+};
+
+
+/**
+ * @param {!proto.enums.ItemeffectEnum} value
+ * @return {!proto.pokemon.Pokemon} returns this
+ */
+proto.pokemon.Pokemon.prototype.setItemeffect = function(value) {
+  return jspb.Message.setProto3EnumField(this, 17, value);
 };
 
 

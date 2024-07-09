@@ -161,6 +161,26 @@ export interface VolatilestatusEnumMap {
 
 export const VolatilestatusEnum: VolatilestatusEnumMap;
 
+export interface ItemeffectEnumMap {
+  ITEMEFFECT_NULL: 0;
+  ITEMEFFECT_BESTOWED: 1;
+  ITEMEFFECT_CONSUMED: 2;
+  ITEMEFFECT_DISTURBED: 3;
+  ITEMEFFECT_EATEN: 4;
+  ITEMEFFECT_FLUNG: 5;
+  ITEMEFFECT_FOUND: 6;
+  ITEMEFFECT_FRISKED: 7;
+  ITEMEFFECT_HARVESTED: 8;
+  ITEMEFFECT_HELDUP: 9;
+  ITEMEFFECT_INCINERATED: 10;
+  ITEMEFFECT_KNOCKEDOFF: 11;
+  ITEMEFFECT_POPPED: 12;
+  ITEMEFFECT_STOLEN: 13;
+  ITEMEFFECT_TRICKED: 14;
+}
+
+export const ItemeffectEnum: ItemeffectEnumMap;
+
 export interface WeathersEnumMap {
   WEATHERS_NULL: 0;
   WEATHERS_DELTASTREAM: 1;

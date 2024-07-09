@@ -158,6 +158,24 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     volatileStatus_yawn: _ClassVar[VolatilestatusEnum]
     volatileStatus_zenmode: _ClassVar[VolatilestatusEnum]
 
+class ItemeffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    itemEffect_null: _ClassVar[ItemeffectEnum]
+    itemEffect_bestowed: _ClassVar[ItemeffectEnum]
+    itemEffect_consumed: _ClassVar[ItemeffectEnum]
+    itemEffect_disturbed: _ClassVar[ItemeffectEnum]
+    itemEffect_eaten: _ClassVar[ItemeffectEnum]
+    itemEffect_flung: _ClassVar[ItemeffectEnum]
+    itemEffect_found: _ClassVar[ItemeffectEnum]
+    itemEffect_frisked: _ClassVar[ItemeffectEnum]
+    itemEffect_harvested: _ClassVar[ItemeffectEnum]
+    itemEffect_heldup: _ClassVar[ItemeffectEnum]
+    itemEffect_incinerated: _ClassVar[ItemeffectEnum]
+    itemEffect_knockedoff: _ClassVar[ItemeffectEnum]
+    itemEffect_popped: _ClassVar[ItemeffectEnum]
+    itemEffect_stolen: _ClassVar[ItemeffectEnum]
+    itemEffect_tricked: _ClassVar[ItemeffectEnum]
+
 class WeathersEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     weathers_null: _ClassVar[WeathersEnum]
@@ -3748,6 +3766,21 @@ volatileStatus_watersport: VolatilestatusEnum
 volatileStatus_wrap: VolatilestatusEnum
 volatileStatus_yawn: VolatilestatusEnum
 volatileStatus_zenmode: VolatilestatusEnum
+itemEffect_null: ItemeffectEnum
+itemEffect_bestowed: ItemeffectEnum
+itemEffect_consumed: ItemeffectEnum
+itemEffect_disturbed: ItemeffectEnum
+itemEffect_eaten: ItemeffectEnum
+itemEffect_flung: ItemeffectEnum
+itemEffect_found: ItemeffectEnum
+itemEffect_frisked: ItemeffectEnum
+itemEffect_harvested: ItemeffectEnum
+itemEffect_heldup: ItemeffectEnum
+itemEffect_incinerated: ItemeffectEnum
+itemEffect_knockedoff: ItemeffectEnum
+itemEffect_popped: ItemeffectEnum
+itemEffect_stolen: ItemeffectEnum
+itemEffect_tricked: ItemeffectEnum
 weathers_null: WeathersEnum
 weathers_deltastream: WeathersEnum
 weathers_desolateland: WeathersEnum

@@ -11,6 +11,7 @@ import {
     BoostsEnumMap,
     HyphenargsEnum,
     HyphenargsEnumMap,
+    ItemeffectEnumMap,
     ItemsEnum,
     ItemsEnumMap,
     MovesEnum,
@@ -34,21 +35,8 @@ import {
     Sidecondition,
     HyphenArg,
 } from "../protos/history_pb";
-import {
-    BoostsMessage,
-    SideconditionsMessage,
-    VolatilestatusMessage,
-    PseudoweatherMessage,
-    HyphenargsMessage,
-} from "../protos/messages_pb";
-
-type SettersOf<T> = {
-    [K in keyof T as K extends `set${string}` ? K : never]: T[K] extends (
-        ...args: any[]
-    ) => any
-        ? T[K]
-        : never;
-};
+import { PseudoweatherMessage } from "../protos/messages_pb";
+import { MappingLookup, EnumKeyMapping, Mappings } from "./data";
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);
@@ -61,6 +49,34 @@ AllValidActions.setSwitch3(true);
 AllValidActions.setSwitch4(true);
 AllValidActions.setSwitch5(true);
 AllValidActions.setSwitch6(true);
+
+function SanitizeKey(key: string): string {
+    return key.replace(/[^\w]|_/g, "").toLowerCase();
+}
+
+function IndexValueFromEnum<
+    T extends
+        | SpeciesEnumMap
+        | ItemsEnumMap
+        | ItemeffectEnumMap
+        | MovesEnumMap
+        | AbilitiesEnumMap
+        | BoostsEnumMap
+        | VolatilestatusEnumMap
+        | SideconditionsEnumMap
+        | WeathersEnumMap
+        | HyphenargsEnumMap
+>(mappingType: Mappings, key: string): T[keyof T] {
+    const mapping = MappingLookup[mappingType] as T;
+    const enumMapping = EnumKeyMapping[mappingType];
+    const sanitizedKey = SanitizeKey(key);
+    const trueKey = enumMapping[sanitizedKey] as keyof T;
+    const value = mapping[trueKey];
+    if (value === undefined) {
+        console.error(`${key.toString()} not in mapping`);
+    }
+    return value;
+}
 
 export class EventHandler implements Protocol.Handler {
     readonly handler: StreamHandler;
@@ -85,31 +101,42 @@ export class EventHandler implements Protocol.Handler {
         if (active) {
             const activeProto = new Pokemon();
 
-            const species = active.species;
-            const speciesKey =
-                `SPECIES_${species.baseSpecies.toUpperCase()}` as keyof SpeciesEnumMap;
-            activeProto.setSpecies(SpeciesEnum[speciesKey]);
+            activeProto.setSpecies(
+                IndexValueFromEnum<SpeciesEnumMap>(
+                    "Species",
+                    active.species.baseSpecies.toLowerCase()
+                )
+            );
 
             const item = active.item;
-            const itemKey = (
-                item ? `ITEMS_${item.toUpperCase()}` : `ITEMS_UNK`
-            ) as keyof ItemsEnumMap;
-            activeProto.setItem(ItemsEnum[itemKey]);
+            const itemEffect = active.itemEffect ?? active.lastItemEffect;
+            activeProto.setItem(
+                IndexValueFromEnum<ItemsEnumMap>(
+                    "Items",
+                    item === "" ? "unk" : item
+                )
+            );
+            activeProto.setItemeffect(
+                IndexValueFromEnum<ItemeffectEnumMap>(
+                    "ItemEffects",
+                    itemEffect === "" ? "unk" : itemEffect
+                )
+            );
 
             const ability = active.ability;
-            const abilityKey = (
-                ability ? `ABILITIES_${ability.toUpperCase()}` : `ABILITIES_UNK`
-            ) as keyof AbilitiesEnumMap;
-            activeProto.setAbility(AbilitiesEnum[abilityKey]);
+            const abilityKey = ability ? ability : "unk";
+            activeProto.setAbility(
+                IndexValueFromEnum<AbilitiesEnumMap>("Abilities", abilityKey)
+            );
 
             for (const [moveIndex_, move] of active.moveSlots
                 .slice(-4)
                 .entries()) {
                 const { id, ppUsed } = move;
-                const moveKey =
-                    `MOVES_${id.toUpperCase()}` as keyof MovesEnumMap;
                 const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
-                activeProto[`setMove${moveIndex}id`](MovesEnum[moveKey]);
+                activeProto[`setMove${moveIndex}id`](
+                    IndexValueFromEnum<MovesEnumMap>("Moves", id)
+                );
                 activeProto[`setPp${moveIndex}used`](ppUsed);
             }
 
@@ -118,9 +145,7 @@ export class EventHandler implements Protocol.Handler {
             for (const [stat, value] of Object.entries(active.boosts)) {
                 const boost = new Boost();
                 boost.setIndex(
-                    BoostsEnum[
-                        `BOOSTS_${stat.toUpperCase()}` as keyof BoostsEnumMap
-                    ]
+                    IndexValueFromEnum<BoostsEnumMap>("Boosts", stat)
                 );
                 boost.setValue(value);
                 historySide.addBoosts(boost);
@@ -128,13 +153,10 @@ export class EventHandler implements Protocol.Handler {
 
             for (const [stat, state] of Object.entries(active.volatiles)) {
                 const volatileStatus = new Volatilestatus();
-                const indexValue =
-                    VolatilestatusEnum[
-                        `VOLATILESTATUS_${stat.toUpperCase()}` as keyof VolatilestatusEnumMap
-                    ];
-                if (indexValue === undefined) {
-                    throw new Error();
-                }
+                const indexValue = IndexValueFromEnum<VolatilestatusEnumMap>(
+                    "Volatilestatus",
+                    stat
+                );
                 volatileStatus.setIndex(indexValue);
                 volatileStatus.setValue(state.level ?? 1);
                 historySide.addVolatilestatus(volatileStatus);
@@ -142,13 +164,10 @@ export class EventHandler implements Protocol.Handler {
 
             for (const [stat, state] of Object.entries(side.sideConditions)) {
                 const sideCondition = new Sidecondition();
-                const indexValue =
-                    SideconditionsEnum[
-                        `SIDECONDITIONS_${stat.toUpperCase()}` as keyof SideconditionsEnumMap
-                    ];
-                if (indexValue === undefined) {
-                    throw new Error();
-                }
+                const indexValue = IndexValueFromEnum<SideconditionsEnumMap>(
+                    "Sideconditions",
+                    stat
+                );
                 sideCondition.setIndex(indexValue);
                 sideCondition.setValue(state.level ?? 1);
                 historySide.addSideconditions(sideCondition);
@@ -164,7 +183,7 @@ export class EventHandler implements Protocol.Handler {
     ): HistoryStep {
         const playerIndex = this.handler.playerIndex as number;
         const battle = this.handler.publicBattle;
-        const weather = battle.currentWeather().toString().toUpperCase();
+        const weather = battle.currentWeather().toString();
         const step = new HistoryStep();
         step.setP1(this.getPublicSide(playerIndex));
         step.setP2(this.getPublicSide(1 - playerIndex));
@@ -173,11 +192,10 @@ export class EventHandler implements Protocol.Handler {
         }
         step.setMove(move ?? MovesEnum.MOVES_NONE);
         step.setWeather(
-            WeathersEnum[
-                `WEATHERS_${
-                    weather ? weather : "NULL"
-                }` as keyof WeathersEnumMap
-            ]
+            IndexValueFromEnum<WeathersEnumMap>(
+                "Weathers",
+                weather ? weather : "null"
+            )
         );
         const pseudoweather = new PseudoweatherMessage();
         for (const [pseudoWeatherId, pseudoWeatherState] of Object.entries(
@@ -199,8 +217,10 @@ export class EventHandler implements Protocol.Handler {
 
     "|move|"(args: Args["|move|"], kwArgs: KWArgs["|move|"]) {
         const move = args[2];
-        const MovesKey = `MOVES_${move.toUpperCase()}` as keyof MovesEnumMap;
-        this.addPublicState(ActionTypeEnum.MOVE, MovesEnum[MovesKey]);
+        this.addPublicState(
+            ActionTypeEnum.MOVE,
+            IndexValueFromEnum<MovesEnumMap>("Moves", move)
+        );
         this.moveCounter += 1;
     }
 
@@ -232,9 +252,12 @@ export class EventHandler implements Protocol.Handler {
             ) as HistorySide;
 
             const hyphenArg = new HyphenArg();
-            const hyphenArgKey = `HYPHENARGS_${args[0].slice(1).toUpperCase()}`;
+            const hyphenArgKey = args[0].slice(1);
             hyphenArg.setIndex(
-                HyphenargsEnum[hyphenArgKey as keyof HyphenargsEnumMap]
+                IndexValueFromEnum<HyphenargsEnumMap>(
+                    "Hyphenargs",
+                    hyphenArgKey
+                )
             );
             hyphenArg.setValue(true);
             side.addHyphenargs(hyphenArg);

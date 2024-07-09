@@ -19,6 +19,7 @@ goog.exportSymbol('proto.enums.AbilitiesEnum', null, global);
 goog.exportSymbol('proto.enums.BoostsEnum', null, global);
 goog.exportSymbol('proto.enums.GendersEnum', null, global);
 goog.exportSymbol('proto.enums.HyphenargsEnum', null, global);
+goog.exportSymbol('proto.enums.ItemeffectEnum', null, global);
 goog.exportSymbol('proto.enums.ItemsEnum', null, global);
 goog.exportSymbol('proto.enums.MovesEnum', null, global);
 goog.exportSymbol('proto.enums.PseudoweatherEnum', null, global);
@@ -187,6 +188,27 @@ proto.enums.VolatilestatusEnum = {
   VOLATILESTATUS_WRAP: 136,
   VOLATILESTATUS_YAWN: 137,
   VOLATILESTATUS_ZENMODE: 138
+};
+
+/**
+ * @enum {number}
+ */
+proto.enums.ItemeffectEnum = {
+  ITEMEFFECT_NULL: 0,
+  ITEMEFFECT_BESTOWED: 1,
+  ITEMEFFECT_CONSUMED: 2,
+  ITEMEFFECT_DISTURBED: 3,
+  ITEMEFFECT_EATEN: 4,
+  ITEMEFFECT_FLUNG: 5,
+  ITEMEFFECT_FOUND: 6,
+  ITEMEFFECT_FRISKED: 7,
+  ITEMEFFECT_HARVESTED: 8,
+  ITEMEFFECT_HELDUP: 9,
+  ITEMEFFECT_INCINERATED: 10,
+  ITEMEFFECT_KNOCKEDOFF: 11,
+  ITEMEFFECT_POPPED: 12,
+  ITEMEFFECT_STOLEN: 13,
+  ITEMEFFECT_TRICKED: 14
 };
 
 /**

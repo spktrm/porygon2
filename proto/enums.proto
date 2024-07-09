@@ -159,6 +159,24 @@ enum VolatilestatusEnum {
 	volatileStatus_zenmode = 138;
 }
 
+enum ItemeffectEnum {
+	itemEffect_null = 0;
+	itemEffect_bestowed = 1;
+	itemEffect_consumed = 2;
+	itemEffect_disturbed = 3;
+	itemEffect_eaten = 4;
+	itemEffect_flung = 5;
+	itemEffect_found = 6;
+	itemEffect_frisked = 7;
+	itemEffect_harvested = 8;
+	itemEffect_heldup = 9;
+	itemEffect_incinerated = 10;
+	itemEffect_knockedoff = 11;
+	itemEffect_popped = 12;
+	itemEffect_stolen = 13;
+	itemEffect_tricked = 14;
+}
+
 enum WeathersEnum {
 	weathers_null = 0;
 	weathers_deltastream = 1;
