@@ -3,7 +3,7 @@ import { StreamHandler } from "./game";
 import { Args, KWArgs, Protocol } from "@pkmn/protocol";
 
 import { Info, LegalActions, State } from "../protos/state_pb";
-import { Pokemon } from "../protos/pokemon_pb";
+import { Pokemon as PokemonPb } from "../protos/pokemon_pb";
 import {
     AbilitiesEnum,
     BoostsEnum,
@@ -14,6 +14,7 @@ import {
     MovesEnum,
     SideconditionsEnum,
     SpeciesEnum,
+    StatusesEnum,
     VolatilestatusEnum,
     WeathersEnum,
 } from "../protos/enums_pb";
@@ -29,6 +30,7 @@ import {
 } from "../protos/history_pb";
 import { PseudoweatherMessage } from "../protos/messages_pb";
 import { MappingLookup, EnumKeyMapping, EnumMappings, Mappings } from "./data";
+import { Pokemon } from "@pkmn/client";
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);
@@ -76,61 +78,77 @@ export class EventHandler implements Protocol.Handler {
         this.historyMaxSize = historyMaxSize;
     }
 
+    static getPokemon(pokemon: Pokemon): PokemonPb {
+        const pb = new PokemonPb();
+        pb.setSpecies(
+            IndexValueFromEnum<typeof SpeciesEnum>(
+                "Species",
+                pokemon.species.baseSpecies.toLowerCase()
+            )
+        );
+
+        pb.setGender(
+            IndexValueFromEnum<typeof GendersEnum>("Genders", pokemon.gender)
+        );
+
+        pb.setFainted(pokemon.fainted);
+        pb.setHp(pokemon.hp);
+        pb.setMaxhp(pokemon.maxhp);
+
+        pb.setStatus(
+            pokemon.status
+                ? IndexValueFromEnum<typeof StatusesEnum>(
+                      "Statuses",
+                      pokemon.status
+                  )
+                : StatusesEnum.STATUSES_NULL
+        );
+
+        pb.setLevel(pokemon.level);
+
+        const item = pokemon.item;
+        const itemEffect = pokemon.itemEffect ?? pokemon.lastItemEffect;
+        pb.setItem(
+            IndexValueFromEnum<typeof ItemsEnum>(
+                "Items",
+                item === "" ? "unk" : item
+            )
+        );
+        pb.setItemeffect(
+            IndexValueFromEnum<typeof ItemeffectEnum>(
+                "ItemEffects",
+                itemEffect === "" ? "unk" : itemEffect
+            )
+        );
+
+        const ability = pokemon.ability;
+        const abilityKey = ability ? ability : "unk";
+        pb.setAbility(
+            IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", abilityKey)
+        );
+
+        for (const [moveIndex_, move] of pokemon.moveSlots
+            .slice(-4)
+            .entries()) {
+            const { id, ppUsed } = move;
+            const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
+            pb[`setMove${moveIndex}id`](
+                IndexValueFromEnum<typeof MovesEnum>("Moves", id)
+            );
+            pb[`setPp${moveIndex}used`](ppUsed);
+        }
+
+        return pb;
+    }
+
     getPublicSide(playerIndex: number): HistorySide {
         const side = this.handler.publicBattle.sides[playerIndex];
         const active = side?.active[0];
         const historySide = new HistorySide();
 
         if (active) {
-            const activeProto = new Pokemon();
-
-            activeProto.setSpecies(
-                IndexValueFromEnum<typeof SpeciesEnum>(
-                    "Species",
-                    active.species.baseSpecies.toLowerCase()
-                )
-            );
-
-            activeProto.setGender(
-                IndexValueFromEnum<typeof GendersEnum>("Genders", active.gender)
-            );
-
-            const item = active.item;
-            const itemEffect = active.itemEffect ?? active.lastItemEffect;
-            activeProto.setItem(
-                IndexValueFromEnum<typeof ItemsEnum>(
-                    "Items",
-                    item === "" ? "unk" : item
-                )
-            );
-            activeProto.setItemeffect(
-                IndexValueFromEnum<typeof ItemeffectEnum>(
-                    "ItemEffects",
-                    itemEffect === "" ? "unk" : itemEffect
-                )
-            );
-
-            const ability = active.ability;
-            const abilityKey = ability ? ability : "unk";
-            activeProto.setAbility(
-                IndexValueFromEnum<typeof AbilitiesEnum>(
-                    "Abilities",
-                    abilityKey
-                )
-            );
-
-            for (const [moveIndex_, move] of active.moveSlots
-                .slice(-4)
-                .entries()) {
-                const { id, ppUsed } = move;
-                const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
-                activeProto[`setMove${moveIndex}id`](
-                    IndexValueFromEnum<typeof MovesEnum>("Moves", id)
-                );
-                activeProto[`setPp${moveIndex}used`](ppUsed);
-            }
-
-            historySide.setActive(activeProto);
+            const pb = EventHandler.getPokemon(active);
+            historySide.setActive(pb);
 
             for (const [stat, value] of Object.entries(active.boosts)) {
                 const boost = new Boost();

@@ -8,6 +8,7 @@ import {
     MovesEnum,
     SideconditionsEnum,
     SpeciesEnum,
+    StatusesEnum,
     VolatilestatusEnum,
     WeathersEnum,
 } from "../protos/enums_pb";
@@ -15,6 +16,7 @@ import {
 export type EnumMappings =
     | typeof SpeciesEnum
     | typeof ItemsEnum
+    | typeof StatusesEnum
     | typeof ItemeffectEnum
     | typeof MovesEnum
     | typeof AbilitiesEnum
@@ -39,6 +41,7 @@ function GenerateEnumKeyMapping<T extends EnumMappings>(
 export const MappingLookup = {
     Species: SpeciesEnum,
     Items: ItemsEnum,
+    Statuses: StatusesEnum,
     ItemEffects: ItemeffectEnum,
     Moves: MovesEnum,
     Genders: GendersEnum,
