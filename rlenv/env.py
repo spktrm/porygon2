@@ -25,11 +25,21 @@ uvloop.install()
 
 @chex.dataclass(frozen=True)
 class EnvStep:
+    # Standard Info
     valid: chex.Array = ()
     turn: chex.Array = ()
+    actions: chex.Array = ()
+    game_id: chex.Array = ()
+    player_id: chex.Array = ()
+    rewards: chex.Array = ()
+
+    # Private Info
+    side_entities: chex.Array = ()
+    legal: chex.Array = ()
+
+    # Public Info
     turn_context: chex.Array = ()
     active_entities: chex.Array = ()
-    side_entities: chex.Array = ()
     boosts: chex.Array = ()
     side_conditions: chex.Array = ()
     volatile_status: chex.Array = ()
@@ -38,11 +48,6 @@ class EnvStep:
     terrain: chex.Array = ()
     pseudoweather: chex.Array = ()
     weather: chex.Array = ()
-    actions: chex.Array = ()
-    legal: chex.Array = ()
-    game_id: chex.Array = ()
-    player_id: chex.Array = ()
-    rewards: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -65,6 +70,7 @@ def set_tensor_from_fields(
 ) -> None:
     for field, value in proto_list:
         arr[*pre_idx, field.index] = value
+    return arr
 
 
 def set_tensor_from_repeated(
@@ -74,6 +80,7 @@ def set_tensor_from_repeated(
 ) -> None:
     for item in proto_list:
         arr[*pre_idx, item.index] = item.value
+    return arr
 
 
 def get_history(state: State, num_history: int = 8):
@@ -100,22 +107,24 @@ def get_history(state: State, num_history: int = 8):
     for step_idx, step in enumerate(history):
         history_weather[step_idx] = step.weather
 
-        set_tensor_from_fields(
+        history_pseudoweather = set_tensor_from_fields(
             history_pseudoweather, step.pseudoweather.ListFields(), (step_idx,)
         )
 
         for side_idx, side in enumerate([step.p1, step.p2]):
-            set_tensor_from_fields(
+            history_active_entities = set_tensor_from_fields(
                 history_active_entities, side.active.ListFields(), (step_idx, side_idx)
             )
-            set_tensor_from_repeated(
+            history_volatile_status = set_tensor_from_repeated(
                 history_volatile_status, side.volatileStatus, (step_idx, side_idx)
             )
-            set_tensor_from_repeated(
+            history_side_conditions = set_tensor_from_repeated(
                 history_side_conditions, side.sideConditions, (step_idx, side_idx)
             )
-            set_tensor_from_repeated(history_boosts, side.boosts, (step_idx, side_idx))
-            set_tensor_from_repeated(
+            history_boosts = set_tensor_from_repeated(
+                history_boosts, side.boosts, (step_idx, side_idx)
+            )
+            history_hyphen_args = set_tensor_from_repeated(
                 history_hyphen_args, side.hyphenArgs, (step_idx, side_idx)
             )
 

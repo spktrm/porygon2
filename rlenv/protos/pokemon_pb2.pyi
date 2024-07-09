@@ -6,7 +6,7 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Pokemon(_message.Message):
-    __slots__ = ("species", "item", "ability", "move1Id", "move2Id", "move3Id", "move4Id", "pp1Used", "pp2Used", "pp3Used", "pp4Used", "hpRatio", "active", "fainted", "level", "gender", "itemEffect")
+    __slots__ = ("species", "item", "ability", "move1Id", "move2Id", "move3Id", "move4Id", "pp1Used", "pp2Used", "pp3Used", "pp4Used", "hpRatio", "active", "fainted", "level", "gender", "itemEffect", "hp", "maxHp", "status")
     SPECIES_FIELD_NUMBER: _ClassVar[int]
     ITEM_FIELD_NUMBER: _ClassVar[int]
     ABILITY_FIELD_NUMBER: _ClassVar[int]
@@ -24,6 +24,9 @@ class Pokemon(_message.Message):
     LEVEL_FIELD_NUMBER: _ClassVar[int]
     GENDER_FIELD_NUMBER: _ClassVar[int]
     ITEMEFFECT_FIELD_NUMBER: _ClassVar[int]
+    HP_FIELD_NUMBER: _ClassVar[int]
+    MAXHP_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
     species: _enums_pb2.SpeciesEnum
     item: _enums_pb2.ItemsEnum
     ability: _enums_pb2.AbilitiesEnum
@@ -41,4 +44,7 @@ class Pokemon(_message.Message):
     level: int
     gender: _enums_pb2.GendersEnum
     itemEffect: _enums_pb2.ItemeffectEnum
-    def __init__(self, species: _Optional[_Union[_enums_pb2.SpeciesEnum, str]] = ..., item: _Optional[_Union[_enums_pb2.ItemsEnum, str]] = ..., ability: _Optional[_Union[_enums_pb2.AbilitiesEnum, str]] = ..., move1Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move2Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move3Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move4Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., pp1Used: _Optional[int] = ..., pp2Used: _Optional[int] = ..., pp3Used: _Optional[int] = ..., pp4Used: _Optional[int] = ..., hpRatio: _Optional[float] = ..., active: bool = ..., fainted: bool = ..., level: _Optional[int] = ..., gender: _Optional[_Union[_enums_pb2.GendersEnum, str]] = ..., itemEffect: _Optional[_Union[_enums_pb2.ItemeffectEnum, str]] = ...) -> None: ...
+    hp: int
+    maxHp: int
+    status: _enums_pb2.StatusesEnum
+    def __init__(self, species: _Optional[_Union[_enums_pb2.SpeciesEnum, str]] = ..., item: _Optional[_Union[_enums_pb2.ItemsEnum, str]] = ..., ability: _Optional[_Union[_enums_pb2.AbilitiesEnum, str]] = ..., move1Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move2Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move3Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., move4Id: _Optional[_Union[_enums_pb2.MovesEnum, str]] = ..., pp1Used: _Optional[int] = ..., pp2Used: _Optional[int] = ..., pp3Used: _Optional[int] = ..., pp4Used: _Optional[int] = ..., hpRatio: _Optional[float] = ..., active: bool = ..., fainted: bool = ..., level: _Optional[int] = ..., gender: _Optional[_Union[_enums_pb2.GendersEnum, str]] = ..., itemEffect: _Optional[_Union[_enums_pb2.ItemeffectEnum, str]] = ..., hp: _Optional[int] = ..., maxHp: _Optional[int] = ..., status: _Optional[_Union[_enums_pb2.StatusesEnum, str]] = ...) -> None: ...

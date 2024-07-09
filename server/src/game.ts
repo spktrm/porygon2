@@ -62,8 +62,12 @@ export class StreamHandler {
     }
 
     ingestLine(line: string) {
-        this.publicBattle.add(line);
         this.privatebattle.add(line);
+        if (!line.startsWith("|request|")) {
+            this.publicBattle.add(line);
+        } else {
+            this.getPlayerIndex();
+        }
         this.log.push(line);
         this.ingestEvent(line);
     }
@@ -145,6 +149,21 @@ export class StreamHandler {
         return await this.recvFn();
     }
 
+    ensureRequestApplied() {
+        if (this.privatebattle.request) {
+            while (this.privatebattle.requestStatus !== "applied") {
+                this.privatebattle.update();
+            }
+            if (this.privatebattle.turn === 1) {
+                this.privatebattle.requestStatus =
+                    "received" as Battle["requestStatus"];
+                while (this.privatebattle.requestStatus !== "applied") {
+                    this.privatebattle.update();
+                }
+            }
+        }
+    }
+
     async ingestChunk(chunk: string) {
         if (chunk) {
             if (chunk.startsWith("|error")) {
@@ -154,6 +173,7 @@ export class StreamHandler {
                 this.ingestLine(line);
             }
             if (this.isActionRequired(chunk)) {
+                this.ensureRequestApplied();
                 return await this.stateActionStep();
             }
         }

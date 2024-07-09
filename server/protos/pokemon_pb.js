@@ -87,7 +87,10 @@ proto.pokemon.Pokemon.toObject = function(includeInstance, msg) {
     fainted: jspb.Message.getBooleanFieldWithDefault(msg, 14, false),
     level: jspb.Message.getFieldWithDefault(msg, 15, 0),
     gender: jspb.Message.getFieldWithDefault(msg, 16, 0),
-    itemeffect: jspb.Message.getFieldWithDefault(msg, 17, 0)
+    itemeffect: jspb.Message.getFieldWithDefault(msg, 17, 0),
+    hp: jspb.Message.getFieldWithDefault(msg, 18, 0),
+    maxhp: jspb.Message.getFieldWithDefault(msg, 19, 0),
+    status: jspb.Message.getFieldWithDefault(msg, 20, 0)
   };
 
   if (includeInstance) {
@@ -191,6 +194,18 @@ proto.pokemon.Pokemon.deserializeBinaryFromReader = function(msg, reader) {
     case 17:
       var value = /** @type {!proto.enums.ItemeffectEnum} */ (reader.readEnum());
       msg.setItemeffect(value);
+      break;
+    case 18:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setHp(value);
+      break;
+    case 19:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setMaxhp(value);
+      break;
+    case 20:
+      var value = /** @type {!proto.enums.StatusesEnum} */ (reader.readEnum());
+      msg.setStatus(value);
       break;
     default:
       reader.skipField();
@@ -337,6 +352,27 @@ proto.pokemon.Pokemon.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeEnum(
       17,
+      f
+    );
+  }
+  f = message.getHp();
+  if (f !== 0) {
+    writer.writeInt32(
+      18,
+      f
+    );
+  }
+  f = message.getMaxhp();
+  if (f !== 0) {
+    writer.writeInt32(
+      19,
+      f
+    );
+  }
+  f = message.getStatus();
+  if (f !== 0.0) {
+    writer.writeEnum(
+      20,
       f
     );
   }
@@ -646,6 +682,60 @@ proto.pokemon.Pokemon.prototype.getItemeffect = function() {
  */
 proto.pokemon.Pokemon.prototype.setItemeffect = function(value) {
   return jspb.Message.setProto3EnumField(this, 17, value);
+};
+
+
+/**
+ * optional int32 hp = 18;
+ * @return {number}
+ */
+proto.pokemon.Pokemon.prototype.getHp = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 18, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.pokemon.Pokemon} returns this
+ */
+proto.pokemon.Pokemon.prototype.setHp = function(value) {
+  return jspb.Message.setProto3IntField(this, 18, value);
+};
+
+
+/**
+ * optional int32 maxHp = 19;
+ * @return {number}
+ */
+proto.pokemon.Pokemon.prototype.getMaxhp = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 19, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.pokemon.Pokemon} returns this
+ */
+proto.pokemon.Pokemon.prototype.setMaxhp = function(value) {
+  return jspb.Message.setProto3IntField(this, 19, value);
+};
+
+
+/**
+ * optional enums.StatusesEnum status = 20;
+ * @return {!proto.enums.StatusesEnum}
+ */
+proto.pokemon.Pokemon.prototype.getStatus = function() {
+  return /** @type {!proto.enums.StatusesEnum} */ (jspb.Message.getFieldWithDefault(this, 20, 0));
+};
+
+
+/**
+ * @param {!proto.enums.StatusesEnum} value
+ * @return {!proto.pokemon.Pokemon} returns this
+ */
+proto.pokemon.Pokemon.prototype.setStatus = function(value) {
+  return jspb.Message.setProto3EnumField(this, 20, value);
 };
 
 

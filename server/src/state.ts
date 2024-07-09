@@ -6,24 +6,16 @@ import { Info, LegalActions, State } from "../protos/state_pb";
 import { Pokemon } from "../protos/pokemon_pb";
 import {
     AbilitiesEnum,
-    AbilitiesEnumMap,
     BoostsEnum,
-    BoostsEnumMap,
+    GendersEnum,
     HyphenargsEnum,
-    HyphenargsEnumMap,
-    ItemeffectEnumMap,
+    ItemeffectEnum,
     ItemsEnum,
-    ItemsEnumMap,
     MovesEnum,
-    MovesEnumMap,
     SideconditionsEnum,
-    SideconditionsEnumMap,
     SpeciesEnum,
-    SpeciesEnumMap,
     VolatilestatusEnum,
-    VolatilestatusEnumMap,
     WeathersEnum,
-    WeathersEnumMap,
 } from "../protos/enums_pb";
 import {
     HistoryStep,
@@ -36,7 +28,7 @@ import {
     HyphenArg,
 } from "../protos/history_pb";
 import { PseudoweatherMessage } from "../protos/messages_pb";
-import { MappingLookup, EnumKeyMapping, Mappings } from "./data";
+import { MappingLookup, EnumKeyMapping, EnumMappings, Mappings } from "./data";
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);
@@ -54,19 +46,10 @@ function SanitizeKey(key: string): string {
     return key.replace(/[^\w]|_/g, "").toLowerCase();
 }
 
-function IndexValueFromEnum<
-    T extends
-        | SpeciesEnumMap
-        | ItemsEnumMap
-        | ItemeffectEnumMap
-        | MovesEnumMap
-        | AbilitiesEnumMap
-        | BoostsEnumMap
-        | VolatilestatusEnumMap
-        | SideconditionsEnumMap
-        | WeathersEnumMap
-        | HyphenargsEnumMap
->(mappingType: Mappings, key: string): T[keyof T] {
+function IndexValueFromEnum<T extends EnumMappings>(
+    mappingType: Mappings,
+    key: string
+): T[keyof T] {
     const mapping = MappingLookup[mappingType] as T;
     const enumMapping = EnumKeyMapping[mappingType];
     const sanitizedKey = SanitizeKey(key);
@@ -102,22 +85,26 @@ export class EventHandler implements Protocol.Handler {
             const activeProto = new Pokemon();
 
             activeProto.setSpecies(
-                IndexValueFromEnum<SpeciesEnumMap>(
+                IndexValueFromEnum<typeof SpeciesEnum>(
                     "Species",
                     active.species.baseSpecies.toLowerCase()
                 )
             );
 
+            activeProto.setGender(
+                IndexValueFromEnum<typeof GendersEnum>("Genders", active.gender)
+            );
+
             const item = active.item;
             const itemEffect = active.itemEffect ?? active.lastItemEffect;
             activeProto.setItem(
-                IndexValueFromEnum<ItemsEnumMap>(
+                IndexValueFromEnum<typeof ItemsEnum>(
                     "Items",
                     item === "" ? "unk" : item
                 )
             );
             activeProto.setItemeffect(
-                IndexValueFromEnum<ItemeffectEnumMap>(
+                IndexValueFromEnum<typeof ItemeffectEnum>(
                     "ItemEffects",
                     itemEffect === "" ? "unk" : itemEffect
                 )
@@ -126,7 +113,10 @@ export class EventHandler implements Protocol.Handler {
             const ability = active.ability;
             const abilityKey = ability ? ability : "unk";
             activeProto.setAbility(
-                IndexValueFromEnum<AbilitiesEnumMap>("Abilities", abilityKey)
+                IndexValueFromEnum<typeof AbilitiesEnum>(
+                    "Abilities",
+                    abilityKey
+                )
             );
 
             for (const [moveIndex_, move] of active.moveSlots
@@ -135,7 +125,7 @@ export class EventHandler implements Protocol.Handler {
                 const { id, ppUsed } = move;
                 const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
                 activeProto[`setMove${moveIndex}id`](
-                    IndexValueFromEnum<MovesEnumMap>("Moves", id)
+                    IndexValueFromEnum<typeof MovesEnum>("Moves", id)
                 );
                 activeProto[`setPp${moveIndex}used`](ppUsed);
             }
@@ -145,7 +135,7 @@ export class EventHandler implements Protocol.Handler {
             for (const [stat, value] of Object.entries(active.boosts)) {
                 const boost = new Boost();
                 boost.setIndex(
-                    IndexValueFromEnum<BoostsEnumMap>("Boosts", stat)
+                    IndexValueFromEnum<typeof BoostsEnum>("Boosts", stat)
                 );
                 boost.setValue(value);
                 historySide.addBoosts(boost);
@@ -153,10 +143,9 @@ export class EventHandler implements Protocol.Handler {
 
             for (const [stat, state] of Object.entries(active.volatiles)) {
                 const volatileStatus = new Volatilestatus();
-                const indexValue = IndexValueFromEnum<VolatilestatusEnumMap>(
-                    "Volatilestatus",
-                    stat
-                );
+                const indexValue = IndexValueFromEnum<
+                    typeof VolatilestatusEnum
+                >("Volatilestatus", stat);
                 volatileStatus.setIndex(indexValue);
                 volatileStatus.setValue(state.level ?? 1);
                 historySide.addVolatilestatus(volatileStatus);
@@ -164,10 +153,9 @@ export class EventHandler implements Protocol.Handler {
 
             for (const [stat, state] of Object.entries(side.sideConditions)) {
                 const sideCondition = new Sidecondition();
-                const indexValue = IndexValueFromEnum<SideconditionsEnumMap>(
-                    "Sideconditions",
-                    stat
-                );
+                const indexValue = IndexValueFromEnum<
+                    typeof SideconditionsEnum
+                >("Sideconditions", stat);
                 sideCondition.setIndex(indexValue);
                 sideCondition.setValue(state.level ?? 1);
                 historySide.addSideconditions(sideCondition);
@@ -179,7 +167,7 @@ export class EventHandler implements Protocol.Handler {
 
     getPublicState(
         action?: ActionTypeEnumMap[keyof ActionTypeEnumMap],
-        move?: MovesEnumMap[keyof MovesEnumMap]
+        move?: string
     ): HistoryStep {
         const playerIndex = this.handler.playerIndex as number;
         const battle = this.handler.publicBattle;
@@ -190,9 +178,13 @@ export class EventHandler implements Protocol.Handler {
         if (action) {
             step.setAction(action);
         }
-        step.setMove(move ?? MovesEnum.MOVES_NONE);
+        step.setMove(
+            move
+                ? IndexValueFromEnum<typeof MovesEnum>("Moves", move)
+                : MovesEnum.MOVES_NONE
+        );
         step.setWeather(
-            IndexValueFromEnum<WeathersEnumMap>(
+            IndexValueFromEnum<typeof WeathersEnum>(
                 "Weathers",
                 weather ? weather : "null"
             )
@@ -209,7 +201,7 @@ export class EventHandler implements Protocol.Handler {
 
     addPublicState(
         action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
-        move?: MovesEnumMap[keyof MovesEnumMap]
+        move?: string
     ) {
         const state = this.getPublicState(action, move);
         this.history.push(state);
@@ -217,10 +209,7 @@ export class EventHandler implements Protocol.Handler {
 
     "|move|"(args: Args["|move|"], kwArgs: KWArgs["|move|"]) {
         const move = args[2];
-        this.addPublicState(
-            ActionTypeEnum.MOVE,
-            IndexValueFromEnum<MovesEnumMap>("Moves", move)
-        );
+        this.addPublicState(ActionTypeEnum.MOVE, move);
         this.moveCounter += 1;
     }
 
@@ -254,7 +243,7 @@ export class EventHandler implements Protocol.Handler {
             const hyphenArg = new HyphenArg();
             const hyphenArgKey = args[0].slice(1);
             hyphenArg.setIndex(
-                IndexValueFromEnum<HyphenargsEnumMap>(
+                IndexValueFromEnum<typeof HyphenargsEnum>(
                     "Hyphenargs",
                     hyphenArgKey
                 )

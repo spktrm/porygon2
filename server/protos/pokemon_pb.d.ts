@@ -56,6 +56,15 @@ export class Pokemon extends jspb.Message {
   getItemeffect(): enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap];
   setItemeffect(value: enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap]): void;
 
+  getHp(): number;
+  setHp(value: number): void;
+
+  getMaxhp(): number;
+  setMaxhp(value: number): void;
+
+  getStatus(): enums_pb.StatusesEnumMap[keyof enums_pb.StatusesEnumMap];
+  setStatus(value: enums_pb.StatusesEnumMap[keyof enums_pb.StatusesEnumMap]): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Pokemon.AsObject;
   static toObject(includeInstance: boolean, msg: Pokemon): Pokemon.AsObject;
@@ -85,6 +94,9 @@ export namespace Pokemon {
     level: number,
     gender: enums_pb.GendersEnumMap[keyof enums_pb.GendersEnumMap],
     itemeffect: enums_pb.ItemeffectEnumMap[keyof enums_pb.ItemeffectEnumMap],
+    hp: number,
+    maxhp: number,
+    status: enums_pb.StatusesEnumMap[keyof enums_pb.StatusesEnumMap],
   }
 }
 

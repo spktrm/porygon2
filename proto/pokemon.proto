@@ -22,4 +22,7 @@ message Pokemon {
     int32 level = 15;
     enums.GendersEnum gender = 16;
     enums.ItemeffectEnum itemEffect = 17;
+    int32 hp = 18;
+    int32 maxHp = 19;
+    enums.StatusesEnum status = 20;    
 }
