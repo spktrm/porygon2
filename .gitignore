@@ -11,5 +11,5 @@ data/data/**/*.json
 
 **/*.ipynb
 
-rlenv/protos/** */
-server/protos/** */
+rlenv/protos/** 
+server/protos/** 
