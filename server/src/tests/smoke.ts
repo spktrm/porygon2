@@ -84,12 +84,18 @@ async function main(verbose: boolean = false) {
         }
     };
 
-    let rateSum = 0;
+    let rateWindow = [];
     for (let runIdx = 1; runIdx <= totalTest; runIdx++) {
         game = await runGame(game);
         const rate = (1000 * n) / tSum;
-        rateSum += rate;
-        console.log(runIdx, rateSum / runIdx);
+        rateWindow.push(rate);
+        if (rateWindow.length > 16) {
+            rateWindow.shift();
+        }
+        console.log(
+            runIdx,
+            rateWindow.reduce((a, b) => a + b) / rateWindow.length,
+        );
         prevT = Date.now();
         currT = Date.now();
         tSum = 0;

@@ -3,6 +3,8 @@ syntax = "proto3";
 package rlenv;
 
 import "history.proto";
+import "pokemon.proto";
+import "enums.proto";
 
 message LegalActions {
     bool move1 = 1;
@@ -26,8 +28,33 @@ message Info {
     int32 turn = 6;
 }
 
+message Move {
+    enums.MovesEnum moveId = 1;
+    int32 pp = 2;
+    int32 maxpp = 3;
+}
+
+message Moveset {
+    Move move0 = 1;
+    Move move1 = 2;
+    Move move2 = 3;
+    Move move3 = 4;
+}
+
+message Team {
+    pokemon.Pokemon active = 1;
+    pokemon.Pokemon bench0 = 2;
+    pokemon.Pokemon bench1 = 3;
+    pokemon.Pokemon bench2 = 4;
+    pokemon.Pokemon bench3 = 5;
+    pokemon.Pokemon bench4 = 6;
+    pokemon.Pokemon bench5 = 7;
+}
+
 message State {
     Info info = 1;
     LegalActions legalActions = 2;
     repeated history.HistoryStep history = 3;
+    Moveset moveset = 4;
+    Team team = 5;
 }

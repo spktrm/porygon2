@@ -41,6 +41,7 @@ function GenerateEnumKeyMapping<T extends EnumMappings>(
 }
 
 export type MoveIndex = 0 | 1 | 2 | 3;
+export type BenchIndex = MoveIndex | 4 | 5;
 
 export const MappingLookup = {
     Species: SpeciesEnum,

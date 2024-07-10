@@ -10,6 +10,8 @@ from google.protobuf.descriptor import FieldDescriptor
 
 from rlenv.data import (
     NUM_BOOSTS_FIELDS,
+    NUM_MOVE_FIELDS,
+    NUM_MOVES,
     NUM_POKEMON_FIELDS,
     NUM_PSEUDOWEATHER_FIELDS,
     NUM_SIDE_CONDITION_FIELDS,
@@ -28,12 +30,12 @@ class EnvStep:
     # Standard Info
     valid: chex.Array = ()
     turn: chex.Array = ()
-    actions: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()
     rewards: chex.Array = ()
 
     # Private Info
+    moves: chex.Array = ()
     side_entities: chex.Array = ()
     legal: chex.Array = ()
 
@@ -115,6 +117,33 @@ def get_history(state: State, num_history: int = 8):
         (num_history, NUM_PSEUDOWEATHER_FIELDS, 2), dtype=np.int32
     )
 
+    side_entities = np.zeros((7, NUM_POKEMON_FIELDS), dtype=np.int32)
+    for entity_idx, entity in enumerate(
+        [
+            state.team.active,
+            state.team.bench0,
+            state.team.bench1,
+            state.team.bench2,
+            state.team.bench3,
+            state.team.bench4,
+            state.team.bench5,
+        ]
+    ):
+        side_entities = set_tensor_from_fields(
+            side_entities, entity.ListFields(), (entity_idx,)
+        )
+
+    moveset = np.zeros((NUM_MOVES, NUM_MOVE_FIELDS), dtype=np.int32)
+    for move_idx, move in enumerate(
+        [
+            state.moveset.move0,
+            state.moveset.move1,
+            state.moveset.move2,
+            state.moveset.move3,
+        ]
+    ):
+        moveset = set_tensor_from_fields(moveset, move.ListFields(), (move_idx,))
+
     for step_idx, step in enumerate(history):
         history_weather[step_idx, 0] = step.weather.index
         history_weather[step_idx, 1] = step.weather.minDuration
@@ -142,6 +171,7 @@ def get_history(state: State, num_history: int = 8):
             )
 
     return (
+        side_entities,
         history_active_entities,
         history_side_conditions,
         history_volatile_status,
@@ -154,6 +184,7 @@ def get_history(state: State, num_history: int = 8):
 
 def process_state(state: State) -> EnvStep:
     (
+        side_entities,
         active_entities,
         side_conditions,
         volatile_status,
@@ -192,6 +223,7 @@ def process_state(state: State) -> EnvStep:
         weather=weather,
         pseudoweather=pseudoweather,
         hyphen_args=hyphen_args,
+        side_entities=side_entities,
     )
 
 

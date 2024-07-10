@@ -13,6 +13,7 @@ import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
+import { writeFileSync } from "fs";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -302,7 +303,13 @@ export class Game {
             state.setInfo(info);
             state.setLegalactions(AllValidActions);
         }
-        const stateArr = state.serializeBinary();
+        let stateArr: Uint8Array;
+        try {
+            stateArr = state.serializeBinary();
+        } catch (err) {
+            writeFileSync("./err.json", JSON.stringify(state.toObject()));
+            throw err;
+        }
         this.ts += 1;
         return this.port?.postMessage(stateArr, [stateArr.buffer]);
     }

@@ -7,6 +7,7 @@ from rlenv.protos.messages_pb2 import (
     VolatilestatusMessage,
     HyphenargsMessage,
 )
+from rlenv.protos.state_pb2 import Move, Moveset
 
 
 NUM_POKEMON_FIELDS = len(Pokemon.DESCRIPTOR.fields)
@@ -16,3 +17,6 @@ NUM_BOOSTS_FIELDS = len(BoostsMessage.DESCRIPTOR.fields)
 NUM_HYPHEN_ARGS_FIELDS = len(HyphenargsMessage.DESCRIPTOR.fields)
 NUM_PSEUDOWEATHER_FIELDS = len(PseudoweatherMessage.DESCRIPTOR.fields)
 NUM_TERRAIN_FIELDS = len(TerrainMessage.DESCRIPTOR.fields)
+
+NUM_MOVES = len(Moveset.DESCRIPTOR.fields)
+NUM_MOVE_FIELDS = len(Move.DESCRIPTOR.fields)

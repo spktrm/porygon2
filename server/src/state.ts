@@ -1,8 +1,14 @@
 import { AnyObject } from "@pkmn/sim";
 import { StreamHandler } from "./game";
 import { Args, KWArgs, Protocol } from "@pkmn/protocol";
-
-import { Info, LegalActions, State } from "../protos/state_pb";
+import {
+    Info,
+    LegalActions,
+    Move,
+    Moveset,
+    State,
+    Team,
+} from "../protos/state_pb";
 import { Pokemon as PokemonPb } from "../protos/pokemon_pb";
 import {
     AbilitiesEnum,
@@ -37,6 +43,7 @@ import {
     EnumMappings,
     Mappings,
     MoveIndex,
+    BenchIndex,
 } from "./data";
 import { Pokemon } from "@pkmn/client";
 
@@ -111,6 +118,7 @@ export class EventHandler implements Protocol.Handler {
             IndexValueFromEnum<typeof GendersEnum>("Genders", pokemon.gender),
         );
 
+        pb.setActive(pokemon.isActive());
         pb.setFainted(pokemon.fainted);
         pb.setHp(pokemon.hp);
         pb.setMaxhp(pokemon.maxhp);
@@ -154,10 +162,14 @@ export class EventHandler implements Protocol.Handler {
         if (moveSlots) {
             for (let [moveIndex, move] of moveSlots.entries()) {
                 const { id, ppUsed } = move;
-                pb[`setMoveid${moveIndex as MoveIndex}`](
-                    IndexValueFromEnum<typeof MovesEnum>("Moves", id),
+                const idValue = IndexValueFromEnum<typeof MovesEnum>(
+                    "Moves",
+                    id,
                 );
-                pb[`setPpused${moveIndex as MoveIndex}`](ppUsed);
+                pb[`setMoveid${moveIndex as MoveIndex}`](idValue);
+                pb[`setPpused${moveIndex as MoveIndex}`](
+                    isNaN(ppUsed) ? +!!ppUsed : ppUsed,
+                );
             }
         }
         let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
@@ -441,6 +453,40 @@ export class StateHandler {
         return legalActions;
     }
 
+    getMoveset(): Moveset {
+        const moveset = new Moveset();
+        const request = this.handler.getRequest() as AnyObject;
+        const moves = (request?.active ?? [{}])[0].moves ?? [];
+        for (const [moveIndex, move] of moves.entries()) {
+            const { id, pp, maxpp } = move;
+            const movepb = new Move();
+            movepb.setMoveid(IndexValueFromEnum<typeof MovesEnum>("Moves", id));
+            movepb.setPp(pp);
+            movepb.setMaxpp(maxpp);
+            moveset[`setMove${moveIndex as MoveIndex}`](movepb);
+        }
+        return moveset;
+    }
+
+    getTeam(): Team {
+        const team = new Team();
+        const playerIndex = this.handler.getPlayerIndex() as number;
+        const side = this.handler.privatebattle.sides[playerIndex];
+        for (const active of side.active) {
+            if (active !== null) {
+                team.setActive(EventHandler.getPokemon(active));
+            }
+        }
+        let benchIndex = 0 as BenchIndex;
+        for (const member of side.team) {
+            if (member) {
+                team[`setBench${benchIndex}`](EventHandler.getPokemon(member));
+                benchIndex += 1;
+            }
+        }
+        return team;
+    }
+
     getState(): State {
         const state = new State();
 
@@ -458,6 +504,10 @@ export class StateHandler {
         ))
             state.addHistory(historyStep);
         this.handler.eventHandler.resetTurn();
+
+        state.setTeam(this.getTeam());
+        state.setMoveset(this.getMoveset());
+
         return state;
     }
 }
