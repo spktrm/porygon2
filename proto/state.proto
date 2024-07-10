@@ -5,29 +5,29 @@ package rlenv;
 import "history.proto";
 
 message LegalActions {
-  bool move1 = 1;
-  bool move2 = 2;
-  bool move3 = 3;
-  bool move4 = 4;
-  bool switch1 = 5;
-  bool switch2 = 6;
-  bool switch3 = 7;
-  bool switch4 = 8;
-  bool switch5 = 9;
-  bool switch6 = 10;
+    bool move1 = 1;
+    bool move2 = 2;
+    bool move3 = 3;
+    bool move4 = 4;
+    bool switch1 = 5;
+    bool switch2 = 6;
+    bool switch3 = 7;
+    bool switch4 = 8;
+    bool switch5 = 9;
+    bool switch6 = 10;
 }
 
 message Info {
-  int32 gameId = 1;
-  bool done = 2;
-  float playerOneReward = 3;
-  float playerTwoReward = 4;
-  bool playerIndex = 5;
-  int32 turn = 6;
+    int32 gameId = 1;
+    bool done = 2;
+    float playerOneReward = 3;
+    float playerTwoReward = 4;
+    bool playerIndex = 5;
+    int32 turn = 6;
 }
 
 message State {
-  Info info = 1;
-  LegalActions legalActions = 2;
-  repeated history.HistoryStep history = 3;
+    Info info = 1;
+    LegalActions legalActions = 2;
+    repeated history.HistoryStep history = 3;
 }

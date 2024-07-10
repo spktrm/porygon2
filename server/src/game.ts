@@ -120,7 +120,7 @@ export class StreamHandler {
                 return this.playerIndex;
             }
             this.playerIndex = (parseInt(
-                request.side?.id.toString().slice(1) ?? ""
+                request.side?.id.toString().slice(1) ?? "",
             ) - 1) as 0 | 1;
             return this.playerIndex;
         }
@@ -134,14 +134,14 @@ export class StreamHandler {
 
             const allMoves = Object.keys(legalObj);
             const validMoves = Object.fromEntries(
-                Object.entries(legalObj).filter(([i, v]) => v)
+                Object.entries(legalObj).filter(([i, v]) => v),
             );
 
             if (Object.values(validMoves).length === 1) {
                 const action = new Action();
                 action.setGameid(this.gameId);
                 action.setIndex(
-                    allMoves.indexOf(Object.keys(validMoves).at(0) ?? "")
+                    allMoves.indexOf(Object.keys(validMoves).at(0) ?? ""),
                 );
                 return action;
             }
@@ -243,7 +243,7 @@ export class Game {
                         return await this.queues[x].dequeue();
                     },
                 }),
-            ])
+            ]),
         );
     }
 
@@ -259,7 +259,7 @@ export class Game {
         const sideHpSums = publicBattle.sides.map((side) =>
             side.team
                 .map((pokemon) => pokemon.hp / pokemon.maxhp)
-                .reduce((a, b) => a + b)
+                .reduce((a, b) => a + b),
         );
         if (sideHpSums[0] === sideHpSums[1]) {
             this.tied = true;

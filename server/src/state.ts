@@ -72,7 +72,7 @@ function SanitizeKey(key: string): string {
 
 function IndexValueFromEnum<T extends EnumMappings>(
     mappingType: Mappings,
-    key: string
+    key: string,
 ): T[keyof T] {
     const mapping = MappingLookup[mappingType] as T;
     const enumMapping = EnumKeyMapping[mappingType];
@@ -104,11 +104,11 @@ export class EventHandler implements Protocol.Handler {
         const pb = new PokemonPb();
         const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
         pb.setSpecies(
-            IndexValueFromEnum<typeof SpeciesEnum>("Species", baseSpecies)
+            IndexValueFromEnum<typeof SpeciesEnum>("Species", baseSpecies),
         );
 
         pb.setGender(
-            IndexValueFromEnum<typeof GendersEnum>("Genders", pokemon.gender)
+            IndexValueFromEnum<typeof GendersEnum>("Genders", pokemon.gender),
         );
 
         pb.setFainted(pokemon.fainted);
@@ -119,9 +119,9 @@ export class EventHandler implements Protocol.Handler {
             pokemon.status
                 ? IndexValueFromEnum<typeof StatusesEnum>(
                       "Statuses",
-                      pokemon.status
+                      pokemon.status,
                   )
-                : StatusesEnum.STATUSES_NULL
+                : StatusesEnum.STATUSES_NULL,
         );
 
         pb.setLevel(pokemon.level);
@@ -130,7 +130,7 @@ export class EventHandler implements Protocol.Handler {
         pb.setItem(
             item
                 ? IndexValueFromEnum<typeof ItemsEnum>("Items", item)
-                : ItemsEnum.ITEMS_UNK
+                : ItemsEnum.ITEMS_UNK,
         );
 
         const itemEffect = pokemon.itemEffect ?? pokemon.lastItemEffect;
@@ -138,16 +138,16 @@ export class EventHandler implements Protocol.Handler {
             itemEffect
                 ? IndexValueFromEnum<typeof ItemeffectEnum>(
                       "ItemEffects",
-                      itemEffect
+                      itemEffect,
                   )
-                : ItemeffectEnum.ITEMEFFECT_NULL
+                : ItemeffectEnum.ITEMEFFECT_NULL,
         );
 
         const ability = pokemon.ability;
         pb.setAbility(
             ability
                 ? IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", ability)
-                : AbilitiesEnum.ABILITIES_UNK
+                : AbilitiesEnum.ABILITIES_UNK,
         );
 
         const moveSlots = pokemon.moveSlots.slice(-4);
@@ -155,7 +155,7 @@ export class EventHandler implements Protocol.Handler {
             for (let [moveIndex, move] of moveSlots.entries()) {
                 const { id, ppUsed } = move;
                 pb[`setMoveid${moveIndex as MoveIndex}`](
-                    IndexValueFromEnum<typeof MovesEnum>("Moves", id)
+                    IndexValueFromEnum<typeof MovesEnum>("Moves", id),
                 );
                 pb[`setPpused${moveIndex as MoveIndex}`](ppUsed);
             }
@@ -180,7 +180,7 @@ export class EventHandler implements Protocol.Handler {
             for (const [stat, value] of Object.entries(active.boosts)) {
                 const boost = new Boost();
                 boost.setIndex(
-                    IndexValueFromEnum<typeof BoostsEnum>("Boosts", stat)
+                    IndexValueFromEnum<typeof BoostsEnum>("Boosts", stat),
                 );
                 boost.setValue(value);
                 historySide.addBoosts(boost);
@@ -216,7 +216,7 @@ export class EventHandler implements Protocol.Handler {
 
     getPublicState(
         action?: ActionTypeEnumMap[keyof ActionTypeEnumMap],
-        move?: string
+        move?: string,
     ): HistoryStep {
         const playerIndex = this.handler.playerIndex as number;
         const battle = this.handler.publicBattle;
@@ -230,14 +230,14 @@ export class EventHandler implements Protocol.Handler {
         step.setMove(
             move
                 ? IndexValueFromEnum<typeof MovesEnum>("Moves", move)
-                : MovesEnum.MOVES_NONE
+                : MovesEnum.MOVES_NONE,
         );
 
         const weatherpb = new WeatherPb();
         if (weather) {
             const weatherState = battle.field.weatherState;
             weatherpb.setIndex(
-                IndexValueFromEnum<typeof WeathersEnum>("Weathers", weather)
+                IndexValueFromEnum<typeof WeathersEnum>("Weathers", weather),
             );
             weatherpb.setMinduration(weatherState.minDuration);
             weatherpb.setMaxduration(weatherState.maxDuration);
@@ -245,15 +245,15 @@ export class EventHandler implements Protocol.Handler {
         step.setWeather(weatherpb);
 
         for (const [pseudoWeatherId, pseudoWeatherState] of Object.entries(
-            battle.field.pseudoWeather
+            battle.field.pseudoWeather,
         )) {
             const pseudoweather = new PseudoWeatherPb();
             const { minDuration, maxDuration, level } = pseudoWeatherState;
             pseudoweather.setIndex(
                 IndexValueFromEnum<typeof PseudoweatherEnum>(
                     "PseudoWeathers",
-                    pseudoWeatherId
-                )
+                    pseudoWeatherId,
+                ),
             );
             pseudoweather.setMinduration(minDuration);
             pseudoweather.setMaxduration(maxDuration);
@@ -268,7 +268,7 @@ export class EventHandler implements Protocol.Handler {
     addPublicState(
         isMyTurn: boolean,
         action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
-        move?: string
+        move?: string,
     ) {
         const state = this.getPublicState(action, move);
         state.setIsmyturn(isMyTurn);
@@ -294,7 +294,7 @@ export class EventHandler implements Protocol.Handler {
 
     "|switch|"(
         args: Args["|switch|" | "|drag|" | "|replace|"],
-        kwArgs?: KWArgs["|switch|"]
+        kwArgs?: KWArgs["|switch|"],
     ) {
         const isMyTurn = this.isMyTurn(args[1]);
         this.addPublicState(isMyTurn, ActionTypeEnum.SWITCH);
@@ -324,8 +324,8 @@ export class EventHandler implements Protocol.Handler {
             hyphenArg.setIndex(
                 IndexValueFromEnum<typeof HyphenargsEnum>(
                     "Hyphenargs",
-                    hyphenArgKey
-                )
+                    hyphenArgKey,
+                ),
             );
             hyphenArg.setValue(true);
             side.addHyphenargs(hyphenArg);
@@ -454,7 +454,7 @@ export class StateHandler {
         state.setLegalactions(legalActions);
 
         for (const historyStep of this.handler.eventHandler.history.slice(
-            -this.handler.eventHandler.historyMaxSize
+            -this.handler.eventHandler.historyMaxSize,
         ))
             state.addHistory(historyStep);
         this.handler.eventHandler.resetTurn();

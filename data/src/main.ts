@@ -31,7 +31,7 @@ async function getFilenames(path: string): Promise<string[]> {
 
     if (!response.ok) {
         console.error(
-            `GitHub API responded with ${response.status} for path ${path}`
+            `GitHub API responded with ${response.status} for path ${path}`,
         );
         return [];
     }
@@ -118,7 +118,7 @@ async function getGenData(gen: number): Promise<GenData> {
     const dex = generations.dex.mod(format as GenID);
     const species = (dex.species as any).all();
     const promises = species.map((species: { id: string }) =>
-        dex.learnsets.get(species.id)
+        dex.learnsets.get(species.id),
     );
     const learnsets = await Promise.all(promises);
     const moves = (dex.moves as any).all();
@@ -134,7 +134,7 @@ async function getGenData(gen: number): Promise<GenData> {
 }
 
 function mapId<T extends { id: string; [key: string]: any }>(
-    arr: T[]
+    arr: T[],
 ): string[] {
     return arr.map((item) => item.id);
 }
@@ -247,8 +247,8 @@ async function main(): Promise<void> {
         extractPatterns(src, sideConditionPattern).map((sideCondition) =>
             sideCondition.startsWith("move: ")
                 ? sideCondition.slice("move: ".length)
-                : sideCondition
-        )
+                : sideCondition,
+        ),
     );
 
     let terrain = extractPatterns(src, terrainPattern);
@@ -301,7 +301,7 @@ async function main(): Promise<void> {
         types: enumerate([
             ...extraTokens,
             ...genData.typechart.flatMap((type) =>
-                type.isNonstandard === "Future" ? [] : type.id
+                type.isNonstandard === "Future" ? [] : type.id,
             ),
         ]),
         genders: enumerate([unkToken, "M", "F", "N"]),
@@ -322,7 +322,7 @@ async function main(): Promise<void> {
     // Write the data to a JSON file
     fs.writeFileSync(
         `${parentDataDir}/data.json`,
-        JSON.stringify(data, null, 2)
+        JSON.stringify(data, null, 2),
     );
 
     for (const genNo of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {

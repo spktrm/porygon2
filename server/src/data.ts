@@ -30,13 +30,13 @@ export type EnumMappings =
     | typeof HyphenargsEnum;
 
 function GenerateEnumKeyMapping<T extends EnumMappings>(
-    mapping: T
+    mapping: T,
 ): { [k: string]: keyof T } {
     return Object.fromEntries(
         Object.keys(mapping).map((key) => {
             const preKey = key.split("_").pop() ?? "";
             return [preKey.toLowerCase(), key as keyof T];
-        })
+        }),
     );
 }
 
@@ -67,5 +67,5 @@ type EnumKeyMappingType = {
 export const EnumKeyMapping: EnumKeyMappingType = Object.fromEntries(
     Object.entries(MappingLookup).map(([key, value]) => {
         return [key, GenerateEnumKeyMapping(value)];
-    })
+    }),
 ) as EnumKeyMappingType;
