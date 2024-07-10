@@ -4,25 +4,25 @@ package pokemon;
 
 import "enums.proto";
 
+
 message Pokemon {
     enums.SpeciesEnum species = 1;
     enums.ItemsEnum item = 2;
     enums.AbilitiesEnum ability = 3;
-    enums.MovesEnum move1Id = 4;
-    enums.MovesEnum move2Id = 5;
-    enums.MovesEnum move3Id = 6;
-    enums.MovesEnum move4Id = 7;
-    int32 pp1Used = 8;
-    int32 pp2Used = 9;
-    int32 pp3Used = 10;
-    int32 pp4Used = 11;
-    float hpRatio = 12;
-    bool active = 13;
-    bool fainted = 14;
-    int32 level = 15;
-    enums.GendersEnum gender = 16;
-    enums.ItemeffectEnum itemEffect = 17;
-    int32 hp = 18;
-    int32 maxHp = 19;
-    enums.StatusesEnum status = 20;    
+    enums.MovesEnum moveId0 = 4;
+    enums.MovesEnum moveId1 = 5;
+    enums.MovesEnum moveId2 = 6;
+    enums.MovesEnum moveId3 = 7;
+    int32 ppUsed0 = 8;
+    int32 ppUsed1 = 9;
+    int32 ppUsed2 = 10;
+    int32 ppUsed3 = 11;
+    bool active = 12;
+    bool fainted = 13;
+    int32 level = 14;
+    enums.GendersEnum gender = 15;
+    enums.ItemeffectEnum itemEffect = 16;
+    int32 hp = 17;
+    int32 maxHp = 18;
+    enums.StatusesEnum status = 19;
 }

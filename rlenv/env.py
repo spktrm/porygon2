@@ -110,13 +110,15 @@ def get_history(state: State, num_history: int = 8):
         (num_history, 2, NUM_HYPHEN_ARGS_FIELDS), dtype=np.int32
     )
 
-    history_weather = np.zeros((num_history,), dtype=np.int32)
+    history_weather = np.zeros((num_history, 3), dtype=np.int32)
     history_pseudoweather = np.zeros(
         (num_history, NUM_PSEUDOWEATHER_FIELDS, 2), dtype=np.int32
     )
 
     for step_idx, step in enumerate(history):
-        history_weather[step_idx] = step.weather.index
+        history_weather[step_idx, 0] = step.weather.index
+        history_weather[step_idx, 1] = step.weather.minDuration
+        history_weather[step_idx, 2] = step.weather.maxDuration
 
         history_pseudoweather = set_tensor_from_repeated(
             history_pseudoweather, step.pseudoweather, (step_idx,)
@@ -214,12 +216,10 @@ class Environment:
 
     async def _read(self) -> EnvStep:
         msg_size_bytes = await self.reader.readexactly(4)
-        remaining_msg_bytes = np.frombuffer(msg_size_bytes, dtype=np.int32).item()
+        msg_size = np.frombuffer(msg_size_bytes, dtype=np.int32).item()
 
-        buffer = b""
-        while remaining_msg_bytes > 0:
-            buffer += await self.reader.readexactly(remaining_msg_bytes)
-            remaining_msg_bytes -= len(buffer)
+        # Read the message
+        buffer = await self.reader.readexactly(msg_size)
 
         state = State.FromString(buffer)
         self.state = state

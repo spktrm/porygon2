@@ -31,7 +31,13 @@ import {
     Weather as WeatherPb,
     PseudoWeather as PseudoWeatherPb,
 } from "../protos/history_pb";
-import { MappingLookup, EnumKeyMapping, EnumMappings, Mappings } from "./data";
+import {
+    MappingLookup,
+    EnumKeyMapping,
+    EnumMappings,
+    Mappings,
+    MoveIndex,
+} from "./data";
 import { Pokemon } from "@pkmn/client";
 
 export const AllValidActions = new LegalActions();
@@ -46,8 +52,22 @@ AllValidActions.setSwitch4(true);
 AllValidActions.setSwitch5(true);
 AllValidActions.setSwitch6(true);
 
+const sanitizeKeyCache = new Map<string, string>();
+
+const sideIdMapping: {
+    [k in "p1" | "p2"]: 0 | 1;
+} = {
+    p1: 0,
+    p2: 1,
+};
+
 function SanitizeKey(key: string): string {
-    return key.replace(/[^\w]|_/g, "").toLowerCase();
+    if (sanitizeKeyCache.has(key)) {
+        return sanitizeKeyCache.get(key)!;
+    }
+    const sanitizedKey = key.replace(/\W/g, "").toLowerCase();
+    sanitizeKeyCache.set(key, sanitizedKey);
+    return sanitizedKey;
 }
 
 function IndexValueFromEnum<T extends EnumMappings>(
@@ -60,7 +80,7 @@ function IndexValueFromEnum<T extends EnumMappings>(
     const trueKey = enumMapping[sanitizedKey] as keyof T;
     const value = mapping[trueKey];
     if (value === undefined) {
-        console.error(`${key.toString()} not in mapping`);
+        throw new Error(`${key.toString()} not in mapping`);
     }
     return value;
 }
@@ -82,11 +102,9 @@ export class EventHandler implements Protocol.Handler {
 
     static getPokemon(pokemon: Pokemon): PokemonPb {
         const pb = new PokemonPb();
+        const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
         pb.setSpecies(
-            IndexValueFromEnum<typeof SpeciesEnum>(
-                "Species",
-                pokemon.species.baseSpecies.toLowerCase()
-            )
+            IndexValueFromEnum<typeof SpeciesEnum>("Species", baseSpecies)
         );
 
         pb.setGender(
@@ -108,38 +126,43 @@ export class EventHandler implements Protocol.Handler {
 
         pb.setLevel(pokemon.level);
 
-        const item = pokemon.item;
-        const itemEffect = pokemon.itemEffect ?? pokemon.lastItemEffect;
+        const item = pokemon.item ?? pokemon.lastItem;
         pb.setItem(
-            IndexValueFromEnum<typeof ItemsEnum>(
-                "Items",
-                item === "" ? "unk" : item
-            )
+            item
+                ? IndexValueFromEnum<typeof ItemsEnum>("Items", item)
+                : ItemsEnum.ITEMS_UNK
         );
+
+        const itemEffect = pokemon.itemEffect ?? pokemon.lastItemEffect;
         pb.setItemeffect(
-            itemEffect === ""
+            itemEffect
                 ? IndexValueFromEnum<typeof ItemeffectEnum>(
                       "ItemEffects",
                       itemEffect
                   )
-                : ItemeffectEnum.ITEMEFFECT_UNK
+                : ItemeffectEnum.ITEMEFFECT_NULL
         );
 
         const ability = pokemon.ability;
-        const abilityKey = ability ? ability : "unk";
         pb.setAbility(
-            IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", abilityKey)
+            ability
+                ? IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", ability)
+                : AbilitiesEnum.ABILITIES_UNK
         );
 
-        for (const [moveIndex_, move] of pokemon.moveSlots
-            .slice(-4)
-            .entries()) {
-            const { id, ppUsed } = move;
-            const moveIndex = (moveIndex_ + 1) as 1 | 2 | 3 | 4;
-            pb[`setMove${moveIndex}id`](
-                IndexValueFromEnum<typeof MovesEnum>("Moves", id)
-            );
-            pb[`setPp${moveIndex}used`](ppUsed);
+        const moveSlots = pokemon.moveSlots.slice(-4);
+        if (moveSlots) {
+            for (let [moveIndex, move] of moveSlots.entries()) {
+                const { id, ppUsed } = move;
+                pb[`setMoveid${moveIndex as MoveIndex}`](
+                    IndexValueFromEnum<typeof MovesEnum>("Moves", id)
+                );
+                pb[`setPpused${moveIndex as MoveIndex}`](ppUsed);
+            }
+        }
+        let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
+        for (remainingIndex; remainingIndex < 4; remainingIndex++) {
+            pb[`setMoveid${remainingIndex}`](MovesEnum.MOVES_UNK);
         }
 
         return pb;
@@ -236,20 +259,36 @@ export class EventHandler implements Protocol.Handler {
             pseudoweather.setMaxduration(maxDuration);
             step.addPseudoweather(pseudoweather);
         }
+        step.setSwitchcounter(this.switchCounter);
+        step.setMovecounter(this.moveCounter);
+        step.setTurn(this.handler.publicBattle.turn);
         return step;
     }
 
     addPublicState(
+        isMyTurn: boolean,
         action: ActionTypeEnumMap[keyof ActionTypeEnumMap],
         move?: string
     ) {
         const state = this.getPublicState(action, move);
+        state.setIsmyturn(isMyTurn);
         this.history.push(state);
+    }
+
+    getUser(line: string): 0 | 1 {
+        return sideIdMapping[line.slice(0, 2) as keyof typeof sideIdMapping];
+    }
+
+    isMyTurn(line: string): boolean {
+        const playerIndex = this.handler.getPlayerIndex();
+        const user = this.getUser(line);
+        return playerIndex === user;
     }
 
     "|move|"(args: Args["|move|"], kwArgs: KWArgs["|move|"]) {
         const move = args[2];
-        this.addPublicState(ActionTypeEnum.MOVE, move);
+        const isMyTurn = this.isMyTurn(args[1]);
+        this.addPublicState(isMyTurn, ActionTypeEnum.MOVE, move);
         this.moveCounter += 1;
     }
 
@@ -257,7 +296,8 @@ export class EventHandler implements Protocol.Handler {
         args: Args["|switch|" | "|drag|" | "|replace|"],
         kwArgs?: KWArgs["|switch|"]
     ) {
-        this.addPublicState(ActionTypeEnum.SWITCH);
+        const isMyTurn = this.isMyTurn(args[1]);
+        this.addPublicState(isMyTurn, ActionTypeEnum.SWITCH);
         this.switchCounter += 1;
     }
 
@@ -265,12 +305,11 @@ export class EventHandler implements Protocol.Handler {
         const prevState = this.history.pop() as HistoryStep;
         const newState = this.getPublicState();
         const prevAction = prevState.getAction();
-        const playerIndex = this.handler.playerIndex as 0 | 1;
+        const playerIndex = this.handler.getPlayerIndex();
 
         const users = [];
         if (args[1]) {
-            const potentialUser = (parseInt((args[1] as string).slice(1, 2)) -
-                1) as 0 | 1;
+            const potentialUser = this.getUser(args[1] as string);
             users.push(potentialUser);
         } else {
             users.push(...[0, 1]);
@@ -297,15 +336,24 @@ export class EventHandler implements Protocol.Handler {
         if (prevAction) {
             newState.setAction(prevAction);
         }
-        const prevMove = prevState?.getMove();
+        const prevMove = prevState.getMove();
         if (prevMove) {
             newState.setMove(prevMove);
+        }
+        const prevUser = prevState.getIsmyturn();
+        if (prevUser !== undefined) {
+            newState.setIsmyturn(prevUser);
         }
         this.history.push(newState);
     }
 
     reset() {
         this.history = [];
+        this.moveCounter = 0;
+        this.switchCounter = 0;
+    }
+
+    resetTurn() {
         this.moveCounter = 0;
         this.switchCounter = 0;
     }
@@ -409,7 +457,7 @@ export class StateHandler {
             -this.handler.eventHandler.historyMaxSize
         ))
             state.addHistory(historyStep);
-
+        this.handler.eventHandler.resetTurn();
         return state;
     }
 }

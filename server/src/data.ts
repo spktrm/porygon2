@@ -40,6 +40,8 @@ function GenerateEnumKeyMapping<T extends EnumMappings>(
     );
 }
 
+export type MoveIndex = 0 | 1 | 2 | 3;
+
 export const MappingLookup = {
     Species: SpeciesEnum,
     Items: ItemsEnum,

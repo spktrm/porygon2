@@ -37,6 +37,10 @@ async function main(verbose: boolean = false) {
     let game = new Game({ port: port, gameId: 0 });
 
     let trajectory: State[] = [];
+    let prevT = Date.now();
+    let currT = Date.now();
+    let tSum = 0;
+    let n = 0;
 
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
@@ -72,15 +76,28 @@ async function main(verbose: boolean = false) {
                 }
                 assert(r1 + r2 === 0);
             }
+            n += 1;
+            currT = Date.now();
+            const diff = currT - prevT;
+            tSum += diff;
+            prevT = currT;
         }
     };
 
-    for (let runIdx = 0; runIdx < totalTest; runIdx++) {
+    let rateSum = 0;
+    for (let runIdx = 1; runIdx <= totalTest; runIdx++) {
         game = await runGame(game);
+        const rate = (1000 * n) / tSum;
+        rateSum += rate;
+        console.log(runIdx, rateSum / runIdx);
+        prevT = Date.now();
+        currT = Date.now();
+        tSum = 0;
+        n = 0;
         assertTrajectory(trajectory);
         trajectory = [];
         // bar.tick();
-        console.log(runIdx);
+        // console.log(runIdx);
     }
 }
 

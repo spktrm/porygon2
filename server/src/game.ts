@@ -36,7 +36,7 @@ export class StreamHandler {
 
     rqid: string | undefined;
     queue: AsyncQueue<Action>;
-    playerIndex: number | undefined;
+    playerIndex: 0 | 1 | undefined;
 
     constructor(args: {
         gameId: number;
@@ -119,8 +119,9 @@ export class StreamHandler {
             if (this.playerIndex) {
                 return this.playerIndex;
             }
-            this.playerIndex =
-                parseInt(request.side?.id.toString().slice(1) ?? "") - 1;
+            this.playerIndex = (parseInt(
+                request.side?.id.toString().slice(1) ?? ""
+            ) - 1) as 0 | 1;
             return this.playerIndex;
         }
     }
