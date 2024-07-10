@@ -3,6 +3,7 @@ import struct
 import asyncio
 import uvloop
 import numpy as np
+import jax.numpy as jnp
 
 from typing import Any, Sequence, Tuple
 
@@ -19,7 +20,7 @@ from rlenv.data import (
     NUM_VOLATILE_STATUS_FIELDS,
 )
 from rlenv.protos.history_pb2 import Boost, PseudoWeather, Sidecondition, Volatilestatus
-from rlenv.protos.state_pb2 import State
+from rlenv.protos.state_pb2 import LegalActions, State
 from rlenv.protos.action_pb2 import Action
 
 uvloop.install()
@@ -225,6 +226,11 @@ def process_state(state: State) -> EnvStep:
         hyphen_args=hyphen_args,
         side_entities=side_entities,
     )
+
+
+def get_ex_state() -> EnvStep:
+    legal_actions = LegalActions(move1=True)
+    return process_state(State(legalActions=legal_actions))
 
 
 SOCKET_PATH = "/tmp/pokemon.sock"

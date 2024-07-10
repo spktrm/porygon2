@@ -1,9 +1,22 @@
+import jax
+
 import numpy as np
+import flax.linen as nn
 
 from tqdm import tqdm
 
 from ml.config import RNaDConfig
 from rlenv.client import BatchCollector
+from rlenv.env import EnvStep, get_ex_state
+
+
+class Model(nn.Module):
+    @nn.compact
+    def __call__(self, env_step: EnvStep):
+        pi = env_step.legal / env_step.legal.sum(-1, keepdims=True)
+        logit = log_pi = pi
+        v = env_step.legal.sum()
+        return pi, v, log_pi, logit
 
 
 def main():
@@ -11,10 +24,15 @@ def main():
     pbar2 = tqdm(desc="num_steps")
     pbar3 = tqdm(desc="num_games")
 
-    collector = BatchCollector(config=RNaDConfig())
+    network = Model()
+    collector = BatchCollector(network, config=RNaDConfig())
+
+    ex = get_ex_state()
+    params = network.init(jax.random.key(0), ex)
+    network.apply(params, ex)
 
     for _ in range(100000):
-        trajectory = collector.collect_batch_trajectory()
+        trajectory = collector.collect_batch_trajectory(params)
 
         turns_increasing = trajectory.env.turn[1:] >= trajectory.env.turn[:-1]
 
