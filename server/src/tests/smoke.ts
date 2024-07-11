@@ -5,7 +5,6 @@ import { Game } from "../game";
 import { port } from "./utils";
 import { State } from "../../protos/state_pb";
 import { chooseRandom } from "../utils";
-import ProgressBar from "progress";
 
 const totalTest = 10000;
 // const bar = new ProgressBar(":bar", { total: totalTest });

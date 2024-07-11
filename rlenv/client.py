@@ -4,7 +4,6 @@ import functools
 import numpy as np
 import flax.linen as nn
 
-from jax import numpy as jnp
 from typing import Any, Dict, Sequence, TypeVar
 
 from rlenv.env import ParallelEnvironment, EnvStep, ActorStep, TimeStep

@@ -2,63 +2,23 @@ syntax = "proto3";
 
 package history;
 
-import "pokemon.proto";
-import "enums.proto";
-
-message Boost {
-    enums.BoostsEnum index = 1;
-    int32 value = 2;
-}
-
-message Sidecondition {
-    enums.SideconditionsEnum index = 1;
-    int32 value = 2;
-}
-
-message Volatilestatus {
-    enums.VolatilestatusEnum index = 1;
-    int32 value = 2;
-}
-
-message HyphenArg {
-    enums.HyphenargsEnum index = 1;
-    bool value = 2;
-}
-
-message HistorySide {
-    pokemon.Pokemon active = 1;
-    repeated Boost boosts = 2;
-    repeated Sidecondition sideConditions = 3;
-    repeated Volatilestatus volatileStatus = 4;
-    repeated HyphenArg hyphenArgs = 5;
-}
-
 enum ActionTypeEnum {
     move = 0;
     switch = 1;
 }
 
-message Weather {
-    enums.WeathersEnum index = 1;
-    int32 minDuration = 2;
-    int32 maxDuration = 3;
-}
+message History {
+    // two sided
+    bytes active = 1;
+    bytes boosts = 2;
+    bytes sideConditions = 3;
+    bytes volatileStatus = 4;
+    bytes hyphenArgs = 5;
 
-message PseudoWeather {
-    enums.PseudoweatherEnum index = 1;
-    int32 minDuration = 2;
-    int32 maxDuration = 3;
-}
+    // one sided
+    bytes weather = 6;
+    bytes pseudoweather = 7;
+    bytes turnContext = 8;
 
-message HistoryStep {
-    HistorySide p1 = 1;
-    HistorySide p2 = 2;
-    Weather weather = 3;
-    repeated PseudoWeather pseudoweather = 4;
-    ActionTypeEnum action = 5;
-    enums.MovesEnum move = 6;
-    bool isMyTurn = 7;
-    int32 moveCounter = 8;
-    int32 switchCounter = 9;
-    int32 turn = 10;
+    int32 length = 9;
 }

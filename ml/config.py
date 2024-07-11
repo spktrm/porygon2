@@ -177,7 +177,7 @@ class ActorCriticConfig:
     # The games longer than this value are truncated. Must be strictly positive.
     trajectory_max: int = 1000
     # num players in game
-    num_players: int = 2
+    num_players: int = 8
     # The batch size to use when learning/improving parameters.
     batch_size: int = 8
     # The learning rate for `params`.

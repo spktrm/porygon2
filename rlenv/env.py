@@ -2,25 +2,15 @@ import chex
 import struct
 import asyncio
 import uvloop
+import jax
 import numpy as np
-import jax.numpy as jnp
 
 from typing import Any, Sequence, Tuple
 
 from google.protobuf.descriptor import FieldDescriptor
 
-from rlenv.data import (
-    NUM_BOOSTS_FIELDS,
-    NUM_MOVE_FIELDS,
-    NUM_MOVES,
-    NUM_POKEMON_FIELDS,
-    NUM_PSEUDOWEATHER_FIELDS,
-    NUM_SIDE_CONDITION_FIELDS,
-    NUM_HYPHEN_ARGS_FIELDS,
-    NUM_VOLATILE_STATUS_FIELDS,
-)
-from rlenv.protos.history_pb2 import Boost, PseudoWeather, Sidecondition, Volatilestatus
-from rlenv.protos.state_pb2 import LegalActions, State
+from rlenv.data import EX_STATE
+from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
 
 uvloop.install()
@@ -36,8 +26,8 @@ class EnvStep:
     rewards: chex.Array = ()
 
     # Private Info
-    moves: chex.Array = ()
-    side_entities: chex.Array = ()
+    moveset: chex.Array = ()
+    team: chex.Array = ()
     legal: chex.Array = ()
 
     # Public Info
@@ -66,126 +56,63 @@ class TimeStep:
     actor: ActorStep = ActorStep()
 
 
-def set_tensor_from_fields(
-    arr: np.ndarray,
-    proto_list: Sequence[Tuple[FieldDescriptor, Any]],
-    pre_idx: Sequence[int],
-) -> None:
-    for field, value in proto_list:
-        arr[*pre_idx, field.index] = value
-    return arr
+NUM_HISTORY = 8
 
 
-def set_tensor_from_repeated(
-    arr: np.ndarray,
-    proto_list: Sequence[Boost] | Sequence[Volatilestatus] | Sequence[Sidecondition],
-    pre_idx: Sequence[int],
-) -> None:
-    for item in proto_list:
-        arr[*pre_idx, item.index] = item.value
-    return arr
+def padnstack(arr: np.ndarray) -> np.ndarray:
+    num_repeats = NUM_HISTORY - arr.shape[0]
+    padding = np.zeros_like(arr[0], dtype=arr.dtype)[None].repeat(num_repeats, 0)
+    return np.concatenate((arr, padding))
 
 
-def set_tensor_from_repeated_multiple_values(
-    arr: np.ndarray,
-    proto_list: Sequence[PseudoWeather],
-    pre_idx: Sequence[int],
-) -> None:
-    for item in proto_list:
-        arr[*pre_idx, item.index, 0] = item.minDuration
-        arr[*pre_idx, item.index, 1] = item.maxDuration
-    return arr
-
-
-def get_history(state: State, num_history: int = 8):
+def get_history(state: State):
     history = state.history
-    history_active_entities = np.zeros(
-        (num_history, 2, NUM_POKEMON_FIELDS), dtype=np.int32
+    history_length = history.length
+    moveset = np.frombuffer(state.moveset, dtype=np.int32).reshape((4, -1))
+    team = np.frombuffer(state.team, dtype=np.int32).reshape((7, -1))
+    history_active_entities = np.frombuffer(history.active, dtype=np.int32).reshape(
+        (history_length, 2, -1)
     )
-    history_side_conditions = np.zeros(
-        (num_history, 2, NUM_SIDE_CONDITION_FIELDS), dtype=np.int32
+    history_side_conditions = np.frombuffer(
+        history.sideConditions, dtype=np.uint8
+    ).reshape((history_length, 2, -1))
+    history_volatile_status = np.frombuffer(
+        history.volatileStatus, dtype=np.uint8
+    ).reshape((history_length, 2, -1))
+    history_boosts = np.frombuffer(history.boosts, dtype=np.uint8).reshape(
+        (history_length, 2, -1)
     )
-    history_volatile_status = np.zeros(
-        (num_history, 2, NUM_VOLATILE_STATUS_FIELDS), dtype=np.int32
+    history_hyphen_args = np.frombuffer(history.hyphenArgs, dtype=np.uint8).reshape(
+        (history_length, 2, -1)
     )
-    history_boosts = np.zeros((num_history, 2, NUM_BOOSTS_FIELDS), dtype=np.int32)
-    history_hyphen_args = np.zeros(
-        (num_history, 2, NUM_HYPHEN_ARGS_FIELDS), dtype=np.int32
+    history_weather = np.frombuffer(history.weather, dtype=np.uint8).reshape(
+        (history_length, -1)
     )
-
-    history_weather = np.zeros((num_history, 3), dtype=np.int32)
-    history_pseudoweather = np.zeros(
-        (num_history, NUM_PSEUDOWEATHER_FIELDS, 2), dtype=np.int32
+    history_pseudoweather = np.frombuffer(
+        history.pseudoweather, dtype=np.uint8
+    ).reshape((history_length, -1))
+    history_turn_context = np.frombuffer(history.turnContext, dtype=np.int32).reshape(
+        (history_length, -1)
     )
-
-    side_entities = np.zeros((7, NUM_POKEMON_FIELDS), dtype=np.int32)
-    for entity_idx, entity in enumerate(
-        [
-            state.team.active,
-            state.team.bench0,
-            state.team.bench1,
-            state.team.bench2,
-            state.team.bench3,
-            state.team.bench4,
-            state.team.bench5,
-        ]
-    ):
-        side_entities = set_tensor_from_fields(
-            side_entities, entity.ListFields(), (entity_idx,)
-        )
-
-    moveset = np.zeros((NUM_MOVES, NUM_MOVE_FIELDS), dtype=np.int32)
-    for move_idx, move in enumerate(
-        [
-            state.moveset.move0,
-            state.moveset.move1,
-            state.moveset.move2,
-            state.moveset.move3,
-        ]
-    ):
-        moveset = set_tensor_from_fields(moveset, move.ListFields(), (move_idx,))
-
-    for step_idx, step in enumerate(history):
-        history_weather[step_idx, 0] = step.weather.index
-        history_weather[step_idx, 1] = step.weather.minDuration
-        history_weather[step_idx, 2] = step.weather.maxDuration
-
-        history_pseudoweather = set_tensor_from_repeated(
-            history_pseudoweather, step.pseudoweather, (step_idx,)
-        )
-
-        for side_idx, side in enumerate([step.p1, step.p2]):
-            history_active_entities = set_tensor_from_fields(
-                history_active_entities, side.active.ListFields(), (step_idx, side_idx)
-            )
-            history_volatile_status = set_tensor_from_repeated(
-                history_volatile_status, side.volatileStatus, (step_idx, side_idx)
-            )
-            history_side_conditions = set_tensor_from_repeated(
-                history_side_conditions, side.sideConditions, (step_idx, side_idx)
-            )
-            history_boosts = set_tensor_from_repeated(
-                history_boosts, side.boosts, (step_idx, side_idx)
-            )
-            history_hyphen_args = set_tensor_from_repeated(
-                history_hyphen_args, side.hyphenArgs, (step_idx, side_idx)
-            )
 
     return (
-        side_entities,
-        history_active_entities,
-        history_side_conditions,
-        history_volatile_status,
-        history_boosts,
-        history_weather,
-        history_pseudoweather,
-        history_hyphen_args,
+        moveset,
+        team,
+        padnstack(history_active_entities),
+        padnstack(history_side_conditions),
+        padnstack(history_volatile_status),
+        padnstack(history_boosts),
+        padnstack(history_weather),
+        padnstack(history_pseudoweather),
+        padnstack(history_hyphen_args),
+        padnstack(history_turn_context),
     )
 
 
 def process_state(state: State) -> EnvStep:
     (
-        side_entities,
+        moveset,
+        team,
         active_entities,
         side_conditions,
         volatile_status,
@@ -193,7 +120,9 @@ def process_state(state: State) -> EnvStep:
         weather,
         pseudoweather,
         hyphen_args,
+        turn_context,
     ) = get_history(state)
+    hyphen_args = np.unpackbits(hyphen_args, axis=-1).view(bool).astype(float)
     return EnvStep(
         valid=not state.info.done,
         player_id=state.info.playerIndex,
@@ -224,13 +153,14 @@ def process_state(state: State) -> EnvStep:
         weather=weather,
         pseudoweather=pseudoweather,
         hyphen_args=hyphen_args,
-        side_entities=side_entities,
+        turn_context=turn_context,
+        team=team,
+        moveset=moveset,
     )
 
 
 def get_ex_state() -> EnvStep:
-    legal_actions = LegalActions(move1=True)
-    return process_state(State(legalActions=legal_actions))
+    return process_state(EX_STATE)
 
 
 SOCKET_PATH = "/tmp/pokemon.sock"

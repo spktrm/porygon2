@@ -59,6 +59,12 @@ export const MappingLookup = {
     Hyphenargs: HyphenargsEnum,
 };
 
+export const numBoosts = Object.keys(BoostsEnum).length;
+export const numVolatiles = Object.keys(VolatilestatusEnum).length;
+export const numSideConditions = Object.keys(SideconditionsEnum).length;
+export const numHyphenArgs = Object.keys(HyphenargsEnum).length;
+export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
+
 export type Mappings = keyof typeof MappingLookup;
 
 type EnumKeyMappingType = {

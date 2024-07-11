@@ -3,9 +3,10 @@
     "version": "1.0.0",
     "main": "src/index.ts",
     "scripts": {
-        "start": "rm -rf ./dist && tsc && node dist/index.js",
+        "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts",
         "compile-proto": "./scripts/compile_proto.sh",
-        "test": "rm -rf ./dist && tsc && node dist/tests/smoke.js"
+        "start": "npm run compile-base && node dist/index.js",
+        "test": "npm run compile-base && node dist/tests/smoke.js"
     },
     "dependencies": {
         "@pkmn/client": "^0.6.25",
