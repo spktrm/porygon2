@@ -1,7 +1,7 @@
 import { MessagePort, parentPort, workerData } from "worker_threads";
+
 import { Game } from "./game";
 import { Action } from "../protos/action_pb";
-import { writeFileSync } from "fs";
 
 const game = new Game({
     gameId: workerData.workerCount,
@@ -11,32 +11,17 @@ const game = new Game({
 async function main() {
     while (true) {
         await game.run();
-
-        // try {
-        //     await runGameWithTimeout(game, 1000); // Wait at most 1 second
-        // } catch (error) {
-        //     const world = game.world;
-        //     if (world) {
-        //         writeFileSync(
-        //             `./logs/${game.gameId}.json`,
-        //             JSON.stringify({
-        //                 log: world.log,
-        //                 inputLog: world.inputLog,
-        //             })
-        //         );
-        //     }
-        //     break; // Exit the loop if a timeout occurs
-        // }
-
         game.reset();
     }
 }
 
 main();
 
+// Allocate a rolling buffer to store incoming messages
 let buffer = Buffer.alloc(0);
 
 parentPort?.on("message", (data: Buffer) => {
+    // Update rolling buffer with incoming information
     buffer = Buffer.concat([buffer, data]);
 
     while (buffer.length >= 4) {

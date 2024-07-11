@@ -1,9 +1,9 @@
 import path from "path";
+
 import { Socket, createServer } from "net";
 import { Worker } from "worker_threads";
 import { existsSync, unlinkSync } from "fs";
-
-const socketPath = "/tmp/pokemon.sock";
+import { socketPath } from "./data";
 
 // Clean up any previous socket file
 if (existsSync(socketPath)) {

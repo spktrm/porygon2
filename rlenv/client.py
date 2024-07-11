@@ -4,19 +4,13 @@ import functools
 import numpy as np
 import flax.linen as nn
 
-from typing import Any, Dict, Sequence, TypeVar
-
-from rlenv.env import ParallelEnvironment, EnvStep, ActorStep, TimeStep
+from typing import Any, Dict, Sequence
 
 from ml.config import RNaDConfig
 
-
-T = TypeVar("T")
-
-
-# @jax.jit
-def stack_steps(steps: Sequence[T]) -> T:
-    return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *steps)
+from rlenv.env import ParallelEnvironment, EnvStep
+from rlenv.interfaces import ActorStep, TimeStep
+from rlenv.utils import stack_steps
 
 
 class BatchCollector:

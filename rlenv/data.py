@@ -1,4 +1,5 @@
 import os
+
 from rlenv.protos.enums_pb2 import (
     BoostsEnum,
     HyphenargsEnum,
@@ -24,3 +25,6 @@ NUM_PSEUDOWEATHER_FIELDS = len(PseudoweatherEnum.keys())
 NUM_TERRAIN_FIELDS = len(TerrainEnum.keys())
 
 NUM_MOVE_FIELDS = len(Move.DESCRIPTOR.fields)
+
+NUM_HISTORY = 8
+SOCKET_PATH = "/tmp/pokemon.sock"

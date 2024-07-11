@@ -1,7 +1,7 @@
 import { AnyObject } from "@pkmn/sim";
 import { StreamHandler } from "./game";
 import { Args, KWArgs, Protocol } from "@pkmn/protocol";
-import { Info, LegalActions, Move, State } from "../protos/state_pb";
+import { Info, LegalActions, State } from "../protos/state_pb";
 import {
     AbilitiesEnum,
     BoostsEnum,
@@ -34,7 +34,7 @@ import {
     numHyphenArgs,
     numPseudoweathers,
 } from "./data";
-import { Pokemon, Side } from "@pkmn/client";
+import { Pokemon } from "@pkmn/client";
 import { TwoDBoolArray } from "./arr";
 
 export const AllValidActions = new LegalActions();

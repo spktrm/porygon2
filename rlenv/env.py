@@ -1,68 +1,17 @@
-import chex
 import struct
 import asyncio
 import uvloop
-import jax
 import numpy as np
 
-from typing import Any, Sequence, Tuple
+from typing import Sequence
 
-from google.protobuf.descriptor import FieldDescriptor
-
-from rlenv.data import EX_STATE
+from rlenv.data import EX_STATE, SOCKET_PATH
+from rlenv.interfaces import EnvStep
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
+from rlenv.utils import padnstack
 
 uvloop.install()
-
-
-@chex.dataclass(frozen=True)
-class EnvStep:
-    # Standard Info
-    valid: chex.Array = ()
-    turn: chex.Array = ()
-    game_id: chex.Array = ()
-    player_id: chex.Array = ()
-    rewards: chex.Array = ()
-
-    # Private Info
-    moveset: chex.Array = ()
-    team: chex.Array = ()
-    legal: chex.Array = ()
-
-    # Public Info
-    turn_context: chex.Array = ()
-    active_entities: chex.Array = ()
-    boosts: chex.Array = ()
-    side_conditions: chex.Array = ()
-    volatile_status: chex.Array = ()
-    hyphen_args: chex.Array = ()
-    additional_features: chex.Array = ()
-    terrain: chex.Array = ()
-    pseudoweather: chex.Array = ()
-    weather: chex.Array = ()
-
-
-@chex.dataclass(frozen=True)
-class ActorStep:
-    action_oh: chex.Array = ()
-    policy: chex.Array = ()
-    rewards: chex.Array = ()
-
-
-@chex.dataclass(frozen=True)
-class TimeStep:
-    env: EnvStep = EnvStep()
-    actor: ActorStep = ActorStep()
-
-
-NUM_HISTORY = 8
-
-
-def padnstack(arr: np.ndarray) -> np.ndarray:
-    num_repeats = NUM_HISTORY - arr.shape[0]
-    padding = np.zeros_like(arr[0], dtype=arr.dtype)[None].repeat(num_repeats, 0)
-    return np.concatenate((arr, padding))
 
 
 def get_history(state: State):
@@ -94,7 +43,6 @@ def get_history(state: State):
     history_turn_context = np.frombuffer(history.turnContext, dtype=np.int32).reshape(
         (history_length, -1)
     )
-
     return (
         moveset,
         team,
@@ -122,7 +70,7 @@ def process_state(state: State) -> EnvStep:
         hyphen_args,
         turn_context,
     ) = get_history(state)
-    hyphen_args = np.unpackbits(hyphen_args, axis=-1).view(bool).astype(float)
+    # hyphen_args = np.unpackbits(hyphen_args, axis=-1).view(bool).astype(float)
     return EnvStep(
         valid=not state.info.done,
         player_id=state.info.playerIndex,
@@ -161,9 +109,6 @@ def process_state(state: State) -> EnvStep:
 
 def get_ex_state() -> EnvStep:
     return process_state(EX_STATE)
-
-
-SOCKET_PATH = "/tmp/pokemon.sock"
 
 
 class Environment:
