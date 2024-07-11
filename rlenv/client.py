@@ -6,7 +6,7 @@ import flax.linen as nn
 
 from typing import Any, Dict, Sequence
 
-from ml.config import RNaDConfig
+from ml.utils import Params
 
 from rlenv.env import ParallelEnvironment, EnvStep
 from rlenv.interfaces import ActorStep, TimeStep
@@ -14,12 +14,9 @@ from rlenv.utils import stack_steps
 
 
 class BatchCollector:
-    def __init__(self, network: nn.Module, config: RNaDConfig):
-        self.config = config
-
-        # The random facilities for jax and numpy.
-        self.np_rng = np.random.RandomState(self.config.seed)
-        self.game = ParallelEnvironment(self.config.batch_size)
+    def __init__(self, network: nn.Module, batch_size: int, seed: int = 42):
+        self.np_rng = np.random.RandomState(seed)
+        self.game = ParallelEnvironment(batch_size)
         self.network = network
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
@@ -41,7 +38,7 @@ class BatchCollector:
         # Apply the vectorized function to the batch of env_steps
         return vmapped_apply_network(env_steps)
 
-    def actor_step(self, params: Dict[str, Any], env_step: EnvStep):
+    def actor_step(self, params: Params, env_step: EnvStep):
         pi = self._network_jit_apply(params, env_step)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
@@ -51,7 +48,7 @@ class BatchCollector:
         return action, actor_step
 
     def collect_batch_trajectory(
-        self, params: Dict[str, Any], resolution: int = 32
+        self, params: Params, resolution: int = 32
     ) -> TimeStep:
         states = self.game.reset()
         timesteps = []
