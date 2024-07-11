@@ -11,5 +11,10 @@ data/data/**/*.json
 
 **/*.ipynb
 
+# rlenv ignores
 rlenv/protos/** 
+rlenv/ex
+
+# server ignores
 server/protos/** 
+
