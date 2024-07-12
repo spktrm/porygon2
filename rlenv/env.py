@@ -19,41 +19,41 @@ def get_history(state: State):
     history_length = history.length
     moveset = np.frombuffer(state.moveset, dtype=np.int32).reshape((4, -1))
     team = np.frombuffer(state.team, dtype=np.int32).reshape((7, -1))
-    history_active_entities = np.frombuffer(history.active, dtype=np.int32).reshape(
+    active_entities = np.frombuffer(history.active, dtype=np.int32).reshape(
         (history_length, 2, -1)
     )
-    history_side_conditions = np.frombuffer(
-        history.sideConditions, dtype=np.uint8
-    ).reshape((history_length, 2, -1))
-    history_volatile_status = np.frombuffer(
-        history.volatileStatus, dtype=np.uint8
-    ).reshape((history_length, 2, -1))
-    history_boosts = np.frombuffer(history.boosts, dtype=np.uint8).reshape(
+    side_conditions = np.frombuffer(history.sideConditions, dtype=np.uint8).reshape(
         (history_length, 2, -1)
     )
-    history_hyphen_args = np.frombuffer(history.hyphenArgs, dtype=np.uint8).reshape(
+    volatile_status = np.frombuffer(history.volatileStatus, dtype=np.uint8).reshape(
         (history_length, 2, -1)
     )
-    history_weather = np.frombuffer(history.weather, dtype=np.uint8).reshape(
+    boosts = np.frombuffer(history.boosts, dtype=np.int8).reshape(
+        (history_length, 2, -1)
+    )
+    hyphen_args = np.frombuffer(history.hyphenArgs, dtype=np.uint8).reshape(
+        (history_length, 2, -1)
+    )
+    weather = np.frombuffer(history.weather, dtype=np.uint8).reshape(
         (history_length, -1)
     )
-    history_pseudoweather = np.frombuffer(
-        history.pseudoweather, dtype=np.uint8
-    ).reshape((history_length, -1))
-    history_turn_context = np.frombuffer(history.turnContext, dtype=np.int32).reshape(
+    pseudoweather = np.frombuffer(history.pseudoweather, dtype=np.uint8).reshape(
+        (history_length, -1)
+    )
+    turn_context = np.frombuffer(history.turnContext, dtype=np.int32).reshape(
         (history_length, -1)
     )
     return (
         moveset,
         team,
-        padnstack(history_active_entities),
-        padnstack(history_side_conditions),
-        padnstack(history_volatile_status),
-        padnstack(history_boosts),
-        padnstack(history_weather),
-        padnstack(history_pseudoweather),
-        padnstack(history_hyphen_args),
-        padnstack(history_turn_context),
+        padnstack(active_entities),
+        padnstack(side_conditions),
+        padnstack(volatile_status),
+        padnstack(boosts),
+        padnstack(weather),
+        padnstack(pseudoweather),
+        padnstack(hyphen_args),
+        padnstack(turn_context),
     )
 
 

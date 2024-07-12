@@ -1,5 +1,8 @@
 import os
+import jax
 import chex
+
+import jax.numpy as jnp
 
 from typing import Callable
 
@@ -23,3 +26,15 @@ def get_most_recent_file(dir_path):
     most_recent_file = max(files, key=os.path.getctime)
 
     return most_recent_file
+
+
+def breakpoint_if_nonfinite(x):
+    is_finite = jnp.isfinite(x).all()
+
+    def true_fn(x):
+        pass
+
+    def false_fn(x):
+        jax.debug.breakpoint()
+
+    jax.lax.cond(is_finite, true_fn, false_fn, x)

@@ -1,23 +1,24 @@
 import math
+import pprint
 import chex
 import jax
-import numpy as np
 import flax.linen as nn
 
 from ml.arch.config import get_model_cfg
 from ml.arch.interfaces import ModuleConfigDict
 from ml.arch.modules import ConfigurableModule
-
 from ml.utils import Params
+
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep
 
 
 class Model(ConfigurableModule):
     def __call__(self, env_step: EnvStep):
+        current_state, select_embeddings, move_embeddings = self.encoder(env_step)
         pi = env_step.legal / env_step.legal.sum(-1, keepdims=True)
         logit = log_pi = pi
-        v = self.value_head(pi.astype(np.float32))
+        v = self.value_head(current_state)
         return pi, v, log_pi, logit
 
 
@@ -43,7 +44,9 @@ def main():
     params = network.init(jax.random.key(0), ex)
     output = network.apply(params, ex)
 
-    print(get_num_params(params))
+    pprint.pprint(output)
+
+    print("{:,}".format(get_num_params(params)))
 
 
 if __name__ == "__main__":

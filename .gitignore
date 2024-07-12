@@ -18,3 +18,5 @@ rlenv/ex
 # server ignores
 server/protos/** 
 
+# ml ignores
+ml/wandb/

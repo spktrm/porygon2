@@ -1,11 +1,16 @@
 import os
 
 from rlenv.protos.enums_pb2 import (
+    AbilitiesEnum,
     BoostsEnum,
     GendersEnum,
     HyphenargsEnum,
+    ItemeffectEnum,
+    ItemsEnum,
+    MovesEnum,
     PseudoweatherEnum,
     SideconditionsEnum,
+    SpeciesEnum,
     StatusesEnum,
     TerrainEnum,
     TypesEnum,
@@ -31,6 +36,11 @@ NUM_HYPHEN_ARGS = len(HyphenargsEnum.keys())
 NUM_PSEUDOWEATHER = len(PseudoweatherEnum.keys())
 NUM_WEATHER = len(WeathersEnum.keys())
 NUM_TERRAIN = len(TerrainEnum.keys())
+NUM_SPECIES = len(SpeciesEnum.keys())
+NUM_MOVES = len(MovesEnum.keys())
+NUM_ABILITIES = len(AbilitiesEnum.keys())
+NUM_ITEMS = len(ItemsEnum.keys())
+NUM_ITEM_EFFECTS = len(ItemeffectEnum.keys())
 
 NUM_MOVE_FIELDS = len(Move.DESCRIPTOR.fields)
 

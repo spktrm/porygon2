@@ -199,7 +199,7 @@ export class EventHandler implements Protocol.Handler {
         const side = this.handler.publicBattle.sides[playerIndex];
         const active = side?.active[0];
 
-        const boostsData = new Uint8Array(numBoosts);
+        const boostsData = new Int8Array(numBoosts);
         const volatilesData = new Uint8Array(numVolatiles);
         const sideConditionsData = new Uint8Array(numSideConditions);
         const activeArr = EventHandler.getPokemon(active);
@@ -210,7 +210,7 @@ export class EventHandler implements Protocol.Handler {
                     "Boosts",
                     stat,
                 );
-                boostsData[index] = value + 6;
+                boostsData[index] = value;
             }
 
             for (const [stat, state] of Object.entries(active.volatiles)) {
@@ -235,7 +235,7 @@ export class EventHandler implements Protocol.Handler {
 
         return {
             active: activeArr,
-            boosts: boostsData,
+            boosts: new Uint8Array(boostsData.buffer),
             sideConditions: volatilesData,
             volatileStatus: sideConditionsData,
             hyphenArgs: hyphenArgsArr,

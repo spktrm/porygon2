@@ -22,7 +22,6 @@ class EnvStep:
     side_conditions: chex.Array = ()
     volatile_status: chex.Array = ()
     hyphen_args: chex.Array = ()
-    additional_features: chex.Array = ()
     terrain: chex.Array = ()
     pseudoweather: chex.Array = ()
     weather: chex.Array = ()
