@@ -1,5 +1,6 @@
 import os
 
+from enum import Enum, auto
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
     BoostsEnum,
@@ -25,7 +26,6 @@ with open(os.path.join(os.path.dirname(__file__), "ex"), "rb") as f:
 
 EX_STATE = State.FromString(EX_BUFFER)
 
-NUM_POKEMON = 19
 NUM_GENDERS = len(GendersEnum.keys())
 NUM_STATUS = len(StatusesEnum.keys())
 NUM_TYPES = len(TypesEnum.keys())
@@ -50,3 +50,52 @@ SOCKET_PATH = "/tmp/pokemon.sock"
 
 SPIKES_TOKEN = SideconditionsEnum.sideConditions_spikes
 TOXIC_SPIKES_TOKEN = SideconditionsEnum.sideConditions_toxicspikes
+
+
+class FeatureEntity(Enum):
+    SPECIES = 0
+    ITEM = auto()
+    ITEM_EFFECT = auto()
+    ABILITY = auto()
+    GENDER = auto()
+    ACTIVE = auto()
+    FAINTED = auto()
+    HP = auto()
+    MAXHP = auto()
+    STATUS = auto()
+    TOXIC_TURNS = auto()
+    SLEEP_TURNS = auto()
+    BEING_CALLED_BACK = auto()
+    TRAPPED = auto()
+    NEWLY_SWITCHED = auto()
+    LEVEL = auto()
+    MOVEID0 = auto()
+    MOVEID1 = auto()
+    MOVEID2 = auto()
+    MOVEID3 = auto()
+    MOVEPP0 = auto()
+    MOVEPP1 = auto()
+    MOVEPP2 = auto()
+    MOVEPP3 = auto()
+
+
+class FeatureMoveset(Enum):
+    MOVEID = 0
+    PPLEFT = auto()
+    PPMAX = auto()
+
+
+class FeatureTurnContext(Enum):
+    VALID = 0
+    IS_MY_TURN = auto()
+    ACTION = auto()
+    MOVE = auto()
+    SWITCH_COUNTER = auto()
+    MOVE_COUNTER = auto()
+    TURN = auto()
+
+
+class FeatureWeather(Enum):
+    WEATHER_ID = 0
+    MIN_DURATION = auto()
+    MAX_DURATION = auto()

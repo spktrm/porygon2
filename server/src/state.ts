@@ -130,12 +130,19 @@ export class EventHandler implements Protocol.Handler {
         this.historyMaxSize = historyMaxSize;
     }
 
-    static getPokemon(pokemon: Pokemon | null): Uint8Array {
-        if (pokemon === null) {
+    static getPokemon(candidate: Pokemon | null): Uint8Array {
+        if (candidate === null) {
             const data = new Int32Array(19);
             data.fill(0);
             data[0] = SpeciesEnum.SPECIES_NONE;
             return new Uint8Array(data.buffer);
+        }
+
+        let pokemon: Pokemon;
+        if (candidate.volatiles.transform !== undefined) {
+            pokemon = candidate.volatiles.transform.pokemon as Pokemon;
+        } else {
+            pokemon = candidate;
         }
 
         const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
@@ -188,6 +195,11 @@ export class EventHandler implements Protocol.Handler {
                       pokemon.status,
                   )
                 : StatusesEnum.STATUSES_NULL,
+            pokemon.statusState.toxicTurns,
+            pokemon.statusState.sleepTurns,
+            pokemon.beingCalledBack ? 1 : 0,
+            !!pokemon.trapped ? 1 : 0,
+            pokemon.newlySwitched ? 1 : 0,
             pokemon.level,
             ...moveIds,
             ...movePps,

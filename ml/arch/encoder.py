@@ -1,11 +1,10 @@
 import jax
 import chex
-from ml_collections import ConfigDict
 import numpy as np
 import jax.numpy as jnp
 import flax.linen as nn
 
-from enum import Enum, auto
+from ml_collections import ConfigDict
 from functools import partial
 
 from ml.arch.modules import ToAvgVector, Transformer, VectorMerge
@@ -22,60 +21,12 @@ from rlenv.data import (
     NUM_WEATHER,
     SPIKES_TOKEN,
     TOXIC_SPIKES_TOKEN,
+    FeatureEntity,
+    FeatureMoveset,
+    FeatureTurnContext,
+    FeatureWeather,
 )
 from rlenv.interfaces import EnvStep
-
-
-class FeatureEntity(Enum):
-    SPECIES = 0
-    ITEM = auto()
-    ITEM_EFFECT = auto()
-    ABILITY = auto()
-    GENDER = auto()
-    ACTIVE = auto()
-    FAINTED = auto()
-    HP = auto()
-    MAXHP = auto()
-    STATUS = auto()
-    LEVEL = auto()
-    MOVEID0 = auto()
-    MOVEID1 = auto()
-    MOVEID2 = auto()
-    MOVEID3 = auto()
-    MOVEPP0 = auto()
-    MOVEPP1 = auto()
-    MOVEPP2 = auto()
-    MOVEPP3 = auto()
-
-
-class FeatureMoveset(Enum):
-    MOVEID = 0
-    PPLEFT = auto()
-    PPMAX = auto()
-
-
-class FeatureTurnContext(Enum):
-    VALID = 0
-    IS_MY_TURN = auto()
-    ACTION = auto()
-    MOVE = auto()
-    SWITCH_COUNTER = auto()
-    MOVE_COUNTER = auto()
-    TURN = auto()
-
-
-class FeatureWeather(Enum):
-    WEATHER_ID = 0
-    MIN_DURATION = auto()
-    MAX_DURATION = auto()
-
-
-def _onehot_encode(entity: np.ndarray, feature_idx: int, num_classes: int):
-    return jax.nn.one_hot(entity[:, feature_idx], num_classes)
-
-
-def _encode_divided_onehot(x: chex.Array, num_classes: int, divisor: int):
-    return jax.nn.one_hot(x // divisor, num_classes // divisor)
 
 
 def _encode_multi_onehot(x: chex.Array, num_classes: int):
@@ -130,14 +81,23 @@ class EntityEncoder(nn.Module):
         self.moveset_linear = nn.Dense(features=entity_size)
 
     def encode_entity(self, entity: chex.Array):
+        hp = entity[FeatureEntity.HP.value]
+        maxhp = entity[FeatureEntity.MAXHP.value].clip(min=0)
+
+        hp_ratio = (hp / maxhp).clip(min=0, max=1)
+        hp_token = (1023 * hp_ratio).astype(int)
+
         embeddings = [
-            _binary_scale_embedding(entity[FeatureEntity.HP.value], 1024),
-            # (entity[FeatureEntity.HP.value] / entity[FeatureEntity.MAXHP.value])[
-            #     jnp.newaxis
-            # ],
+            _binary_scale_embedding(hp_token, 1024),
+            hp_ratio[jnp.newaxis],
             _binary_scale_embedding(entity[FeatureEntity.LEVEL.value], 100),
             jax.nn.one_hot(entity[FeatureEntity.GENDER.value], NUM_GENDERS),
             jax.nn.one_hot(entity[FeatureEntity.STATUS.value], NUM_STATUS),
+            jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK.value], 2),
+            jax.nn.one_hot(entity[FeatureEntity.TRAPPED.value], 2),
+            jax.nn.one_hot(entity[FeatureEntity.NEWLY_SWITCHED.value], 2),
+            jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS.value], 8),
+            jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS.value], 4),
             # _encode_multi_onehot(
             #     entity[FeatureEntity.TYPE_TOKEN_START : FeatureEntity.TYPE_TOKEN_END],
             #     NUM_TYPES,
