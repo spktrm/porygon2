@@ -1,12 +1,14 @@
 import jax
 import chex
+from ml_collections import ConfigDict
 import numpy as np
 import jax.numpy as jnp
+import flax.linen as nn
 
 from enum import Enum, auto
 from functools import partial
 
-from ml.arch.modules import ConfigurableModule
+from ml.arch.modules import ToAvgVector, Transformer, VectorMerge
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_GENDERS,
@@ -93,7 +95,12 @@ def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array
     return result.astype(jnp.float32)
 
 
-class MoveEncoder(ConfigurableModule):
+class MoveEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.move_linear = nn.Dense(features=self.cfg.entity_size)
+
     def __call__(
         self,
         moveset: chex.Array,
@@ -110,7 +117,18 @@ class MoveEncoder(ConfigurableModule):
         return (move_embeddings, history_move_embedding)
 
 
-class EntityEncoder(ConfigurableModule):
+class EntityEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        entity_size = self.cfg.entity_size
+
+        self.onehot_linear = nn.Dense(features=entity_size)
+        self.species_linear = nn.Dense(features=entity_size)
+        self.ability_linear = nn.Dense(features=entity_size)
+        self.item_linear = nn.Dense(features=entity_size)
+        self.moveset_linear = nn.Dense(features=entity_size)
+
     def encode_entity(self, entity: chex.Array):
         embeddings = [
             _binary_scale_embedding(entity[FeatureEntity.HP.value], 1024),
@@ -162,7 +180,13 @@ class EntityEncoder(ConfigurableModule):
         return active_embeddings, side_embedding
 
 
-class SideEncoder(ConfigurableModule):
+class SideEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.linear = nn.Dense(features=self.cfg.entity_size)
+        self.merge = VectorMerge(**self.cfg.merge.to_dict())
+
     def encode(
         self,
         boosts: chex.Array,
@@ -216,7 +240,13 @@ class SideEncoder(ConfigurableModule):
         return _merge(active_embeddings, side_embeddings)
 
 
-class TeamEncoder(ConfigurableModule):
+class TeamEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.transformer = Transformer(**self.cfg.transformer.to_dict())
+        self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
+
     def __call__(self, team_embeddings: chex.Array, valid_mask: chex.Array):
 
         team_embeddings = team_embeddings.reshape(-1, team_embeddings.shape[-1])
@@ -228,7 +258,12 @@ class TeamEncoder(ConfigurableModule):
         return team_embeddings, teams_embedding
 
 
-class FieldEncoder(ConfigurableModule):
+class FieldEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.linear = nn.Dense(features=self.cfg.vector_size)
+
     def encode(
         self,
         terrain: chex.Array,
@@ -300,21 +335,32 @@ class FieldEncoder(ConfigurableModule):
         return valid_mask, field_encoding
 
 
-class HistoryEncoder(ConfigurableModule):
+class HistoryEncoder(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.transformer = Transformer(**self.cfg.transformer.to_dict())
+        self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
+
     def __call__(self, state_history: chex.Array, valid_mask: chex.Array):
         state_history = self.transformer(state_history, valid_mask)
         return self.to_vector(state_history, valid_mask)
 
 
-class LegalEncoder(ConfigurableModule):
-    def __call__(self, env_step: EnvStep):
-        legal_moves_onehot = env_step.legal[:4][:, None] * jax.nn.one_hot(
-            env_step.actions[:4], 4
-        )
-        return self.linear(legal_moves_onehot.sum(0))
+class Encoder(nn.Module):
+    cfg: ConfigDict
 
+    def setup(self):
+        self.move_encoder = MoveEncoder(self.cfg.move_encoder)
+        self.entity_encoder = EntityEncoder(self.cfg.entity_encoder)
+        self.team_encoder = TeamEncoder(self.cfg.team_encoder)
+        self.side_encoder = SideEncoder(self.cfg.side_encoder)
+        self.field_encoder = FieldEncoder(self.cfg.field_encoder)
+        self.history_encoder = HistoryEncoder(self.cfg.history_encoder)
 
-class Encoder(ConfigurableModule):
+        self.history_merge = VectorMerge(**self.cfg.history_merge.to_dict())
+        self.state_merge = VectorMerge(**self.cfg.state_merge.to_dict())
+
     def __call__(self, env_step: EnvStep):
         move_embeddings, history_move_embeddings = self.move_encoder(
             env_step.moveset,

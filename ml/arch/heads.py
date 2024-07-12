@@ -3,9 +3,10 @@ import chex
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+
 from ml_collections import ConfigDict
 
-from ml.arch.modules import ConfigurableModule
+from ml.arch.modules import Logits, PointerLogits, Resnet
 
 
 def _legal_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Array:
@@ -43,7 +44,14 @@ def legal_log_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Arra
     return log_policy
 
 
-class PolicyHead(ConfigurableModule):
+class PolicyHead(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.state_query = Resnet(**self.cfg.state_query.to_dict())
+        self.action_logits = PointerLogits(**self.cfg.action_logits.to_dict())
+        self.select_logits = PointerLogits(**self.cfg.select_logits.to_dict())
+
     def __call__(
         self,
         state_embedding: chex.Array,
@@ -64,7 +72,7 @@ class PolicyHead(ConfigurableModule):
         # )
 
         logits = jnp.concatenate((action_logits, select_logits))
-        denom = jnp.array(self.key_size, dtype=jnp.float32)
+        denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
         logits = logits * jax.lax.rsqrt(denom)
 
         policy = _legal_policy(logits, legal)
@@ -73,7 +81,13 @@ class PolicyHead(ConfigurableModule):
         return (logits, policy, log_policy)
 
 
-class ValueHead(ConfigurableModule):
+class ValueHead(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.resnet = Resnet(**self.cfg.resnet.to_dict())
+        self.logits = Logits(**self.cfg.logits.to_dict())
+
     def __call__(self, x: chex.Array):
         x = self.resnet(x)
         return self.logits(x)

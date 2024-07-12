@@ -1,239 +1,132 @@
-import functools
 import json
 import pprint
 
-import flax.linen as nn
+from ml_collections import ConfigDict
 
-from ml.arch.encoder import (
-    Encoder,
-    EntityEncoder,
-    FieldEncoder,
-    HistoryEncoder,
-    MoveEncoder,
-    SideEncoder,
-    TeamEncoder,
-)
-from ml.arch.heads import PolicyHead, ValueHead
-from ml.arch.interfaces import ModuleConfigDict
-from ml.arch.modules import (
-    GatingType,
-    Logits,
-    Resnet,
-    ToAvgVector,
-    Transformer,
-    VectorMerge,
-    PointerLogits,
-)
-
-
-def get_move_encoder_config(entity_size: int, **kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "move_linear": functools.partial(nn.Dense, features=entity_size),
-    }
-    return cfg
-
-
-def get_entity_encoder_config(entity_size: int, **kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "onehot_linear": functools.partial(nn.Dense, features=entity_size),
-        "species_linear": functools.partial(nn.Dense, features=entity_size),
-        "ability_linear": functools.partial(nn.Dense, features=entity_size),
-        "item_linear": functools.partial(nn.Dense, features=entity_size),
-        "moveset_linear": functools.partial(nn.Dense, features=entity_size),
-    }
-    return cfg
-
-
-def get_side_encoder_config(
-    entity_size: int, vector_size: int, use_layer_norm: bool, **kwargs
-):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "linear": functools.partial(nn.Dense, features=entity_size),
-        "merge": functools.partial(
-            VectorMerge,
-            output_size=vector_size,
-            gating_type=GatingType.NONE,
-            use_layer_norm=use_layer_norm,
-        ),
-    }
-    return cfg
-
-
-def get_team_encoder_config(
-    entity_size: int, vector_size: int, use_layer_norm: bool, **kwargs
-):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "transformer": functools.partial(
-            Transformer,
-            units_stream_size=entity_size,
-            transformer_num_layers=2,
-            transformer_num_heads=2,
-            transformer_key_size=entity_size // 2,
-            transformer_value_size=entity_size // 2,
-            resblocks_num_before=2,
-            resblocks_num_after=2,
-            resblocks_hidden_size=entity_size // 2,
-            use_layer_norm=use_layer_norm,
-        ),
-        "to_vector": functools.partial(
-            ToAvgVector,
-            units_hidden_sizes=(entity_size, vector_size),
-            use_layer_norm=use_layer_norm,
-        ),
-    }
-    return cfg
-
-
-def get_field_encoder_config(vector_size: int, **kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "linear": functools.partial(nn.Dense, features=vector_size),
-    }
-    return cfg
-
-
-def get_history_encoder_config(vector_size: int, use_layer_norm: bool, **kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    cfg.module_fns = {
-        "transformer": functools.partial(
-            Transformer,
-            units_stream_size=vector_size,
-            transformer_num_layers=2,
-            transformer_num_heads=2,
-            transformer_key_size=vector_size // 2,
-            transformer_value_size=vector_size // 2,
-            resblocks_num_before=2,
-            resblocks_num_after=2,
-            resblocks_hidden_size=vector_size // 2,
-            use_layer_norm=use_layer_norm,
-        ),
-        "to_vector": functools.partial(
-            ToAvgVector,
-            units_hidden_sizes=(vector_size,),
-            use_layer_norm=use_layer_norm,
-        ),
-    }
-    return cfg
-
-
-def get_encoder_config(**kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    vector_size = kwargs.get("vector_size")
-    use_layer_norm = kwargs.get("use_layer_norm")
-    cfg.module_fns = {
-        "move_encoder": functools.partial(
-            MoveEncoder, get_move_encoder_config(**kwargs)
-        ),
-        "entity_encoder": functools.partial(
-            EntityEncoder, get_entity_encoder_config(**kwargs)
-        ),
-        "team_encoder": functools.partial(
-            TeamEncoder, get_team_encoder_config(**kwargs)
-        ),
-        "side_encoder": functools.partial(
-            SideEncoder, get_side_encoder_config(**kwargs)
-        ),
-        "field_encoder": functools.partial(
-            FieldEncoder, get_field_encoder_config(**kwargs)
-        ),
-        "history_merge": functools.partial(
-            VectorMerge,
-            output_size=vector_size,
-            gating_type=GatingType.NONE,
-            use_layer_norm=use_layer_norm,
-        ),
-        "history_encoder": functools.partial(
-            HistoryEncoder, get_history_encoder_config(**kwargs)
-        ),
-        "state_merge": functools.partial(
-            VectorMerge,
-            output_size=vector_size,
-            gating_type=GatingType.NONE,
-            use_layer_norm=use_layer_norm,
-        ),
-    }
-    return cfg
-
-
-def get_value_head_cfg(**kwargs):
-    cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
-    depth_factor = kwargs.get("depth_factor")
-    cfg.module_fns = {
-        "resnet": functools.partial(
-            Resnet,
-            num_resblocks=max(int(depth_factor * 2), 1),
-            use_layer_norm=True,
-        ),
-        "logits": functools.partial(Logits, num_logits=1, use_layer_norm=True),
-    }
-    return cfg
-
-
-def get_policy_head_cfg(
-    entity_size: int, vector_size: int, use_layer_norm: bool, **kwargs
-):
-    cfg = ModuleConfigDict()
-    cfg.constants = dict(key_size=entity_size)
-    depth_factor = kwargs.get("depth_factor")
-    cfg.module_fns = {
-        "state_query": functools.partial(
-            Resnet,
-            num_resblocks=max(int(depth_factor * 2), 1),
-            use_layer_norm=use_layer_norm,
-        ),
-        "action_logits": functools.partial(
-            PointerLogits,
-            num_layers_query=1,
-            num_layers_keys=2,
-            key_size=entity_size,
-            use_layer_norm=use_layer_norm,
-        ),
-        "select_logits": functools.partial(
-            PointerLogits,
-            num_layers_query=1,
-            num_layers_keys=2,
-            key_size=entity_size,
-            use_layer_norm=use_layer_norm,
-        ),
-    }
-    return cfg
+from ml.arch.modules import GatingType
 
 
 def get_model_cfg():
-    cfg = ModuleConfigDict()
+    cfg = ConfigDict()
 
-    depth_factor = 0.5
-    width_factor = 0.5
-    default_constants = dict(
-        entity_size=int(128 * width_factor),
-        vector_size=int(512 * width_factor),
-        depth_factor=depth_factor,
-        width_factor=width_factor,
-        use_layer_norm=True,
+    depth_factor = 1
+    width_factor = 0.25
+
+    entity_size = int(256 * width_factor)
+    vector_size = int(1024 * width_factor)
+    use_layer_norm = True
+
+    # Encoder Configuration
+    cfg.encoder = ConfigDict()
+
+    cfg.encoder.move_encoder = ConfigDict()
+    cfg.encoder.move_encoder.entity_size = entity_size
+
+    cfg.encoder.entity_encoder = ConfigDict()
+    cfg.encoder.entity_encoder.entity_size = entity_size
+
+    cfg.encoder.side_encoder = ConfigDict()
+    cfg.encoder.side_encoder.entity_size = entity_size
+
+    cfg.encoder.side_encoder.merge = ConfigDict()
+    cfg.encoder.side_encoder.merge.output_size = vector_size
+    cfg.encoder.side_encoder.merge.gating_type = GatingType.NONE
+    cfg.encoder.side_encoder.merge.use_layer_norm = use_layer_norm
+
+    cfg.encoder.team_encoder = ConfigDict()
+    cfg.encoder.team_encoder.transformer = ConfigDict()
+    cfg.encoder.team_encoder.transformer.units_stream_size = entity_size
+    cfg.encoder.team_encoder.transformer.transformer_num_layers = max(
+        int(depth_factor * 2), 1
     )
+    cfg.encoder.team_encoder.transformer.transformer_num_heads = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.team_encoder.transformer.transformer_key_size = entity_size // 2
+    cfg.encoder.team_encoder.transformer.transformer_value_size = entity_size // 2
+    cfg.encoder.team_encoder.transformer.resblocks_num_before = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.team_encoder.transformer.resblocks_num_after = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.team_encoder.transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.team_encoder.transformer.use_layer_norm = use_layer_norm
 
-    cfg.constants = default_constants
-    cfg.module_fns = {
-        "encoder": functools.partial(Encoder, get_encoder_config(**default_constants)),
-        "value_head": functools.partial(
-            ValueHead, get_value_head_cfg(**default_constants)
-        ),
-        "policy_head": functools.partial(
-            PolicyHead, get_policy_head_cfg(**default_constants)
-        ),
-    }
+    cfg.encoder.team_encoder.to_vector = ConfigDict()
+    cfg.encoder.team_encoder.to_vector.units_hidden_sizes = (
+        entity_size,
+        vector_size,
+    )
+    cfg.encoder.team_encoder.to_vector.use_layer_norm = use_layer_norm
+
+    cfg.encoder.field_encoder = ConfigDict()
+    cfg.encoder.field_encoder.vector_size = entity_size
+
+    cfg.encoder.history_encoder = ConfigDict()
+    cfg.encoder.history_encoder.transformer = ConfigDict()
+    cfg.encoder.history_encoder.transformer.units_stream_size = vector_size
+    cfg.encoder.history_encoder.transformer.transformer_num_layers = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.history_encoder.transformer.transformer_num_heads = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.history_encoder.transformer.transformer_key_size = vector_size // 2
+    cfg.encoder.history_encoder.transformer.transformer_value_size = vector_size // 2
+    cfg.encoder.history_encoder.transformer.resblocks_num_before = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.history_encoder.transformer.resblocks_num_after = max(
+        int(depth_factor * 2), 1
+    )
+    cfg.encoder.history_encoder.transformer.resblocks_hidden_size = vector_size // 2
+    cfg.encoder.history_encoder.transformer.use_layer_norm = use_layer_norm
+
+    cfg.encoder.history_encoder.to_vector = ConfigDict()
+    cfg.encoder.history_encoder.to_vector.units_hidden_sizes = (vector_size,)
+    cfg.encoder.history_encoder.to_vector.use_layer_norm = use_layer_norm
+
+    cfg.encoder.history_merge = ConfigDict()
+    cfg.encoder.history_merge.output_size = vector_size
+    cfg.encoder.history_merge.gating_type = GatingType.NONE
+    cfg.encoder.history_merge.use_layer_norm = use_layer_norm
+
+    cfg.encoder.state_merge = ConfigDict()
+    cfg.encoder.state_merge.output_size = vector_size
+    cfg.encoder.state_merge.gating_type = GatingType.NONE
+    cfg.encoder.state_merge.use_layer_norm = use_layer_norm
+
+    # Policy Head Configuration
+    cfg.policy_head = ConfigDict()
+    cfg.policy_head.key_size = entity_size
+
+    cfg.policy_head.state_query = ConfigDict()
+    cfg.policy_head.state_query.num_resblocks = max(int(depth_factor * 2), 1)
+    cfg.policy_head.state_query.use_layer_norm = use_layer_norm
+
+    cfg.policy_head.action_logits = ConfigDict()
+    cfg.policy_head.action_logits.num_layers_query = max(int(depth_factor * 1), 1)
+    cfg.policy_head.action_logits.num_layers_keys = max(int(depth_factor * 3), 1)
+    cfg.policy_head.action_logits.key_size = entity_size
+    cfg.policy_head.action_logits.use_layer_norm = use_layer_norm
+
+    cfg.policy_head.select_logits = ConfigDict()
+    cfg.policy_head.select_logits.num_layers_query = max(int(depth_factor * 1), 1)
+    cfg.policy_head.select_logits.num_layers_keys = max(int(depth_factor * 3), 1)
+    cfg.policy_head.select_logits.key_size = entity_size
+    cfg.policy_head.select_logits.use_layer_norm = use_layer_norm
+
+    # Value Head Configuration
+    cfg.value_head = ConfigDict()
+    cfg.value_head.resnet = ConfigDict()
+    cfg.value_head.resnet.num_resblocks = max(int(depth_factor * 2), 1)
+    cfg.value_head.resnet.use_layer_norm = use_layer_norm
+
+    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits.num_logits = 1
+    cfg.value_head.logits.use_layer_norm = use_layer_norm
+
     return cfg
 
 

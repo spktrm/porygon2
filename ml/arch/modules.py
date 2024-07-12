@@ -5,10 +5,9 @@ import numpy as np
 import flax.linen as nn
 import jax.numpy as jnp
 
+from ml_collections import ConfigDict
 from enum import Enum, auto
 from typing import List, Optional, Sequence
-
-from ml.arch.interfaces import ModuleConfigDict
 
 
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
@@ -27,17 +26,6 @@ class GatingType(Enum):
     NONE = auto()
     GLOBAL = auto()
     POINTWISE = auto()
-
-
-class ConfigurableModule(nn.Module):
-    cfg: ModuleConfigDict
-
-    def setup(self):
-        for name, constant in self.cfg.constants.items():
-            setattr(self, name, constant)
-
-        for name, module_fn in self.cfg.module_fns.items():
-            setattr(self, name, module_fn())
 
 
 class VectorResblock(nn.Module):

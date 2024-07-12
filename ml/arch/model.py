@@ -4,16 +4,25 @@ import chex
 import jax
 import flax.linen as nn
 
+from ml_collections import ConfigDict
+
 from ml.arch.config import get_model_cfg
-from ml.arch.interfaces import ModuleConfigDict
-from ml.arch.modules import ConfigurableModule
+from ml.arch.encoder import Encoder
+from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params
 
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep
 
 
-class Model(ConfigurableModule):
+class Model(nn.Module):
+    cfg: ConfigDict
+
+    def setup(self):
+        self.encoder = Encoder(self.cfg.encoder)
+        self.policy_head = PolicyHead(self.cfg.policy_head)
+        self.value_head = ValueHead(self.cfg.value_head)
+
     def __call__(self, env_step: EnvStep):
         current_state, select_embeddings, move_embeddings = self.encoder(env_step)
         logit, pi, log_pi = self.policy_head(
@@ -33,7 +42,7 @@ def get_num_params(vars: Params):
     return total
 
 
-def get_model(config: ModuleConfigDict) -> nn.Module:
+def get_model(config: ConfigDict) -> nn.Module:
     return Model(config)
 
 
