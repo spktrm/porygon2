@@ -21,7 +21,7 @@ from ml.func import (
     _policy_ratio,
 )
 
-from rlenv.env import get_ex_state
+from rlenv.env import get_ex_step
 from rlenv.interfaces import TimeStep
 
 
@@ -135,7 +135,7 @@ class Learner:
         self.learner_steps = 0
         self.actor_steps = 0
 
-        ex = get_ex_state()
+        ex = get_ex_step()
         key = jax.random.key(0)
 
         # The machinery related to updating parameters/learner.

@@ -107,7 +107,7 @@ def process_state(state: State) -> EnvStep:
     )
 
 
-def get_ex_state() -> EnvStep:
+def get_ex_step() -> EnvStep:
     return process_state(EX_STATE)
 
 

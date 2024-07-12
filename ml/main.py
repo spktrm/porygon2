@@ -4,7 +4,7 @@ from tqdm import trange
 
 from ml.learner import Learner
 from ml.config import RNaDConfig
-from ml.model import get_model
+from ml.arch.model import get_model
 
 from rlenv.client import BatchCollector
 

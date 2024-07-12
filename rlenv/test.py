@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from ml.config import RNaDConfig
 from rlenv.client import BatchCollector
-from rlenv.env import EnvStep, get_ex_state
+from rlenv.env import EnvStep, get_ex_step
 
 
 class Model(nn.Module):
@@ -27,7 +27,7 @@ def main():
     network = Model()
     collector = BatchCollector(network, config=RNaDConfig())
 
-    ex = get_ex_state()
+    ex = get_ex_step()
     params = network.init(jax.random.key(0), ex)
     network.apply(params, ex)
 

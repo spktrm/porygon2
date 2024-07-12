@@ -23,8 +23,24 @@ async function main(verbose: boolean = false) {
     let game = new Game({ port: port, gameId: 0 });
 
     port.postMessage = (buffer) => {
-        writeFileSync("../rlenv/ex", buffer);
-        exit(0);
+        const state = State.deserializeBinary(buffer);
+        const info = state.getInfo();
+        const turn = info?.getTurn() ?? 0;
+        const legalActions = state.getLegalactions();
+
+        if (info && legalActions) {
+            if (turn > 10) {
+                writeFileSync("../rlenv/ex", buffer);
+                exit(0);
+            } else {
+                const playerIndex = info.getPlayerindex();
+                const action = new Action();
+                action.setPlayerindex(playerIndex);
+                const randomIndex = chooseRandom(legalActions);
+                action.setIndex(randomIndex);
+                game.queues[`p${playerIndex ? 2 : 1}`].enqueue(action);
+            }
+        }
     };
 
     game = await runGame(game);
