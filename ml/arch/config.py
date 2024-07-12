@@ -1,4 +1,6 @@
 import functools
+import json
+import pprint
 
 import flax.linen as nn
 
@@ -20,6 +22,7 @@ from ml.arch.modules import (
     ToAvgVector,
     Transformer,
     VectorMerge,
+    PointerLogits,
 )
 
 
@@ -178,17 +181,32 @@ def get_value_head_cfg(**kwargs):
     return cfg
 
 
-def get_policy_head_cfg(**kwargs):
+def get_policy_head_cfg(
+    entity_size: int, vector_size: int, use_layer_norm: bool, **kwargs
+):
     cfg = ModuleConfigDict()
-    cfg.constants = {**kwargs}
+    cfg.constants = dict(key_size=entity_size)
     depth_factor = kwargs.get("depth_factor")
     cfg.module_fns = {
-        "resnet": functools.partial(
+        "state_query": functools.partial(
             Resnet,
             num_resblocks=max(int(depth_factor * 2), 1),
-            use_layer_norm=True,
+            use_layer_norm=use_layer_norm,
         ),
-        "logits": functools.partial(Logits, num_logits=1, use_layer_norm=True),
+        "action_logits": functools.partial(
+            PointerLogits,
+            num_layers_query=1,
+            num_layers_keys=2,
+            key_size=entity_size,
+            use_layer_norm=use_layer_norm,
+        ),
+        "select_logits": functools.partial(
+            PointerLogits,
+            num_layers_query=1,
+            num_layers_keys=2,
+            key_size=entity_size,
+            use_layer_norm=use_layer_norm,
+        ),
     }
     return cfg
 
@@ -220,7 +238,8 @@ def get_model_cfg():
 
 
 def main():
-    print(get_model_cfg())
+    cfg = get_model_cfg()
+    pprint.pprint(json.loads(cfg.to_json_best_effort()))
 
 
 if __name__ == "__main__":

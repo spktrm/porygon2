@@ -20,3 +20,5 @@ server/protos/**
 
 # ml ignores
 ml/wandb/
+
+wandb/

@@ -294,6 +294,7 @@ export class EventHandler implements Protocol.Handler {
                 pseudoweather: pseudoweatherData.buffer,
                 turnContext: new Uint8Array(
                     Int32Array.from([
+                        1,
                         isMyTurn,
                         action,
                         move,

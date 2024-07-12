@@ -6,7 +6,7 @@ import flax.linen as nn
 
 from typing import Any, Dict, Sequence
 
-from ml.utils import Params
+from ml.utils import Params, breakpoint_if_nonfinite
 
 from rlenv.env import ParallelEnvironment, EnvStep
 from rlenv.interfaces import ActorStep, TimeStep

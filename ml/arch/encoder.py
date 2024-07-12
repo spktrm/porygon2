@@ -11,14 +11,12 @@ from rlenv.data import (
     NUM_ABILITIES,
     NUM_GENDERS,
     NUM_HISTORY,
-    NUM_HYPHEN_ARGS,
     NUM_ITEM_EFFECTS,
     NUM_ITEMS,
     NUM_PLAYERS,
     NUM_MOVES,
     NUM_SPECIES,
     NUM_STATUS,
-    NUM_TERRAIN,
     NUM_WEATHER,
     SPIKES_TOKEN,
     TOXIC_SPIKES_TOKEN,
@@ -55,7 +53,8 @@ class FeatureMoveset(Enum):
 
 
 class FeatureTurnContext(Enum):
-    IS_MY_TURN = 0
+    VALID = 0
+    IS_MY_TURN = auto()
     ACTION = auto()
     MOVE = auto()
     SWITCH_COUNTER = auto()
@@ -292,7 +291,7 @@ class FieldEncoder(ConfigurableModule):
         history_move_embedding: chex.Array,
     ):
         turn = turn_context[..., FeatureTurnContext.TURN.value]
-        valid_mask = jnp.ones_like(turn)
+        valid_mask = turn_context[..., FeatureTurnContext.VALID.value]
         max_turn = turn.max()
         _encode = partial(self.encode, max_turn=max_turn)
         field_encoding = jax.vmap(_encode)(
@@ -330,7 +329,6 @@ class Encoder(ConfigurableModule):
         team_embeddings, teams_embedding = self.team_encoder(
             team_embeddings[..., 1:, :], valid_team_mask[..., 1:]
         )
-        select_embeddings = team_embeddings[..., 1:, :]
 
         side_embeddings = self.side_encoder(
             active_embeddings,
@@ -368,4 +366,4 @@ class Encoder(ConfigurableModule):
             selected_unit,  # legal_moves_embedding
         )
 
-        return current_state, select_embeddings, move_embeddings
+        return current_state, team_embeddings, move_embeddings

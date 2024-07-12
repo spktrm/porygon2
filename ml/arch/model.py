@@ -16,8 +16,9 @@ from rlenv.interfaces import EnvStep
 class Model(ConfigurableModule):
     def __call__(self, env_step: EnvStep):
         current_state, select_embeddings, move_embeddings = self.encoder(env_step)
-        pi = env_step.legal / env_step.legal.sum(-1, keepdims=True)
-        logit = log_pi = pi
+        logit, pi, log_pi = self.policy_head(
+            current_state, select_embeddings, move_embeddings, env_step.legal
+        )
         v = self.value_head(current_state)
         return pi, v, log_pi, logit
 

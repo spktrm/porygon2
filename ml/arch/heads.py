@@ -64,7 +64,7 @@ class PolicyHead(ConfigurableModule):
         # )
 
         logits = jnp.concatenate((action_logits, select_logits))
-        denom = jnp.array(self.cfg.heads.policy.logits.key_size, dtype=jnp.float32)
+        denom = jnp.array(self.key_size, dtype=jnp.float32)
         logits = logits * jax.lax.rsqrt(denom)
 
         policy = _legal_policy(logits, legal)

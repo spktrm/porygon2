@@ -25,7 +25,8 @@ def main():
     pbar3 = tqdm(desc="num_games")
 
     network = Model()
-    collector = BatchCollector(network, config=RNaDConfig())
+    config = RNaDConfig()
+    collector = BatchCollector(network, batch_size=config.batch_size, seed=config.seed)
 
     ex = get_ex_step()
     params = network.init(jax.random.key(0), ex)
@@ -41,7 +42,7 @@ def main():
 
         pbar1.update(1)
         pbar2.update(trajectory.env.valid.sum())
-        pbar3.update(collector.config.batch_size)
+        pbar3.update(config.batch_size)
 
     collector.game.close()
     print("done")
