@@ -1,7 +1,7 @@
 import { MessagePort, parentPort, workerData } from "worker_threads";
 
 import { Game } from "./game";
-import { Action } from "../protos/action_pb";
+import { Action } from "../../protos/action_pb";
 
 const isTraining = workerData.socketType === "training";
 

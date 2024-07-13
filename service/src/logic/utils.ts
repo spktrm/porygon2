@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { LegalActions } from "../protos/state_pb";
+import { LegalActions } from "../../protos/state_pb";
 
 export function chooseRandom(legalActions: LegalActions): number {
     const legalIndices = Object.values(legalActions.toObject()).flatMap(

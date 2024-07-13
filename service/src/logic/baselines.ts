@@ -1,5 +1,5 @@
-import { Action } from "../protos/action_pb";
-import { State } from "../protos/state_pb";
+import { Action } from "../../protos/action_pb";
+import { State } from "../../protos/state_pb";
 import { chooseRandom } from "./utils";
 
 const evalActionMapping = {

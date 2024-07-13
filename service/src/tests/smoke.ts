@@ -1,10 +1,10 @@
 import assert from "assert";
 
 import { Action } from "../../protos/action_pb";
-import { Game } from "../game";
 import { port } from "./utils";
 import { State } from "../../protos/state_pb";
-import { chooseRandom } from "../utils";
+import { chooseRandom } from "../logic/utils";
+import { Game } from "../server/game";
 
 const totalTest = 10000;
 // const bar = new ProgressBar(":bar", { total: totalTest });

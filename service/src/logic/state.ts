@@ -1,7 +1,6 @@
 import { AnyObject } from "@pkmn/sim";
-import { StreamHandler } from "./game";
 import { Args, KWArgs, Protocol } from "@pkmn/protocol";
-import { Info, LegalActions, State } from "../protos/state_pb";
+import { Info, LegalActions, State } from "../../protos/state_pb";
 import {
     AbilitiesEnum,
     BoostsEnum,
@@ -16,12 +15,12 @@ import {
     StatusesEnum,
     VolatilestatusEnum,
     WeathersEnum,
-} from "../protos/enums_pb";
+} from "../../protos/enums_pb";
 import {
     ActionTypeEnum,
     ActionTypeEnumMap,
     History,
-} from "../protos/history_pb";
+} from "../../protos/history_pb";
 import {
     MappingLookup,
     EnumKeyMapping,
@@ -36,6 +35,7 @@ import {
 } from "./data";
 import { Pokemon } from "@pkmn/client";
 import { TwoDBoolArray } from "./arr";
+import { StreamHandler } from "./handler";
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);

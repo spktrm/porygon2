@@ -12,7 +12,7 @@ import {
     StatusesEnum,
     VolatilestatusEnum,
     WeathersEnum,
-} from "../protos/enums_pb";
+} from "../../protos/enums_pb";
 
 export type EnumMappings =
     | typeof SpeciesEnum
