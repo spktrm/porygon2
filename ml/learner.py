@@ -1,3 +1,5 @@
+import os
+import pickle
 import jax
 import optax
 import functools
@@ -369,3 +371,25 @@ class Learner:
             }
         )
         return logs
+
+    def save(self, ckpt_path: str = "ckpts"):
+        """To serialize the agent."""
+        if not os.path.exists(ckpt_path):
+            os.mkdir(ckpt_path)
+        config = dict(
+            # RNaD config.
+            config=self.config,
+            # Learner and actor step counters.
+            learner_steps=self.learner_steps,
+            actor_steps=self.actor_steps,
+            # Network params.
+            params=self.params,
+            params_target=self.params_target,
+            params_prev=self.params_prev,
+            params_prev_=self.params_prev_,
+            # Optimizer state.
+            optimizer=self.optimizer_state,  # pytype: disable=attribute-error  # always-use-return-annotations
+            optimizer_target=self.optimizer_target_state,  # pytype: disable=attribute-error  # always-use-return-annotations
+        )
+        with open(f"{ckpt_path}/ckpt_{self.learner_steps:08}.pt", "wb") as f:
+            pickle.dump(config, f)

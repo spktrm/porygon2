@@ -14,6 +14,7 @@ import { MessagePort } from "worker_threads";
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
 import { writeFileSync } from "fs";
+import { getEvalAction } from "./eval/baselines";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -30,6 +31,7 @@ export class StreamHandler {
     ts: number;
     log: string[];
     gameId: number;
+    isTraining: boolean;
 
     publicBattle: Battle;
     privatebattle: Battle;
@@ -37,17 +39,20 @@ export class StreamHandler {
 
     rqid: string | undefined;
     queue: AsyncQueue<Action>;
+    isEvalAction: boolean | undefined;
     playerIndex: 0 | 1 | undefined;
 
     constructor(args: {
         gameId: number;
+        isTraining: boolean;
         sendFn: sendFnType;
         recvFn: recvFnType;
     }) {
-        const { gameId, sendFn, recvFn } = args;
+        const { gameId, isTraining, sendFn, recvFn } = args;
 
         this.ts = Date.now();
         this.gameId = gameId;
+        this.isTraining = isTraining;
         this.log = [];
 
         this.publicBattle = new Battle(generations);
@@ -57,6 +62,7 @@ export class StreamHandler {
         this.rqid = undefined;
         this.playerIndex = undefined;
         this.queue = new AsyncQueue();
+        this.isEvalAction = undefined;
 
         this.sendFn = sendFn;
         this.recvFn = recvFn;
@@ -127,6 +133,13 @@ export class StreamHandler {
         }
     }
 
+    getIsEvalAction() {
+        if (this.isEvalAction === undefined) {
+            this.isEvalAction = !this.isTraining && this.playerIndex === 1;
+        }
+        return this.isEvalAction;
+    }
+
     async stateActionStep(): Promise<Action | undefined> {
         const state = this.getState();
         const legalActions = state.getLegalactions();
@@ -141,14 +154,17 @@ export class StreamHandler {
             if (Object.values(validMoves).length === 1) {
                 const action = new Action();
                 action.setGameid(this.gameId);
-                action.setIndex(
-                    allMoves.indexOf(Object.keys(validMoves).at(0) ?? ""),
-                );
+                action.setIndex(-1);
+                action.setText("default");
                 return action;
             }
         }
-        this.sendFn(state);
-        return await this.recvFn();
+        if (this.getIsEvalAction()) {
+            return getEvalAction(state);
+        } else {
+            this.sendFn(state);
+            return await this.recvFn();
+        }
     }
 
     ensureRequestApplied() {
@@ -219,29 +235,36 @@ export class Game {
         [k: string]: AsyncQueue<Action>;
     };
     world: World | null;
+    isTraining: boolean;
     ts: number;
     tied: boolean;
 
-    constructor(args: { port: MessagePort | null; gameId: number }) {
-        const { gameId, port } = args;
+    constructor(args: {
+        port: MessagePort | null;
+        gameId: number;
+        isTraining: boolean;
+    }) {
+        const { gameId, port, isTraining } = args;
         this.port = port;
         this.done = false;
         this.gameId = gameId;
         this.world = null;
+        this.isTraining = isTraining;
         this.ts = 0;
         this.tied = false;
 
         this.queues = { p1: new AsyncQueue(), p2: new AsyncQueue() };
         this.handlers = Object.fromEntries(
-            ["p1", "p2"].map((x) => [
-                x,
+            ["p1", "p2"].map((sideId) => [
+                sideId,
                 new StreamHandler({
                     gameId,
+                    isTraining: sideId === "p2" && isTraining,
                     sendFn: (state) => {
                         this.sendState(state);
                     },
                     recvFn: async () => {
-                        return await this.queues[x].dequeue();
+                        return await this.queues[sideId].dequeue();
                     },
                 }),
             ]),
@@ -304,19 +327,19 @@ export class Game {
             state.setLegalactions(AllValidActions);
         }
         let stateArr: Uint8Array;
-        try {
-            stateArr = state.serializeBinary();
-        } catch (err) {
-            writeFileSync("./err.json", JSON.stringify(state.toObject()));
-            throw err;
-        }
+        stateArr = state.serializeBinary();
         this.ts += 1;
         return this.port?.postMessage(stateArr, [stateArr.buffer]);
     }
 
     handleAction(stream: ObjectReadWriteStream<string>, action: Action) {
         const actionIndex = action.getIndex();
-        stream.write(actionIndexMapping[actionIndex] ?? "default");
+        if (actionIndex < 0) {
+            const actiontext = action.getText();
+            stream.write(actiontext);
+        } else {
+            stream.write(actionIndexMapping[actionIndex]);
+        }
     }
 
     async runPlayer(args: {

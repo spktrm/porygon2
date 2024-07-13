@@ -3,8 +3,11 @@ import { MessagePort, parentPort, workerData } from "worker_threads";
 import { Game } from "./game";
 import { Action } from "../protos/action_pb";
 
+const isTraining = workerData.socketType === "training";
+
 const game = new Game({
     gameId: workerData.workerCount,
+    isTraining,
     port: parentPort as unknown as MessagePort,
 });
 

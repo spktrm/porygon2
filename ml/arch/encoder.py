@@ -82,7 +82,7 @@ class EntityEncoder(nn.Module):
 
     def encode_entity(self, entity: chex.Array):
         hp = entity[FeatureEntity.HP.value]
-        maxhp = entity[FeatureEntity.MAXHP.value].clip(min=0)
+        maxhp = entity[FeatureEntity.MAXHP.value].clip(min=1)
 
         hp_ratio = (hp / maxhp).clip(min=0, max=1)
         hp_token = (1023 * hp_ratio).astype(int)
@@ -90,7 +90,7 @@ class EntityEncoder(nn.Module):
         embeddings = [
             _binary_scale_embedding(hp_token, 1024),
             hp_ratio[jnp.newaxis],
-            _binary_scale_embedding(entity[FeatureEntity.LEVEL.value], 100),
+            _binary_scale_embedding(entity[FeatureEntity.LEVEL.value], 101),
             jax.nn.one_hot(entity[FeatureEntity.GENDER.value], NUM_GENDERS),
             jax.nn.one_hot(entity[FeatureEntity.STATUS.value], NUM_STATUS),
             jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK.value], 2),
@@ -104,10 +104,6 @@ class EntityEncoder(nn.Module):
             # ),
             jax.nn.one_hot(entity[FeatureEntity.FAINTED.value], 2),
             jax.nn.one_hot(entity[FeatureEntity.ITEM_EFFECT.value], NUM_ITEM_EFFECTS),
-            # jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK], 2),
-            # jax.nn.one_hot(entity[FeatureEntity.HURT_THIS_TURN], 2),
-            # jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS], 4),
-            # jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS], 6),
         ]
 
         # Put all the encoded one-hots in a single boolean vector:

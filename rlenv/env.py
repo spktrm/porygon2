@@ -5,7 +5,7 @@ import numpy as np
 
 from typing import Sequence
 
-from rlenv.data import EX_STATE, SOCKET_PATH
+from rlenv.data import EX_STATE, SocketPath
 from rlenv.interfaces import EnvStep
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
@@ -53,7 +53,7 @@ def get_history(state: State):
         padnstack(weather),
         padnstack(pseudoweather),
         padnstack(hyphen_args),
-        padnstack(turn_context),
+        padnstack(turn_context, np.zeros_like),
     )
 
 
@@ -119,8 +119,8 @@ class Environment:
     writer: asyncio.StreamWriter
 
     @classmethod
-    async def init(cls, env_idx: int):
-        reader, writer = await asyncio.open_unix_connection(SOCKET_PATH)
+    async def init(cls, path: SocketPath, env_idx: int):
+        reader, writer = await asyncio.open_unix_connection(path)
         self = cls()
         self.env_idx = env_idx
         self.reader = reader
@@ -179,13 +179,13 @@ class Environment:
 
 
 class ParallelEnvironment:
-    def __init__(self, num_envs: int):
+    def __init__(self, num_envs: int, path: SocketPath):
         try:
             self._loop = asyncio.get_event_loop()
         except:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-        tasks = [Environment.init(env_idx) for env_idx in range(num_envs)]
+        tasks = [Environment.init(path, env_idx) for env_idx in range(num_envs)]
         self._games = self._loop.run_until_complete(asyncio.gather(*tasks))
 
     def step(self, actions: Sequence[Action]):

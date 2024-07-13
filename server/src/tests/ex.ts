@@ -20,7 +20,7 @@ async function runGame(game: Game) {
 }
 
 async function main(verbose: boolean = false) {
-    let game = new Game({ port: port, gameId: 0 });
+    let game = new Game({ port: port, isTraining: false, gameId: 0 });
 
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);

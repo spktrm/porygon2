@@ -40,8 +40,6 @@ function GenerateEnumKeyMapping<T extends EnumMappings>(
     );
 }
 
-export const socketPath = "/tmp/pokemon.sock";
-
 export type MoveIndex = 0 | 1 | 2 | 3;
 export type BenchIndex = MoveIndex | 4 | 5;
 

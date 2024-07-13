@@ -132,7 +132,7 @@ export class EventHandler implements Protocol.Handler {
 
     static getPokemon(candidate: Pokemon | null): Uint8Array {
         if (candidate === null) {
-            const data = new Int32Array(19);
+            const data = new Int32Array(24);
             data.fill(0);
             data[0] = SpeciesEnum.SPECIES_NONE;
             return new Uint8Array(data.buffer);

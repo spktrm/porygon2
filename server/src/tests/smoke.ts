@@ -33,7 +33,7 @@ function assertTrajectory(trajectory: State[]) {
 }
 
 async function main(verbose: boolean = false) {
-    let game = new Game({ port: port, gameId: 0 });
+    let game = new Game({ port: port, isTraining: true, gameId: 0 });
 
     let trajectory: State[] = [];
     let prevT = Date.now();

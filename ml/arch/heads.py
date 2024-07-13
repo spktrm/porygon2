@@ -48,9 +48,8 @@ class PolicyHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.state_query = Resnet(**self.cfg.state_query.to_dict())
-        self.action_logits = PointerLogits(**self.cfg.action_logits.to_dict())
-        self.select_logits = PointerLogits(**self.cfg.select_logits.to_dict())
+        self.query = Resnet(**self.cfg.query.to_dict())
+        self.logits = PointerLogits(**self.cfg.logits.to_dict())
 
     def __call__(
         self,
@@ -59,19 +58,11 @@ class PolicyHead(nn.Module):
         action_embeddings: chex.Array,
         legal: chex.Array,
     ):
-        state_query = self.state_query(state_embedding)
+        query = self.query(state_embedding)
 
-        action_logits = self.action_logits(state_query, action_embeddings)
-        # action_logits = utils._prenorm_softmax(
-        #     action_logits, legal[:4] + (legal[:4].sum() == 0)
-        # )
+        embeddings = jnp.concatenate((action_embeddings, select_embeddings))
+        logits = self.logits(query, embeddings)
 
-        select_logits = self.select_logits(state_query, select_embeddings)
-        # select_logits = utils._prenorm_softmax(
-        #     select_logits, legal[4:] + (legal[4:].sum() == 0)
-        # )
-
-        logits = jnp.concatenate((action_logits, select_logits))
         denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
         logits = logits * jax.lax.rsqrt(denom)
 

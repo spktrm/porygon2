@@ -101,21 +101,15 @@ def get_model_cfg():
     cfg.policy_head = ConfigDict()
     cfg.policy_head.key_size = entity_size
 
-    cfg.policy_head.state_query = ConfigDict()
-    cfg.policy_head.state_query.num_resblocks = max(int(depth_factor * 2), 1)
-    cfg.policy_head.state_query.use_layer_norm = use_layer_norm
+    cfg.policy_head.query = ConfigDict()
+    cfg.policy_head.query.num_resblocks = max(int(depth_factor * 2), 1)
+    cfg.policy_head.query.use_layer_norm = use_layer_norm
 
-    cfg.policy_head.action_logits = ConfigDict()
-    cfg.policy_head.action_logits.num_layers_query = max(int(depth_factor * 1), 1)
-    cfg.policy_head.action_logits.num_layers_keys = max(int(depth_factor * 3), 1)
-    cfg.policy_head.action_logits.key_size = entity_size
-    cfg.policy_head.action_logits.use_layer_norm = use_layer_norm
-
-    cfg.policy_head.select_logits = ConfigDict()
-    cfg.policy_head.select_logits.num_layers_query = max(int(depth_factor * 1), 1)
-    cfg.policy_head.select_logits.num_layers_keys = max(int(depth_factor * 3), 1)
-    cfg.policy_head.select_logits.key_size = entity_size
-    cfg.policy_head.select_logits.use_layer_norm = use_layer_norm
+    cfg.policy_head.logits = ConfigDict()
+    cfg.policy_head.logits.num_layers_query = max(int(depth_factor * 1), 1)
+    cfg.policy_head.logits.num_layers_keys = max(int(depth_factor * 3), 1)
+    cfg.policy_head.logits.key_size = entity_size
+    cfg.policy_head.logits.use_layer_norm = use_layer_norm
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()

@@ -1,6 +1,7 @@
 import os
 
 from enum import Enum, auto
+from typing import Union
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
     BoostsEnum,
@@ -46,7 +47,11 @@ NUM_MOVE_FIELDS = len(Move.DESCRIPTOR.fields)
 
 NUM_HISTORY = 8
 NUM_PLAYERS = 2
-SOCKET_PATH = "/tmp/pokemon.sock"
+
+BASE_SOCKET_PATH = "/tmp/pokemon-{}.sock"
+TRAINING_SOCKET_PATH = BASE_SOCKET_PATH.format("training")
+EVALUATION_SOCKET_PATH = BASE_SOCKET_PATH.format("evaluation")
+SocketPath = str
 
 SPIKES_TOKEN = SideconditionsEnum.sideConditions_spikes
 TOXIC_SPIKES_TOKEN = SideconditionsEnum.sideConditions_toxicspikes

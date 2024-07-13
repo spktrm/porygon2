@@ -1,8 +1,22 @@
 import path from "path";
+
 import { Socket, createServer } from "net";
 import { Worker } from "worker_threads";
 import { existsSync, unlinkSync } from "fs";
-import { socketPath } from "./data";
+import { Command } from "commander";
+
+const program = new Command();
+
+program.option("-t, --type <string>", "server type");
+program.parse(process.argv);
+
+interface SocketServerArgs {
+    type: "trainig" | "evaluation";
+}
+
+const options = program.opts<SocketServerArgs>();
+const socketType = options.type;
+const socketPath = `/tmp/pokemon-${socketType}.sock`;
 
 // Clean up any previous socket file
 if (existsSync(socketPath)) {
@@ -17,6 +31,7 @@ function allocateWorker(ws: Socket) {
     const worker = new Worker(path.resolve(__dirname, "../dist/worker.js"), {
         workerData: {
             workerCount,
+            socketType,
         },
     });
 
@@ -39,12 +54,14 @@ function allocateWorker(ws: Socket) {
     });
 
     worker.on("error", (error) => {
-        console.error(`Worker ${currWorkerIndex} error:`, error);
+        console.error(`${socketType} worker ${currWorkerIndex} error:`, error);
         // Handle worker error (e.g., clean up resources, restart worker, notify client, etc.)
         if (workerClients.has(workerCount)) {
             const client = workerClients.get(workerCount);
             if (client) {
-                client.end(`Worker ${currWorkerIndex} encountered an error.`);
+                client.end(
+                    `${socketType} worker ${currWorkerIndex} encountered an error.`,
+                );
                 workerClients.delete(workerCount);
             }
         }
@@ -54,14 +71,16 @@ function allocateWorker(ws: Socket) {
     worker.on("exit", (code) => {
         if (code !== 0) {
             console.error(
-                `Worker ${currWorkerIndex} stopped with exit code ${code}`,
+                `${socketType} worker ${currWorkerIndex} stopped with exit code ${code}`,
             );
         }
         // Cleanup and potentially restart the worker
         if (workerClients.has(workerCount)) {
             const client = workerClients.get(workerCount);
             if (client) {
-                client.end(`Worker ${currWorkerIndex} has exited.`);
+                client.end(
+                    `${socketType} worker ${currWorkerIndex} has exited.`,
+                );
                 workerClients.delete(workerCount);
             }
         }
@@ -74,7 +93,7 @@ function allocateWorker(ws: Socket) {
 
 const server = createServer((ws) => {
     const workerIndex = allocateWorker(ws);
-    console.log(`Client ${workerIndex} has connected`);
+    console.log(`${socketType} client ${workerIndex} has connected`);
 
     ws.on("data", (data: Buffer) => {
         const worker = workers[workerIndex];
@@ -86,7 +105,7 @@ const server = createServer((ws) => {
     });
 
     ws.on("close", () => {
-        console.log(`Client ${workerIndex} disconnected`);
+        console.log(`${socketType} client ${workerIndex} disconnected`);
         // Cleanup worker-client association
         workerClients.delete(workerIndex);
         workers[workerIndex].terminate();

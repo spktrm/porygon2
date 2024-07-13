@@ -6,17 +6,20 @@ import flax.linen as nn
 
 from typing import Any, Dict, Sequence
 
-from ml.utils import Params, breakpoint_if_nonfinite
+from ml.utils import Params
 
+from rlenv.data import SocketPath
 from rlenv.env import ParallelEnvironment, EnvStep
 from rlenv.interfaces import ActorStep, TimeStep
 from rlenv.utils import stack_steps
 
 
 class BatchCollector:
-    def __init__(self, network: nn.Module, batch_size: int, seed: int = 42):
+    def __init__(
+        self, network: nn.Module, path: SocketPath, batch_size: int, seed: int = 42
+    ):
         self.np_rng = np.random.RandomState(seed)
-        self.game = ParallelEnvironment(batch_size)
+        self.game = ParallelEnvironment(batch_size, path)
         self.network = network
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
