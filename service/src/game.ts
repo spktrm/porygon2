@@ -13,8 +13,7 @@ import { MessagePort } from "worker_threads";
 
 import { State } from "../protos/state_pb";
 import { Action } from "../protos/action_pb";
-import { writeFileSync } from "fs";
-import { getEvalAction } from "./eval/baselines";
+import { getEvalAction } from "./baselines";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);

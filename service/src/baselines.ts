@@ -1,6 +1,6 @@
-import { Action } from "../../protos/action_pb";
-import { State } from "../../protos/state_pb";
-import { chooseRandom } from "../utils";
+import { Action } from "../protos/action_pb";
+import { State } from "../protos/state_pb";
+import { chooseRandom } from "./utils";
 
 const evalActionMapping = {
     0: (state: State, action: Action) => {
