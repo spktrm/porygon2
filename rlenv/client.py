@@ -4,7 +4,7 @@ import functools
 import numpy as np
 import flax.linen as nn
 
-from typing import Any, Dict, Sequence
+from typing import Sequence
 
 from ml.utils import Params
 
@@ -27,9 +27,7 @@ class BatchCollector:
         return self.game.step(list(actions))
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(
-        self, params: Dict[str, Any], env_steps: EnvStep
-    ) -> chex.Array:
+    def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> chex.Array:
         def apply_network(env_step: EnvStep):
             pi, _, _, _ = self.network.apply(params, env_step)
             # return self.config.finetune.post_process_policy(pi, env_step.legal)
