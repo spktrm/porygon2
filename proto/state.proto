@@ -33,8 +33,6 @@ message Move {
     int32 maxpp = 3;
 }
 
-
-
 message State {
     Info info = 1;
     LegalActions legalActions = 2;
@@ -42,4 +40,6 @@ message State {
     bytes moveset = 4;
     bytes team = 5;
     string key = 6;
+    bytes myPublic = 7;
+    bytes oppPublic = 8;
 }

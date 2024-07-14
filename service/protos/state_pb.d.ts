@@ -158,6 +158,16 @@ export class State extends jspb.Message {
   getKey(): string;
   setKey(value: string): void;
 
+  getMypublic(): Uint8Array | string;
+  getMypublic_asU8(): Uint8Array;
+  getMypublic_asB64(): string;
+  setMypublic(value: Uint8Array | string): void;
+
+  getOpppublic(): Uint8Array | string;
+  getOpppublic_asU8(): Uint8Array;
+  getOpppublic_asB64(): string;
+  setOpppublic(value: Uint8Array | string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
   static toObject(includeInstance: boolean, msg: State): State.AsObject;
@@ -176,6 +186,8 @@ export namespace State {
     moveset: Uint8Array | string,
     team: Uint8Array | string,
     key: string,
+    mypublic: Uint8Array | string,
+    opppublic: Uint8Array | string,
   }
 }
 

@@ -16,6 +16,8 @@ class EnvStep:
     legal: chex.Array = ()
 
     # Public Info
+    my_public: chex.Array = ()
+    opp_public: chex.Array = ()
     turn_context: chex.Array = ()
     active_entities: chex.Array = ()
     boosts: chex.Array = ()

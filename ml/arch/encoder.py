@@ -8,6 +8,7 @@ from ml_collections import ConfigDict
 from functools import partial
 
 from ml.arch.modules import Resnet, ToAvgVector, Transformer, VectorMerge
+
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_GENDERS,
@@ -21,12 +22,15 @@ from rlenv.data import (
     NUM_WEATHER,
     SPIKES_TOKEN,
     TOXIC_SPIKES_TOKEN,
+)
+from rlenv.interfaces import EnvStep
+
+from rlenv.protos.features_pb2 import (
     FeatureEntity,
     FeatureMoveset,
     FeatureTurnContext,
     FeatureWeather,
 )
-from rlenv.interfaces import EnvStep
 
 
 def _encode_multi_onehot(x: chex.Array, num_classes: int):
@@ -54,8 +58,8 @@ class MoveEncoder(nn.Module):
         self.pp_linear = nn.Dense(features=self.cfg.entity_size)
 
     def encode_move(self, move: chex.Array):
-        pp_left = move[FeatureMoveset.PPLEFT.value]
-        pp_max = move[FeatureMoveset.PPMAX.value].clip(min=1)
+        pp_left = move[FeatureMoveset.PPLEFT]
+        pp_max = move[FeatureMoveset.PPMAX].clip(min=1)
         pp_ratio = (pp_left / pp_max).clip(min=0, max=1)
         pp_onehot = jnp.concatenate(
             (
@@ -64,7 +68,7 @@ class MoveEncoder(nn.Module):
                 _binary_scale_embedding(pp_max, 64),
             )
         )
-        move_onehot = jax.nn.one_hot(move[FeatureMoveset.MOVEID.value], NUM_MOVES)
+        move_onehot = jax.nn.one_hot(move[FeatureMoveset.MOVEID], NUM_MOVES)
         return self.move_linear(move_onehot) + self.pp_linear(pp_onehot)
 
     def __call__(
@@ -95,8 +99,8 @@ class EntityEncoder(nn.Module):
         self.moveset_linear = nn.Dense(features=entity_size)
 
     def encode_entity(self, entity: chex.Array):
-        hp = entity[FeatureEntity.HP.value]
-        maxhp = entity[FeatureEntity.MAXHP.value].clip(min=1)
+        hp = entity[FeatureEntity.HP]
+        maxhp = entity[FeatureEntity.MAXHP].clip(min=1)
 
         hp_ratio = (hp / maxhp).clip(min=0, max=1)
         hp_token = (1023 * hp_ratio).astype(int)
@@ -104,39 +108,37 @@ class EntityEncoder(nn.Module):
         embeddings = [
             _binary_scale_embedding(hp_token, 1024),
             hp_ratio[jnp.newaxis],
-            _binary_scale_embedding(entity[FeatureEntity.LEVEL.value], 101),
-            jax.nn.one_hot(entity[FeatureEntity.GENDER.value], NUM_GENDERS),
-            jax.nn.one_hot(entity[FeatureEntity.STATUS.value], NUM_STATUS),
-            jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK.value], 2),
-            jax.nn.one_hot(entity[FeatureEntity.TRAPPED.value], 2),
-            jax.nn.one_hot(entity[FeatureEntity.NEWLY_SWITCHED.value], 2),
-            jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS.value], 8),
-            jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS.value], 4),
+            _binary_scale_embedding(entity[FeatureEntity.LEVEL], 101),
+            jax.nn.one_hot(entity[FeatureEntity.GENDER], NUM_GENDERS),
+            jax.nn.one_hot(entity[FeatureEntity.STATUS], NUM_STATUS),
+            jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK], 2),
+            jax.nn.one_hot(entity[FeatureEntity.TRAPPED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.NEWLY_SWITCHED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS], 8),
+            jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS], 4),
             # _encode_multi_onehot(
             #     entity[FeatureEntity.TYPE_TOKEN_START : FeatureEntity.TYPE_TOKEN_END],
             #     NUM_TYPES,
             # ),
-            jax.nn.one_hot(entity[FeatureEntity.FAINTED.value], 2),
-            jax.nn.one_hot(entity[FeatureEntity.ITEM_EFFECT.value], NUM_ITEM_EFFECTS),
+            jax.nn.one_hot(entity[FeatureEntity.FAINTED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ITEM_EFFECT], NUM_ITEM_EFFECTS),
         ]
 
         # Put all the encoded one-hots in a single boolean vector:
         boolean_code = jnp.concatenate(embeddings, axis=0)
         moveset_onehot = _encode_multi_onehot(
-            entity[FeatureEntity.MOVEID0.value : FeatureEntity.MOVEID3.value], 4
+            entity[FeatureEntity.MOVEID0 : FeatureEntity.MOVEID3], 4
         )
 
         embeddings = [
             self.onehot_linear(boolean_code.astype(np.float32)),
             self.species_linear(
-                jax.nn.one_hot(entity[FeatureEntity.SPECIES.value], NUM_SPECIES)
+                jax.nn.one_hot(entity[FeatureEntity.SPECIES], NUM_SPECIES)
             ),
             self.ability_linear(
-                jax.nn.one_hot(entity[FeatureEntity.ABILITY.value], NUM_ABILITIES)
+                jax.nn.one_hot(entity[FeatureEntity.ABILITY], NUM_ABILITIES)
             ),
-            self.item_linear(
-                jax.nn.one_hot(entity[FeatureEntity.ITEM.value], NUM_ITEMS)
-            ),
+            self.item_linear(jax.nn.one_hot(entity[FeatureEntity.ITEM], NUM_ITEMS)),
             self.moveset_linear(moveset_onehot),
         ]
         return jnp.stack(embeddings).sum(0)
@@ -245,28 +247,22 @@ class FieldEncoder(nn.Module):
     ):
         # terrain_onehot = jax.nn.one_hot(terrain[0], NUM_TERRAIN)
         pseudoweather_onehot = (pseudoweather > 0).astype(np.float32)
-        weather_onehot = jax.nn.one_hot(
-            weather[FeatureWeather.WEATHER_ID.value], NUM_WEATHER
-        )
-        weather_min_onehot = jax.nn.one_hot(
-            weather[FeatureWeather.MIN_DURATION.value], 8
-        )
-        weather_max_onehot = jax.nn.one_hot(
-            weather[FeatureWeather.MAX_DURATION.value], 8
-        )
+        weather_onehot = jax.nn.one_hot(weather[FeatureWeather.WEATHER_ID], NUM_WEATHER)
+        weather_min_onehot = jax.nn.one_hot(weather[FeatureWeather.MIN_DURATION], 8)
+        weather_max_onehot = jax.nn.one_hot(weather[FeatureWeather.MAX_DURATION], 8)
 
-        turn = turn_context[FeatureTurnContext.TURN.value]
+        turn = turn_context[FeatureTurnContext.TURN]
         relative_turn = (max_turn - turn).clip(min=0)
 
         move_counter_onehot = jax.nn.one_hot(
-            turn_context[FeatureTurnContext.MOVE_COUNTER.value], 4
+            turn_context[FeatureTurnContext.MOVE_COUNTER], 4
         )
         switch_counter_onehot = jax.nn.one_hot(
-            turn_context[FeatureTurnContext.SWITCH_COUNTER.value], 4
+            turn_context[FeatureTurnContext.SWITCH_COUNTER], 4
         )
         turn_onehot = jax.nn.one_hot(relative_turn, NUM_HISTORY)
         player_onehot = jax.nn.one_hot(
-            turn_context[FeatureTurnContext.IS_MY_TURN.value], NUM_PLAYERS
+            turn_context[FeatureTurnContext.IS_MY_TURN], NUM_PLAYERS
         )
 
         field_onehot = jnp.concatenate(
@@ -295,8 +291,8 @@ class FieldEncoder(nn.Module):
         turn_context: chex.Array,
         history_move_embedding: chex.Array,
     ):
-        turn = turn_context[..., FeatureTurnContext.TURN.value]
-        valid_mask = turn_context[..., FeatureTurnContext.VALID.value]
+        turn = turn_context[..., FeatureTurnContext.TURN]
+        valid_mask = turn_context[..., FeatureTurnContext.VALID]
         max_turn = turn.max()
         _encode = partial(self.encode, max_turn=max_turn)
         field_encoding = jax.vmap(_encode)(
@@ -336,7 +332,7 @@ class Encoder(nn.Module):
     def __call__(self, env_step: EnvStep):
         move_embeddings, history_move_embeddings = self.move_encoder(
             env_step.moveset,
-            env_step.turn_context[..., FeatureTurnContext.MOVE.value],
+            env_step.turn_context[..., FeatureTurnContext.MOVE],
         )
 
         active_embeddings, team_embeddings = self.entity_encoder(

@@ -17,9 +17,11 @@ uvloop.install()
 def get_history(state: State):
     history = state.history
     history_length = history.length
-    moveset = np.frombuffer(state.moveset, dtype=np.int32).reshape((4, -1))
-    team = np.frombuffer(state.team, dtype=np.int32).reshape((7, -1))
-    active_entities = np.frombuffer(history.active, dtype=np.int32).reshape(
+    moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape((4, -1))
+    team = np.frombuffer(state.team, dtype=np.int16).reshape((7, -1))
+    my_public = np.frombuffer(state.myPublic, dtype=np.int16).reshape((7, -1))
+    opp_public = np.frombuffer(state.oppPublic, dtype=np.int16).reshape((7, -1))
+    active_entities = np.frombuffer(history.active, dtype=np.int16).reshape(
         (history_length, 2, -1)
     )
     side_conditions = np.frombuffer(history.sideConditions, dtype=np.uint8).reshape(
@@ -40,12 +42,14 @@ def get_history(state: State):
     pseudoweather = np.frombuffer(history.pseudoweather, dtype=np.uint8).reshape(
         (history_length, -1)
     )
-    turn_context = np.frombuffer(history.turnContext, dtype=np.int32).reshape(
+    turn_context = np.frombuffer(history.turnContext, dtype=np.int16).reshape(
         (history_length, -1)
     )
     return (
         moveset,
         team,
+        my_public,
+        opp_public,
         padnstack(active_entities),
         padnstack(side_conditions),
         padnstack(volatile_status),
@@ -61,6 +65,8 @@ def process_state(state: State) -> EnvStep:
     (
         moveset,
         team,
+        my_public,
+        opp_public,
         active_entities,
         side_conditions,
         volatile_status,
@@ -103,6 +109,8 @@ def process_state(state: State) -> EnvStep:
         hyphen_args=hyphen_args,
         turn_context=turn_context,
         team=team,
+        my_public=my_public,
+        opp_public=opp_public,
         moveset=moveset,
     )
 

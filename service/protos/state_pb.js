@@ -1014,7 +1014,9 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
     history: (f = msg.getHistory()) && history_pb.History.toObject(includeInstance, f),
     moveset: msg.getMoveset_asB64(),
     team: msg.getTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 6, "")
+    key: jspb.Message.getFieldWithDefault(msg, 6, ""),
+    mypublic: msg.getMypublic_asB64(),
+    opppublic: msg.getOpppublic_asB64()
   };
 
   if (includeInstance) {
@@ -1077,6 +1079,14 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 6:
       var value = /** @type {string} */ (reader.readString());
       msg.setKey(value);
+      break;
+    case 7:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setMypublic(value);
+      break;
+    case 8:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setOpppublic(value);
       break;
     default:
       reader.skipField();
@@ -1149,6 +1159,20 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writeString(
       6,
+      f
+    );
+  }
+  f = message.getMypublic_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      7,
+      f
+    );
+  }
+  f = message.getOpppublic_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      8,
       f
     );
   }
@@ -1365,6 +1389,90 @@ proto.rlenv.State.prototype.getKey = function() {
  */
 proto.rlenv.State.prototype.setKey = function(value) {
   return jspb.Message.setProto3StringField(this, 6, value);
+};
+
+
+/**
+ * optional bytes myPublic = 7;
+ * @return {!(string|Uint8Array)}
+ */
+proto.rlenv.State.prototype.getMypublic = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
+};
+
+
+/**
+ * optional bytes myPublic = 7;
+ * This is a type-conversion wrapper around `getMypublic()`
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getMypublic_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getMypublic()));
+};
+
+
+/**
+ * optional bytes myPublic = 7;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getMypublic()`
+ * @return {!Uint8Array}
+ */
+proto.rlenv.State.prototype.getMypublic_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getMypublic()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setMypublic = function(value) {
+  return jspb.Message.setProto3BytesField(this, 7, value);
+};
+
+
+/**
+ * optional bytes oppPublic = 8;
+ * @return {!(string|Uint8Array)}
+ */
+proto.rlenv.State.prototype.getOpppublic = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
+};
+
+
+/**
+ * optional bytes oppPublic = 8;
+ * This is a type-conversion wrapper around `getOpppublic()`
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getOpppublic_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getOpppublic()));
+};
+
+
+/**
+ * optional bytes oppPublic = 8;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getOpppublic()`
+ * @return {!Uint8Array}
+ */
+proto.rlenv.State.prototype.getOpppublic_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getOpppublic()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setOpppublic = function(value) {
+  return jspb.Message.setProto3BytesField(this, 8, value);
 };
 
 

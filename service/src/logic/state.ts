@@ -22,6 +22,12 @@ import {
     History,
 } from "../../protos/history_pb";
 import {
+    FeatureEntity,
+    FeatureMoveset,
+    FeatureTurnContext,
+    FeatureWeather,
+} from "../../protos/features_pb";
+import {
     MappingLookup,
     EnumKeyMapping,
     EnumMappings,
@@ -116,6 +122,28 @@ function concatenateUint8Arrays(arrays: Uint8Array[]): Uint8Array {
 
 type HistoryStep = [SideObject, SideObject, FieldObject];
 
+const numPokemonFields = Object.keys(FeatureEntity).length;
+const numTurnContextFields = Object.keys(FeatureTurnContext).length;
+const numWeatherFields = Object.keys(FeatureWeather).length;
+const numMoveFields = Object.keys(FeatureMoveset).length;
+const numMovesetFields = 4 * numMoveFields;
+
+function getBlankPokemonArr() {
+    return new Int16Array(numPokemonFields);
+}
+
+function getUnkPokemon() {
+    const data = getBlankPokemonArr();
+    data[FeatureEntity.SPECIES] = SpeciesEnum.SPECIES_UNK;
+    return new Uint8Array(data.buffer);
+}
+
+function getNonePokemon() {
+    const data = getBlankPokemonArr();
+    data[FeatureEntity.SPECIES] = SpeciesEnum.SPECIES_NONE;
+    return new Uint8Array(data.buffer);
+}
+
 export class EventHandler implements Protocol.Handler {
     readonly handler: StreamHandler;
     history: Array<HistoryStep>;
@@ -133,10 +161,7 @@ export class EventHandler implements Protocol.Handler {
 
     static getPokemon(candidate: Pokemon | null): Uint8Array {
         if (candidate === null) {
-            const data = new Int32Array(24);
-            data.fill(0);
-            data[0] = SpeciesEnum.SPECIES_NONE;
-            return new Uint8Array(data.buffer);
+            return getNonePokemon();
         }
 
         let pokemon: Pokemon;
@@ -171,41 +196,52 @@ export class EventHandler implements Protocol.Handler {
             movePps.push(0);
         }
 
-        const data = [
-            IndexValueFromEnum<typeof SpeciesEnum>("Species", baseSpecies),
-            item
-                ? IndexValueFromEnum<typeof ItemsEnum>("Items", item)
-                : ItemsEnum.ITEMS_UNK,
-            itemEffect
-                ? IndexValueFromEnum<typeof ItemeffectEnum>(
-                      "ItemEffects",
-                      itemEffect,
-                  )
-                : ItemeffectEnum.ITEMEFFECT_NULL,
-            ability
-                ? IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", ability)
-                : AbilitiesEnum.ABILITIES_UNK,
-            IndexValueFromEnum<typeof GendersEnum>("Genders", pokemon.gender),
-            pokemon.isActive() ? 1 : 0,
-            pokemon.fainted ? 1 : 0,
-            pokemon.hp,
-            pokemon.maxhp,
-            pokemon.status
-                ? IndexValueFromEnum<typeof StatusesEnum>(
-                      "Statuses",
-                      pokemon.status,
-                  )
-                : StatusesEnum.STATUSES_NULL,
-            pokemon.statusState.toxicTurns,
-            pokemon.statusState.sleepTurns,
-            pokemon.beingCalledBack ? 1 : 0,
-            !!pokemon.trapped ? 1 : 0,
-            pokemon.newlySwitched ? 1 : 0,
-            pokemon.level,
-            ...moveIds,
-            ...movePps,
-        ];
-        return new Uint8Array(Int32Array.from(data).buffer);
+        const dataArr = getBlankPokemonArr();
+        dataArr[FeatureEntity.SPECIES] = IndexValueFromEnum<typeof SpeciesEnum>(
+            "Species",
+            baseSpecies,
+        );
+        dataArr[FeatureEntity.ITEM] = item
+            ? IndexValueFromEnum<typeof ItemsEnum>("Items", item)
+            : ItemsEnum.ITEMS_UNK;
+        dataArr[FeatureEntity.ITEM_EFFECT] = itemEffect
+            ? IndexValueFromEnum<typeof ItemeffectEnum>(
+                  "ItemEffects",
+                  itemEffect,
+              )
+            : ItemeffectEnum.ITEMEFFECT_NULL;
+        dataArr[FeatureEntity.ABILITY] = ability
+            ? IndexValueFromEnum<typeof AbilitiesEnum>("Abilities", ability)
+            : AbilitiesEnum.ABILITIES_UNK;
+        dataArr[FeatureEntity.GENDER] = IndexValueFromEnum<typeof GendersEnum>(
+            "Genders",
+            pokemon.gender,
+        );
+        dataArr[FeatureEntity.ACTIVE] = pokemon.isActive() ? 1 : 0;
+        dataArr[FeatureEntity.FAINTED] = pokemon.fainted ? 1 : 0;
+        dataArr[FeatureEntity.HP] = pokemon.hp;
+        dataArr[FeatureEntity.MAXHP] = pokemon.maxhp;
+        dataArr[FeatureEntity.STATUS] = pokemon.status
+            ? IndexValueFromEnum<typeof StatusesEnum>(
+                  "Statuses",
+                  pokemon.status,
+              )
+            : StatusesEnum.STATUSES_NULL;
+        dataArr[FeatureEntity.TOXIC_TURNS] = pokemon.statusState.toxicTurns;
+        dataArr[FeatureEntity.SLEEP_TURNS] = pokemon.statusState.sleepTurns;
+        dataArr[FeatureEntity.BEING_CALLED_BACK] = pokemon.beingCalledBack
+            ? 1
+            : 0;
+        dataArr[FeatureEntity.TRAPPED] = !!pokemon.trapped ? 1 : 0;
+        dataArr[FeatureEntity.NEWLY_SWITCHED] = pokemon.newlySwitched ? 1 : 0;
+        dataArr[FeatureEntity.LEVEL] = pokemon.level;
+        for (let moveIndex = 0; moveIndex < 4; moveIndex++) {
+            dataArr[FeatureEntity[`MOVEID${moveIndex as MoveIndex}`]] =
+                moveIds[moveIndex];
+            dataArr[FeatureEntity[`MOVEPP${moveIndex as MoveIndex}`]] =
+                movePps[moveIndex];
+        }
+        return new Uint8Array(dataArr.buffer);
     }
 
     getPublicSide(playerIndex: number): SideObject {
@@ -267,18 +303,17 @@ export class EventHandler implements Protocol.Handler {
         const p1Side = this.getPublicSide(playerIndex);
         const p2Side = this.getPublicSide(1 - playerIndex);
 
-        const weatherData = new Uint8Array(3);
+        const weatherData = new Uint8Array(numWeatherFields);
         weatherData.fill(0);
         if (weather) {
             const weatherState = battle.field.weatherState;
-            weatherData[0] = IndexValueFromEnum<typeof WeathersEnum>(
-                "Weathers",
-                weather,
-            );
-            weatherData[1] = weatherState.minDuration;
-            weatherData[2] = weatherState.maxDuration;
+            weatherData[FeatureWeather.WEATHER_ID] = IndexValueFromEnum<
+                typeof WeathersEnum
+            >("Weathers", weather);
+            weatherData[FeatureWeather.MIN_DURATION] = weatherState.minDuration;
+            weatherData[FeatureWeather.MAX_DURATION] = weatherState.maxDuration;
         } else {
-            weatherData[0] = WeathersEnum.WEATHERS_NULL;
+            weatherData[FeatureWeather.WEATHER_ID] = WeathersEnum.WEATHERS_NULL;
         }
 
         const pseudoweatherData = new TwoDBoolArray(numPseudoweathers, 1);
@@ -299,23 +334,21 @@ export class EventHandler implements Protocol.Handler {
         //     step.addPseudoweather(pseudoweather);
         // }
 
+        const turnContext = new Int16Array(numTurnContextFields);
+        turnContext[FeatureTurnContext.VALID] = 1;
+        turnContext[FeatureTurnContext.IS_MY_TURN] = isMyTurn;
+        turnContext[FeatureTurnContext.ACTION] = action;
+        turnContext[FeatureTurnContext.MOVE] = move;
+        turnContext[FeatureTurnContext.SWITCH_COUNTER] = this.switchCounter;
+        turnContext[FeatureTurnContext.MOVE_COUNTER] = this.moveCounter;
+        turnContext[FeatureTurnContext.TURN] = this.handler.publicBattle.turn;
         return [
             p1Side,
             p2Side,
             {
                 weather: weatherData,
                 pseudoweather: pseudoweatherData.buffer,
-                turnContext: new Uint8Array(
-                    Int32Array.from([
-                        1,
-                        isMyTurn,
-                        action,
-                        move,
-                        this.switchCounter,
-                        this.moveCounter,
-                        this.handler.publicBattle.turn,
-                    ]).buffer,
-                ),
+                turnContext: new Uint8Array(turnContext.buffer),
             },
         ];
     }
@@ -364,10 +397,13 @@ export class EventHandler implements Protocol.Handler {
 
     handleHyphenLine(args: Protocol.ArgType, kwArgs?: {}) {
         const prevState = this.history.pop() as HistoryStep;
+        const prevField = prevState[2];
         const newState = this.getPublicState(
-            prevState[2].turnContext[0] as 0 | 1,
-            prevState[2].turnContext[1] as 0 | 1,
-            prevState[2].turnContext[2] as MovesEnumMap[keyof MovesEnumMap],
+            prevField.turnContext[FeatureTurnContext.IS_MY_TURN] as 0 | 1,
+            prevField.turnContext[FeatureTurnContext.ACTION] as 0 | 1,
+            prevField.turnContext[
+                FeatureTurnContext.MOVE
+            ] as MovesEnumMap[keyof MovesEnumMap],
         );
 
         const playerIndex = this.handler.getPlayerIndex();
@@ -498,27 +534,31 @@ export class StateHandler {
     getMoveset(): Uint8Array {
         const request = this.handler.getRequest() as AnyObject;
         const moves = (request?.active ?? [{}])[0].moves ?? [];
-        const moveset = [];
+        const movesetArr = new Int16Array(numMovesetFields);
+        let offset = 0;
         for (const move of moves) {
             const { id, pp, maxpp } = move;
-            moveset.push(IndexValueFromEnum<typeof MovesEnum>("Moves", id));
-            moveset.push(pp);
-            moveset.push(maxpp);
+            movesetArr[offset + FeatureMoveset.MOVEID] = IndexValueFromEnum<
+                typeof MovesEnum
+            >("Moves", id);
+            movesetArr[offset + FeatureMoveset.PPLEFT] = pp;
+            movesetArr[offset + FeatureMoveset.PPMAX] = maxpp;
+            offset += numMoveFields;
         }
         for (
             let remainingIndex = moves.length;
             remainingIndex < 4;
             remainingIndex++
         ) {
-            moveset.push(MovesEnum.MOVES_NONE);
-            moveset.push(0);
-            moveset.push(1);
+            movesetArr[offset + FeatureMoveset.MOVEID] = MovesEnum.MOVES_NONE;
+            movesetArr[offset + FeatureMoveset.PPLEFT] = 0;
+            movesetArr[offset + FeatureMoveset.PPMAX] = 1;
+            offset += numMoveFields;
         }
-        return new Uint8Array(Int32Array.from(moveset).buffer);
+        return new Uint8Array(movesetArr.buffer);
     }
 
-    getTeam(): Uint8Array {
-        const playerIndex = this.handler.getPlayerIndex() as number;
+    getPrivateTeam(playerIndex: number): Uint8Array {
         const side = this.handler.privatebattle.sides[playerIndex];
         const team = [];
         for (const active of side.active) {
@@ -526,6 +566,25 @@ export class StateHandler {
         }
         for (const member of side.team) {
             team.push(EventHandler.getPokemon(member));
+        }
+        return concatenateUint8Arrays(team);
+    }
+
+    getPublicTeam(playerIndex: number): Uint8Array {
+        const side = this.handler.publicBattle.sides[playerIndex];
+        const team = [];
+        for (const active of side.active) {
+            team.push(EventHandler.getPokemon(active));
+        }
+        for (const member of side.team) {
+            team.push(EventHandler.getPokemon(member));
+        }
+        for (
+            let memberIndex = side.team.length;
+            memberIndex < 6;
+            memberIndex++
+        ) {
+            team.push(getUnkPokemon());
         }
         return concatenateUint8Arrays(team);
     }
@@ -575,7 +634,8 @@ export class StateHandler {
 
         const info = new Info();
         info.setGameid(this.handler.gameId);
-        info.setPlayerindex(!!this.handler.getPlayerIndex());
+        const playerIndex = this.handler.getPlayerIndex() as number;
+        info.setPlayerindex(!!playerIndex);
         info.setTurn(this.handler.privatebattle.turn);
         state.setInfo(info);
 
@@ -585,7 +645,10 @@ export class StateHandler {
         state.setHistory(this.constructHistory());
         this.handler.eventHandler.resetTurn();
 
-        state.setTeam(this.getTeam());
+        state.setTeam(this.getPrivateTeam(playerIndex));
+        state.setMypublic(this.getPublicTeam(playerIndex));
+        state.setOpppublic(this.getPublicTeam(1 - playerIndex));
+
         state.setMoveset(this.getMoveset());
 
         return state;
