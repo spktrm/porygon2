@@ -51,17 +51,7 @@ def main():
     config = get_model_cfg()
     network = get_model(config)
 
-    with open("ml/err.pkl", "rb") as f:
-        ex = pickle.load(f)
-
     params = network.init(jax.random.key(0), get_ex_step())
-
-    def apply_network(s):
-        return network.apply(params, s)
-
-    output = jax.vmap(apply_network)(ex)
-
-    pprint.pprint(output)
 
     print("{:,}".format(get_num_params(params)))
 

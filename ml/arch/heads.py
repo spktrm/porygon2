@@ -49,7 +49,9 @@ class PolicyHead(nn.Module):
 
     def setup(self):
         self.query = Resnet(**self.cfg.query.to_dict())
-        self.logits = PointerLogits(**self.cfg.logits.to_dict())
+        self.action_type_logits = Logits(**self.cfg.logits.to_dict())
+        self.select_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
+        self.action_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
 
     def __call__(
         self,
@@ -60,9 +62,15 @@ class PolicyHead(nn.Module):
     ):
         query = self.query(state_embedding)
 
-        embeddings = jnp.concatenate((action_embeddings, select_embeddings))
-        logits = self.logits(query, embeddings)
+        action_type_logits = self.action_type_logits(query)
+        action_logits = (
+            self.action_logits(query, action_embeddings) + action_type_logits[..., 0]
+        )
+        select_logits = (
+            self.select_logits(query, select_embeddings) + action_type_logits[..., 1]
+        )
 
+        logits = jnp.concatenate((action_logits, select_logits))
         denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
         logits = logits * jax.lax.rsqrt(denom)
 

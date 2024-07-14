@@ -106,10 +106,14 @@ def get_model_cfg():
     cfg.policy_head.query.use_layer_norm = use_layer_norm
 
     cfg.policy_head.logits = ConfigDict()
-    cfg.policy_head.logits.num_layers_query = max(int(depth_factor * 1), 1)
-    cfg.policy_head.logits.num_layers_keys = max(int(depth_factor * 3), 1)
-    cfg.policy_head.logits.key_size = entity_size
+    cfg.policy_head.logits.num_logits = 2
     cfg.policy_head.logits.use_layer_norm = use_layer_norm
+
+    cfg.policy_head.pointer_logits = ConfigDict()
+    cfg.policy_head.pointer_logits.num_layers_query = max(int(depth_factor * 1), 1)
+    cfg.policy_head.pointer_logits.num_layers_keys = max(int(depth_factor * 3), 1)
+    cfg.policy_head.pointer_logits.key_size = entity_size
+    cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
