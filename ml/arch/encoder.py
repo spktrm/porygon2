@@ -143,13 +143,27 @@ class EntityEncoder(nn.Module):
         ]
         return jnp.stack(embeddings).sum(0)
 
-    def __call__(self, active_entities: chex.Array, side_entities: chex.Array):
+    def __call__(
+        self,
+        active_entities: chex.Array,
+        team: chex.Array,
+        my_public: chex.Array,
+        opp_public: chex.Array,
+    ):
         _encode = jax.vmap(self.encode_entity)
 
         active_embeddings = jax.vmap(_encode)(active_entities)
-        side_embedding = _encode(side_entities)
 
-        return active_embeddings, side_embedding
+        side_embeddings = _encode(team)
+        my_public_embeddings = _encode(my_public)
+        opp_public_embeddings = _encode(opp_public)
+
+        return (
+            active_embeddings,
+            side_embeddings,
+            my_public_embeddings,
+            opp_public_embeddings,
+        )
 
 
 class SideEncoder(nn.Module):
@@ -335,8 +349,16 @@ class Encoder(nn.Module):
             env_step.turn_context[..., FeatureTurnContext.MOVE],
         )
 
-        active_embeddings, team_embeddings = self.entity_encoder(
-            env_step.active_entities, env_step.team
+        (
+            active_embeddings,
+            team_embeddings,
+            my_public_embeddings,
+            opp_public_embeddings,
+        ) = self.entity_encoder(
+            env_step.active_entities,
+            env_step.team,
+            env_step.my_public,
+            env_step.opp_public,
         )
 
         valid_team_mask = jnp.ones_like(team_embeddings[..., 0])
