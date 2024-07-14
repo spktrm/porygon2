@@ -13,7 +13,7 @@ import { TaskQueueSystem } from "../utils";
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 
-const actionIndexMapping: { [k: number]: string } = {
+export const actionIndexMapping: { [k: number]: string } = {
     0: "move 1",
     1: "move 2",
     2: "move 3",
@@ -62,7 +62,7 @@ export class Game {
                 new StreamHandler({
                     gameId,
                     isTraining: sideId === "p2" && isTraining,
-                    sendFn: (state) => {
+                    sendFn: async (state) => {
                         const jobKey = this.queueSystem.createJob();
                         state.setKey(jobKey);
                         this.sendState(state);

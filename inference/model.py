@@ -39,6 +39,7 @@ class InferenceModel:
         self.network = get_model(model_config)
 
         latest_ckpt = get_most_recent_file("ml/ckpts")
+        print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
         self.params = step["params"]
@@ -55,9 +56,9 @@ class InferenceModel:
             lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
         return PredictionResponse(
-            pi.flatten().tolist(),
-            v.item(),
-            log_pi.flatten().tolist(),
-            logit.flatten().tolist(),
-            action.item(),
+            pi=pi.flatten().tolist(),
+            v=v.item(),
+            log_pi=log_pi.flatten().tolist(),
+            logit=logit.flatten().tolist(),
+            action=action.item(),
         )

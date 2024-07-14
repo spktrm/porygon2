@@ -13,7 +13,7 @@ import { getEvalAction } from "./baselines";
 const generations = new Generations(Dex);
 
 type keyType = string;
-type sendFnType = (state: State) => keyType;
+type sendFnType = (state: State) => Promise<keyType>;
 type recvFnType = (key: keyType) => Promise<Action | undefined>;
 type requestType = Protocol.MoveRequest;
 
@@ -149,7 +149,7 @@ export class StreamHandler {
         if (this.getIsEvalAction()) {
             return getEvalAction(state);
         } else {
-            const key = this.sendFn(state);
+            const key = await this.sendFn(state);
             return await this.recvFn(key);
         }
     }
