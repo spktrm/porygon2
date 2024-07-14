@@ -4,7 +4,7 @@ rm -rf protos/
 mkdir protos/
 
 PROTO_DIR=../proto
-OUT_DIR=../server/protos
+OUT_DIR=../service/protos
 
 mkdir -p $OUT_DIR
 

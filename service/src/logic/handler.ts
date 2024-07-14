@@ -4,7 +4,6 @@ import { Dex } from "@pkmn/dex";
 import { AnyObject } from "@pkmn/sim";
 import { Protocol } from "@pkmn/protocol";
 
-import { AsyncQueue } from "./utils";
 import { EventHandler, StateHandler } from "./state";
 
 import { State } from "../../protos/state_pb";
@@ -13,8 +12,9 @@ import { getEvalAction } from "./baselines";
 
 const generations = new Generations(Dex);
 
-type sendFnType = (state: State) => void;
-type recvFnType = () => Promise<Action | undefined>;
+type keyType = string;
+type sendFnType = (state: State) => keyType;
+type recvFnType = (key: keyType) => Promise<Action | undefined>;
 type requestType = Protocol.MoveRequest;
 
 export class StreamHandler {
@@ -31,7 +31,6 @@ export class StreamHandler {
     eventHandler: EventHandler;
 
     rqid: string | undefined;
-    queue: AsyncQueue<Action>;
     isEvalAction: boolean | undefined;
     playerIndex: 0 | 1 | undefined;
 
@@ -54,7 +53,6 @@ export class StreamHandler {
 
         this.rqid = undefined;
         this.playerIndex = undefined;
-        this.queue = new AsyncQueue();
         this.isEvalAction = undefined;
 
         this.sendFn = sendFn;
@@ -138,15 +136,11 @@ export class StreamHandler {
         const legalActions = state.getLegalactions();
         if (legalActions) {
             const legalObj = legalActions.toObject();
-
-            const allMoves = Object.keys(legalObj);
-            const validMoves = Object.fromEntries(
-                Object.entries(legalObj).filter(([i, v]) => v),
-            );
-
-            if (Object.values(validMoves).length === 1) {
+            const numValidMoves = Object.values(legalObj)
+                .map((x) => (x ? 1 : 0) as number)
+                .reduce((a, b) => a + b);
+            if (numValidMoves <= 1) {
                 const action = new Action();
-                action.setGameid(this.gameId);
                 action.setIndex(-1);
                 action.setText("default");
                 return action;
@@ -155,8 +149,8 @@ export class StreamHandler {
         if (this.getIsEvalAction()) {
             return getEvalAction(state);
         } else {
-            this.sendFn(state);
-            return await this.recvFn();
+            const key = this.sendFn(state);
+            return await this.recvFn(key);
         }
     }
 

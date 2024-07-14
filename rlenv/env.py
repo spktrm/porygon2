@@ -145,8 +145,7 @@ class Environment:
             return self.env_step
 
         action = Action()
-        action.gameId = self.state.info.gameId
-        action.playerIndex = self.state.info.playerIndex
+        action.key = self.state.key
         action.index = action_index
 
         # Serialize the action

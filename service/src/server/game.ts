@@ -5,10 +5,10 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 
 import { MessagePort } from "worker_threads";
 import { StreamHandler } from "../logic/handler";
-import { AsyncQueue } from "../logic/utils";
 import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
 import { AllValidActions } from "../logic/state";
+import { TaskQueueSystem } from "../utils";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -35,9 +35,7 @@ export class Game {
     handlers: {
         [k: string]: StreamHandler;
     };
-    queues: {
-        [k: string]: AsyncQueue<Action>;
-    };
+    queueSystem: TaskQueueSystem<Action>;
     world: World | null;
     isTraining: boolean;
     ts: number;
@@ -57,7 +55,7 @@ export class Game {
         this.ts = 0;
         this.tied = false;
 
-        this.queues = { p1: new AsyncQueue(), p2: new AsyncQueue() };
+        this.queueSystem = new TaskQueueSystem<Action>();
         this.handlers = Object.fromEntries(
             ["p1", "p2"].map((sideId) => [
                 sideId,
@@ -65,10 +63,13 @@ export class Game {
                     gameId,
                     isTraining: sideId === "p2" && isTraining,
                     sendFn: (state) => {
+                        const jobKey = this.queueSystem.createJob();
+                        state.setKey(jobKey);
                         this.sendState(state);
+                        return jobKey;
                     },
-                    recvFn: async () => {
-                        return await this.queues[sideId].dequeue();
+                    recvFn: async (key: string) => {
+                        return await this.queueSystem.getResult(key);
                     },
                 }),
             ]),

@@ -4,11 +4,8 @@
 import * as jspb from "google-protobuf";
 
 export class Action extends jspb.Message {
-  getGameid(): number;
-  setGameid(value: number): void;
-
-  getPlayerindex(): boolean;
-  setPlayerindex(value: boolean): void;
+  getKey(): string;
+  setKey(value: string): void;
 
   getIndex(): number;
   setIndex(value: number): void;
@@ -28,8 +25,7 @@ export class Action extends jspb.Message {
 
 export namespace Action {
   export type AsObject = {
-    gameid: number,
-    playerindex: boolean,
+    key: string,
     index: number,
     text: string,
   }

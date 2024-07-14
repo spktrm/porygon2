@@ -155,6 +155,9 @@ export class State extends jspb.Message {
   getTeam_asB64(): string;
   setTeam(value: Uint8Array | string): void;
 
+  getKey(): string;
+  setKey(value: string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
   static toObject(includeInstance: boolean, msg: State): State.AsObject;
@@ -172,6 +175,7 @@ export namespace State {
     history?: history_pb.History.AsObject,
     moveset: Uint8Array | string,
     team: Uint8Array | string,
+    key: string,
   }
 }
 

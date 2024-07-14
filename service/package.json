@@ -6,8 +6,8 @@
         "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts",
         "compile-proto": "./scripts/compile_proto.sh",
         "start": "npm run compile-base && node dist/start.js",
-        "start-training-server": "node dist/index/index.js --type training",
-        "start-evaluation-server": "node dist/index/index.js --type evaluation",
+        "start-training-server": "node dist/server/index.js --type training",
+        "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "test": "npm run compile-base && node dist/tests/smoke.js"
     },
     "dependencies": {

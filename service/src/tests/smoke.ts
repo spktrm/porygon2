@@ -13,8 +13,7 @@ async function runGame(game: Game) {
     await game.run();
 
     assert(game.done);
-    assert(game.queues.p1.size() === 0);
-    assert(game.queues.p2.size() === 0);
+    assert(game.queueSystem.allDone());
 
     game.reset();
     return game;
@@ -43,6 +42,7 @@ async function main(verbose: boolean = false) {
 
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
+        const key = state.getKey();
         trajectory.push(state);
 
         const info = state.getInfo();
@@ -51,12 +51,11 @@ async function main(verbose: boolean = false) {
             const done = info.getDone();
 
             if (!done) {
-                const playerIndex = info.getPlayerindex();
                 const action = new Action();
-                action.setPlayerindex(playerIndex);
+                action.setKey(key);
                 const randomIndex = chooseRandom(legalActions);
                 action.setIndex(randomIndex);
-                game.queues[`p${playerIndex ? 2 : 1}`].enqueue(action);
+                game.queueSystem.submitResult(key, action);
             } else {
                 const wasTie = game.world?.winner === "" || game.tied;
                 if (verbose) {

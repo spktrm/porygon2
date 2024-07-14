@@ -28,7 +28,8 @@ const workers: Worker[] = [];
 const workerClients: Map<number, Socket> = new Map();
 
 function allocateWorker(ws: Socket) {
-    const worker = new Worker(path.resolve(__dirname, "../dist/worker.js"), {
+    const workerPath = path.resolve(__dirname, "../server/worker.js");
+    const worker = new Worker(workerPath, {
         workerData: {
             workerCount,
             socketType,

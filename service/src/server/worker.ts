@@ -41,7 +41,7 @@ parentPort?.on("message", (data: Buffer) => {
         buffer = buffer.subarray(4 + messageLength); // Remove the processed message from the buffer
 
         const action = Action.deserializeBinary(new Uint8Array(message));
-        const playerId = action.getPlayerindex() ? "p2" : "p1";
-        game.queues[playerId].enqueue(action);
+        const jobKey = action.getKey();
+        game.queueSystem.submitResult(jobKey, action);
     }
 });

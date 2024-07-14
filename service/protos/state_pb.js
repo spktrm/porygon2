@@ -1013,7 +1013,8 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
     legalactions: (f = msg.getLegalactions()) && proto.rlenv.LegalActions.toObject(includeInstance, f),
     history: (f = msg.getHistory()) && history_pb.History.toObject(includeInstance, f),
     moveset: msg.getMoveset_asB64(),
-    team: msg.getTeam_asB64()
+    team: msg.getTeam_asB64(),
+    key: jspb.Message.getFieldWithDefault(msg, 6, "")
   };
 
   if (includeInstance) {
@@ -1072,6 +1073,10 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setTeam(value);
+      break;
+    case 6:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setKey(value);
       break;
     default:
       reader.skipField();
@@ -1137,6 +1142,13 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writeBytes(
       5,
+      f
+    );
+  }
+  f = message.getKey();
+  if (f.length > 0) {
+    writer.writeString(
+      6,
       f
     );
   }
@@ -1335,6 +1347,24 @@ proto.rlenv.State.prototype.getTeam_asU8 = function() {
  */
 proto.rlenv.State.prototype.setTeam = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
+};
+
+
+/**
+ * optional string key = 6;
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getKey = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setKey = function(value) {
+  return jspb.Message.setProto3StringField(this, 6, value);
 };
 
 

@@ -3,11 +3,10 @@
 . env/bin/activate
 echo "Generating messages and enums protos..."
 python proto/scripts/make_enums.py
-python proto/scripts/make_messages.py
 
 # Navigate to the server directory and run the TypeScript compilation script
 echo "Compiling Protobuf files for TypeScript..."
-cd server
+cd service
 ./scripts/compile_proto.sh
 if [ $? -ne 0 ]; then
   echo "TypeScript Protobuf compilation failed!"

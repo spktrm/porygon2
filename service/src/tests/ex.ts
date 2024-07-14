@@ -12,8 +12,6 @@ async function runGame(game: Game) {
     await game.run();
 
     assert(game.done);
-    assert(game.queues.p1.size() === 0);
-    assert(game.queues.p2.size() === 0);
 
     game.reset();
     return game;
@@ -24,6 +22,7 @@ async function main(verbose: boolean = false) {
 
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
+        const key = state.getKey();
         const info = state.getInfo();
         const turn = info?.getTurn() ?? 0;
         const legalActions = state.getLegalactions();
@@ -35,10 +34,10 @@ async function main(verbose: boolean = false) {
             } else {
                 const playerIndex = info.getPlayerindex();
                 const action = new Action();
-                action.setPlayerindex(playerIndex);
+                action.setKey(key);
                 const randomIndex = chooseRandom(legalActions);
                 action.setIndex(randomIndex);
-                game.queues[`p${playerIndex ? 2 : 1}`].enqueue(action);
+                game.queueSystem.submitResult(key, action);
             }
         }
     };
