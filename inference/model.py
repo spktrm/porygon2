@@ -38,7 +38,7 @@ class InferenceModel:
         model_config = get_model_cfg()
         self.network = get_model(model_config)
 
-        latest_ckpt = get_most_recent_file("ml/ckpts")
+        latest_ckpt = get_most_recent_file("./ckpts")
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)

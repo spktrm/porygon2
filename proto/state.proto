@@ -33,6 +33,8 @@ message Move {
     int32 maxpp = 3;
 }
 
+
+
 message State {
     Info info = 1;
     LegalActions legalActions = 2;

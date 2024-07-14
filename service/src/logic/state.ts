@@ -98,17 +98,18 @@ function IndexValueFromEnum<T extends EnumMappings>(
 
 function concatenateUint8Arrays(arrays: Uint8Array[]): Uint8Array {
     // Step 1: Calculate the total length
-    const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    let totalLength = 0;
+    for (const arr of arrays) {
+        totalLength += arr.length;
+    }
 
-    // Step 2: Create a new Uint8Array with the total length
     const result = new Uint8Array(totalLength);
 
-    // Step 3: Copy each array into the new array
     let offset = 0;
-    arrays.forEach((arr) => {
+    for (const arr of arrays) {
         result.set(arr, offset);
         offset += arr.length;
-    });
+    }
 
     return result;
 }

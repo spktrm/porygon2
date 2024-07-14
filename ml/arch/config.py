@@ -10,7 +10,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 1
-    width_factor = 0.25
+    width_factor = 1
 
     entity_size = int(256 * width_factor)
     vector_size = int(1024 * width_factor)
@@ -89,13 +89,17 @@ def get_model_cfg():
 
     cfg.encoder.history_merge = ConfigDict()
     cfg.encoder.history_merge.output_size = vector_size
-    cfg.encoder.history_merge.gating_type = GatingType.NONE
+    cfg.encoder.history_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.history_merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_merge = ConfigDict()
     cfg.encoder.state_merge.output_size = vector_size
-    cfg.encoder.state_merge.gating_type = GatingType.NONE
+    cfg.encoder.state_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.state_merge.use_layer_norm = use_layer_norm
+
+    cfg.encoder.state_resnet = ConfigDict()
+    cfg.encoder.state_resnet.num_resblocks = max(int(depth_factor * 2), 1)
+    cfg.encoder.state_resnet.use_layer_norm = use_layer_norm
 
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()

@@ -7,7 +7,7 @@ import flax.linen as nn
 from ml_collections import ConfigDict
 from functools import partial
 
-from ml.arch.modules import ToAvgVector, Transformer, VectorMerge
+from ml.arch.modules import Resnet, ToAvgVector, Transformer, VectorMerge
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_GENDERS,
@@ -51,15 +51,29 @@ class MoveEncoder(nn.Module):
 
     def setup(self):
         self.move_linear = nn.Dense(features=self.cfg.entity_size)
+        self.pp_linear = nn.Dense(features=self.cfg.entity_size)
+
+    def encode_move(self, move: chex.Array):
+        pp_left = move[FeatureMoveset.PPLEFT.value]
+        pp_max = move[FeatureMoveset.PPMAX.value].clip(min=1)
+        pp_ratio = (pp_left / pp_max).clip(min=0, max=1)
+        pp_onehot = jnp.concatenate(
+            (
+                pp_ratio[None],
+                _binary_scale_embedding(pp_left, 64),
+                _binary_scale_embedding(pp_max, 64),
+            )
+        )
+        move_onehot = jax.nn.one_hot(move[FeatureMoveset.MOVEID.value], NUM_MOVES)
+        return self.move_linear(move_onehot) + self.pp_linear(pp_onehot)
 
     def __call__(
         self,
         moveset: chex.Array,
         history_move_index: chex.Array,
     ):
-        move_embeddings = self.move_linear(
-            jax.nn.one_hot(moveset[..., FeatureMoveset.MOVEID.value], NUM_MOVES)
-        )
+        _encode = jax.vmap(self.encode_move)
+        move_embeddings = _encode(moveset)
 
         history_move_embedding = self.move_linear(
             jax.nn.one_hot(history_move_index, NUM_MOVES)
@@ -317,6 +331,8 @@ class Encoder(nn.Module):
         self.history_merge = VectorMerge(**self.cfg.history_merge.to_dict())
         self.state_merge = VectorMerge(**self.cfg.state_merge.to_dict())
 
+        self.state_resnet = Resnet(**self.cfg.state_resnet)
+
     def __call__(self, env_step: EnvStep):
         move_embeddings, history_move_embeddings = self.move_encoder(
             env_step.moveset,
@@ -353,19 +369,9 @@ class Encoder(nn.Module):
 
         current_state = self.history_encoder(history_states, valid_mask)
 
-        my_active_embedding = team_embeddings[0]
-        selected_unit = jnp.where(
-            env_step.legal[:4].any(keepdims=True),
-            my_active_embedding,
-            jnp.zeros_like(my_active_embedding),
-        )
-
         # legal_moves_embedding = self.legal_encoder(env_step)
 
-        current_state = self.state_merge(
-            current_state,
-            teams_embedding,
-            selected_unit,  # legal_moves_embedding
-        )
+        current_state = self.state_merge(current_state, teams_embedding)
+        current_state = self.state_resnet(current_state)
 
         return current_state, team_embeddings, move_embeddings

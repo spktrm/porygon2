@@ -4,7 +4,7 @@ import wandb
 from tqdm import trange
 
 from ml.learner import Learner
-from ml.config import RNaDConfig
+from ml.config import RNaDConfig, VtraceConfig
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
 from ml.utils import Params
@@ -23,7 +23,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = RNaDConfig()
+    learner_config = VtraceConfig()
     model_config = get_model_cfg()
     network = get_model(model_config)
 
