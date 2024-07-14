@@ -1,3 +1,10 @@
 chex==0.1.86
 dm_haiku==0.0.12
+flax==0.8.5
 jax==0.4.30
+ml==0.0.0
+ml_collections==0.1.1
+numpy==2.0.0
+optax==0.2.3
+rlenv==1.1.dev2
+tqdm==4.66.4

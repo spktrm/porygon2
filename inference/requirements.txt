@@ -1,0 +1,9 @@
+chex==0.1.86
+fastapi==0.111.0
+inference==0.14.0
+jax==0.4.30
+ml==0.0.0
+numpy==2.0.0
+pydantic==2.8.2
+rlenv==1.1.dev2
+uvicorn==0.30.1
