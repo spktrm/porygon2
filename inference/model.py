@@ -1,34 +1,18 @@
-from typing import NamedTuple, Tuple
 import chex
 import jax
-import os
 import pickle
 import functools
-
 import numpy as np
 
+from typing import Tuple
+
 from inference.interfaces import PredictionResponse
+
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model
+from ml.utils import get_most_recent_file
 
 from rlenv.interfaces import EnvStep
-
-
-def get_most_recent_file(dir_path):
-    # List all files in the directory
-    files = [
-        os.path.join(dir_path, f)
-        for f in os.listdir(dir_path)
-        if os.path.isfile(os.path.join(dir_path, f))
-    ]
-
-    if not files:
-        return None
-
-    # Sort files by creation time
-    most_recent_file = max(files, key=os.path.getctime)
-
-    return most_recent_file
 
 
 class InferenceModel:

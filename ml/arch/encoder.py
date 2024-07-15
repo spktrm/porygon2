@@ -7,7 +7,14 @@ import flax.linen as nn
 from ml_collections import ConfigDict
 from functools import partial
 
-from ml.arch.modules import Resnet, ToAvgVector, Transformer, VectorMerge
+from ml.arch.modules import (
+    CNNEncoder,
+    MultiHeadAttention,
+    Resnet,
+    ToAvgVector,
+    Transformer,
+    VectorMerge,
+)
 
 from rlenv.data import (
     NUM_ABILITIES,
@@ -25,6 +32,7 @@ from rlenv.data import (
 )
 from rlenv.interfaces import EnvStep
 
+from rlenv.protos.enums_pb2 import SpeciesEnum
 from rlenv.protos.features_pb2 import (
     FeatureEntity,
     FeatureMoveset,
@@ -64,8 +72,8 @@ class MoveEncoder(nn.Module):
         pp_onehot = jnp.concatenate(
             (
                 pp_ratio[None],
-                _binary_scale_embedding(pp_left, 64),
-                _binary_scale_embedding(pp_max, 64),
+                _binary_scale_embedding(pp_left.astype(np.int32), 64),
+                _binary_scale_embedding(pp_max.astype(np.int32), 64),
             )
         )
         move_onehot = jax.nn.one_hot(move[FeatureMoveset.MOVEID], NUM_MOVES)
@@ -106,13 +114,14 @@ class EntityEncoder(nn.Module):
         hp_token = (1023 * hp_ratio).astype(int)
 
         embeddings = [
-            _binary_scale_embedding(hp_token, 1024),
+            _binary_scale_embedding(hp_token.astype(np.int32), 1024),
             hp_ratio[jnp.newaxis],
-            _binary_scale_embedding(entity[FeatureEntity.LEVEL], 101),
+            _binary_scale_embedding(entity[FeatureEntity.LEVEL].astype(np.int32), 101),
             jax.nn.one_hot(entity[FeatureEntity.GENDER], NUM_GENDERS),
             jax.nn.one_hot(entity[FeatureEntity.STATUS], NUM_STATUS),
             jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK], 2),
             jax.nn.one_hot(entity[FeatureEntity.TRAPPED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ACTIVE], 2),
             jax.nn.one_hot(entity[FeatureEntity.NEWLY_SWITCHED], 2),
             jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS], 8),
             jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS], 4),
@@ -143,27 +152,17 @@ class EntityEncoder(nn.Module):
         ]
         return jnp.stack(embeddings).sum(0)
 
-    def __call__(
-        self,
-        active_entities: chex.Array,
-        team: chex.Array,
-        my_public: chex.Array,
-        opp_public: chex.Array,
-    ):
-        _encode = jax.vmap(self.encode_entity)
+    def __call__(self, active_entities: chex.Array, side_entities: chex.Array):
+        _encode = jax.vmap(jax.vmap(self.encode_entity))
 
-        active_embeddings = jax.vmap(_encode)(active_entities)
+        active_embeddings = _encode(active_entities)
+        side_embeddings = _encode(side_entities)
 
-        side_embeddings = _encode(team)
-        my_public_embeddings = _encode(my_public)
-        opp_public_embeddings = _encode(opp_public)
+        side_species_token = side_entities[..., FeatureEntity.SPECIES]
+        valid_team_mask = side_species_token != SpeciesEnum.species_none
+        valid_team_mask |= side_species_token != SpeciesEnum.species_pad
 
-        return (
-            active_embeddings,
-            side_embeddings,
-            my_public_embeddings,
-            opp_public_embeddings,
-        )
+        return active_embeddings, side_embeddings, valid_team_mask
 
 
 class SideEncoder(nn.Module):
@@ -223,25 +222,26 @@ class SideEncoder(nn.Module):
         _merge = jax.vmap(jax.vmap(self.merge))
 
         side_embeddings = _encode(boosts, side_conditions, volatile_status, hyphen_args)
-        return _merge(active_embeddings, side_embeddings)
+        side_embeddings = _merge(active_embeddings, side_embeddings)
+        return side_embeddings.reshape(side_embeddings.shape[0], -1)
 
 
 class TeamEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.transformer = Transformer(**self.cfg.transformer.to_dict())
+        # self.transformer = Transformer(**self.cfg.transteams_embeddingformer.to_dict())
         self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
 
     def __call__(self, team_embeddings: chex.Array, valid_mask: chex.Array):
 
-        team_embeddings = team_embeddings.reshape(-1, team_embeddings.shape[-1])
-        valid_mask = valid_mask.reshape(-1)
+        # team_embeddings = team_embeddings.reshape(-1, team_embeddings.shape[-1])
+        # valid_mask = valid_mask.reshape(-1)
 
-        team_embeddings = self.transformer(team_embeddings, valid_mask.astype(bool))
-        teams_embedding = self.to_vector(team_embeddings, valid_mask)
+        # team_embeddings = self.transformerteams_embedding(team_embeddings, valid_mask.astype(bool))
+        teams_embedding = jax.vmap(self.to_vector)(team_embeddings, valid_mask)
 
-        return team_embeddings, teams_embedding
+        return team_embeddings, teams_embedding.reshape(-1)
 
 
 class FieldEncoder(nn.Module):
@@ -319,12 +319,16 @@ class HistoryEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.transformer = Transformer(**self.cfg.transformer.to_dict())
-        self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
+        # self.transformer = Transformer(**self.cfg.transformer.to_dict())
+        # self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
+        self.encoder = CNNEncoder(
+            (self.cfg.vector_size, self.cfg.entity_size),
+            output_size=self.cfg.vector_size,
+        )
 
     def __call__(self, state_history: chex.Array, valid_mask: chex.Array):
-        state_history = self.transformer(state_history, valid_mask)
-        return self.to_vector(state_history, valid_mask)
+        # state_history = self.transformer(state_history, valid_mask)
+        return self.encoder(state_history, valid_mask)
 
 
 class Encoder(nn.Module):
@@ -349,21 +353,12 @@ class Encoder(nn.Module):
             env_step.turn_context[..., FeatureTurnContext.MOVE],
         )
 
-        (
-            active_embeddings,
-            team_embeddings,
-            my_public_embeddings,
-            opp_public_embeddings,
-        ) = self.entity_encoder(
-            env_step.active_entities,
-            env_step.team,
-            env_step.my_public,
-            env_step.opp_public,
+        active_embeddings, team_embeddings, valid_team_mask = self.entity_encoder(
+            env_step.active_entities, env_step.side_entities
         )
 
-        valid_team_mask = jnp.ones_like(team_embeddings[..., 0])
         team_embeddings, teams_embedding = self.team_encoder(
-            team_embeddings[..., 1:, :], valid_team_mask[..., 1:]
+            team_embeddings, valid_team_mask
         )
 
         side_embeddings = self.side_encoder(
@@ -381,9 +376,7 @@ class Encoder(nn.Module):
             history_move_embeddings,
         )
 
-        history_states = jax.vmap(self.history_merge)(
-            side_embeddings[:, 0], side_embeddings[:, 1], field_embeddings
-        )
+        history_states = jax.vmap(self.history_merge)(side_embeddings, field_embeddings)
 
         current_state = self.history_encoder(history_states, valid_mask)
 
@@ -392,4 +385,4 @@ class Encoder(nn.Module):
         current_state = self.state_merge(current_state, teams_embedding)
         current_state = self.state_resnet(current_state)
 
-        return current_state, team_embeddings, move_embeddings
+        return current_state, team_embeddings[0], move_embeddings

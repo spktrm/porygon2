@@ -154,7 +154,7 @@ class MultiHeadAttention(nn.Module):
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
         query_heads = projection(query, self.key_size)  # [T', H, Q=K]
         key_heads = projection(key, self.key_size)  # [T, H, K]
-        value_heads = projection(value, self.value_size)  # [T, H, V]
+        value_heads = projection(value, self.value_size or self.key_size)  # [T, H, V]
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
@@ -174,7 +174,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(self.model_size)
+        final_projection = nn.Dense(self.model_size or attn.shape[-1])
         return final_projection(attn)  # [T', D']
 
     def _linear_projection(self, x: jax.Array, head_size: int) -> jax.Array:
@@ -287,6 +287,34 @@ class PointerLogits(nn.Module):
         return logits
 
 
+class CNNEncoder(nn.Module):
+
+    hidden_sizes: Sequence[int]
+    kernel_size: Sequence[int] = (3,)
+    output_size: int = None
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, valid_mask: jnp.ndarray):
+        x = x * valid_mask[..., None]
+        for size in self.hidden_sizes:
+            if self.use_layer_norm:
+                x = nn.LayerNorm()(x)
+            x = activation_fn(x)
+            x = nn.Conv(
+                features=size,
+                kernel_size=self.kernel_size,
+                strides=(1,),
+                padding="VALID",
+            )(x)
+        x = x.reshape(-1)
+        if self.use_layer_norm:
+            x = nn.LayerNorm()(x)
+        x = activation_fn(x)
+        x = nn.Dense(features=self.output_size or x.shape[-1])(x)
+        return x
+
+
 class ToAvgVector(nn.Module):
     """Per-unit processing then average over the units dimension."""
 
@@ -294,6 +322,7 @@ class ToAvgVector(nn.Module):
     output_stream_size: int = None
     use_layer_norm: bool = True
 
+    @nn.compact
     @nn.compact
     def __call__(self, x: chex.Array, mask: chex.Array = None):
         for size in self.units_hidden_sizes:

@@ -1,3 +1,4 @@
+import pickle
 import jax
 import math
 import chex
@@ -8,7 +9,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params
+from ml.utils import Params, get_most_recent_file
 
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep
@@ -49,8 +50,13 @@ def main():
     config = get_model_cfg()
     network = get_model(config)
 
-    params = network.init(jax.random.key(0), get_ex_step())
+    latest_ckpt = get_most_recent_file("./ckpts")
+    print(f"loading checkpoint from {latest_ckpt}")
+    with open(latest_ckpt, "rb") as f:
+        step = pickle.load(f)
+    params = step["params"]
 
+    params = network.apply(params, get_ex_step())
     print("{:,}".format(get_num_params(params)))
 
 

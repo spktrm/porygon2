@@ -5,28 +5,13 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 
 import { MessagePort } from "worker_threads";
 import { StreamHandler } from "../logic/handler";
+import { actionIndexMapping, AllValidActions, MAX_TS } from "../logic/data";
+import { TaskQueueSystem } from "../utils";
 import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
-import { AllValidActions } from "../logic/state";
-import { TaskQueueSystem } from "../utils";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
-
-export const actionIndexMapping: { [k: number]: string } = {
-    0: "move 1",
-    1: "move 2",
-    2: "move 3",
-    3: "move 4",
-    4: "switch 1",
-    5: "switch 2",
-    6: "switch 3",
-    7: "switch 4",
-    8: "switch 5",
-    9: "switch 6",
-};
-
-const MAX_TS = 100;
 
 export class Game {
     port: MessagePort | null;
@@ -143,7 +128,11 @@ export class Game {
             const actiontext = action.getText();
             stream.write(actiontext);
         } else {
-            stream.write(actionIndexMapping[actionIndex]);
+            const action =
+                actionIndexMapping[
+                    actionIndex as keyof typeof actionIndexMapping
+                ];
+            stream.write(action);
         }
     }
 

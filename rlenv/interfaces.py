@@ -12,12 +12,12 @@ class EnvStep:
 
     # Private Info
     moveset: chex.Array = ()
-    team: chex.Array = ()
     legal: chex.Array = ()
 
+    # Mixture
+    side_entities: chex.Array = ()
+
     # Public Info
-    my_public: chex.Array = ()
-    opp_public: chex.Array = ()
     turn_context: chex.Array = ()
     active_entities: chex.Array = ()
     boosts: chex.Array = ()

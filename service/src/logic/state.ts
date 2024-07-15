@@ -38,45 +38,21 @@ import {
     numSideConditions,
     numHyphenArgs,
     numPseudoweathers,
+    numPokemonFields,
+    HistoryStep,
+    SideObject,
+    FieldObject,
+    numWeatherFields,
+    numTurnContextFields,
+    sideIdMapping,
+    numMovesetFields,
+    numMoveFields,
 } from "./data";
 import { Pokemon } from "@pkmn/client";
 import { TwoDBoolArray } from "./arr";
 import { StreamHandler } from "./handler";
 
-export const AllValidActions = new LegalActions();
-AllValidActions.setMove1(true);
-AllValidActions.setMove2(true);
-AllValidActions.setMove3(true);
-AllValidActions.setMove4(true);
-AllValidActions.setSwitch1(true);
-AllValidActions.setSwitch2(true);
-AllValidActions.setSwitch3(true);
-AllValidActions.setSwitch4(true);
-AllValidActions.setSwitch5(true);
-AllValidActions.setSwitch6(true);
-
 const sanitizeKeyCache = new Map<string, string>();
-
-const sideIdMapping: {
-    [k in "p1" | "p2"]: 0 | 1;
-} = {
-    p1: 0,
-    p2: 1,
-};
-
-interface SideObject {
-    active: Uint8Array;
-    boosts: Uint8Array;
-    sideConditions: Uint8Array;
-    volatileStatus: Uint8Array;
-    hyphenArgs: Uint8Array;
-}
-
-interface FieldObject {
-    weather: Uint8Array;
-    pseudoweather: Uint8Array;
-    turnContext: Uint8Array;
-}
 
 function SanitizeKey(key: string): string {
     if (sanitizeKeyCache.has(key)) {
@@ -120,14 +96,6 @@ function concatenateUint8Arrays(arrays: Uint8Array[]): Uint8Array {
     return result;
 }
 
-type HistoryStep = [SideObject, SideObject, FieldObject];
-
-const numPokemonFields = Object.keys(FeatureEntity).length;
-const numTurnContextFields = Object.keys(FeatureTurnContext).length;
-const numWeatherFields = Object.keys(FeatureWeather).length;
-const numMoveFields = Object.keys(FeatureMoveset).length;
-const numMovesetFields = 4 * numMoveFields;
-
 function getBlankPokemonArr() {
     return new Int16Array(numPokemonFields);
 }
@@ -135,8 +103,20 @@ function getBlankPokemonArr() {
 function getUnkPokemon() {
     const data = getBlankPokemonArr();
     data[FeatureEntity.SPECIES] = SpeciesEnum.SPECIES_UNK;
+    data[FeatureEntity.ITEM] = ItemsEnum.ITEMS_UNK;
+    data[FeatureEntity.ITEM_EFFECT] = ItemeffectEnum.ITEMEFFECT_NULL;
+    data[FeatureEntity.ABILITY] = AbilitiesEnum.ABILITIES_UNK;
+    data[FeatureEntity.HP] = 100;
+    data[FeatureEntity.MAXHP] = 100;
+    data[FeatureEntity.STATUS] = StatusesEnum.STATUSES_NULL;
+    data[FeatureEntity.MOVEID0] = MovesEnum.MOVES_UNK;
+    data[FeatureEntity.MOVEID1] = MovesEnum.MOVES_UNK;
+    data[FeatureEntity.MOVEID2] = MovesEnum.MOVES_UNK;
+    data[FeatureEntity.MOVEID3] = MovesEnum.MOVES_UNK;
     return new Uint8Array(data.buffer);
 }
+
+const unkPokemon = getUnkPokemon();
 
 function getNonePokemon() {
     const data = getBlankPokemonArr();
@@ -561,9 +541,6 @@ export class StateHandler {
     getPrivateTeam(playerIndex: number): Uint8Array {
         const side = this.handler.privatebattle.sides[playerIndex];
         const team = [];
-        for (const active of side.active) {
-            team.push(EventHandler.getPokemon(active));
-        }
         for (const member of side.team) {
             team.push(EventHandler.getPokemon(member));
         }
@@ -573,9 +550,6 @@ export class StateHandler {
     getPublicTeam(playerIndex: number): Uint8Array {
         const side = this.handler.publicBattle.sides[playerIndex];
         const team = [];
-        for (const active of side.active) {
-            team.push(EventHandler.getPokemon(active));
-        }
         for (const member of side.team) {
             team.push(EventHandler.getPokemon(member));
         }
@@ -584,7 +558,7 @@ export class StateHandler {
             memberIndex < 6;
             memberIndex++
         ) {
-            team.push(getUnkPokemon());
+            team.push(unkPokemon);
         }
         return concatenateUint8Arrays(team);
     }

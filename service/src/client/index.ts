@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { TaskQueueSystem } from "../utils";
 import { Action } from "../../protos/action_pb";
 import { StreamHandler } from "../logic/handler";
-import { actionIndexMapping } from "../server/game";
+import { actionIndexMapping } from "../logic/data";
 
 const offline = "localhost";
 const online = "sim.smogon.com";
@@ -71,7 +71,9 @@ class Battle {
         if (action !== undefined) {
             const actionIndex = action.getIndex();
             const actionString =
-                actionIndexMapping[actionIndex] ?? "choose default";
+                actionIndexMapping[
+                    actionIndex as keyof typeof actionIndexMapping
+                ] ?? "choose default";
             const toSend = `/${actionString}|${this.handler.rqid}`;
             console.log(toSend);
             this.send(toSend);

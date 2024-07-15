@@ -29,7 +29,7 @@ def get_model_cfg():
     cfg.encoder.side_encoder.entity_size = entity_size
 
     cfg.encoder.side_encoder.merge = ConfigDict()
-    cfg.encoder.side_encoder.merge.output_size = vector_size
+    cfg.encoder.side_encoder.merge.output_size = vector_size // 2
     cfg.encoder.side_encoder.merge.gating_type = GatingType.NONE
     cfg.encoder.side_encoder.merge.use_layer_norm = use_layer_norm
 
@@ -56,7 +56,7 @@ def get_model_cfg():
     cfg.encoder.team_encoder.to_vector = ConfigDict()
     cfg.encoder.team_encoder.to_vector.units_hidden_sizes = (
         entity_size,
-        vector_size,
+        int(entity_size * 3 / 2),
     )
     cfg.encoder.team_encoder.to_vector.use_layer_norm = use_layer_norm
 
@@ -64,6 +64,8 @@ def get_model_cfg():
     cfg.encoder.field_encoder.vector_size = entity_size
 
     cfg.encoder.history_encoder = ConfigDict()
+    cfg.encoder.history_encoder.entity_size = entity_size
+    cfg.encoder.history_encoder.vector_size = vector_size
     cfg.encoder.history_encoder.transformer = ConfigDict()
     cfg.encoder.history_encoder.transformer.units_stream_size = vector_size
     cfg.encoder.history_encoder.transformer.transformer_num_layers = max(
@@ -89,7 +91,7 @@ def get_model_cfg():
 
     cfg.encoder.history_merge = ConfigDict()
     cfg.encoder.history_merge.output_size = vector_size
-    cfg.encoder.history_merge.gating_type = GatingType.POINTWISE
+    cfg.encoder.history_merge.gating_type = GatingType.NONE
     cfg.encoder.history_merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_merge = ConfigDict()

@@ -211,14 +211,6 @@ class ActorCriticConfig:
     # The seed that fully controls the randomness.
     seed: int = 42
 
-    # width_scale: float = WIDTH_SCALE
-    # depth_scale: float = DEPTH_SCALE
-
-    # entity_stream_size: int = int(256 * width_scale)
-    # vector_stream_size: int = int(1024 * width_scale)
-
-    # model_cfg = model_fn(entity_stream_size, vector_stream_size, depth_scale)
-
     do_eval: bool = True
     num_eval_games: int = 200
 

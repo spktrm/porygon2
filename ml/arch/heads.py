@@ -44,12 +44,22 @@ def legal_log_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Arra
     return log_policy
 
 
+def _prenorm_softmax(
+    logits: chex.Array, mask: chex.Array, axis: int = -1, eps: float = 1e-5
+):
+    mask = mask + (mask.sum(axis=axis) == 0)
+    mean = jnp.mean(logits, where=mask, axis=axis, keepdims=True)
+    variance = jnp.var(logits, where=mask, axis=axis, keepdims=True)
+    eps = jax.lax.convert_element_type(eps, variance.dtype)
+    inv = jax.lax.rsqrt(variance + eps)
+    return inv * (logits - mean)
+
+
 class PolicyHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
         self.query = Resnet(**self.cfg.query.to_dict())
-        self.action_type_logits = Logits(**self.cfg.logits.to_dict())
         self.select_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
         self.action_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
 
@@ -62,17 +72,12 @@ class PolicyHead(nn.Module):
     ):
         query = self.query(state_embedding)
 
-        action_type_logits = self.action_type_logits(query)
-        action_logits = (
-            self.action_logits(query, action_embeddings) + action_type_logits[..., 0]
-        )
-        select_logits = (
-            self.select_logits(query, select_embeddings) + action_type_logits[..., 1]
-        )
+        action_logits = self.action_logits(query, action_embeddings)
+        select_logits = self.select_logits(query, select_embeddings)
 
-        logits = jnp.concatenate((action_logits, select_logits))
-        denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
-        logits = logits * jax.lax.rsqrt(denom)
+        logits = jnp.concatenate((action_logits + select_logits[0], select_logits))
+        # denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
+        # logits = logits * jax.lax.rsqrt(denom)
 
         policy = _legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)

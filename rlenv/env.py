@@ -18,9 +18,12 @@ def get_history(state: State):
     history = state.history
     history_length = history.length
     moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape((4, -1))
-    team = np.frombuffer(state.team, dtype=np.int16).reshape((7, -1))
-    my_public = np.frombuffer(state.myPublic, dtype=np.int16).reshape((7, -1))
-    opp_public = np.frombuffer(state.oppPublic, dtype=np.int16).reshape((7, -1))
+
+    team = np.frombuffer(state.team, dtype=np.int16).reshape((6, -1))
+    my_public = np.frombuffer(state.myPublic, dtype=np.int16).reshape((6, -1))
+    opp_public = np.frombuffer(state.oppPublic, dtype=np.int16).reshape((6, -1))
+    side_entities = np.stack((team, my_public, opp_public))
+
     active_entities = np.frombuffer(history.active, dtype=np.int16).reshape(
         (history_length, 2, -1)
     )
@@ -47,9 +50,7 @@ def get_history(state: State):
     )
     return (
         moveset,
-        team,
-        my_public,
-        opp_public,
+        side_entities,
         padnstack(active_entities),
         padnstack(side_conditions),
         padnstack(volatile_status),
@@ -64,9 +65,7 @@ def get_history(state: State):
 def process_state(state: State) -> EnvStep:
     (
         moveset,
-        team,
-        my_public,
-        opp_public,
+        side_entities,
         active_entities,
         side_conditions,
         volatile_status,
@@ -108,9 +107,7 @@ def process_state(state: State) -> EnvStep:
         pseudoweather=pseudoweather,
         hyphen_args=hyphen_args,
         turn_context=turn_context,
-        team=team,
-        my_public=my_public,
-        opp_public=opp_public,
+        side_entities=side_entities,
         moveset=moveset,
     )
 
