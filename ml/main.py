@@ -24,7 +24,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = VtraceConfig()
+    learner_config = RNaDConfig()
     model_config = get_model_cfg()
     network = get_model(model_config)
 
@@ -39,8 +39,14 @@ def main():
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
-        for key, value in step.items():
-            setattr(learner, key, value)
+
+        learner.params = step["params"]
+        learner.params_target = step["params"]
+        learner.params_prev = step["params"]
+        learner.params_prev_ = step["params"]
+
+        # for key, value in step.items():
+        #     setattr(learner, key, value)
 
     wandb.init(
         project="pokemon-rl",

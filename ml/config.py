@@ -192,7 +192,7 @@ class ActorCriticConfig:
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
     entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (1000,)
+    entropy_schedule_size: Sequence[int] = (5000,)
 
     # The weight of the reward regularisation term in RNaD.
     eta_reward_transform: float = 0.0

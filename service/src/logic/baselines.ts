@@ -1,6 +1,5 @@
 import { AnyObject } from "@pkmn/sim";
 import { Action } from "../../protos/action_pb";
-import { State } from "../../protos/state_pb";
 import { StreamHandler } from "./handler";
 import { chooseRandom } from "./utils";
 
@@ -69,9 +68,6 @@ export function getEvalAction(handler: StreamHandler): Action {
     const evalIndex = (handler.gameId %
         numEvals) as keyof typeof evalActionMapping;
     const evalFunc = evalActionMapping[evalIndex];
-    action = evalFunc({ handler, action });
 
-    action.setIndex(-1);
-    action.setText("default");
-    return action;
+    return evalFunc({ handler, action });
 }
