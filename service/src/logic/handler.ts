@@ -133,22 +133,22 @@ export class StreamHandler {
 
     async stateActionStep(): Promise<Action | undefined> {
         const state = this.getState();
-        const legalActions = state.getLegalactions();
-        if (legalActions) {
-            const legalObj = legalActions.toObject();
-            const numValidMoves = Object.values(legalObj)
-                .map((x) => (x ? 1 : 0) as number)
-                .reduce((a, b) => a + b);
-            if (numValidMoves <= 1) {
-                const action = new Action();
-                action.setIndex(-1);
-                action.setText("default");
-                return action;
-            }
-        }
         if (this.getIsEvalAction()) {
             return getEvalAction(state);
         } else {
+            const legalActions = state.getLegalactions();
+            if (legalActions) {
+                const legalObj = legalActions.toObject();
+                const numValidMoves = Object.values(legalObj)
+                    .map((x) => (x ? 1 : 0) as number)
+                    .reduce((a, b) => a + b);
+                if (numValidMoves <= 1) {
+                    const action = new Action();
+                    action.setIndex(-1);
+                    action.setText("default");
+                    return action;
+                }
+            }
             const key = await this.sendFn(state);
             return await this.recvFn(key);
         }

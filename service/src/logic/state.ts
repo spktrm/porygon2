@@ -378,10 +378,11 @@ export class EventHandler implements Protocol.Handler {
     handleHyphenLine(args: Protocol.ArgType, kwArgs?: {}) {
         const prevState = this.history.pop() as HistoryStep;
         const prevField = prevState[2];
+        const prevturnContext = new Int16Array(prevField.turnContext.buffer);
         const newState = this.getPublicState(
-            prevField.turnContext[FeatureTurnContext.IS_MY_TURN] as 0 | 1,
-            prevField.turnContext[FeatureTurnContext.ACTION] as 0 | 1,
-            prevField.turnContext[
+            prevturnContext[FeatureTurnContext.IS_MY_TURN] as 0 | 1,
+            prevturnContext[FeatureTurnContext.ACTION] as 0 | 1,
+            prevturnContext[
                 FeatureTurnContext.MOVE
             ] as MovesEnumMap[keyof MovesEnumMap],
         );
