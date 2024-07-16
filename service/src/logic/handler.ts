@@ -132,10 +132,10 @@ export class StreamHandler {
     }
 
     async stateActionStep(): Promise<Action | undefined> {
-        const state = this.getState();
         if (this.getIsEvalAction()) {
-            return getEvalAction(state);
+            return getEvalAction(this);
         } else {
+            const state = this.getState();
             const legalActions = state.getLegalactions();
             if (legalActions) {
                 const legalObj = legalActions.toObject();

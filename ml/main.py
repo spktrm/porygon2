@@ -1,4 +1,5 @@
 import json
+import pickle
 import wandb
 
 from tqdm import trange
@@ -7,7 +8,7 @@ from ml.learner import Learner
 from ml.config import RNaDConfig, VtraceConfig
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.utils import Params
+from ml.utils import Params, get_most_recent_file
 
 from rlenv.client import BatchCollector
 from rlenv.data import EVALUATION_SOCKET_PATH, TRAINING_SOCKET_PATH
@@ -30,8 +31,16 @@ def main():
     training_collector = BatchCollector(
         network, TRAINING_SOCKET_PATH, batch_size=learner_config.batch_size
     )
-    evaluation_collector = BatchCollector(network, EVALUATION_SOCKET_PATH, batch_size=2)
+    evaluation_collector = BatchCollector(network, EVALUATION_SOCKET_PATH, batch_size=3)
     learner = Learner(network, config=learner_config)
+
+    latest_ckpt = get_most_recent_file("./ckpts")
+    if latest_ckpt:
+        print(f"loading checkpoint from {latest_ckpt}")
+        with open(latest_ckpt, "rb") as f:
+            step = pickle.load(f)
+        for key, value in step.items():
+            setattr(learner, key, value)
 
     wandb.init(
         project="pokemon-rl",

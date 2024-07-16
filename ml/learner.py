@@ -388,8 +388,8 @@ class Learner:
             params_prev=self.params_prev,
             params_prev_=self.params_prev_,
             # Optimizer state.
-            optimizer=self.optimizer_state,  # pytype: disable=attribute-error  # always-use-return-annotations
-            optimizer_target=self.optimizer_target_state,  # pytype: disable=attribute-error  # always-use-return-annotations
+            optimizer_state=self.optimizer_state,  # pytype: disable=attribute-error  # always-use-return-annotations
+            optimizer_target_state=self.optimizer_target_state,  # pytype: disable=attribute-error  # always-use-return-annotations
         )
         with open(f"{ckpt_path}/ckpt_{self.learner_steps:08}.pt", "wb") as f:
             pickle.dump(config, f)

@@ -1,9 +1,18 @@
 import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
+import { StreamHandler } from "./handler";
 import { chooseRandom } from "./utils";
 
-const evalActionMapping = {
-    0: (state: State, action: Action) => {
+type evalFuncArgs = {
+    handler: StreamHandler;
+    action: Action;
+};
+
+const evalActionMapping: {
+    [k: number]: (args: evalFuncArgs) => Action;
+} = {
+    0: ({ handler, action }) => {
+        const state = handler.getState();
         const legalActions = state.getLegalactions();
         if (legalActions) {
             const randomIndex = chooseRandom(legalActions);
@@ -14,7 +23,12 @@ const evalActionMapping = {
         }
         return action;
     },
-    1: (state: State, action: Action) => {
+    1: ({ action }) => {
+        action.setIndex(-1);
+        action.setText("default");
+        return action;
+    },
+    2: ({ handler, action }) => {
         action.setIndex(-1);
         action.setText("default");
         return action;
@@ -23,15 +37,14 @@ const evalActionMapping = {
 
 const numEvals = Object.keys(evalActionMapping).length;
 
-export function getEvalAction(state: State): Action {
-    const action = new Action();
-    const info = state.getInfo();
-    if (info) {
-        const gameId = info.getGameid() % numEvals;
-        const evalFunc =
-            evalActionMapping[gameId as keyof typeof evalActionMapping];
-        return evalFunc(state, action);
-    }
+export function getEvalAction(handler: StreamHandler): Action {
+    let action = new Action();
+
+    const evalIndex = (handler.gameId %
+        numEvals) as keyof typeof evalActionMapping;
+    const evalFunc = evalActionMapping[evalIndex];
+    action = evalFunc({ handler, action });
+
     action.setIndex(-1);
     action.setText("default");
     return action;
