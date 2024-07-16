@@ -7,7 +7,7 @@ __pycache__/
 
 .vscode/
 
-data/data/**/*.json
+data/data/
 
 **/*.ipynb
 
