@@ -31,7 +31,7 @@ class EnvStep:
 
 @chex.dataclass(frozen=True)
 class ActorStep:
-    action_oh: chex.Array = ()
+    action: chex.Array = ()
     policy: chex.Array = ()
     rewards: chex.Array = ()
 

@@ -10,7 +10,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 1
-    width_factor = 1
+    width_factor = 0.5
 
     entity_size = int(256 * width_factor)
     vector_size = int(1024 * width_factor)

@@ -201,6 +201,8 @@ class Learner:
         valid = ts.env.valid * (ts.env.legal.sum(axis=-1) > 1)
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
+        action_oh = jax.nn.one_hot(ts.actor.action, ts.actor.policy.shape[-1])
+
         for player in range(self.config.num_players):
             reward = ts.actor.rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = v_trace(
@@ -211,7 +213,7 @@ class Learner:
                 policy_pprocessed,
                 log_policy_reg,
                 _player_others(ts.env.player_id, valid, player),
-                ts.actor.action_oh,
+                action_oh,
                 reward,
                 player,
                 lambda_=1.0,
@@ -229,9 +231,7 @@ class Learner:
         )
 
         is_vector = jnp.expand_dims(
-            _policy_ratio(
-                policy_pprocessed, ts.actor.policy, ts.actor.action_oh, valid
-            ),
+            _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
             axis=-1,
         )
         importance_sampling_correction = [is_vector] * self.config.num_players

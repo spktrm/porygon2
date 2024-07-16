@@ -1,4 +1,6 @@
 import pickle
+from pprint import pprint
+from typing import Dict
 import jax
 import math
 import chex
@@ -32,14 +34,42 @@ class Model(nn.Module):
         return pi, v, log_pi, logit
 
 
-def get_num_params(vars: Params):
-    total = 0
-    for _, value in vars.items():
-        if isinstance(value, chex.Array):
-            total += math.prod(value.shape)
-        else:
-            total += get_num_params(value)
-    return total
+def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
+    def calculate_params(vars: Params) -> int:
+        total = 0
+        for _, value in vars.items():
+            if isinstance(value, chex.Array):
+                total += math.prod(value.shape)
+            else:
+                total += calculate_params(value)
+        return total
+
+    def build_param_dict(
+        vars: Params, total_params: int, current_depth: int
+    ) -> Dict[str, Dict[str, float]]:
+        param_dict = {}
+        for key, value in vars.items():
+            if isinstance(value, chex.Array):
+                num_params = math.prod(value.shape)
+                param_dict[key] = {
+                    "num_params": num_params,
+                    "ratio": num_params / total_params,
+                }
+            else:
+                nested_params = calculate_params(value)
+                param_entry = {
+                    "num_params": nested_params,
+                    "ratio": nested_params / total_params,
+                }
+                if current_depth < n - 1:
+                    param_entry["details"] = build_param_dict(
+                        value, total_params, current_depth + 1
+                    )
+                param_dict[key] = param_entry
+        return param_dict
+
+    total_params = calculate_params(vars)
+    return build_param_dict(vars, total_params, 0)
 
 
 def get_model(config: ConfigDict) -> nn.Module:
@@ -55,9 +85,10 @@ def main():
     with open(latest_ckpt, "rb") as f:
         step = pickle.load(f)
     params = step["params"]
+    # params = network.init(jax.random.key(0), get_ex_step())
 
-    params = network.apply(params, get_ex_step())
-    print("{:,}".format(get_num_params(params)))
+    network.apply(params, get_ex_step())
+    pprint(get_num_params(params))
 
 
 if __name__ == "__main__":

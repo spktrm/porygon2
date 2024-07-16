@@ -36,7 +36,7 @@ def main():
     collector2 = BatchCollector(
         network,
         path=EVALUATION_SOCKET_PATH,
-        batch_size=2,
+        batch_size=1,
         seed=config.seed,
     )
 

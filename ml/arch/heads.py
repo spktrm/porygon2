@@ -75,7 +75,7 @@ class PolicyHead(nn.Module):
         action_logits = self.action_logits(query, action_embeddings)
         select_logits = self.select_logits(query, select_embeddings)
 
-        logits = jnp.concatenate((action_logits + select_logits[0], select_logits))
+        logits = jnp.concatenate((action_logits, select_logits))
         # denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
         # logits = logits * jax.lax.rsqrt(denom)
 

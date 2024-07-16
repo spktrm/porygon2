@@ -179,7 +179,7 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 8
+    batch_size: int = 4
     # The learning rate for `params`.
     learning_rate: float = 0.00005
     # The config related to the ADAM optimizer used for updating `params`.

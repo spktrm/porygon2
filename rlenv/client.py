@@ -44,8 +44,7 @@ class BatchCollector:
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        action_oh = jax.nn.one_hot(action, pi.shape[-1])
-        actor_step = ActorStep(policy=pi, action_oh=action_oh, rewards=())
+        actor_step = ActorStep(policy=pi, rewards=(), action=action)
         return action, actor_step
 
     def collect_batch_trajectory(
@@ -65,7 +64,7 @@ class BatchCollector:
             timestep = TimeStep(
                 env=prev_env_step,
                 actor=ActorStep(
-                    action_oh=actor_step.action_oh,
+                    action=actor_step.action,
                     policy=actor_step.policy,
                     rewards=env_step.rewards,
                 ),
