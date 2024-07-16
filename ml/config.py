@@ -213,6 +213,7 @@ class ActorCriticConfig:
 
     do_eval: bool = True
     num_eval_games: int = 200
+    generation: int = 3
 
 
 @chex.dataclass(frozen=True)

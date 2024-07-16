@@ -10,6 +10,7 @@ from functools import partial
 from ml.arch.modules import (
     CNNEncoder,
     MultiHeadAttention,
+    PretrainedEmbedding,
     Resnet,
     ToAvgVector,
     Transformer,
@@ -58,6 +59,12 @@ def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array
     return result.astype(jnp.float32)
 
 
+SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/species.npy")
+ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/abilities.npy")
+ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/items.npy")
+MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/moves.npy")
+
+
 class MoveEncoder(nn.Module):
     cfg: ConfigDict
 
@@ -76,7 +83,7 @@ class MoveEncoder(nn.Module):
                 _binary_scale_embedding(pp_max.astype(np.int32), 64),
             )
         )
-        move_onehot = jax.nn.one_hot(move[FeatureMoveset.MOVEID], NUM_MOVES)
+        move_onehot = MOVE_ONEHOT(move[FeatureMoveset.MOVEID])
         return self.move_linear(move_onehot) + self.pp_linear(pp_onehot)
 
     def __call__(
@@ -87,9 +94,7 @@ class MoveEncoder(nn.Module):
         _encode = jax.vmap(self.encode_move)
         move_embeddings = _encode(moveset)
 
-        history_move_embedding = self.move_linear(
-            jax.nn.one_hot(history_move_index, NUM_MOVES)
-        )
+        history_move_embedding = self.move_linear(MOVE_ONEHOT(history_move_index))
 
         return (move_embeddings, history_move_embedding)
 
@@ -104,7 +109,7 @@ class EntityEncoder(nn.Module):
         self.species_linear = nn.Dense(features=entity_size)
         self.ability_linear = nn.Dense(features=entity_size)
         self.item_linear = nn.Dense(features=entity_size)
-        self.moveset_linear = nn.Dense(features=entity_size)
+        self.moves_linear = nn.Dense(features=entity_size)
 
     def encode_entity(self, entity: chex.Array):
         hp = entity[FeatureEntity.HP]
@@ -135,20 +140,16 @@ class EntityEncoder(nn.Module):
 
         # Put all the encoded one-hots in a single boolean vector:
         boolean_code = jnp.concatenate(embeddings, axis=0)
-        moveset_onehot = _encode_multi_onehot(
-            entity[FeatureEntity.MOVEID0 : FeatureEntity.MOVEID3], 4
+        moveset_onehot = MOVE_ONEHOT(
+            entity[FeatureEntity.MOVEID0 : FeatureEntity.MOVEID3]
         )
 
         embeddings = [
             self.onehot_linear(boolean_code.astype(np.float32)),
-            self.species_linear(
-                jax.nn.one_hot(entity[FeatureEntity.SPECIES], NUM_SPECIES)
-            ),
-            self.ability_linear(
-                jax.nn.one_hot(entity[FeatureEntity.ABILITY], NUM_ABILITIES)
-            ),
-            self.item_linear(jax.nn.one_hot(entity[FeatureEntity.ITEM], NUM_ITEMS)),
-            self.moveset_linear(moveset_onehot),
+            self.species_linear(SPECIES_ONEHOT(entity[FeatureEntity.SPECIES])),
+            self.ability_linear(ABILITY_ONEHOT(entity[FeatureEntity.ABILITY])),
+            self.item_linear(ITEM_ONEHOT(entity[FeatureEntity.ITEM])),
+            self.moves_linear(moveset_onehot).sum(0),
         ]
         return jnp.stack(embeddings).sum(0)
 

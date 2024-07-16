@@ -80,12 +80,12 @@ def main():
     config = get_model_cfg()
     network = get_model(config)
 
-    latest_ckpt = get_most_recent_file("./ckpts")
-    print(f"loading checkpoint from {latest_ckpt}")
-    with open(latest_ckpt, "rb") as f:
-        step = pickle.load(f)
-    params = step["params"]
-    # params = network.init(jax.random.key(0), get_ex_step())
+    # latest_ckpt = get_most_recent_file("./ckpts")
+    # print(f"loading checkpoint from {latest_ckpt}")
+    # with open(latest_ckpt, "rb") as f:
+    #     step = pickle.load(f)
+    # params = step["params"]
+    params = network.init(jax.random.key(0), get_ex_step())
 
     network.apply(params, get_ex_step())
     pprint(get_num_params(params))

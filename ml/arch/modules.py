@@ -5,7 +5,6 @@ import numpy as np
 import flax.linen as nn
 import jax.numpy as jnp
 
-from ml_collections import ConfigDict
 from enum import Enum, auto
 from typing import List, Optional, Sequence
 
@@ -891,11 +890,9 @@ class AutoEncoder(nn.Module):
         return self.mean(h)
 
 
-class PretrainedEmbedding(nn.Module):
-    fpath: str
-
-    def setup(self):
-        with open(self.fpath, "rb") as f:
+class PretrainedEmbedding:
+    def __init__(self, fpath: str):
+        with open(fpath, "rb") as f:
             arr = np.load(f)
         self.embeddings = jnp.array(arr)
 
