@@ -5,6 +5,7 @@ import { port } from "./utils";
 import { State } from "../../protos/state_pb";
 import { chooseRandom } from "../logic/utils";
 import { Game } from "../server/game";
+import { numEvals } from "../logic/eval";
 
 const totalTest = 10000;
 // const bar = new ProgressBar(":bar", { total: totalTest });
@@ -16,6 +17,15 @@ async function runGame(game: Game) {
     assert(game.queueSystem.allDone());
 
     game.reset();
+    const isTraining = Math.random() < 0.5;
+    if (Math.random() < 0.5) {
+        const gameId = isTraining ? 0 : Math.floor(Math.random() * numEvals);
+        game = new Game({
+            port: port,
+            isTraining: isTraining,
+            gameId,
+        });
+    }
     return game;
 }
 
@@ -32,7 +42,11 @@ function assertTrajectory(trajectory: State[]) {
 }
 
 async function main(verbose: boolean = false) {
-    let game = new Game({ port: port, isTraining: true, gameId: 0 });
+    let game = new Game({
+        port: port,
+        isTraining: true,
+        gameId: 0,
+    });
 
     let trajectory: State[] = [];
     let prevT = Date.now();
@@ -91,6 +105,7 @@ async function main(verbose: boolean = false) {
             rateWindow.shift();
         }
         console.log(
+            game.gameId,
             runIdx,
             rateWindow.reduce((a, b) => a + b) / rateWindow.length,
         );

@@ -8,7 +8,7 @@ import { EventHandler, StateHandler } from "./state";
 
 import { State } from "../../protos/state_pb";
 import { Action } from "../../protos/action_pb";
-import { getEvalAction } from "./baselines";
+import { getEvalAction } from "./eval";
 
 const generations = new Generations(Dex);
 
@@ -31,7 +31,6 @@ export class StreamHandler {
     eventHandler: EventHandler;
 
     rqid: string | undefined;
-    isEvalAction: boolean | undefined;
     playerIndex: 0 | 1 | undefined;
 
     constructor(args: {
@@ -53,7 +52,6 @@ export class StreamHandler {
 
         this.rqid = undefined;
         this.playerIndex = undefined;
-        this.isEvalAction = undefined;
 
         this.sendFn = sendFn;
         this.recvFn = recvFn;
@@ -125,10 +123,7 @@ export class StreamHandler {
     }
 
     getIsEvalAction() {
-        if (this.isEvalAction === undefined) {
-            this.isEvalAction = !this.isTraining && this.playerIndex === 1;
-        }
-        return this.isEvalAction;
+        return !this.isTraining && this.playerIndex === 1;
     }
 
     async stateActionStep(): Promise<Action | undefined> {
