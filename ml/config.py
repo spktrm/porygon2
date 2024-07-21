@@ -168,7 +168,6 @@ class StateRepresentation(str, Enum):
     OBSERVATION = "observation"
 
 
-@chex.dataclass(frozen=True)
 class ActorCriticConfig:
     """Configuration parameters for the RNaDSolver."""
 
@@ -218,7 +217,7 @@ class ActorCriticConfig:
 
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
-    gamma: float = 0.995
+    # gamma: float = 0.995
     entropy_loss_coef: float = 1e-3
 
 

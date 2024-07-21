@@ -15,10 +15,7 @@ from rlenv.utils import stack_steps
 
 
 class BatchCollector:
-    def __init__(
-        self, network: nn.Module, path: SocketPath, batch_size: int, seed: int = 42
-    ):
-        self.np_rng = np.random.RandomState(seed)
+    def __init__(self, network: nn.Module, path: SocketPath, batch_size: int):
         self.game = ParallelEnvironment(batch_size, path)
         self.network = network
 
@@ -28,21 +25,13 @@ class BatchCollector:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> chex.Array:
-        def apply_network(env_step: EnvStep):
-            pi, _, _, _ = self.network.apply(params, env_step)
-            # return self.config.finetune.post_process_policy(pi, env_step.legal)
-            return pi
-
-        # Use jax.vmap to vectorize `apply_network` across the first dimension of env_steps
-        vmapped_apply_network = jax.vmap(apply_network)
-
-        # Apply the vectorized function to the batch of env_steps
-        return vmapped_apply_network(env_steps)
+        rollout = jax.vmap(self.network.apply, (None, 0), 0)
+        return rollout(params, env_steps)
 
     def actor_step(self, params: Params, env_step: EnvStep):
-        pi = self._network_jit_apply(params, env_step)
+        pi, _, _, _ = self._network_jit_apply(params, env_step)
         action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
+            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
         actor_step = ActorStep(policy=pi, rewards=(), action=action)
         return action, actor_step
@@ -54,7 +43,7 @@ class BatchCollector:
         timesteps = []
         env_step: EnvStep = stack_steps(states)
 
-        n = 0
+        state_index = 0
         while True:
             prev_env_step = env_step
             a, actor_step = self.actor_step(params, env_step)
@@ -71,10 +60,10 @@ class BatchCollector:
             )
             timesteps.append(timestep)
 
-            if (~env_step.valid).all() and n % resolution == 0:
+            if (~env_step.valid).all() and state_index % resolution == 0:
                 break
 
-            n += 1
+            state_index += 1
 
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
         return stack_steps(timesteps)

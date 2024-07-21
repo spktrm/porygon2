@@ -1,9 +1,8 @@
 import assert from "assert";
 
 import { Action } from "../../protos/action_pb";
-import { port } from "./utils";
 import { State } from "../../protos/state_pb";
-import { chooseRandom } from "../logic/utils";
+import { port } from "./utils";
 import { Game } from "../server/game";
 import { numEvals } from "../logic/eval";
 
@@ -67,8 +66,10 @@ async function main(verbose: boolean = false) {
             if (!done) {
                 const action = new Action();
                 action.setKey(key);
-                const randomIndex = chooseRandom(legalActions);
-                action.setIndex(randomIndex);
+                // const randomIndex = chooseRandom(legalActions);
+                action.setIndex(-1);
+                action.setText("default");
+
                 game.queueSystem.submitResult(key, action);
             } else {
                 const wasTie = game.world?.winner === "" || game.tied;

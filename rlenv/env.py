@@ -77,10 +77,10 @@ def process_state(state: State) -> EnvStep:
     ) = get_history(state)
     # hyphen_args = np.unpackbits(hyphen_args, axis=-1).view(bool).astype(float)
     return EnvStep(
-        valid=not state.info.done,
-        player_id=state.info.playerIndex,
-        game_id=state.info.gameId,
-        turn=state.info.turn,
+        valid=~np.array(state.info.done, dtype=bool),
+        player_id=np.array(state.info.playerIndex, dtype=np.int32),
+        game_id=np.array(state.info.gameId, dtype=np.int32),
+        turn=np.array(state.info.turn, dtype=np.int32),
         rewards=np.array(
             [state.info.playerOneReward, state.info.playerTwoReward], dtype=np.float32
         ),

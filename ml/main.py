@@ -31,7 +31,7 @@ def main():
     training_collector = BatchCollector(
         network, TRAINING_SOCKET_PATH, batch_size=learner_config.batch_size
     )
-    evaluation_collector = BatchCollector(network, EVALUATION_SOCKET_PATH, batch_size=3)
+    evaluation_collector = BatchCollector(network, EVALUATION_SOCKET_PATH, batch_size=6)
     learner = Learner(network, config=learner_config)
 
     latest_ckpt = get_most_recent_file("./ckpts")
@@ -40,13 +40,13 @@ def main():
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
 
-        learner.params = step["params"]
-        learner.params_target = step["params"]
-        learner.params_prev = step["params"]
-        learner.params_prev_ = step["params"]
+        # learner.params = step["params"]
+        # learner.params_target = step["params"]
+        # learner.params_prev = step["params"]
+        # learner.params_prev_ = step["params"]
 
-        # for key, value in step.items():
-        #     setattr(learner, key, value)
+        for key, value in step.items():
+            setattr(learner, key, value)
 
     wandb.init(
         project="pokemon-rl",
@@ -61,7 +61,7 @@ def main():
     save_freq = 1000
 
     for _ in trange(0, learner_config.num_steps):
-        if learner.learner_steps % save_freq == 0:
+        if learner.learner_steps % save_freq == 0 and learner.learner_steps > 0:
             learner.save()
 
         if learner.learner_steps % eval_freq == 0:

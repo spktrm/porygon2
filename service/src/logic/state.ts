@@ -130,6 +130,7 @@ export class EventHandler implements Protocol.Handler {
     moveCounter: number;
     switchCounter: number;
     historyMaxSize: number;
+    hpRatios: { [k: string]: number[] };
 
     constructor(handler: StreamHandler, historyMaxSize: number = 8) {
         this.handler = handler;
@@ -137,9 +138,15 @@ export class EventHandler implements Protocol.Handler {
         this.moveCounter = 0;
         this.switchCounter = 0;
         this.historyMaxSize = historyMaxSize;
+        this.hpRatios = {};
     }
 
-    static getPokemon(candidate: Pokemon | null): Uint8Array {
+    getRecentDamage(ident: string) {
+        const hpHistory = this.hpRatios[ident] ?? [];
+        return (hpHistory.at(-2) ?? 1) - (hpHistory.at(-1) ?? 1);
+    }
+
+    getPokemon(candidate: Pokemon | null): Uint8Array {
         if (candidate === null) {
             return getNonePokemon();
         }
@@ -221,6 +228,14 @@ export class EventHandler implements Protocol.Handler {
             dataArr[FeatureEntity[`MOVEPP${moveIndex as MoveIndex}`]] =
                 movePps[moveIndex];
         }
+
+        if (!!!this.hpRatios[candidate.ident]) {
+            this.hpRatios[candidate.ident] = [];
+        }
+        const hpRatio = candidate.hp / candidate.maxhp;
+        if (hpRatio !== this.hpRatios[candidate.ident].at(-1) ?? -1)
+            this.hpRatios[candidate.ident].push(hpRatio);
+
         return new Uint8Array(dataArr.buffer);
     }
 
@@ -231,7 +246,7 @@ export class EventHandler implements Protocol.Handler {
         const boostsData = new Int8Array(numBoosts);
         const volatilesData = new Uint8Array(numVolatiles);
         const sideConditionsData = new Uint8Array(numSideConditions);
-        const activeArr = EventHandler.getPokemon(active);
+        const activeArr = this.getPokemon(active);
 
         if (active) {
             for (const [stat, value] of Object.entries(active.boosts)) {
@@ -420,6 +435,7 @@ export class EventHandler implements Protocol.Handler {
 
     reset() {
         this.history = [];
+        this.hpRatios = {};
         this.moveCounter = 0;
         this.switchCounter = 0;
     }
@@ -543,7 +559,7 @@ export class StateHandler {
         const side = this.handler.privatebattle.sides[playerIndex];
         const team = [];
         for (const member of side.team) {
-            team.push(EventHandler.getPokemon(member));
+            team.push(this.handler.eventHandler.getPokemon(member));
         }
         return concatenateUint8Arrays(team);
     }
@@ -552,7 +568,7 @@ export class StateHandler {
         const side = this.handler.publicBattle.sides[playerIndex];
         const team = [];
         for (const member of side.team) {
-            team.push(EventHandler.getPokemon(member));
+            team.push(this.handler.eventHandler.getPokemon(member));
         }
         for (
             let memberIndex = side.team.length;

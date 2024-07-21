@@ -67,10 +67,13 @@ export class Game {
         }
     }
 
-    getRewardFromHpDiff(sideId: "p1" | "p2"): [number, number] {
-        const omniscientHandler = this.handlers[sideId];
+    getRewardFromHpDiff(playerIndex: number): [number, number] {
+        const omniscientHandler = this.handlers[playerIndex ? "p2" : "p1"];
         const publicBattle = omniscientHandler.publicBattle;
-        const sideHpSums = publicBattle.sides.map((side) =>
+        const sideHpSums = [
+            publicBattle.sides[playerIndex],
+            publicBattle.sides[1 - playerIndex],
+        ].map((side) =>
             side.team
                 .map((pokemon) => pokemon.hp / pokemon.maxhp)
                 .reduce((a, b) => a + b),
@@ -85,9 +88,9 @@ export class Game {
         ];
     }
 
-    getRewardFromFinish(sideId: "p1" | "p2"): [number, number] {
+    getRewardFromFinish(playerIndex: number): [number, number] {
         const winner = this.getWinner();
-        const omniscientHandler = this.handlers[sideId];
+        const omniscientHandler = this.handlers[playerIndex ? "p2" : "p1"];
         const publicBattle = omniscientHandler.publicBattle;
         if (winner) {
             const p1Reward = publicBattle.p1.name === winner ? 1 : -1;
@@ -99,9 +102,9 @@ export class Game {
         }
     }
 
-    getRewards(sideId: "p1" | "p2"): [number, number] {
-        return this.getRewardFromHpDiff(sideId);
-        return this.getRewardFromFinish(sideId);
+    getRewards(playerIndex: number): [number, number] {
+        return this.getRewardFromHpDiff(playerIndex);
+        // return this.getRewardFromFinish(sideId);
     }
 
     sendState(state: State) {
@@ -109,8 +112,8 @@ export class Game {
         let info = state.getInfo();
         if (isDone && info) {
             info.setDone(isDone);
-            const sideId = info.getPlayerindex() ? "p2" : "p1";
-            const [r1, r2] = this.getRewards(sideId);
+            const playerIndex = info.getPlayerindex();
+            const [r1, r2] = this.getRewards(playerIndex ? 1 : 0);
             info.setPlayeronereward(r1);
             info.setPlayertworeward(r2);
             state.setInfo(info);

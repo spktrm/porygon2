@@ -1,17 +1,17 @@
-import pickle
-from pprint import pprint
-from typing import Dict
 import jax
 import math
 import chex
 import flax.linen as nn
+import jax.numpy as jnp
 
+from pprint import pprint
+from typing import Dict
 from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params, get_most_recent_file
+from ml.utils import Params
 
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep
@@ -85,9 +85,10 @@ def main():
     # with open(latest_ckpt, "rb") as f:
     #     step = pickle.load(f)
     # params = step["params"]
-    params = network.init(jax.random.key(0), get_ex_step())
+    key = jax.random.key(42)
 
-    network.apply(params, get_ex_step())
+    params = network.init(key, get_ex_step())
+
     pprint(get_num_params(params))
 
 

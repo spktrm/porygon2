@@ -3,6 +3,7 @@ import pickle
 import jax
 import optax
 import functools
+import haiku as hk
 
 import numpy as np
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from typing import Sequence, Tuple
 from ml.config import RNaDConfig
 from ml.utils import Params
 from ml.func import (
+    HLGaussLoss,
     get_loss_entropy,
     get_loss_heuristic,
     get_loss_nerd,
@@ -138,7 +140,7 @@ class Learner:
         self.actor_steps = 0
 
         ex = get_ex_step()
-        key = jax.random.key(0)
+        key = jax.random.key(42)
 
         # The machinery related to updating parameters/learner.
         self._entropy_schedule = EntropySchedule(
@@ -230,10 +232,11 @@ class Learner:
             [v] * self.config.num_players, v_target_list, has_played_list
         )
 
-        is_vector = jnp.expand_dims(
-            _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
-            axis=-1,
-        )
+        # is_vector = jnp.expand_dims(
+        #     _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
+        #     axis=-1,
+        # )
+        is_vector = jnp.expand_dims(jnp.ones_like(ts.env.valid), axis=-1)
         importance_sampling_correction = [is_vector] * self.config.num_players
 
         # Uses v-trace to define q-values for Nerd
@@ -249,6 +252,8 @@ class Learner:
             threshold=self.config.nerd.beta,
         )
 
+        loss_entropy = get_loss_entropy(pi, log_pi, ts.env.legal, valid)
+
         # loss_heuristic = get_loss_heuristic(
         #     log_pi,
         #     valid,
@@ -258,21 +263,19 @@ class Learner:
         #     ts.env.legal,
         # )
 
-        # loss_entropy = get_loss_entropy(pi, log_pi, ts.env.legal, valid)
-
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
+            + self.config.entropy_loss_coef * loss_entropy
             # + self.config.heuristic_loss_coef * loss_heuristic
-            # + self.config.entropy_loss_coef * loss_entropy
         )
 
         return loss, (
             dict(
                 loss_v=loss_v,
                 loss_nerd=loss_nerd,
+                loss_entropy=loss_entropy,
                 # loss_heuristic=loss_heuristic,
-                # loss_entropy=loss_entropy,
             ),
         )  # pytype: disable=bad-return-type  # numpy-scalars
 

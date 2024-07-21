@@ -1,9 +1,11 @@
 import chex
 
 import jax
+import haiku as hk
 import jax.numpy as jnp
 import flax.linen as nn
 
+from jax import lax
 from ml_collections import ConfigDict
 
 from ml.arch.modules import Logits, PointerLogits, Resnet
@@ -76,13 +78,13 @@ class PolicyHead(nn.Module):
         select_logits = self.select_logits(query, select_embeddings)
 
         logits = jnp.concatenate((action_logits, select_logits))
-        # denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
-        # logits = logits * jax.lax.rsqrt(denom)
+        denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
+        logits = logits * jax.lax.rsqrt(denom)
 
         policy = _legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)
 
-        return (logits, policy, log_policy)
+        return logits, policy, log_policy
 
 
 class ValueHead(nn.Module):
