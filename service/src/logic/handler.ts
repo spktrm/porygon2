@@ -35,8 +35,9 @@ export class StreamHandler {
         gameId: number;
         sendFn: sendFnType;
         recvFn: recvFnType;
+        playerIndex?: 0 | 1;
     }) {
-        const { gameId, sendFn, recvFn } = args;
+        const { gameId, sendFn, recvFn, playerIndex } = args;
 
         this.gameId = gameId;
         this.log = [];
@@ -46,7 +47,7 @@ export class StreamHandler {
         this.eventHandler = new EventHandler(this);
 
         this.rqid = undefined;
-        this.playerIndex = undefined;
+        this.playerIndex = playerIndex;
 
         this.sendFn = sendFn;
         this.recvFn = recvFn;
@@ -106,10 +107,10 @@ export class StreamHandler {
 
     getPlayerIndex(): number | undefined {
         const request = this.privatebattle.request;
+        if (this.playerIndex !== undefined) {
+            return this.playerIndex;
+        }
         if (request) {
-            if (this.playerIndex) {
-                return this.playerIndex;
-            }
             this.playerIndex = (parseInt(
                 request.side?.id.toString().slice(1) ?? "",
             ) - 1) as 0 | 1;
@@ -120,7 +121,8 @@ export class StreamHandler {
     async stateActionStep(): Promise<Action | undefined> {
         const state = this.getState();
         const legalActions = state.getLegalactions();
-        if (legalActions) {
+        const request = this.privatebattle.request;
+        if (request && legalActions) {
             const legalObj = legalActions.toObject();
             const numValidMoves = Object.values(legalObj)
                 .map((x) => (x ? 1 : 0) as number)

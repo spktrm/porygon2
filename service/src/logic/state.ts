@@ -631,12 +631,12 @@ export class StateHandler {
         info.setPlayerindex(!!playerIndex);
         info.setTurn(this.handler.privatebattle.turn);
 
-        const heuristicAction = evalActionMapping[
-            Math.floor(Math.random() * 5 + 2)
-        ]({
-            handler: this.handler,
-        });
-        info.setHeuristicaction(heuristicAction);
+        // const heuristicAction = evalActionMapping[
+        //     Math.floor(Math.random() * 5 + 2)
+        // ]({
+        //     handler: this.handler,
+        // });
+        // info.setHeuristicaction(heuristicAction);
 
         state.setInfo(info);
 

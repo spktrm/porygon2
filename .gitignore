@@ -18,6 +18,9 @@ rlenv/ex
 # server ignores
 service/protos/**
 
+# replays ignores
+replays/data/**
+
 # ml ignores
 ml/wandb/
 
