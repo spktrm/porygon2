@@ -24,7 +24,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = RNaDConfig()
+    learner_config = TeacherForceConfig()
     model_config = get_model_cfg()
     network = get_model(model_config)
 

@@ -10,9 +10,9 @@ import jax.numpy as jnp
 import jax.tree_util as tree
 import flax.linen as nn
 
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Union
 
-from ml.config import RNaDConfig
+from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.utils import Params
 from ml.func import (
     HLGaussLoss,
@@ -132,7 +132,11 @@ class EntropySchedule:
 
 
 class Learner:
-    def __init__(self, network: nn.Module, config: RNaDConfig):
+    def __init__(
+        self,
+        network: nn.Module,
+        config: Union[RNaDConfig, VtraceConfig, TeacherForceConfig],
+    ):
         self.config = config
         self.network = network
 

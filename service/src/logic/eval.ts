@@ -21,11 +21,9 @@ export function partial(
     };
 }
 
-const evalActionMapping: {
-    [k: number]: EvalActionFnType;
-} = {
+export const evalActionMapping: EvalActionFnType[] = [
     // Random
-    0: ({ handler }) => {
+    ({ handler }) => {
         const state = handler.getState();
         const legalActions = state.getLegalactions();
         if (legalActions) {
@@ -36,26 +34,27 @@ const evalActionMapping: {
         }
     },
     // Default
-    1: () => {
+    () => {
         return -1;
     },
-    2: GetMaxDamageAction,
-    3: partial(GetBestSwitchAction, { switchThreshold: 0 }),
-    4: partial(GetBestSwitchAction, { switchThreshold: -1 }),
-    5: partial(GetBestSwitchAction, { switchThreshold: -2 }),
-    6: partial(GetBestSwitchAction, { switchThreshold: -3 }),
-    7: partial(GetBestSwitchAction, { switchThreshold: -4 }),
-};
+    GetMaxDamageAction,
+    partial(GetBestSwitchAction, { switchThreshold: 0 }),
+    partial(GetBestSwitchAction, { switchThreshold: -1 }),
+    partial(GetBestSwitchAction, { switchThreshold: -2 }),
+    partial(GetBestSwitchAction, { switchThreshold: -3 }),
+    partial(GetBestSwitchAction, { switchThreshold: -4 }),
+];
 
 export const numEvals = Object.keys(evalActionMapping).length;
 
-export function getEvalAction(handler: StreamHandler): Action {
+export function getEvalAction(
+    handler: StreamHandler,
+    evalIndex: number,
+): Action {
     let action = new Action();
 
-    const evalIndex = (handler.gameId %
-        numEvals) as keyof typeof evalActionMapping;
     const evalFunc = evalActionMapping[evalIndex];
-    const actionIndex = evalFunc({ handler, action });
+    const actionIndex = evalFunc({ handler });
 
     action.setIndex(actionIndex);
     if (actionIndex < 0) {

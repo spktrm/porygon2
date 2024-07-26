@@ -4,7 +4,7 @@ import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
 import { port } from "./utils";
 import { Game } from "../server/game";
-import { numEvals } from "../logic/eval";
+import { getEvalAction, numEvals } from "../logic/eval";
 
 const totalTest = 10000;
 // const bar = new ProgressBar(":bar", { total: totalTest });
@@ -18,12 +18,24 @@ async function runGame(game: Game) {
     game.reset();
     const isTraining = Math.random() < 0.5;
     if (Math.random() < 0.5) {
-        const gameId = isTraining ? 0 : Math.floor(Math.random() * numEvals);
         game = new Game({
             port: port,
-            isTraining: isTraining,
-            gameId,
+            gameId: 0,
         });
+        for (const playerIndex of [0, 1]) {
+            if (Math.random() < 0.5) {
+                game.handlers[playerIndex].sendFn = async (state) => {
+                    const jobKey = game.queueSystem.createJob();
+                    state.setKey(jobKey);
+                    const action = getEvalAction(
+                        game.handlers[playerIndex],
+                        Math.floor(Math.random() * numEvals),
+                    );
+                    game.queueSystem.submitResult(jobKey, action);
+                    return jobKey;
+                };
+            }
+        }
     }
     return game;
 }
@@ -43,7 +55,6 @@ function assertTrajectory(trajectory: State[]) {
 async function main(verbose: boolean = false) {
     let game = new Game({
         port: port,
-        isTraining: true,
         gameId: 0,
     });
 

@@ -378,7 +378,7 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
             attacker,
             defender,
         });
-        if (score < switchThreshold || attacker.fainted) {
+        if (score < switchThreshold) {
             if (
                 !!!attacker.trapped &&
                 !!!attacker.maybeTrapped &&

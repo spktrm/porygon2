@@ -16,15 +16,16 @@ from rlenv.interfaces import EnvStep
 
 
 class InferenceModel:
-    def __init__(self, seed: int = 42):
+    def __init__(self, fpath: str = None, seed: int = 42):
         self.np_rng = np.random.RandomState(seed)
 
         model_config = get_model_cfg()
         self.network = get_model(model_config)
 
-        latest_ckpt = get_most_recent_file("./ckpts")
-        print(f"loading checkpoint from {latest_ckpt}")
-        with open(latest_ckpt, "rb") as f:
+        if not fpath:
+            fpath = get_most_recent_file("./ckpts")
+        print(f"loading checkpoint from {fpath}")
+        with open(fpath, "rb") as f:
             step = pickle.load(f)
         self.params = step["params"]
 

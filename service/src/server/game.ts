@@ -18,35 +18,28 @@ export class Game {
     done: boolean;
     gameId: number;
     handlers: {
-        [k: string]: StreamHandler;
+        [k: number]: StreamHandler;
     };
     queueSystem: TaskQueueSystem<Action>;
     world: World | null;
-    isTraining: boolean;
     ts: number;
     tied: boolean;
 
-    constructor(args: {
-        port: MessagePort | null;
-        gameId: number;
-        isTraining: boolean;
-    }) {
-        const { gameId, port, isTraining } = args;
+    constructor(args: { port: MessagePort | null; gameId: number }) {
+        const { gameId, port } = args;
         this.port = port;
         this.done = false;
         this.gameId = gameId;
         this.world = null;
-        this.isTraining = isTraining;
+        this.queueSystem = new TaskQueueSystem<Action>();
         this.ts = 0;
         this.tied = false;
 
-        this.queueSystem = new TaskQueueSystem<Action>();
         this.handlers = Object.fromEntries(
-            ["p1", "p2"].map((sideId) => [
-                sideId,
+            [0, 1].map((playerIndex) => [
+                playerIndex,
                 new StreamHandler({
                     gameId,
-                    isTraining: sideId === "p2" && isTraining,
                     sendFn: async (state) => {
                         const jobKey = this.queueSystem.createJob();
                         state.setKey(jobKey);
@@ -68,7 +61,7 @@ export class Game {
     }
 
     getRewardFromHpDiff(playerIndex: number): [number, number] {
-        const omniscientHandler = this.handlers[playerIndex ? "p2" : "p1"];
+        const omniscientHandler = this.handlers[playerIndex];
         const publicBattle = omniscientHandler.publicBattle;
         const sideHpSums = [
             publicBattle.sides[playerIndex],
@@ -90,7 +83,7 @@ export class Game {
 
     getRewardFromFinish(playerIndex: number): [number, number] {
         const winner = this.getWinner();
-        const omniscientHandler = this.handlers[playerIndex ? "p2" : "p1"];
+        const omniscientHandler = this.handlers[playerIndex];
         const publicBattle = omniscientHandler.publicBattle;
         if (winner) {
             const p1Reward = publicBattle.p1.name === winner ? 1 : -1;
@@ -144,11 +137,15 @@ export class Game {
         stream: ObjectReadWriteStream<string>;
     }) {
         const { id, stream } = args;
-        const handler = this.handlers[id];
+        let handler = this.handlers[{ p1: 0, p2: 1 }[id]];
         for await (const chunk of stream) {
             const action = await handler.ingestChunk(chunk);
             if (action !== undefined) {
                 this.handleAction(stream, action);
+            }
+            const playerIndex = handler.getPlayerIndex();
+            if (playerIndex) {
+                handler = this.handlers[playerIndex];
             }
             if (this.ts > MAX_TS) {
                 break;
@@ -189,13 +186,13 @@ export class Game {
         await players;
 
         this.done = true;
-        const state = this.handlers.p1.getState();
+        const state = this.handlers[0].getState();
         this.sendState(state);
     }
 
     reset() {
-        for (const handlerId of Object.keys(this.handlers)) {
-            this.handlers[handlerId].reset();
+        for (const playerIndex of [0, 1]) {
+            this.handlers[playerIndex].reset();
         }
         this.done = false;
         this.world = null;

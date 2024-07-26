@@ -41,7 +41,6 @@ class Battle {
 
         this.handler = new StreamHandler({
             gameId: stringToUniqueInt(roomId),
-            isTraining: true,
             sendFn: async (state) => {
                 const jobKey = queueSystem.createJob();
                 state.setKey(jobKey);

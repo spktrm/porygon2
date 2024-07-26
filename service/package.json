@@ -9,7 +9,8 @@
         "start-training-server": "node dist/server/index.js --type training",
         "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
-        "test": "npm run compile-base && node dist/tests/smoke.js"
+        "test": "npm run compile-base && node dist/tests/smoke.js",
+        "matchup": "npm run compile-base && node dist/tests/matchup.js"
     },
     "dependencies": {
         "@pkmn/client": "^0.6.25",

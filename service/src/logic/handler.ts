@@ -21,10 +21,8 @@ export class StreamHandler {
     sendFn: sendFnType;
     recvFn: recvFnType;
 
-    ts: number;
     log: string[];
     gameId: number;
-    isTraining: boolean;
 
     publicBattle: Battle;
     privatebattle: Battle;
@@ -35,15 +33,12 @@ export class StreamHandler {
 
     constructor(args: {
         gameId: number;
-        isTraining: boolean;
         sendFn: sendFnType;
         recvFn: recvFnType;
     }) {
-        const { gameId, isTraining, sendFn, recvFn } = args;
+        const { gameId, sendFn, recvFn } = args;
 
-        this.ts = Date.now();
         this.gameId = gameId;
-        this.isTraining = isTraining;
         this.log = [];
 
         this.publicBattle = new Battle(generations);
@@ -122,31 +117,23 @@ export class StreamHandler {
         }
     }
 
-    getIsEvalAction() {
-        return !this.isTraining && this.playerIndex === 1;
-    }
-
     async stateActionStep(): Promise<Action | undefined> {
-        if (this.getIsEvalAction()) {
-            return getEvalAction(this);
-        } else {
-            const state = this.getState();
-            const legalActions = state.getLegalactions();
-            if (legalActions) {
-                const legalObj = legalActions.toObject();
-                const numValidMoves = Object.values(legalObj)
-                    .map((x) => (x ? 1 : 0) as number)
-                    .reduce((a, b) => a + b);
-                if (numValidMoves <= 1) {
-                    const action = new Action();
-                    action.setIndex(-1);
-                    action.setText("default");
-                    return action;
-                }
+        const state = this.getState();
+        const legalActions = state.getLegalactions();
+        if (legalActions) {
+            const legalObj = legalActions.toObject();
+            const numValidMoves = Object.values(legalObj)
+                .map((x) => (x ? 1 : 0) as number)
+                .reduce((a, b) => a + b);
+            if (numValidMoves <= 1) {
+                const action = new Action();
+                action.setIndex(-1);
+                action.setText("default");
+                return action;
             }
-            const key = await this.sendFn(state);
-            return await this.recvFn(key);
         }
+        const key = await this.sendFn(state);
+        return await this.recvFn(key);
     }
 
     ensureRequestApplied() {

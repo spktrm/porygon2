@@ -2,14 +2,25 @@ import { MessagePort, parentPort, workerData } from "worker_threads";
 
 import { Game } from "./game";
 import { Action } from "../../protos/action_pb";
+import { getEvalAction } from "../logic/eval";
 
 const isTraining = workerData.socketType === "training";
+const gameId = workerData.workerCount;
 
 const game = new Game({
-    gameId: workerData.workerCount,
-    isTraining,
+    gameId,
     port: parentPort as unknown as MessagePort,
 });
+
+if (!isTraining) {
+    game.handlers[1].sendFn = async (state) => {
+        const jobKey = game.queueSystem.createJob();
+        state.setKey(jobKey);
+        const action = getEvalAction(game.handlers[1], gameId);
+        game.queueSystem.submitResult(jobKey, action);
+        return jobKey;
+    };
+}
 
 async function main() {
     while (true) {
