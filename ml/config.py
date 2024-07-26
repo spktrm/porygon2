@@ -28,7 +28,7 @@ class FineTuning:
     # The learner step after which the policy post processing (aka finetuning)
     # will be enabled when learning. A strictly negative value is equivalent
     # to infinity, ie disables finetuning completely.
-    from_learner_steps: int = -1
+    from_learner_steps: int = 0
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
     policy_threshold: float = 0.03

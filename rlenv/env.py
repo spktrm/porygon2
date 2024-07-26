@@ -81,6 +81,7 @@ def process_state(state: State) -> EnvStep:
         player_id=np.array(state.info.playerIndex, dtype=np.int32),
         game_id=np.array(state.info.gameId, dtype=np.int32),
         turn=np.array(state.info.turn, dtype=np.int32),
+        heuristic_action=np.array(state.info.heuristicAction, dtype=np.int32),
         rewards=np.array(
             [state.info.playerOneReward, state.info.playerTwoReward], dtype=np.float32
         ),
@@ -119,7 +120,6 @@ def get_ex_step() -> EnvStep:
 class Environment:
     env_idx: int
     state: State
-    stage: int
     env_step: EnvStep
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
@@ -128,7 +128,6 @@ class Environment:
     async def init(cls, path: SocketPath, env_idx: int):
         reader, writer = await asyncio.open_unix_connection(path)
         self = cls()
-        self.stage = 0
         self.env_idx = env_idx
         self.reader = reader
         self.writer = writer
@@ -143,18 +142,8 @@ class Environment:
 
         state = State.FromString(buffer)
         self.state = state
-        self.env_step = self.get_env_step(self.state, self.stage)
+        self.env_step = process_state(self.state)
         return self.env_step
-
-    @staticmethod
-    def get_env_step(state: State, stage: int):
-        env_step = process_state(state)
-        if stage == 0:
-            env_step.legal[4] = env_step.legal[:4].any()
-            env_step.legal[:4] = 0
-        else:
-            env_step.legal[4:] = 0
-        return env_step
 
     async def _check_for_single_action(self) -> EnvStep:
         legal = self.env_step.legal
@@ -175,29 +164,19 @@ class Environment:
         if self.state.info.done:
             return self.env_step
 
-        choosing_switch = action > 4
-        choosing_move = action < 4
+        self.stage = 0
+        serialized_action = self._get_acton_bytes(action)
+        # Get the size of the serialized action
+        action_size = len(serialized_action)
 
-        if choosing_switch or choosing_move:
-            self.stage = 0
-            serialized_action = self._get_acton_bytes(action)
-            # Get the size of the serialized action
-            action_size = len(serialized_action)
+        # Create a byte buffer for the size (4 bytes for a 32-bit integer)
+        size_buffer = struct.pack(">I", action_size)
 
-            # Create a byte buffer for the size (4 bytes for a 32-bit integer)
-            size_buffer = struct.pack(">I", action_size)
-
-            # Write the size buffer followed by the serialized action
-            self.writer.write(size_buffer)
-            self.writer.write(serialized_action)
-            await self.writer.drain()
-            await self._read()
-            return await self._check_for_single_action()
-
-        else:
-            self.stage = 1
-            self.env_step = self.get_env_step(self.state, self.stage)
-            return await self._check_for_single_action()
+        # Write the size buffer followed by the serialized action
+        self.writer.write(size_buffer)
+        self.writer.write(serialized_action)
+        await self.writer.drain()
+        return await self._read()
 
     async def reset(self):
         return await self._read()

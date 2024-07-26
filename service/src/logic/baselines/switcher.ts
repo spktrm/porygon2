@@ -1,8 +1,7 @@
 import { AnyObject } from "@pkmn/sim";
 import { evalFuncArgs } from "../eval";
 import { Battle, Pokemon, Side } from "@pkmn/client";
-import { BoostID, Type, TypeName } from "@pkmn/dex";
-import { Action } from "../../../protos/action_pb";
+import { BoostID, Type, TypeName, StatusName } from "@pkmn/dex";
 import { Request } from "@pkmn/protocol";
 import { Move as DexMove } from "@pkmn/dex-types";
 import { StreamHandler } from "../handler";
@@ -27,6 +26,14 @@ function ComputeTypeMatchup(types1: Type[], types2: Type[]) {
 }
 
 const SPEED_TIER_COEFFECIENT = 0.1;
+const STATUS_COEFFECIENT_MAPPING: { [k in StatusName]: number } = {
+    slp: 0.3,
+    psn: 0.05,
+    brn: 0.1,
+    frz: 0.3,
+    par: 0.0025,
+    tox: 0.2,
+};
 const HP_FRACTION_COEFICIENT = 0.8;
 
 function MatchupPokemon(args: {
@@ -86,6 +93,13 @@ function MatchupPokemon(args: {
     score -=
         (CalculateHpRatio(defender) + CalculateStatRatio(defender, attacker)) /
         3;
+
+    if (defender.status) {
+        score += STATUS_COEFFECIENT_MAPPING[defender.status] ?? 0;
+    }
+    if (attacker.status) {
+        score -= STATUS_COEFFECIENT_MAPPING[attacker.status] ?? 0;
+    }
 
     return score;
 }
@@ -160,7 +174,8 @@ const calcMovePrior: (args: {
     move: Request.ActivePokemon["moves"][0];
     attacker: Pokemon;
     defender: Pokemon;
-}) => number = ({ handler, move, attacker, defender }) => {
+    score: number;
+}) => number = ({ handler, move, attacker, defender, score }) => {
     const battle = handler.privatebattle;
     const { id } = move;
     const attackerRecentDamage = handler.eventHandler.getRecentDamage(
@@ -270,6 +285,7 @@ const calcMovePrior: (args: {
 
     const { target } = moveData;
     if (
+        score > 0 &&
         Object.keys(boosts).length > 0 &&
         Object.values(boosts).reduce((a, b) => a + b) >= 1 &&
         target === "self" &&
@@ -310,11 +326,10 @@ type SwitcherEvalActionFnType = (
         switchThreshold?: number;
         boostThresold?: number;
     },
-) => Action;
+) => number;
 
 export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
     handler,
-    action,
     switchThreshold = 0,
     boostThresold = 0,
 }) => {
@@ -334,6 +349,29 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
     const attacker = mySide.active[0];
     const defender = oppSide.active[0];
 
+    const anySwitchesLeft = mySide.team.filter((t) => !t.fainted).length > 1;
+
+    const MaximumBench = (defender: Pokemon) => {
+        const benchScores = mySide.team.flatMap((bench, benchIndex) =>
+            bench.fainted || bench.isActive()
+                ? []
+                : {
+                      benchIndex,
+                      score: MatchupPokemon({
+                          battle,
+                          attacker: bench,
+                          defender,
+                      }),
+                  },
+        );
+        return benchScores.reduce((a, b) => (a.score > b.score ? a : b));
+    };
+
+    if (attacker === null && defender !== null && anySwitchesLeft) {
+        const maxBench = MaximumBench(defender);
+        return 4 + maxBench.benchIndex;
+    }
+
     if (attacker !== null && defender !== null) {
         const score = MatchupPokemon({
             battle,
@@ -344,26 +382,11 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
             if (
                 !!!attacker.trapped &&
                 !!!attacker.maybeTrapped &&
-                mySide.team.filter((t) => !t.fainted).length > 1
+                anySwitchesLeft
             ) {
-                const benchScores = mySide.team.flatMap((bench, benchIndex) =>
-                    bench.fainted || bench.isActive()
-                        ? []
-                        : {
-                              benchIndex,
-                              score: MatchupPokemon({
-                                  battle,
-                                  attacker: bench,
-                                  defender,
-                              }),
-                          },
-                );
-                const maxBench = benchScores.reduce((a, b) =>
-                    a.score > b.score ? a : b,
-                );
+                const maxBench = MaximumBench(defender);
                 if (maxBench.score > score || attacker.fainted) {
-                    action.setIndex(4 + maxBench.benchIndex);
-                    return action;
+                    return 4 + maxBench.benchIndex;
                 }
             }
         }
@@ -380,6 +403,7 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                                   move,
                                   attacker,
                                   defender,
+                                  score,
                               }),
                           },
                 )
@@ -389,30 +413,34 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                 const maxMove = movePriorities.reduce((a, b) =>
                     a.prior > b.prior ? a : b,
                 );
-                action.setIndex(maxMove.moveIndex);
-                return action;
+                return maxMove.moveIndex;
             }
+
+            const moveData: number[] = moves.map(({ id, disabled }) => {
+                let damage = 0;
+                try {
+                    damage = GetMoveDamange({
+                        battle,
+                        attacker,
+                        defender,
+                        moveId: id,
+                    });
+                } catch (err) {
+                    throw err;
+                }
+                return disabled ? -100 : damage;
+            });
+            const indexOfLargestNum = moveData.reduce(
+                (maxIndex, currentElement, currentIndex, arr) => {
+                    return currentElement > arr[maxIndex]
+                        ? currentIndex
+                        : maxIndex;
+                },
+                0,
+            );
+            return indexOfLargestNum;
         }
     }
 
-    if (moves !== undefined) {
-        const moveData = moves.map(({ id, disabled }) => {
-            const trueId = id.startsWith("return") ? "return" : id;
-            return disabled
-                ? -100
-                : battle.gens.dex.moves.get(trueId).basePower;
-        });
-        const indexOfLargestNum = moveData.reduce(
-            (maxIndex, currentElement, currentIndex, arr) => {
-                return currentElement > arr[maxIndex] ? currentIndex : maxIndex;
-            },
-            0,
-        );
-        action.setIndex(indexOfLargestNum);
-    } else {
-        action.setIndex(-1);
-        action.setText("default");
-    }
-
-    return action;
+    return -1;
 };

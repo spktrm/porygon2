@@ -254,20 +254,18 @@ class Learner:
 
         loss_entropy = get_loss_entropy(pi, log_pi, ts.env.legal, valid)
 
-        # loss_heuristic = get_loss_heuristic(
-        #     log_pi,
-        #     valid,
-        #     ts.actor.action_oh,
-        #     ts.env.heuristic_move,
-        #     ts.env.heuristic_switch,
-        #     ts.env.legal,
-        # )
+        loss_heuristic = get_loss_heuristic(
+            log_pi,
+            valid,
+            ts.env.heuristic_action,
+            ts.env.legal,
+        )
 
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
-            # + self.config.heuristic_loss_coef * loss_heuristic
+            + self.config.heuristic_loss_coef * loss_heuristic
         )
 
         return loss, (
@@ -275,7 +273,7 @@ class Learner:
                 loss_v=loss_v,
                 loss_nerd=loss_nerd,
                 loss_entropy=loss_entropy,
-                # loss_heuristic=loss_heuristic,
+                loss_heuristic=loss_heuristic,
             ),
         )  # pytype: disable=bad-return-type  # numpy-scalars
 

@@ -51,6 +51,8 @@ import {
 import { Pokemon } from "@pkmn/client";
 import { TwoDBoolArray } from "./arr";
 import { StreamHandler } from "./handler";
+import { getEvalAction, partial } from "./eval";
+import { GetBestSwitchAction } from "./baselines/switcher";
 
 const sanitizeKeyCache = new Map<string, string>();
 
@@ -628,6 +630,13 @@ export class StateHandler {
         const playerIndex = this.handler.getPlayerIndex() as number;
         info.setPlayerindex(!!playerIndex);
         info.setTurn(this.handler.privatebattle.turn);
+
+        const heuristicAction = GetBestSwitchAction({
+            handler: this.handler,
+            switchThreshold: -2,
+        });
+        info.setHeuristicaction(heuristicAction);
+
         state.setInfo(info);
 
         const legalActions = this.getLegalActions();

@@ -25,6 +25,7 @@ message Info {
     float playerTwoReward = 4;
     bool playerIndex = 5;
     int32 turn = 6;
+    int32 heuristicAction = 7;
 }
 
 message Move {

@@ -1,11 +1,10 @@
+from re import X
 import chex
 
 import jax
-import haiku as hk
 import jax.numpy as jnp
 import flax.linen as nn
 
-from jax import lax
 from ml_collections import ConfigDict
 
 from ml.arch.modules import Logits, PointerLogits, Resnet
@@ -62,6 +61,7 @@ class PolicyHead(nn.Module):
 
     def setup(self):
         self.query = Resnet(**self.cfg.query.to_dict())
+        self.action_type_logits = Logits(**self.cfg.logits.to_dict())
         self.select_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
         self.action_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
 
@@ -74,8 +74,14 @@ class PolicyHead(nn.Module):
     ):
         query = self.query(state_embedding)
 
-        action_logits = self.action_logits(query, action_embeddings)
-        select_logits = self.select_logits(query, select_embeddings)
+        action_type_logits = self.action_type_logits(query)
+        can_move = legal[:4].any(axis=-1)
+        can_switch = legal[4:].any(axis=-1)
+        is_choice = can_move & can_switch
+        move_bias = jnp.where(is_choice, action_type_logits[..., 0], 0)
+        switch_bias = jnp.where(is_choice, action_type_logits[..., 1], 0)
+        action_logits = self.action_logits(query, action_embeddings) + move_bias
+        select_logits = self.select_logits(query, select_embeddings) + switch_bias
 
         logits = jnp.concatenate((action_logits, select_logits))
         denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)

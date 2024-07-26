@@ -9,6 +9,7 @@ class EnvStep:
     game_id: chex.Array = ()
     player_id: chex.Array = ()
     rewards: chex.Array = ()
+    heuristic_action: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()

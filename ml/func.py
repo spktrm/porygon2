@@ -395,19 +395,18 @@ def get_loss_nerd(
 def get_loss_heuristic(
     log_pi: chex.Array,
     valid: chex.Array,
-    action_oh: chex.Array,
-    heuristic_move: chex.Array,
-    heuristic_switch: chex.Array,
+    heuristic_action: chex.Array,
     legal: chex.Array,
 ) -> chex.Array:
+
     num_actions = log_pi.shape[-1]
-    one_hot_label = jax.nn.one_hot(
-        heuristic_move, num_actions
-    ) + jax.nn.one_hot(  # * (action_oh < 4)[:, None]
-        heuristic_switch, num_actions
-    )  # * (action_oh >= 4)[:, None]
-    one_hot_label = one_hot_label * legal
-    xentropy = log_pi * one_hot_label
+    target_probs = jnp.where(
+        (heuristic_action < 0)[..., None],
+        legal / legal.sum(axis=-1, keepdims=True),
+        jax.nn.one_hot(heuristic_action, num_actions),
+    )
+
+    xentropy = log_pi * target_probs
     xentropy = -xentropy.sum(-1)
     return renormalize(xentropy, valid)
 

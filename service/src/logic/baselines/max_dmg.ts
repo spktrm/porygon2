@@ -95,7 +95,7 @@ export const GetMoveDamange: (args: {
     }
 };
 
-export const GetMaxDamageAction: EvalActionFnType = ({ handler, action }) => {
+export const GetMaxDamageAction: EvalActionFnType = ({ handler }) => {
     const battle = handler.privatebattle;
     const generation = Generations.get(battle.gen.num);
     const request = battle.request as AnyObject;
@@ -137,11 +137,7 @@ export const GetMaxDamageAction: EvalActionFnType = ({ handler, action }) => {
             },
             0,
         );
-        action.setIndex(indexOfLargestNum);
-    } else {
-        action.setIndex(-1);
-        action.setText("default");
+        return indexOfLargestNum;
     }
-
-    return action;
+    return -1;
 };
