@@ -8,8 +8,6 @@ from ml_collections import ConfigDict
 from functools import partial
 
 from ml.arch.modules import (
-    CNNEncoder,
-    MultiHeadAttention,
     PretrainedEmbedding,
     Resnet,
     ToAvgVector,
@@ -18,14 +16,10 @@ from ml.arch.modules import (
 )
 
 from rlenv.data import (
-    NUM_ABILITIES,
     NUM_GENDERS,
     NUM_HISTORY,
     NUM_ITEM_EFFECTS,
-    NUM_ITEMS,
     NUM_PLAYERS,
-    NUM_MOVES,
-    NUM_SPECIES,
     NUM_STATUS,
     NUM_WEATHER,
     SPIKES_TOKEN,
@@ -141,7 +135,7 @@ class EntityEncoder(nn.Module):
         # Put all the encoded one-hots in a single boolean vector:
         boolean_code = jnp.concatenate(embeddings, axis=0)
         moveset_onehot = MOVE_ONEHOT(
-            entity[FeatureEntity.MOVEID0 : FeatureEntity.MOVEID3]
+            entity[FeatureEntity.MOVEID0 : FeatureEntity.MOVEID0 + 4]
         )
 
         embeddings = [
@@ -320,16 +314,10 @@ class HistoryEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        # self.transformer = Transformer(**self.cfg.transformer.to_dict())
-        # self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
-        self.encoder = CNNEncoder(
-            (self.cfg.vector_size, self.cfg.entity_size),
-            output_size=self.cfg.vector_size,
-        )
+        self.transformer = Transformer(**self.cfg.transformer.to_dict())
 
     def __call__(self, state_history: chex.Array, valid_mask: chex.Array):
-        # state_history = self.transformer(state_history, valid_mask)
-        return self.encoder(state_history, valid_mask)
+        return self.transformer(state_history, valid_mask)
 
 
 class Encoder(nn.Module):
@@ -342,6 +330,7 @@ class Encoder(nn.Module):
         self.side_encoder = SideEncoder(self.cfg.side_encoder)
         self.field_encoder = FieldEncoder(self.cfg.field_encoder)
         self.history_encoder = HistoryEncoder(self.cfg.history_encoder)
+        # self.dynamics = Dynamics(self.cfg.history_encoder)
 
         self.history_merge = VectorMerge(**self.cfg.history_merge.to_dict())
         self.state_merge = VectorMerge(**self.cfg.state_merge.to_dict())
@@ -379,11 +368,26 @@ class Encoder(nn.Module):
 
         history_states = jax.vmap(self.history_merge)(side_embeddings, field_embeddings)
 
-        current_state = self.history_encoder(history_states, valid_mask)
+        # recon_loss = self.dynamics(
+        #     history_states[:-1],
+        #     env_step.turn_context[:-1, FeatureTurnContext.IS_MY_TURN],
+        #     history_move_embeddings[:-1],
+        #     history_states[1:],
+        #     valid_mask[:-1],
+        # )
+
+        history_states = self.history_encoder(history_states, valid_mask)
+        current_state = (valid_mask @ history_states) / valid_mask.sum()
 
         # legal_moves_embedding = self.legal_encoder(env_step)
 
         current_state = self.state_merge(current_state, teams_embedding)
         current_state = self.state_resnet(current_state)
 
-        return current_state, team_embeddings[0], move_embeddings
+        return (
+            current_state,
+            team_embeddings[0],
+            move_embeddings,
+            history_states,
+            valid_mask,
+        )

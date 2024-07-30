@@ -15,14 +15,13 @@ from typing import Sequence, Tuple, Union
 from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.utils import Params
 from ml.func import (
-    HLGaussLoss,
     get_loss_entropy,
     get_loss_heuristic,
     get_loss_nerd,
+    get_loss_recon,
     get_loss_v,
     v_trace,
     _player_others,
-    _policy_ratio,
 )
 
 from rlenv.env import get_ex_step
@@ -265,11 +264,14 @@ class Learner:
             ts.env.legal,
         )
 
+        # loss_recon = get_loss_recon(recon_loss, valid)
+
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
             + self.config.heuristic_loss_coef * loss_heuristic
+            # + self.config.recon_loss_coef * loss_recon
         )
 
         return loss, (
@@ -278,6 +280,7 @@ class Learner:
                 loss_nerd=loss_nerd,
                 loss_entropy=loss_entropy,
                 loss_heuristic=loss_heuristic,
+                # loss_recon=loss_recon,
             ),
         )  # pytype: disable=bad-return-type  # numpy-scalars
 

@@ -24,14 +24,16 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = TeacherForceConfig()
+    learner_config = RNaDConfig()
     model_config = get_model_cfg()
     network = get_model(model_config)
 
     training_collector = BatchCollector(
         network, TRAINING_SOCKET_PATH, batch_size=learner_config.batch_size
     )
-    evaluation_collector = BatchCollector(network, EVALUATION_SOCKET_PATH, batch_size=8)
+    evaluation_collector = BatchCollector(
+        network, EVALUATION_SOCKET_PATH, batch_size=12
+    )
     learner = Learner(network, config=learner_config)
 
     latest_ckpt = get_most_recent_file("./ckpts")

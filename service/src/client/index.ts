@@ -3,6 +3,7 @@ import { TaskQueueSystem } from "../utils";
 import { Action } from "../../protos/action_pb";
 import { StreamHandler } from "../logic/handler";
 import { actionIndexMapping } from "../logic/data";
+import { getEvalAction } from "../logic/eval";
 
 const offline = "localhost";
 const online = "sim.smogon.com";
@@ -57,6 +58,13 @@ class Battle {
                 return await queueSystem.getResult(key);
             },
         });
+        // this.handler.sendFn = async (state) => {
+        //     const jobKey = queueSystem.createJob();
+        //     state.setKey(jobKey);
+        //     const action = getEvalAction(this.handler, 10);
+        //     queueSystem.submitResult(jobKey, action);
+        //     return jobKey;
+        // };
     }
 
     public async receive(message: string): Promise<void> {

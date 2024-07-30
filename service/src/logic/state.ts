@@ -132,7 +132,7 @@ export class EventHandler implements Protocol.Handler {
     moveCounter: number;
     switchCounter: number;
     historyMaxSize: number;
-    hpRatios: { [k: string]: number[] };
+    hpRatios: { [k: string]: { turn: number; hpRatio: number }[] };
 
     constructor(handler: StreamHandler, historyMaxSize: number = 8) {
         this.handler = handler;
@@ -145,7 +145,16 @@ export class EventHandler implements Protocol.Handler {
 
     getRecentDamage(ident: string) {
         const hpHistory = this.hpRatios[ident] ?? [];
-        return (hpHistory.at(-2) ?? 1) - (hpHistory.at(-1) ?? 1);
+        const { hpRatio: accum, turn: currentTurn } = hpHistory.at(-1) ?? {
+            hpRatio: 1,
+            turn: 1,
+        };
+        for (const { hpRatio, turn } of [...hpHistory].reverse()) {
+            if (currentTurn !== turn) {
+                return accum - hpRatio;
+            }
+        }
+        return accum - (hpHistory.at(0)?.hpRatio ?? 1);
     }
 
     getPokemon(candidate: Pokemon | null): Uint8Array {
@@ -235,8 +244,11 @@ export class EventHandler implements Protocol.Handler {
             this.hpRatios[candidate.ident] = [];
         }
         const hpRatio = candidate.hp / candidate.maxhp;
-        if (hpRatio !== this.hpRatios[candidate.ident].at(-1) ?? -1)
-            this.hpRatios[candidate.ident].push(hpRatio);
+        if (hpRatio !== this.hpRatios[candidate.ident].at(-1)?.hpRatio)
+            this.hpRatios[candidate.ident].push({
+                turn: this.handler.publicBattle.turn,
+                hpRatio,
+            });
 
         return new Uint8Array(dataArr.buffer);
     }
@@ -631,12 +643,8 @@ export class StateHandler {
         info.setPlayerindex(!!playerIndex);
         info.setTurn(this.handler.privatebattle.turn);
 
-        // const heuristicAction = evalActionMapping[
-        //     Math.floor(Math.random() * 5 + 2)
-        // ]({
-        //     handler: this.handler,
-        // });
-        // info.setHeuristicaction(heuristicAction);
+        const heuristicAction = getEvalAction(this.handler, 10);
+        info.setHeuristicaction(heuristicAction.getIndex());
 
         state.setInfo(info);
 

@@ -163,11 +163,7 @@ class NerdConfig:
     clip: float = 10_000
 
 
-class StateRepresentation(str, Enum):
-    INFO_SET = "info_set"
-    OBSERVATION = "observation"
-
-
+@chex.dataclass(frozen=True)
 class ActorCriticConfig:
     """Configuration parameters for the RNaDSolver."""
 
@@ -191,7 +187,7 @@ class ActorCriticConfig:
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
     entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (5000,)
+    entropy_schedule_size: Sequence[int] = (20_000,)
 
     # The weight of the reward regularisation term in RNaD.
     eta_reward_transform: float = 0.0

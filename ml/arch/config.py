@@ -30,7 +30,7 @@ def get_model_cfg():
 
     cfg.encoder.side_encoder.merge = ConfigDict()
     cfg.encoder.side_encoder.merge.output_size = vector_size // 2
-    cfg.encoder.side_encoder.merge.gating_type = GatingType.NONE
+    cfg.encoder.side_encoder.merge.gating_type = GatingType.POINTWISE
     cfg.encoder.side_encoder.merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.team_encoder = ConfigDict()
@@ -91,7 +91,7 @@ def get_model_cfg():
 
     cfg.encoder.history_merge = ConfigDict()
     cfg.encoder.history_merge.output_size = vector_size
-    cfg.encoder.history_merge.gating_type = GatingType.NONE
+    cfg.encoder.history_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.history_merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_merge = ConfigDict()

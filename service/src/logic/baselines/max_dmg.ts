@@ -35,6 +35,9 @@ export const GetMoveDamange: (args: {
         return 0;
     }
     moveId = fixMoveId(moveId);
+    const moveData = battle.gens.dex.moves.get(moveId);
+    const moveAccuracy =
+        moveData.accuracy === true ? 1 : moveData.accuracy / 100;
     const result = calculateADV(
         generation,
         new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
@@ -89,7 +92,10 @@ export const GetMoveDamange: (args: {
     ) as Result;
     const damage = result.damage as number[];
     if (typeof damage === "object") {
-        return damage.reduce((a, b) => a + b) / damage.length;
+        return (
+            (damage.reduce((a, b) => a + b) / damage.length) *
+            (Math.random() < moveAccuracy ? 1 : 0)
+        );
     } else {
         return damage / result.defender.stats.hp;
     }

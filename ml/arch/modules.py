@@ -282,7 +282,7 @@ class PointerLogits(nn.Module):
                 keys = nn.Dense(features=keys.shape[-1])(keys)
 
         # Pointer
-        logits = jnp.matmul(keys, query)  # ij,j->i
+        logits = query @ keys.T  # ij,j->i
         return logits
 
 

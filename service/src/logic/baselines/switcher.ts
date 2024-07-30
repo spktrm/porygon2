@@ -65,17 +65,13 @@ function MatchupPokemon(args: {
     const defenderSpeed = CalculateSpeedStat(defender);
 
     if (attackerSpeed > defenderSpeed) {
-        score += SPEED_TIER_COEFFECIENT;
+        score += 1;
     } else if (attackerSpeed < defenderSpeed) {
-        score -= SPEED_TIER_COEFFECIENT;
+        score -= 1;
     }
 
     const CalculateHpRatio = (pokemon: Pokemon) => {
-        return (
-            (pokemon.baseSpecies.baseStats.hp / 255) *
-            (pokemon.hp / pokemon.maxhp) *
-            HP_FRACTION_COEFICIENT
-        );
+        return (2 * pokemon.hp) / pokemon.maxhp - 1;
     };
 
     const CalculateStatRatio = (attacker: Pokemon, defender: Pokemon) => {
@@ -83,16 +79,15 @@ function MatchupPokemon(args: {
             attacker.baseSpecies.baseStats.atk /
                 defender.baseSpecies.baseStats.def +
             attacker.baseSpecies.baseStats.spa /
-                defender.baseSpecies.baseStats.spd
+                defender.baseSpecies.baseStats.spd -
+            2
         );
     };
 
     score +=
-        (CalculateHpRatio(attacker) + CalculateStatRatio(attacker, defender)) /
-        3;
+        CalculateHpRatio(attacker) + CalculateStatRatio(attacker, defender);
     score -=
-        (CalculateHpRatio(defender) + CalculateStatRatio(defender, attacker)) /
-        3;
+        CalculateHpRatio(defender) + CalculateStatRatio(defender, attacker);
 
     if (defender.status) {
         score += STATUS_COEFFECIENT_MAPPING[defender.status] ?? 0;
@@ -111,8 +106,24 @@ const getNumRemainingMons: (side: Side) => number = (side) => {
 const SLEEP_TALK_PRIORITY = 5;
 const STATUS_PRIORITY = 3;
 const ENTRY_HAZARD_PRIORITY = 1;
+const ENCORE_PRIORITY = 1;
+const LEECHSEED_PRIORITY = 1;
 const KNOCKOFF_PRIORITY = 2;
 const BOOST_PRIORITY = 0;
+const HEALBELL_PRIORITY = -1;
+const HAZE_PRIORITY = -1;
+
+function calculateHpValue(pokemon: Pokemon) {
+    return (
+        Math.floor(
+            ((2 * pokemon.baseSpecies.baseStats.hp + 31 + Math.floor(85 / 4)) *
+                pokemon.level) /
+                100,
+        ) +
+        pokemon.level +
+        10
+    );
+}
 
 function calculateStatusPriority(args: {
     attacker: Pokemon;
@@ -135,6 +146,9 @@ function calculateHealRatio(args: {
     // const opponentHpRatio = defender.hp / defender.maxhp;
     const activeWeather = battle.field.weather;
 
+    const attackerHp = attacker.hp;
+    const defenderHp = calculateHpValue(defender);
+
     switch (moveData.id) {
         case "synthesis":
         case "moonlight":
@@ -155,11 +169,14 @@ function calculateHealRatio(args: {
                 defender,
                 moveId: moveData.id,
             });
-            return (0.5 * damage) / defender.maxhp;
+            return (0.5 * damage) / defenderHp;
         case "wish":
             return 0.5;
         case "rest":
             return 1;
+        case "painsplit":
+            const avgHp = (attackerHp + defenderHp) / 2;
+            return (avgHp - attackerHp) / attacker.maxhp;
         default:
             if (isNaN(healRatio)) {
                 return 1;
@@ -174,8 +191,8 @@ const calcMovePrior: (args: {
     move: Request.ActivePokemon["moves"][0];
     attacker: Pokemon;
     defender: Pokemon;
-    score: number;
-}) => number = ({ handler, move, attacker, defender, score }) => {
+    attackerScore: number;
+}) => number = ({ handler, move, attacker, defender, attackerScore }) => {
     const battle = handler.privatebattle;
     const { id } = move;
     const attackerRecentDamage = handler.eventHandler.getRecentDamage(
@@ -189,52 +206,201 @@ const calcMovePrior: (args: {
 
     const boosts = moveData.boosts ?? {};
     const attackerHpRatio = attacker.hp / attacker.maxhp;
+    const defenderHpRatio = defender.hp / defender.maxhp;
 
     const nRemainingMons = getNumRemainingMons(attacker.side);
     const nOppRemainingMons = getNumRemainingMons(defender.side);
 
-    if (
-        id === "sleeptalk" &&
-        attacker.status === "slp" &&
-        attacker.statusState.sleepTurns < 3
-    ) {
-        return SLEEP_TALK_PRIORITY;
-    }
-    if (
-        id === "knockoff" &&
-        defender.item === "" &&
-        !(defender.itemEffect === "knocked off")
-    ) {
-        return KNOCKOFF_PRIORITY;
-    }
-    if (
-        id === "substitute" &&
-        !!!attacker.volatiles.substitute &&
-        attackerRecentDamage < 0.25 &&
-        attackerHpRatio >= 0.5
-    ) {
-        return KNOCKOFF_PRIORITY;
-    }
-    if (attackerHpRatio < 1) {
-        if (id === "protect" && attacker.lastMove === "wish") {
-            return KNOCKOFF_PRIORITY;
-        }
-        if (moveData.heal) {
-            const healRatio = calculateHealRatio({
-                battle,
-                attacker,
-                defender,
-                moveData,
-            });
+    const { atk: defenderAtk, spa: defenderSpa } =
+        defender.baseSpecies.baseStats;
+
+    switch (id) {
+        case "meanlook":
+            if (!defender.volatiles.trapped) {
+                return 1.5;
+            }
+            break;
+        case "perishsong":
             if (
-                attackerHpRatio + attackerRecentDamage > 0 &&
-                healRatio >= attackerRecentDamage &&
-                attackerHpRatio + healRatio < 1.25 &&
-                Math.random() <= moveAccuracy
+                !Object.keys(defender.volatiles).some((volatile) =>
+                    volatile.startsWith("perish"),
+                )
+            )
+                return 1;
+            break;
+        case "spiderweb":
+            if (attackerScore > 0) {
+                return 2;
+            }
+            break;
+        case "trick":
+            if (attacker.item.startsWith("choice")) {
+                return HEALBELL_PRIORITY;
+            }
+            break;
+        case "yawn":
+            return 0;
+        case "endure":
+            if (
+                attackerHpRatio + attackerRecentDamage < 0 &&
+                attackerScore < 0
             ) {
+                return 0;
+            }
+            break;
+        case "destinybond":
+            if (attackerHpRatio + attackerRecentDamage < 0) {
+                return 0;
+            }
+            break;
+        case "raindance":
+        case "sunnyday":
+            if (moveData.weather) {
+                const weather = battle.field.weather;
+                const weatherState = battle.field.weatherState;
+                if (
+                    (id === "raindance" &&
+                        (weather !== "Rain" ||
+                            weatherState.maxDuration === 1)) ||
+                    (id === "sunnyday" &&
+                        (weather !== "Sun" || weatherState.maxDuration === 1))
+                ) {
+                    return 2;
+                }
+            }
+            break;
+        case "refresh":
+            if (["brn", "tox", "par"].some((s) => s === attacker.status)) {
+                return HEALBELL_PRIORITY;
+            }
+            break;
+        case "roar":
+        case "whirlwind":
+            if (attackerHpRatio + attackerRecentDamage > 0) {
+                return HEALBELL_PRIORITY;
+            }
+            if (
+                Object.keys(defender.side.sideConditions).some(
+                    (sideCondition) =>
+                        sideCondition === "spikes" ||
+                        sideCondition === "stealthrock" ||
+                        sideCondition === "toxicspikes",
+                )
+            ) {
+                return HEALBELL_PRIORITY + 1;
+            }
+            break;
+        case "leechseed":
+            return LEECHSEED_PRIORITY;
+        case "healbell":
+            if (
+                attacker.side.team.some((member) => {
+                    const { status } = member;
+                    return (
+                        (status === "slp" && !member.isActive()) ||
+                        status !== undefined
+                    );
+                })
+            ) {
+                return HEALBELL_PRIORITY;
+            }
+            break;
+        case "encore":
+            const defenderLastMoveData = battle.gens.dex.moves.get(
+                defender.lastMove,
+            );
+            if (
+                defenderLastMoveData.status &&
+                attacker.baseSpecies.baseStats.spe >
+                    defender.baseSpecies.baseStats.spe
+            ) {
+                return ENCORE_PRIORITY;
+            }
+            break;
+        case "haze":
+            if (
+                Object.values(defender.boosts ?? {}).reduce(
+                    (a, b) => a + b,
+                    0,
+                ) > 0 ||
+                Object.values(attacker.boosts ?? {}).reduce(
+                    (a, b) => a + b,
+                    0,
+                ) < 0
+            ) {
+                return HAZE_PRIORITY;
+            }
+            break;
+        case "mirrorcoat":
+            return defenderSpa > defenderAtk ? 1 : -100;
+        case "counter":
+            return defenderAtk > defenderSpa ? 1 : -100;
+        case "sleeptalk":
+            if (
+                attacker.status === "slp" &&
+                attacker.statusState.sleepTurns < 3
+            ) {
+                return SLEEP_TALK_PRIORITY;
+            }
+            break;
+        case "knockoff":
+            if (defender.item === "" && defender.itemEffect !== "knocked off") {
                 return KNOCKOFF_PRIORITY;
             }
-        }
+            break;
+        case "explosion":
+        case "selfdestruct":
+            if (attackerHpRatio + attackerRecentDamage <= 0) {
+                return 1;
+            }
+            break;
+        case "substitute":
+            if (
+                !attacker.volatiles.substitute &&
+                -attackerRecentDamage < 0.25 &&
+                attackerHpRatio >= 0.5
+            ) {
+                if (attacker.lastMove === "substitute") {
+                    if (Math.random() < 0.5) {
+                        return KNOCKOFF_PRIORITY;
+                    }
+                } else {
+                    return KNOCKOFF_PRIORITY;
+                }
+            }
+            break;
+        case "protect":
+            if (attackerHpRatio < 1) {
+                if (attacker.lastMove === "wish") {
+                    return KNOCKOFF_PRIORITY;
+                }
+                if (
+                    moveData.flags.heal ||
+                    (id === "painsplit" &&
+                        attackerHpRatio < defenderHpRatio &&
+                        !defender.volatiles.substitute)
+                ) {
+                    const healRatio = calculateHealRatio({
+                        battle,
+                        attacker,
+                        defender,
+                        moveData,
+                    });
+                    if (
+                        attackerHpRatio +
+                            (attacker.status === "tox"
+                                ? 1.5 * attackerRecentDamage
+                                : attackerRecentDamage) <=
+                            0 &&
+                        healRatio >= -attackerRecentDamage &&
+                        attackerHpRatio + healRatio < 1.3 &&
+                        Math.random() <= moveAccuracy
+                    ) {
+                        return KNOCKOFF_PRIORITY;
+                    }
+                }
+            }
+            break;
     }
 
     if (
@@ -285,7 +451,7 @@ const calcMovePrior: (args: {
 
     const { target } = moveData;
     if (
-        score > 0 &&
+        attackerHpRatio + attackerRecentDamage > 0 &&
         Object.keys(boosts).length > 0 &&
         Object.values(boosts).reduce((a, b) => a + b) >= 1 &&
         target === "self" &&
@@ -301,7 +467,7 @@ const calcMovePrior: (args: {
         if (attackerHpRatio >= 0.9) {
             if (
                 id === "spikes" &&
-                ((defender.side.sideConditions[id] ?? {}).level ?? 0) < 3
+                (defender.side.sideConditions[id]?.level ?? 0) < 3
             ) {
                 return ENTRY_HAZARD_PRIORITY;
             } else if (
@@ -378,7 +544,32 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
             attacker,
             defender,
         });
-        if (score < switchThreshold) {
+        let lastMoveDamage = 0;
+        if (attacker.lastMove) {
+            const lastMove =
+                attacker.lastMove === "hiddenpower"
+                    ? attacker.moveSlots.find((x) =>
+                          x.id.startsWith("hiddenpower"),
+                      )?.id ?? ""
+                    : attacker.lastMove;
+            try {
+                lastMoveDamage = GetMoveDamange({
+                    battle,
+                    attacker,
+                    defender,
+                    moveId: lastMove,
+                });
+            } catch (err) {
+                // throw err;
+            }
+        }
+        if (
+            score < switchThreshold ||
+            (attacker.lastMove &&
+                attacker.item.startsWith("choice") &&
+                attacker.lastMove !== "switch-in" &&
+                lastMoveDamage <= 0)
+        ) {
             if (
                 !!!attacker.trapped &&
                 !!!attacker.maybeTrapped &&
@@ -391,31 +582,6 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
             }
         }
         if (moves !== undefined) {
-            const movePriorities = moves
-                .flatMap((move, moveIndex) =>
-                    move.disabled
-                        ? []
-                        : {
-                              move,
-                              moveIndex,
-                              prior: calcMovePrior({
-                                  handler,
-                                  move,
-                                  attacker,
-                                  defender,
-                                  score,
-                              }),
-                          },
-                )
-                .filter(({ prior }) => prior >= 0);
-
-            if (movePriorities.length > 0) {
-                const maxMove = movePriorities.reduce((a, b) =>
-                    a.prior > b.prior ? a : b,
-                );
-                return maxMove.moveIndex;
-            }
-
             const moveData: number[] = moves.map(({ id, disabled }) => {
                 let damage = 0;
                 try {
@@ -428,8 +594,12 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                 } catch (err) {
                     throw err;
                 }
+                if (["selfdestruct", "explosion"].includes(id)) {
+                    return -99;
+                }
                 return disabled ? -100 : damage;
             });
+
             const indexOfLargestNum = moveData.reduce(
                 (maxIndex, currentElement, currentIndex, arr) => {
                     return currentElement > arr[maxIndex]
@@ -438,6 +608,45 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                 },
                 0,
             );
+
+            if (
+                !["frz", "slp"].includes(defender.status ?? "") &&
+                moveData.some(
+                    (damage) =>
+                        (defender.hp * calculateHpValue(defender)) /
+                            defender.maxhp -
+                            damage <=
+                        0,
+                )
+            ) {
+                return indexOfLargestNum;
+            }
+
+            const movePriorities = moves
+                .flatMap((move, moveIndex) =>
+                    move.disabled
+                        ? []
+                        : {
+                              move,
+                              moveIndex,
+                              prior: calcMovePrior({
+                                  handler,
+                                  move,
+                                  attacker,
+                                  defender,
+                                  attackerScore: score,
+                              }),
+                          },
+                )
+                .filter(({ prior }) => prior >= 0);
+
+            if (movePriorities.length > 0) {
+                const maxMove = movePriorities.reduce((a, b) =>
+                    a.prior > b.prior ? a : b,
+                );
+                return maxMove.moveIndex;
+            }
+
             return indexOfLargestNum;
         }
     }

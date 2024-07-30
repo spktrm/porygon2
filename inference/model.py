@@ -10,6 +10,7 @@ from inference.interfaces import PredictionResponse
 
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model
+from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 
 from rlenv.interfaces import EnvStep
@@ -21,6 +22,7 @@ class InferenceModel:
 
         model_config = get_model_cfg()
         self.network = get_model(model_config)
+        self.finetuning = FineTuning()
 
         if not fpath:
             fpath = get_most_recent_file("./ckpts")
@@ -29,11 +31,13 @@ class InferenceModel:
             step = pickle.load(f)
         self.params = step["params"]
 
-    @functools.partial(jax.jit, static_argnums=(0,))
+    # @functools.partial(jax.jit, static_argnums=(0,))
     def _network_jit_apply(
         self, env_step: EnvStep
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        return self.network.apply(self.params, env_step)
+        pi, v, log_pi, logit = self.network.apply(self.params, env_step)
+        pi = self.finetuning(pi, env_step.legal, 1)
+        return pi, v, log_pi, logit
 
     def predict(self, env_step: EnvStep):
         pi, v, log_pi, logit = self._network_jit_apply(env_step)

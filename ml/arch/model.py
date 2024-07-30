@@ -1,8 +1,7 @@
-import jax
 import math
 import chex
+import pickle
 import flax.linen as nn
-import jax.numpy as jnp
 
 from pprint import pprint
 from typing import Dict
@@ -11,7 +10,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params
+from ml.utils import Params, get_most_recent_file
 
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep
@@ -26,22 +25,32 @@ class Model(nn.Module):
         self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep):
-        current_state, select_embeddings, move_embeddings = self.encoder(env_step)
+        (
+            current_state,
+            select_embeddings,
+            move_embeddings,
+            history_states,
+            valid_mask,
+        ) = self.encoder(env_step)
         logit, pi, log_pi = self.policy_head(
-            current_state, select_embeddings, move_embeddings, env_step.legal
+            history_states,
+            valid_mask,
+            select_embeddings,
+            move_embeddings,
+            env_step.legal,
         )
         v = self.value_head(current_state)
         return pi, v, log_pi, logit
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
-    def calculate_params(vars: Params) -> int:
+    def calculate_params(key: str, vars: Params) -> int:
         total = 0
-        for _, value in vars.items():
+        for key, value in vars.items():
             if isinstance(value, chex.Array):
                 total += math.prod(value.shape)
             else:
-                total += calculate_params(value)
+                total += calculate_params(key, value)
         return total
 
     def build_param_dict(
@@ -56,7 +65,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
                     "ratio": num_params / total_params,
                 }
             else:
-                nested_params = calculate_params(value)
+                nested_params = calculate_params(key, value)
                 param_entry = {
                     "num_params": nested_params,
                     "ratio": nested_params / total_params,
@@ -68,7 +77,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
                 param_dict[key] = param_entry
         return param_dict
 
-    total_params = calculate_params(vars)
+    total_params = calculate_params("base", vars)
     return build_param_dict(vars, total_params, 0)
 
 
@@ -80,14 +89,15 @@ def main():
     config = get_model_cfg()
     network = get_model(config)
 
-    # latest_ckpt = get_most_recent_file("./ckpts")
-    # print(f"loading checkpoint from {latest_ckpt}")
-    # with open(latest_ckpt, "rb") as f:
-    #     step = pickle.load(f)
-    # params = step["params"]
-    key = jax.random.key(42)
+    latest_ckpt = get_most_recent_file("./ckpts")
+    print(f"loading checkpoint from {latest_ckpt}")
+    with open(latest_ckpt, "rb") as f:
+        step = pickle.load(f)
+    params = step["params"]
+    # key = jax.random.key(42)
 
-    params = network.init(key, get_ex_step())
+    # params = network.init(key, get_ex_step())
+    network.apply(params, get_ex_step())
 
     pprint(get_num_params(params))
 

@@ -67,25 +67,35 @@ class PolicyHead(nn.Module):
 
     def __call__(
         self,
-        state_embedding: chex.Array,
+        history_states: chex.Array,
+        valid_mask: chex.Array,
         select_embeddings: chex.Array,
         action_embeddings: chex.Array,
         legal: chex.Array,
     ):
-        query = self.query(state_embedding)
+        valid_mask_sum = valid_mask.sum()
+        query = self.query(history_states)
+        action_type_logits = valid_mask @ self.action_type_logits(query)
 
-        action_type_logits = self.action_type_logits(query)
         can_move = legal[:4].any(axis=-1)
         can_switch = legal[4:].any(axis=-1)
         is_choice = can_move & can_switch
+
         move_bias = jnp.where(is_choice, action_type_logits[..., 0], 0)
         switch_bias = jnp.where(is_choice, action_type_logits[..., 1], 0)
-        action_logits = self.action_logits(query, action_embeddings) + move_bias
-        select_logits = self.select_logits(query, select_embeddings) + switch_bias
 
-        logits = jnp.concatenate((action_logits, select_logits))
         denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
-        logits = logits * jax.lax.rsqrt(denom)
+
+        action_logits = valid_mask @ self.action_logits(query, action_embeddings)
+        action_logits = action_logits * jax.lax.rsqrt(denom)
+
+        select_logits = valid_mask @ self.select_logits(query, select_embeddings)
+        select_logits = select_logits * jax.lax.rsqrt(denom)
+
+        logits = (
+            jnp.concatenate((action_logits + move_bias, select_logits + switch_bias))
+            / valid_mask_sum
+        )
 
         policy = _legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)

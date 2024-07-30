@@ -10,7 +10,8 @@ def main():
         results = json.load(f)
 
     # Process the data
-    data = np.array(results).reshape(9, 9, -1)
+    data = np.array(results)
+    data = data.reshape(12, 12, -1)
     data = data.mean(-1)
     data = (data + 1) / 2
 

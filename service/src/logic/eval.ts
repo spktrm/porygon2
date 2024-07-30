@@ -38,6 +38,10 @@ export const evalActionMapping: EvalActionFnType[] = [
         return -1;
     },
     GetMaxDamageAction,
+    partial(GetBestSwitchAction, { switchThreshold: 4 }),
+    partial(GetBestSwitchAction, { switchThreshold: 3 }),
+    partial(GetBestSwitchAction, { switchThreshold: 2 }),
+    partial(GetBestSwitchAction, { switchThreshold: 1 }),
     partial(GetBestSwitchAction, { switchThreshold: 0 }),
     partial(GetBestSwitchAction, { switchThreshold: -1 }),
     partial(GetBestSwitchAction, { switchThreshold: -2 }),

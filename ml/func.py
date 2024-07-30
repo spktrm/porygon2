@@ -9,36 +9,6 @@ from jax import numpy as jnp
 from jax import tree_util as tree
 
 
-class HLGaussLoss:
-    def __init__(self, min_value: float, max_value: float, num_bins: int, sigma: float):
-        self.min_value = min_value
-        self.max_value = max_value
-        self.num_bins = num_bins
-        self.sigma = sigma
-        self.support = jnp.linspace(min_value, max_value, num_bins + 1)
-
-    def __call__(self, logits: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
-        target_probs = lax.stop_gradient(self.transform_to_probs(target))
-        return self.cross_entropy_loss(logits, target_probs)
-
-    def transform_to_probs(self, target: jnp.ndarray) -> jnp.ndarray:
-        cdf_evals = jsp.erf(
-            (self.support - target[..., None]) / (jnp.sqrt(2.0) * self.sigma)
-        )
-        z = cdf_evals[..., -1] - cdf_evals[..., 0]
-        bin_probs = cdf_evals[..., 1:] - cdf_evals[..., :-1]
-        return bin_probs / z[..., None]
-
-    def transform_from_probs(self, probs: jnp.ndarray) -> jnp.ndarray:
-        centers = (self.support[:-1] + self.support[1:]) / 2
-        return jnp.sum(probs * centers, axis=-1)
-
-    def cross_entropy_loss(
-        self, logits: jnp.ndarray, probs: jnp.ndarray
-    ) -> jnp.ndarray:
-        return -jnp.sum(probs * jax.nn.log_softmax(logits), axis=-1)
-
-
 def _player_others(
     player_ids: chex.Array, valid: chex.Array, player: int
 ) -> chex.Array:
@@ -390,6 +360,11 @@ def get_loss_nerd(
         nerd_loss = -renormalize(nerd_loss, valid * (player_ids == k))
         loss_pi_list.append(nerd_loss)
     return sum(loss_pi_list)
+
+
+def get_loss_recon(loss: chex.Array, valid: chex.Array) -> chex.Array:
+    loss = -loss * valid
+    return loss.sum() / valid.sum()
 
 
 def get_loss_heuristic(
