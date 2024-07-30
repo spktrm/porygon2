@@ -27,3 +27,6 @@ ml/wandb/
 wandb/
 
 ckpts/
+
+# heuristics ignores
+heuristics/**/*.json
