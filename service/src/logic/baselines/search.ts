@@ -157,26 +157,6 @@ class RandomRolloutEvaluator extends Evaluator {
             1.0 / legalActions.length,
         ]);
     }
-
-    private choice<T>(items: T[]): T {
-        const index = this.randomState.integer(0, items.length - 1);
-        return items[index];
-    }
-
-    private weightedChoice<T>(items: T[], weights: number[]): T {
-        const sumOfWeights = weights.reduce((a, b) => a + b, 0);
-        const random = this.randomState.real(0, sumOfWeights, false);
-        let cumulativeWeight = 0;
-
-        for (let i = 0; i < items.length; i++) {
-            cumulativeWeight += weights[i];
-            if (random < cumulativeWeight) {
-                return items[i];
-            }
-        }
-
-        return items[items.length - 1]; // Fallback to the last item, should not reach here.
-    }
 }
 
 class SearchNode {
