@@ -24,7 +24,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = RNaDConfig()
+    learner_config = TeacherForceConfig()
     model_config = get_model_cfg()
     network = get_model(model_config)
 
@@ -32,7 +32,7 @@ def main():
         network, TRAINING_SOCKET_PATH, batch_size=learner_config.batch_size
     )
     evaluation_collector = BatchCollector(
-        network, EVALUATION_SOCKET_PATH, batch_size=12
+        network, EVALUATION_SOCKET_PATH, batch_size=14
     )
     learner = Learner(network, config=learner_config)
 
@@ -42,13 +42,13 @@ def main():
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
 
-        # for key, value in step.items():
-        #     setattr(learner, key, value)
+        for key, value in step.items():
+            setattr(learner, key, value)
 
-        learner.params = step["params"]
-        learner.params_target = step["params"]
-        learner.params_prev = step["params"]
-        learner.params_prev_ = step["params"]
+        # learner.params = step["params"]
+        # learner.params_target = step["params"]
+        # learner.params_prev = step["params"]
+        # learner.params_prev_ = step["params"]
 
         # for key, value in step.items():
         #     setattr(learner, key, value)

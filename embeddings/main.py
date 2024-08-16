@@ -1,20 +1,14 @@
 import os
 import json
 import traceback
+import umap
 
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-import jax
-import optax
-import jax.numpy as jnp
-import flax.linen as nn
-
-from jax import random, jit
-from flax.training import train_state
-
 from typing import Any, Dict, List, Sequence
+from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity
 
 from embeddings.encoders import onehot_encode, z_score_scale

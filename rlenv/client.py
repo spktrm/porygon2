@@ -4,13 +4,13 @@ import functools
 import numpy as np
 import flax.linen as nn
 
-from typing import Sequence
+from typing import Callable, Sequence
 
 from ml.utils import Params
 
 from rlenv.data import SocketPath
 from rlenv.env import ParallelEnvironment, EnvStep
-from rlenv.interfaces import ActorStep, TimeStep
+from rlenv.interfaces import ActorStep, ModelOutput, TimeStep
 from rlenv.utils import stack_steps
 
 
@@ -24,12 +24,15 @@ class BatchCollector:
         return self.game.step(list(actions))
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> chex.Array:
-        rollout = jax.vmap(self.network.apply, (None, 0), 0)
+    def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> ModelOutput:
+        rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
+            self.network.apply, (None, 0), 0
+        )
         return rollout(params, env_steps)
 
     def actor_step(self, params: Params, env_step: EnvStep):
-        pi, _, _, _ = self._network_jit_apply(params, env_step)
+        output = self._network_jit_apply(params, env_step)
+        pi = output.pi
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )

@@ -190,8 +190,6 @@ class Transformer(nn.Module):
     transformer_num_heads: int
     transformer_key_size: int
     transformer_value_size: int
-    resblocks_num_before: int
-    resblocks_num_after: int
     resblocks_hidden_size: Optional[int] = None
     use_layer_norm: bool = True
 
@@ -199,16 +197,8 @@ class Transformer(nn.Module):
     def __call__(
         self, x: chex.Array, mask: chex.Array, temporal_mask: chex.Array = None
     ):
-        for _ in range(self.resblocks_num_before):
-            x = UnitsResblock(
-                hidden_size=self.resblocks_hidden_size,
-                use_layer_norm=self.use_layer_norm,
-            )(x)
         for _ in range(self.transformer_num_layers):
             x1 = x
-            if self.use_layer_norm:
-                x1 = nn.LayerNorm()(x1)
-            x1 = activation_fn(x1)
             # The logits mask has shape [num_heads, num_units, num_units]:
             logits_mask = mask[jnp.newaxis, jnp.newaxis]
             if temporal_mask is not None:
@@ -222,11 +212,12 @@ class Transformer(nn.Module):
             # Mask here mostly for safety:
             x1 = jnp.where(mask[:, jnp.newaxis], x1, 0)
             x = x + x1
-        for _ in range(self.resblocks_num_after):
             x = UnitsResblock(
                 hidden_size=self.resblocks_hidden_size,
                 use_layer_norm=self.use_layer_norm,
             )(x)
+            if self.use_layer_norm:
+                x = nn.LayerNorm()(x)
         x = jnp.where(mask[:, jnp.newaxis], x, 0)
         return x
 

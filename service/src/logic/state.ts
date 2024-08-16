@@ -51,8 +51,10 @@ import {
 import { Pokemon } from "@pkmn/client";
 import { TwoDBoolArray } from "./arr";
 import { StreamHandler } from "./handler";
-import { evalActionMapping, getEvalAction, partial } from "./eval";
+import { evalActionMapping, getEvalAction, numEvals, partial } from "./eval";
 import { GetBestSwitchAction } from "./baselines/switcher";
+import { Battle as World } from "@pkmn/sim";
+import { GetSearchDistribution } from "./baselines/search";
 
 const sanitizeKeyCache = new Map<string, string>();
 
@@ -133,6 +135,8 @@ export class EventHandler implements Protocol.Handler {
     switchCounter: number;
     historyMaxSize: number;
     hpRatios: { [k: string]: { turn: number; hpRatio: number }[] };
+    numSwitches: { [k: string]: number };
+    lastAction: [number, number];
 
     constructor(handler: StreamHandler, historyMaxSize: number = 8) {
         this.handler = handler;
@@ -141,6 +145,8 @@ export class EventHandler implements Protocol.Handler {
         this.switchCounter = 0;
         this.historyMaxSize = historyMaxSize;
         this.hpRatios = {};
+        this.numSwitches = {};
+        this.lastAction = [-1, -1];
     }
 
     getRecentDamage(ident: string) {
@@ -294,8 +300,8 @@ export class EventHandler implements Protocol.Handler {
         return {
             active: activeArr,
             boosts: new Uint8Array(boostsData.buffer),
-            sideConditions: volatilesData,
-            volatileStatus: sideConditionsData,
+            sideConditions: sideConditionsData,
+            volatileStatus: volatilesData,
             hyphenArgs: hyphenArgsArr,
         };
     }
@@ -351,6 +357,11 @@ export class EventHandler implements Protocol.Handler {
         turnContext[FeatureTurnContext.SWITCH_COUNTER] = this.switchCounter;
         turnContext[FeatureTurnContext.MOVE_COUNTER] = this.moveCounter;
         turnContext[FeatureTurnContext.TURN] = this.handler.publicBattle.turn;
+
+        if (isMyTurn) {
+            this.lastAction = [action, move];
+        }
+
         return [
             p1Side,
             p2Side,
@@ -401,6 +412,13 @@ export class EventHandler implements Protocol.Handler {
             ActionTypeEnum.SWITCH,
             MovesEnum.MOVES_NONE,
         );
+        const battle = this.handler.publicBattle;
+        const pokemon = battle.getPokemon(args[1]);
+        if (pokemon) {
+            const ident = pokemon.ident;
+            const count = this.numSwitches[ident] ?? 0;
+            this.numSwitches[ident] = (count + 1) as number;
+        }
         this.switchCounter += 1;
     }
 
@@ -450,6 +468,7 @@ export class EventHandler implements Protocol.Handler {
     reset() {
         this.history = [];
         this.hpRatios = {};
+        this.numSwitches = {};
         this.moveCounter = 0;
         this.switchCounter = 0;
     }
@@ -462,12 +481,13 @@ export class EventHandler implements Protocol.Handler {
 
 export class StateHandler {
     handler: StreamHandler;
+
     constructor(handler: StreamHandler) {
         this.handler = handler;
     }
 
     getLegalActions(): LegalActions {
-        const request = this.handler.privatebattle.request as AnyObject;
+        const request = this.handler.privateBattle.request as AnyObject;
         const legalActions = new LegalActions();
 
         if (request === undefined) {
@@ -552,7 +572,7 @@ export class StateHandler {
             movesetArr[offset + FeatureMoveset.MOVEID] = IndexValueFromEnum<
                 typeof MovesEnum
             >("Moves", id);
-            movesetArr[offset + FeatureMoveset.PPLEFT] = pp;
+            movesetArr[offset + FeatureMoveset.PPUSED] = pp;
             movesetArr[offset + FeatureMoveset.PPMAX] = maxpp;
             offset += numMoveFields;
         }
@@ -562,18 +582,46 @@ export class StateHandler {
             remainingIndex++
         ) {
             movesetArr[offset + FeatureMoveset.MOVEID] = MovesEnum.MOVES_NONE;
-            movesetArr[offset + FeatureMoveset.PPLEFT] = 0;
+            movesetArr[offset + FeatureMoveset.PPUSED] = 0;
             movesetArr[offset + FeatureMoveset.PPMAX] = 1;
             offset += numMoveFields;
+        }
+        const playerIndex = this.handler.getPlayerIndex();
+        if (playerIndex !== undefined) {
+            const mySide = this.handler.privateBattle.sides[playerIndex];
+
+            for (let switchIndex = 0; switchIndex < 6; switchIndex++) {
+                const numSwitches =
+                    this.handler.eventHandler.numSwitches[
+                        mySide.team[switchIndex].ident
+                    ] ?? 0;
+                movesetArr[offset + FeatureMoveset.MOVEID] =
+                    MovesEnum.MOVES_SWITCH;
+                movesetArr[offset + FeatureMoveset.PPUSED] = Math.min(
+                    64,
+                    numSwitches,
+                );
+                movesetArr[offset + FeatureMoveset.PPMAX] = 64;
+                offset += numMoveFields;
+            }
+        } else {
+            throw Error();
         }
         return new Uint8Array(movesetArr.buffer);
     }
 
     getPrivateTeam(playerIndex: number): Uint8Array {
-        const side = this.handler.privatebattle.sides[playerIndex];
+        const side = this.handler.privateBattle.sides[playerIndex];
         const team = [];
         for (const member of side.team) {
             team.push(this.handler.eventHandler.getPokemon(member));
+        }
+        for (
+            let memberIndex = side.team.length;
+            memberIndex < 6;
+            memberIndex++
+        ) {
+            team.push(unkPokemon);
         }
         return concatenateUint8Arrays(team);
     }
@@ -641,10 +689,17 @@ export class StateHandler {
         info.setGameid(this.handler.gameId);
         const playerIndex = this.handler.getPlayerIndex() as number;
         info.setPlayerindex(!!playerIndex);
-        info.setTurn(this.handler.privatebattle.turn);
+        info.setTurn(this.handler.privateBattle.turn);
+        info.setLastaction(this.handler.eventHandler.lastAction[0]);
+        info.setLastmove(this.handler.eventHandler.lastAction[1]);
 
-        const heuristicAction = getEvalAction(this.handler, 10);
-        info.setHeuristicaction(heuristicAction.getIndex());
+        const searchDistribution = GetSearchDistribution({
+            handler: this.handler,
+        });
+        const searchDistributionBuffer = new Uint8Array(
+            new Float32Array(searchDistribution).buffer,
+        );
+        info.setHeuristicdistribution(searchDistributionBuffer);
 
         state.setInfo(info);
 

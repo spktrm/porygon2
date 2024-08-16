@@ -138,6 +138,7 @@ export class Game {
     }) {
         const { id, stream } = args;
         let handler = this.handlers[{ p1: 0, p2: 1 }[id]];
+        handler.world = this.world;
         for await (const chunk of stream) {
             const action = await handler.ingestChunk(chunk);
             if (action !== undefined) {
@@ -157,6 +158,11 @@ export class Game {
         const stream = new BattleStreams.BattleStream();
         const streams = BattleStreams.getPlayerStreams(stream);
         const spec = { formatid: formatId, ...options };
+
+        void streams.omniscient.write(`>start ${JSON.stringify(spec)}
+`);
+
+        this.world = stream.battle;
 
         const players = Promise.all([
             this.runPlayer({
@@ -178,10 +184,8 @@ export class Game {
             team: Teams.pack(generator.getTeam()),
         };
 
-        void streams.omniscient.write(`>start ${JSON.stringify(spec)}
->player p1 ${JSON.stringify(p1spec)}
+        void streams.omniscient.write(`>player p1 ${JSON.stringify(p1spec)}
 >player p2 ${JSON.stringify(p2spec)}`);
-        this.world = stream.battle;
 
         await players;
 

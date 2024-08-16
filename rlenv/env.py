@@ -5,7 +5,7 @@ import numpy as np
 
 from typing import Sequence
 
-from rlenv.data import EX_STATE, SocketPath
+from rlenv.data import EX_STATE, NUM_MOVE_FIELDS, SocketPath
 from rlenv.interfaces import EnvStep
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
@@ -17,12 +17,16 @@ uvloop.install()
 def get_history(state: State):
     history = state.history
     history_length = history.length
-    moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape((4, -1))
+    moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape(
+        (-1, NUM_MOVE_FIELDS)
+    )
 
     team = np.frombuffer(state.team, dtype=np.int16).reshape((6, -1))
     my_public = np.frombuffer(state.myPublic, dtype=np.int16).reshape((6, -1))
     opp_public = np.frombuffer(state.oppPublic, dtype=np.int16).reshape((6, -1))
-    side_entities = np.stack((team, my_public, opp_public))
+
+    private_side_entities = team
+    public_side_entities = np.stack((my_public, opp_public))
 
     active_entities = np.frombuffer(history.active, dtype=np.int16).reshape(
         (history_length, 2, -1)
@@ -50,7 +54,8 @@ def get_history(state: State):
     )
     return (
         moveset,
-        side_entities,
+        private_side_entities,
+        public_side_entities,
         padnstack(active_entities),
         padnstack(side_conditions),
         padnstack(volatile_status),
@@ -65,7 +70,8 @@ def get_history(state: State):
 def process_state(state: State) -> EnvStep:
     (
         moveset,
-        side_entities,
+        private_side_entities,
+        public_side_entities,
         active_entities,
         side_conditions,
         volatile_status,
@@ -82,6 +88,11 @@ def process_state(state: State) -> EnvStep:
         game_id=np.array(state.info.gameId, dtype=np.int32),
         turn=np.array(state.info.turn, dtype=np.int32),
         heuristic_action=np.array(state.info.heuristicAction, dtype=np.int32),
+        heuristic_dist=np.frombuffer(
+            state.info.heuristicDistribution, dtype=np.float32
+        ),
+        prev_action=np.array(state.info.lastAction, dtype=np.int32),
+        prev_move=np.array(state.info.lastMove, dtype=np.int32),
         rewards=np.array(
             [state.info.playerOneReward, state.info.playerTwoReward], dtype=np.float32
         ),
@@ -108,7 +119,8 @@ def process_state(state: State) -> EnvStep:
         pseudoweather=pseudoweather,
         hyphen_args=hyphen_args,
         turn_context=turn_context,
-        side_entities=side_entities,
+        private_side_entities=private_side_entities,
+        public_side_entities=public_side_entities,
         moveset=moveset,
     )
 

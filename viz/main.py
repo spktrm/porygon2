@@ -11,7 +11,7 @@ def main():
 
     # Process the data
     data = np.array(results)
-    data = data.reshape(12, 12, -1)
+    data = data.reshape(14, 14, -1)
     data = data.mean(-1)
     data = (data + 1) / 2
 

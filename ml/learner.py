@@ -3,14 +3,13 @@ import pickle
 import jax
 import optax
 import functools
-import haiku as hk
 
 import numpy as np
 import jax.numpy as jnp
 import jax.tree_util as tree
 import flax.linen as nn
 
-from typing import Sequence, Tuple, Union
+from typing import Any, Callable, Sequence, Tuple, Union
 
 from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.utils import Params
@@ -18,14 +17,13 @@ from ml.func import (
     get_loss_entropy,
     get_loss_heuristic,
     get_loss_nerd,
-    get_loss_recon,
     get_loss_v,
     v_trace,
     _player_others,
 )
 
 from rlenv.env import get_ex_step
-from rlenv.interfaces import TimeStep
+from rlenv.interfaces import EnvStep, ModelOutput, TimeStep
 
 
 class EntropySchedule:
@@ -158,6 +156,13 @@ class Learner:
         self.params_prev = network.init(key, ex)
         self.params_prev_ = network.init(key, ex)
 
+        # with open("replays/foundation.ckpt", "rb") as f:
+        #     public_encoder = pickle.load(f)["params"]["public_encoder"]
+        #     self.params["params"]["encoder"]["public_encoder"] = public_encoder
+        #     self.params_target["params"]["encoder"]["public_encoder"] = public_encoder
+        #     self.params_prev["params"]["encoder"]["public_encoder"] = public_encoder
+        #     self.params_prev_["params"]["encoder"]["public_encoder"] = public_encoder
+
         # Parameter optimizers.
         self.optimizer = optax.chain(
             optax.clip(self.config.clip_gradient),
@@ -185,23 +190,30 @@ class Learner:
         alpha: float,
         learner_steps: int,
     ) -> float:
-        rollout = jax.vmap(jax.vmap(self.network.apply, (None, 0), 0), (None, 0), 0)
-        pi, v, log_pi, logit = rollout(params, ts.env)
+        rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
+            jax.vmap(self.network.apply, (None, 0), 0), (None, 0), 0
+        )
+        params_output = rollout(params, ts.env)
 
-        policy_pprocessed = self.config.finetune(pi, ts.env.legal, learner_steps)
+        policy_pprocessed = self.config.finetune(
+            params_output.pi, ts.env.legal, learner_steps
+        )
 
-        _, v_target, _, _ = rollout(params_target, ts.env)
+        params_target_output = rollout(params_target, ts.env)
 
         if self.config.eta_reward_transform > 0:
-            _, _, log_pi_prev, _ = rollout(params_prev, ts.env)
-            _, _, log_pi_prev_, _ = rollout(params_prev_, ts.env)
+            params_prev_output = rollout(params_prev, ts.env)
+            _params_prev_output = rollout(params_prev_, ts.env)
             # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
             # For the stability reasons, reward changes smoothly between iterations.
             # The mixing between old and new reward transform is a convex combination
             # parametrised by alpha.
-            log_policy_reg = log_pi - (alpha * log_pi_prev + (1 - alpha) * log_pi_prev_)
+            log_policy_reg = params_output.log_pi - (
+                alpha * params_prev_output.log_pi
+                + (1 - alpha) * _params_prev_output.log_pi
+            )
         else:
-            log_policy_reg = jnp.zeros_like(log_pi)
+            log_policy_reg = jnp.zeros_like(params_output.log_pi)
 
         valid = ts.env.valid * (ts.env.legal.sum(axis=-1) > 1)
 
@@ -211,7 +223,7 @@ class Learner:
         for player in range(self.config.num_players):
             reward = ts.actor.rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = v_trace(
-                v_target,
+                params_target_output.v,
                 valid,
                 ts.env.player_id,
                 ts.actor.policy,
@@ -232,7 +244,7 @@ class Learner:
             v_trace_policy_target_list.append(policy_target_)
 
         loss_v = get_loss_v(
-            [v] * self.config.num_players, v_target_list, has_played_list
+            [params_output.v] * self.config.num_players, v_target_list, has_played_list
         )
 
         # is_vector = jnp.expand_dims(
@@ -244,8 +256,8 @@ class Learner:
 
         # Uses v-trace to define q-values for Nerd
         loss_nerd = get_loss_nerd(
-            [logit] * self.config.num_players,
-            [pi] * self.config.num_players,
+            [params_output.logit] * self.config.num_players,
+            [params_output.pi] * self.config.num_players,
             v_trace_policy_target_list,
             valid,
             ts.env.player_id,
@@ -255,34 +267,31 @@ class Learner:
             threshold=self.config.nerd.beta,
         )
 
-        loss_entropy = get_loss_entropy(pi, log_pi, ts.env.legal, valid)
-
-        loss_heuristic = get_loss_heuristic(
-            log_pi,
-            valid,
-            ts.env.heuristic_action,
-            ts.env.legal,
+        loss_entropy = get_loss_entropy(
+            params_output.pi, params_output.log_pi, ts.env.legal, valid
         )
 
-        # loss_recon = get_loss_recon(recon_loss, valid)
+        loss_heuristic = get_loss_heuristic(
+            params_output.log_pi,
+            valid,
+            ts.env.heuristic_action,
+            ts.env.heuristic_dist,
+            ts.env.legal,
+        )
 
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
             + self.config.heuristic_loss_coef * loss_heuristic
-            # + self.config.recon_loss_coef * loss_recon
         )
 
-        return loss, (
-            dict(
-                loss_v=loss_v,
-                loss_nerd=loss_nerd,
-                loss_entropy=loss_entropy,
-                loss_heuristic=loss_heuristic,
-                # loss_recon=loss_recon,
-            ),
-        )  # pytype: disable=bad-return-type  # numpy-scalars
+        return loss, dict(
+            loss_v=loss_v,
+            loss_nerd=loss_nerd,
+            loss_entropy=loss_entropy,
+            loss_heuristic=loss_heuristic,
+        )
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def update_parameters(
@@ -299,7 +308,7 @@ class Learner:
         update_target_net: bool,
     ):
         """A jitted pure-functional part of the `step`."""
-        (loss_val, (info,)), grad = self._loss_and_grad(
+        (loss_val, info), grad = self._loss_and_grad(
             params,
             params_target,
             params_prev,
@@ -327,7 +336,7 @@ class Learner:
             lambda: (params_prev, params_prev_),
         )
 
-        lengths = (timestep.env.valid * (timestep.env.legal.sum(axis=-1) > 1)).sum(0)
+        lengths = timestep.env.valid.sum(0)
 
         logs = {
             "loss": loss_val,
@@ -396,8 +405,8 @@ class Learner:
             params_prev=self.params_prev,
             params_prev_=self.params_prev_,
             # Optimizer state.
-            optimizer_state=self.optimizer_state,  # pytype: disable=attribute-error  # always-use-return-annotations
-            optimizer_target_state=self.optimizer_target_state,  # pytype: disable=attribute-error  # always-use-return-annotations
+            optimizer_state=self.optimizer_state,
+            optimizer_target_state=self.optimizer_target_state,
         )
         with open(f"{ckpt_path}/ckpt_{self.learner_steps:08}.pt", "wb") as f:
             pickle.dump(config, f)

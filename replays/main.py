@@ -123,7 +123,7 @@ async def main():
     for player in initlist:
         await player_queue.put(player)
 
-    search = Search(format_id, limit=50)
+    search = Search(format_id, limit=500)
     await asyncio.gather(*[search.get_battle_ids(player_queue) for _ in range(64)])
     results = search.get_results()
     results = [json.loads(res) for res in tqdm(results, desc="loading results")]

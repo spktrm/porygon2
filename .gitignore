@@ -30,3 +30,9 @@ ckpts/
 
 # heuristics ignores
 heuristics/**/*.json
+
+# replays ignores
+replays/**/*.ckpt
+
+# viz ignores
+viz/*.json

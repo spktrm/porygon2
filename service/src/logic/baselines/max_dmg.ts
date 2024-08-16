@@ -28,9 +28,6 @@ export const GetMoveDamange: (args: {
     defender: Pokemon;
     moveId: string;
 }) => number = ({ battle, attacker, defender, generation, moveId }) => {
-    if (!generation) {
-        generation = Generations.get(3);
-    }
     if (moveId === "recharge") {
         return 0;
     }
@@ -38,71 +35,115 @@ export const GetMoveDamange: (args: {
     const moveData = battle.gens.dex.moves.get(moveId);
     const moveAccuracy =
         moveData.accuracy === true ? 1 : moveData.accuracy / 100;
-    const result = calculateADV(
-        generation,
-        new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
-            item: attacker.item,
-            ability: attacker.ability,
-            abilityOn: true,
-            nature: attacker.nature ?? "Hardy",
-            ivs: attacker.ivs,
-            evs: attacker.evs ?? {
-                hp: 84,
-                atk: 84,
-                def: 84,
-                spa: 84,
-                spd: 84,
-                spe: 84,
-            },
-            boosts: attacker.boosts,
-        }),
-        new SmogonPoke(generation, defender.baseSpecies.baseSpecies, {
-            item: defender.item,
-            ability: defender.ability,
-            abilityOn: true,
-            nature: defender.nature ?? "Hardy",
-            ivs: attacker.ivs,
-            evs: defender.evs ?? {
-                hp: 84,
-                atk: 84,
-                def: 84,
-                spa: 84,
-                spd: 84,
-                spe: 84,
-            },
-            boosts: defender.boosts,
-        }),
-        new Move(generation, moveId, {
-            species: attacker.baseSpecies.baseSpecies,
-            item: attacker.item,
-            ability: attacker.ability,
-        }),
-        new Field({
-            weather: battle.field.weather,
-            terrain: battle.field.terrain,
-            attackerSide: new Side({
-                isReflect:
-                    attacker.side.sideConditions?.reflect?.level !== undefined,
+
+    const potentialDefenderAbilities = Object.values(
+        defender.baseSpecies.abilities,
+    );
+    const numDefenderAbilities = potentialDefenderAbilities.length;
+    const defenderAbility =
+        defender.ability === ""
+            ? potentialDefenderAbilities[
+                  Math.floor(Math.random() * numDefenderAbilities)
+              ]
+            : defender.ability;
+
+    const Calc = (isCrit: boolean) => {
+        if (!generation) {
+            generation = Generations.get(3);
+        }
+        const result = calculateADV(
+            generation,
+            new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
+                item: attacker.item,
+                ability: attacker.ability,
+                abilityOn: true,
+                nature: attacker.nature ?? "Hardy",
+                ivs: attacker.ivs,
+                level: attacker.level,
+                evs: attacker.evs ?? {
+                    hp: 84,
+                    atk: 84,
+                    def: 84,
+                    spa: 84,
+                    spd: 84,
+                    spe: 84,
+                },
+                boosts: attacker.boosts,
             }),
-            defenderSide: new Side({
-                isReflect:
-                    attacker.side.sideConditions?.reflect?.level !== undefined,
+            new SmogonPoke(generation, defender.baseSpecies.baseSpecies, {
+                item: defender.item,
+                ability: defenderAbility,
+                abilityOn: true,
+                nature: defender.nature ?? "Hardy",
+                ivs: attacker.ivs,
+                level: defender.level,
+                evs: defender.evs ?? {
+                    hp: 84,
+                    atk: 84,
+                    def: 84,
+                    spa: 84,
+                    spd: 84,
+                    spe: 84,
+                },
+                boosts: defender.boosts,
             }),
-        }),
-    ) as Result;
-    const damage = result.damage as number[];
-    if (typeof damage === "object") {
+            new Move(generation, moveId, {
+                species: attacker.baseSpecies.baseSpecies,
+                item: attacker.item,
+                ability: attacker.ability,
+                isCrit,
+            }),
+            new Field({
+                weather: battle.field.weather,
+                terrain: battle.field.terrain,
+                attackerSide: new Side({
+                    isReflect:
+                        attacker.side.sideConditions?.reflect?.level !==
+                        undefined,
+                }),
+                defenderSide: new Side({
+                    isReflect:
+                        attacker.side.sideConditions?.reflect?.level !==
+                        undefined,
+                }),
+            }),
+        ) as Result;
+        const damage = result.damage as number[];
+        if (typeof damage === "object") {
+            return (
+                (damage.reduce((a, b) => a + b) / damage.length) * moveAccuracy
+            );
+        } else {
+            return damage / result.defender.stats.hp;
+        }
+    };
+    const calcCritChance = () => {
+        let stage = 0;
+        if (attacker.ability === "Super Luck") {
+            stage += 1;
+        }
+        if ((moveData.critRatio ?? 1) === 2) {
+            stage += 1;
+        }
+        if (["Razor Claw", "Scope Lens"].includes(attacker.item)) {
+            stage += 1;
+        }
         return (
-            (damage.reduce((a, b) => a + b) / damage.length) *
-            (Math.random() < moveAccuracy ? 1 : 0)
+            {
+                0: 1 / 16,
+                1: 1 / 8,
+                2: 1 / 4,
+                3: 1 / 3,
+                4: 1 / 2,
+            }[Math.min(4, stage)] ?? 1 / 16
         );
-    } else {
-        return damage / result.defender.stats.hp;
-    }
+    };
+    const critChance = calcCritChance();
+    return critChance * Calc(true) + (1 - critChance) * Calc(false);
 };
 
 export const GetMaxDamageAction: EvalActionFnType = ({ handler }) => {
-    const battle = handler.privatebattle;
+    const battle = handler.privateBattle;
     const generation = Generations.get(battle.gen.num);
     const request = battle.request as AnyObject;
     const active = request.active ?? [];

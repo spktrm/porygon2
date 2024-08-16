@@ -3,6 +3,7 @@ import { Generations } from "@pkmn/data";
 import { Dex } from "@pkmn/dex";
 import { AnyObject } from "@pkmn/sim";
 import { Protocol } from "@pkmn/protocol";
+import { Battle as World } from "@pkmn/sim";
 
 import { EventHandler, StateHandler } from "./state";
 
@@ -25,8 +26,9 @@ export class StreamHandler {
     gameId: number;
 
     publicBattle: Battle;
-    privatebattle: Battle;
+    privateBattle: Battle;
     eventHandler: EventHandler;
+    world: World | null;
 
     rqid: string | undefined;
     playerIndex: 0 | 1 | undefined;
@@ -43,9 +45,10 @@ export class StreamHandler {
         this.log = [];
 
         this.publicBattle = new Battle(generations);
-        this.privatebattle = new Battle(generations);
+        this.privateBattle = new Battle(generations);
         this.eventHandler = new EventHandler(this);
 
+        this.world = null;
         this.rqid = undefined;
         this.playerIndex = playerIndex;
 
@@ -54,7 +57,7 @@ export class StreamHandler {
     }
 
     ingestLine(line: string) {
-        this.privatebattle.add(line);
+        this.privateBattle.add(line);
         if (!line.startsWith("|request|")) {
             this.publicBattle.add(line);
         } else {
@@ -77,7 +80,7 @@ export class StreamHandler {
     }
 
     isActionRequired(chunk: string): boolean {
-        const request = (this.privatebattle.request ?? {}) as AnyObject;
+        const request = (this.privateBattle.request ?? {}) as AnyObject;
         this.rqid = request.rqid;
         if (request === undefined) {
             return false;
@@ -98,7 +101,7 @@ export class StreamHandler {
     }
 
     getRequest(): requestType {
-        return this.privatebattle.request as requestType;
+        return this.privateBattle.request as requestType;
     }
 
     getState(): State {
@@ -106,7 +109,7 @@ export class StreamHandler {
     }
 
     getPlayerIndex(): number | undefined {
-        const request = this.privatebattle.request;
+        const request = this.privateBattle.request;
         if (this.playerIndex !== undefined) {
             return this.playerIndex;
         }
@@ -121,7 +124,7 @@ export class StreamHandler {
     async stateActionStep(): Promise<Action | undefined> {
         const state = this.getState();
         const legalActions = state.getLegalactions();
-        const request = this.privatebattle.request;
+        const request = this.privateBattle.request;
         if (request && legalActions) {
             const legalObj = legalActions.toObject();
             const numValidMoves = Object.values(legalObj)
@@ -139,15 +142,15 @@ export class StreamHandler {
     }
 
     ensureRequestApplied() {
-        if (this.privatebattle.request) {
-            while (this.privatebattle.requestStatus !== "applied") {
-                this.privatebattle.update();
+        if (this.privateBattle.request) {
+            while (this.privateBattle.requestStatus !== "applied") {
+                this.privateBattle.update();
             }
-            if (this.privatebattle.turn === 1) {
-                this.privatebattle.requestStatus =
+            if (this.privateBattle.turn === 1) {
+                this.privateBattle.requestStatus =
                     "received" as Battle["requestStatus"];
-                while (this.privatebattle.requestStatus !== "applied") {
-                    this.privatebattle.update();
+                while (this.privateBattle.requestStatus !== "applied") {
+                    this.privateBattle.update();
                 }
             }
         }
@@ -172,7 +175,7 @@ export class StreamHandler {
         this.log = [];
 
         this.publicBattle = new Battle(generations);
-        this.privatebattle = new Battle(generations);
+        this.privateBattle = new Battle(generations);
         this.eventHandler.reset();
 
         this.rqid = undefined;

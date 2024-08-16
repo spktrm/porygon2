@@ -28,7 +28,7 @@ class FineTuning:
     # The learner step after which the policy post processing (aka finetuning)
     # will be enabled when learning. A strictly negative value is equivalent
     # to infinity, ie disables finetuning completely.
-    from_learner_steps: int = 0
+    from_learner_steps: int = -1
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
     policy_threshold: float = 0.03
@@ -159,7 +159,7 @@ class AdamConfig:
 class NerdConfig:
     """Nerd related params."""
 
-    beta: float = 2.0
+    beta: float = 3.0
     clip: float = 10_000
 
 
@@ -187,7 +187,7 @@ class ActorCriticConfig:
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
     entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (20_000,)
+    entropy_schedule_size: Sequence[int] = (10_000,)
 
     # The weight of the reward regularisation term in RNaD.
     eta_reward_transform: float = 0.0
@@ -206,7 +206,7 @@ class ActorCriticConfig:
     # The seed that fully controls the randomness.
     seed: int = 42
 
-    do_eval: bool = True
+    do_eval: bool = False
     num_eval_games: int = 200
     generation: int = 3
 
@@ -219,7 +219,7 @@ class VtraceConfig(ActorCriticConfig):
 
 @chex.dataclass(frozen=True)
 class RNaDConfig(ActorCriticConfig):
-    eta_reward_transform: float = 0.2
+    eta_reward_transform: float = 0.1
 
 
 @chex.dataclass(frozen=True)

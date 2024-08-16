@@ -35,9 +35,9 @@ class InferenceModel:
     def _network_jit_apply(
         self, env_step: EnvStep
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        pi, v, log_pi, logit = self.network.apply(self.params, env_step)
-        pi = self.finetuning(pi, env_step.legal, 1)
-        return pi, v, log_pi, logit
+        output = self.network.apply(self.params, env_step)
+        pi = self.finetuning(output.pi, env_step.legal, 1)
+        return pi, output.v, output.log_pi, output.logit
 
     def predict(self, env_step: EnvStep):
         pi, v, log_pi, logit = self._network_jit_apply(env_step)

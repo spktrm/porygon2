@@ -29,7 +29,7 @@ enum FeatureEntity {
 
 enum FeatureMoveset {
     MOVEID = 0;
-    PPLEFT = 1;
+    PPUSED = 1;
     PPMAX = 2;
 }
 

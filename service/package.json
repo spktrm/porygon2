@@ -10,7 +10,8 @@
         "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
         "test": "npm run compile-base && node dist/tests/smoke.js",
-        "matchup": "npm run compile-base && node dist/tests/matchup.js"
+        "matchup": "npm run compile-base && node dist/tests/matchup.js",
+        "preprocess-replays": "ts-node src/replays/main.ts"
     },
     "dependencies": {
         "@pkmn/client": "^0.6.25",
@@ -26,7 +27,9 @@
         "@types/ws": "^8.5.10",
         "commander": "^12.1.0",
         "google-protobuf": "^3.19.1",
+        "jstat": "^1.9.6",
         "progress": "^2.0.3",
+        "random-js": "^2.1.0",
         "ts-protoc-gen": "^0.15.0",
         "ws": "^8.17.1"
     },

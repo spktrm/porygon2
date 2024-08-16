@@ -1,7 +1,7 @@
 import { AnyObject } from "@pkmn/sim";
 import { evalFuncArgs } from "../eval";
 import { Battle, Pokemon, Side } from "@pkmn/client";
-import { BoostID, Type, TypeName, StatusName } from "@pkmn/dex";
+import { BoostID, Type, TypeName, StatusName, StatID } from "@pkmn/dex";
 import { Request } from "@pkmn/protocol";
 import { Move as DexMove } from "@pkmn/dex-types";
 import { StreamHandler } from "../handler";
@@ -25,23 +25,50 @@ function ComputeTypeMatchup(types1: Type[], types2: Type[]) {
     );
 }
 
-const SPEED_TIER_COEFFECIENT = 0.1;
-const STATUS_COEFFECIENT_MAPPING: { [k in StatusName]: number } = {
-    slp: 0.3,
-    psn: 0.05,
-    brn: 0.1,
-    frz: 0.3,
-    par: 0.0025,
-    tox: 0.2,
+const STATUS_COEFFICIENT_MAPPING: { [k in StatusName]: number } = {
+    slp: 0.4, // Sleep is very impactful due to incapacitation
+    psn: 0.1, // Regular Poison is less impactful than other conditions
+    brn: 0.3, // Burn is significant due to damage and attack reduction
+    frz: 0.4, // Freeze is highly impactful due to complete immobilization
+    par: 0.2, // Paralysis affects speed and can prevent actions
+    tox: 0.3, // Toxic is more impactful than regular poison due to scaling damage
 };
-const HP_FRACTION_COEFICIENT = 0.8;
+
+const WEIGHTS = {
+    typeMatchup: 0.35,
+    speed: 0.05,
+    hpRatio: 0.15,
+    statRatio: 0.2,
+    statusEffect: 0.1,
+    abilityEffect: 0.05,
+    itemEffect: 0.05,
+    weatherEffect: 0.05,
+    moveset: 0.2,
+};
+
+function calculateStat(pokemon: Pokemon, stat: Exclude<StatID, "hp">) {
+    const baseStat = pokemon.baseSpecies.baseStats[stat];
+    const iv = 0;
+    const ev = 85;
+    const boostStage = pokemon.boosts[stat] ?? 0;
+    const boostMulti =
+        boostStage <= 0 ? (boostStage + 8) / 8 : (boostStage + 2) / 2;
+    const value = Math.floor(
+        Math.floor(
+            ((2 * baseStat + iv + Math.floor(ev / 4)) * pokemon.level) / 100 +
+                5,
+        ),
+    );
+    return boostMulti * value;
+}
 
 function MatchupPokemon(args: {
-    battle: Battle;
+    privateBattle: Battle;
+    publicBattle: Battle;
     attacker: Pokemon;
     defender: Pokemon;
 }) {
-    const { battle, attacker, defender } = args;
+    const { privateBattle, publicBattle, attacker, defender } = args;
 
     const attackerTypes = attacker.types.map(
         (t) => attacker.species.dex.types.get(t) as Type,
@@ -50,53 +77,144 @@ function MatchupPokemon(args: {
         (t) => defender.species.dex.types.get(t) as Type,
     );
 
-    let score =
-        Math.max(...ComputeTypeMatchup(attackerTypes, defenderTypes)) -
-        Math.max(...ComputeTypeMatchup(defenderTypes, attackerTypes));
-
-    const CalculateSpeedStat = (pokemon: Pokemon) => {
+    const calculateTypeMatchup = (
+        attackerTypes: Type[],
+        defenderTypes: Type[],
+    ) => {
         return (
-            pokemon.baseSpecies.baseStats.spe *
+            Math.max(...ComputeTypeMatchup(attackerTypes, defenderTypes)) -
+            Math.max(...ComputeTypeMatchup(defenderTypes, attackerTypes))
+        );
+    };
+
+    const calculateSpeedStat = (pokemon: Pokemon) => {
+        return (
+            calculateStat(pokemon, "spe") *
             (pokemon.status === "par" ? 0.25 : 1)
         );
     };
 
-    const attackerSpeed = CalculateSpeedStat(attacker);
-    const defenderSpeed = CalculateSpeedStat(defender);
+    const calculateSpeedAdvantage = (attacker: Pokemon, defender: Pokemon) => {
+        const attackerSpeed = calculateSpeedStat(attacker);
+        const defenderSpeed = calculateSpeedStat(defender);
+        return attackerSpeed > defenderSpeed
+            ? 1
+            : attackerSpeed < defenderSpeed
+            ? -1
+            : 0;
+    };
 
-    if (attackerSpeed > defenderSpeed) {
-        score += 1;
-    } else if (attackerSpeed < defenderSpeed) {
-        score -= 1;
-    }
-
-    const CalculateHpRatio = (pokemon: Pokemon) => {
+    const calculateHpRatio = (pokemon: Pokemon) => {
         return (2 * pokemon.hp) / pokemon.maxhp - 1;
     };
 
-    const CalculateStatRatio = (attacker: Pokemon, defender: Pokemon) => {
+    const calculateStatRatio = (attacker: Pokemon, defender: Pokemon) => {
+        const attackerATK = calculateStat(attacker, "atk");
+        const attackerSPA = calculateStat(attacker, "spa");
+        const defenderDEF = calculateStat(defender, "def");
+        const defenderSPD = calculateStat(defender, "spd");
+        return (attackerATK / defenderDEF + attackerSPA / defenderSPD) / 2;
+    };
+
+    const calculateStatusEffect = (pokemon: Pokemon) => {
+        if (pokemon.status) {
+            return STATUS_COEFFICIENT_MAPPING[pokemon.status] ?? 0;
+        }
+        return 0;
+    };
+
+    const calculateAbilityEffect = (pokemon: Pokemon) => {
+        // Add logic to calculate the effect of abilities if any
+        return 0;
+    };
+
+    const calculateItemEffect = (pokemon: Pokemon) => {
+        // Add logic to calculate the effect of items if any
+        return 0;
+    };
+
+    const calculateWeatherEffect = (pokemon: Pokemon) => {
+        // Add logic to calculate the effect of the current weather
+        return 0;
+    };
+
+    const calculateMovesetEffectiveness = (
+        attacker: Pokemon,
+        defender: Pokemon,
+    ) => {
+        let numDamagingMoves = 0;
+        const publicAttacker = publicBattle.getPokemon(attacker.ident);
+        if (!publicAttacker) {
+            return 0;
+        }
+        const defenderHp = calculateHpValue(defender);
+        const defenderRatio = defender.hp / defender.maxhp;
+        const damageRatios = attacker.moves
+            .map((move) => {
+                if (["selfdestruct", "explosion"].includes(move)) {
+                    return 0;
+                }
+                let damage = 0;
+                try {
+                    damage = GetMoveDamange({
+                        battle: privateBattle,
+                        attacker,
+                        defender,
+                        moveId: move,
+                    });
+                } catch (err) {
+                    // throw Error(move);
+                }
+                if (damage > 0) {
+                    numDamagingMoves += 1;
+                }
+                return damage / defenderHp;
+            })
+            .filter((damageRatio) => damageRatio > 0);
+        const bias = damageRatios.some(
+            (damageRatio) => defenderRatio - damageRatio <= 0,
+        )
+            ? 10
+            : 0;
         return (
-            attacker.baseSpecies.baseStats.atk /
-                defender.baseSpecies.baseStats.def +
-            attacker.baseSpecies.baseStats.spa /
-                defender.baseSpecies.baseStats.spd -
-            2
+            damageRatios.reduce((a, b) => a + b, 0) /
+                Math.max(1, numDamagingMoves) +
+            bias
         );
     };
 
-    score +=
-        CalculateHpRatio(attacker) + CalculateStatRatio(attacker, defender);
-    score -=
-        CalculateHpRatio(defender) + CalculateStatRatio(defender, attacker);
+    const typeMatchupScore = calculateTypeMatchup(attackerTypes, defenderTypes);
+    const speedScore = calculateSpeedAdvantage(attacker, defender);
+    const hpRatioScore =
+        calculateHpRatio(attacker) - calculateHpRatio(defender);
+    const statRatioScore =
+        calculateStatRatio(attacker, defender) -
+        calculateStatRatio(defender, attacker);
+    const statusEffectScore =
+        calculateStatusEffect(defender) - calculateStatusEffect(attacker);
+    const abilityEffectScore =
+        calculateAbilityEffect(attacker) - calculateAbilityEffect(defender);
+    const itemEffectScore =
+        calculateItemEffect(attacker) - calculateItemEffect(defender);
+    const weatherEffectScore =
+        calculateWeatherEffect(attacker) - calculateWeatherEffect(defender);
 
-    if (defender.status) {
-        score += STATUS_COEFFECIENT_MAPPING[defender.status] ?? 0;
-    }
-    if (attacker.status) {
-        score -= STATUS_COEFFECIENT_MAPPING[attacker.status] ?? 0;
-    }
+    const movesetScore =
+        calculateMovesetEffectiveness(attacker, defender) -
+        calculateMovesetEffectiveness(defender, attacker);
 
-    return score;
+    const totalScore =
+        WEIGHTS.typeMatchup * typeMatchupScore +
+        WEIGHTS.speed * speedScore +
+        WEIGHTS.hpRatio * hpRatioScore +
+        WEIGHTS.statRatio * statRatioScore +
+        WEIGHTS.statusEffect * statusEffectScore +
+        WEIGHTS.abilityEffect * abilityEffectScore +
+        WEIGHTS.itemEffect * itemEffectScore +
+        WEIGHTS.weatherEffect * weatherEffectScore +
+        WEIGHTS.moveset * movesetScore;
+
+    return totalScore;
 }
 
 const getNumRemainingMons: (side: Side) => number = (side) => {
@@ -193,7 +311,7 @@ const calcMovePrior: (args: {
     defender: Pokemon;
     attackerScore: number;
 }) => number = ({ handler, move, attacker, defender, attackerScore }) => {
-    const battle = handler.privatebattle;
+    const battle = handler.privateBattle;
     const { id } = move;
     const attackerRecentDamage = handler.eventHandler.getRecentDamage(
         attacker.ident,
@@ -222,6 +340,7 @@ const calcMovePrior: (args: {
             break;
         case "perishsong":
             if (
+                !defender.volatiles["perishsong"] &&
                 !Object.keys(defender.volatiles).some((volatile) =>
                     volatile.startsWith("perish"),
                 )
@@ -229,7 +348,7 @@ const calcMovePrior: (args: {
                 return 1;
             break;
         case "spiderweb":
-            if (attackerScore > 0) {
+            if (!defender.volatiles["spiderweb"] && attackerScore > 0) {
                 return 2;
             }
             break;
@@ -239,7 +358,9 @@ const calcMovePrior: (args: {
             }
             break;
         case "yawn":
-            return 0;
+            if (!defender.volatiles["yawn"]) {
+                return 0;
+            }
         case "endure":
             if (
                 attackerHpRatio + attackerRecentDamage < 0 &&
@@ -291,7 +412,10 @@ const calcMovePrior: (args: {
             }
             break;
         case "leechseed":
-            return LEECHSEED_PRIORITY;
+            if (!defender.volatiles["leechseed"]) {
+                return LEECHSEED_PRIORITY;
+            }
+            break;
         case "healbell":
             if (
                 attacker.side.team.some((member) => {
@@ -306,15 +430,17 @@ const calcMovePrior: (args: {
             }
             break;
         case "encore":
-            const defenderLastMoveData = battle.gens.dex.moves.get(
-                defender.lastMove,
-            );
-            if (
-                defenderLastMoveData.status &&
-                attacker.baseSpecies.baseStats.spe >
-                    defender.baseSpecies.baseStats.spe
-            ) {
-                return ENCORE_PRIORITY;
+            if (!defender.volatiles["encore"]) {
+                const defenderLastMoveData = battle.gens.dex.moves.get(
+                    defender.lastMove,
+                );
+                if (
+                    defenderLastMoveData.status &&
+                    attacker.baseSpecies.baseStats.spe >
+                        defender.baseSpecies.baseStats.spe
+                ) {
+                    return ENCORE_PRIORITY;
+                }
             }
             break;
         case "haze":
@@ -427,7 +553,11 @@ const calcMovePrior: (args: {
                     !hasAbility(defender, ["Water Bubble", "Water Veil"]) &&
                     !hasTypes(defender, ["Fire"])) ||
                 (moveData.status === "slp" &&
-                    !hasAbility(defender, ["Vital Spirit", "Insomnia"])) ||
+                    !hasAbility(defender, ["Vital Spirit", "Insomnia"]) &&
+                    (defender.side.team.every(
+                        (member) => member.status !== "slp",
+                    ) ||
+                        defender.statusState.sleepTurns === 2)) ||
                 (moveData.status === "par" &&
                     !hasAbility(defender, ["Limber"]) &&
                     (moveData.type === "Grass"
@@ -494,12 +624,14 @@ type SwitcherEvalActionFnType = (
     },
 ) => number;
 
+const scores = [];
+
 export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
     handler,
     switchThreshold = 0,
     boostThresold = 0,
 }) => {
-    const battle = handler.privatebattle;
+    const battle = handler.privateBattle;
     const request = battle.request as AnyObject;
     const active = request.active ?? [];
     const moves: Request.ActivePokemon["moves"] = active[0]?.moves;
@@ -524,12 +656,14 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                 : {
                       benchIndex,
                       score: MatchupPokemon({
-                          battle,
+                          privateBattle: handler.privateBattle,
+                          publicBattle: handler.publicBattle,
                           attacker: bench,
                           defender,
                       }),
                   },
         );
+        scores.push(...benchScores.map(({ score }) => score));
         return benchScores.reduce((a, b) => (a.score > b.score ? a : b));
     };
 
@@ -540,7 +674,8 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
 
     if (attacker !== null && defender !== null) {
         const score = MatchupPokemon({
-            battle,
+            privateBattle: handler.privateBattle,
+            publicBattle: handler.publicBattle,
             attacker,
             defender,
         });
@@ -638,7 +773,7 @@ export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
                               }),
                           },
                 )
-                .filter(({ prior }) => prior >= 0);
+                .filter(({ prior }) => prior >= -99);
 
             if (movePriorities.length > 0) {
                 const maxMove = movePriorities.reduce((a, b) =>
