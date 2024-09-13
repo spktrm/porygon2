@@ -794,45 +794,53 @@ class Turn {
 
     addSwitchEdge(
         argName: EdgeArgNames,
-        sourceIdent: string | undefined,
-        targetIdent: string,
+        sourceIdent?: string,
+        targetIdent?: string,
     ) {
-        const target = this.entityNodes.get(targetIdent);
-        const sourceIndex = this.getNodeIndex(
-            sourceIdent === undefined
-                ? target?.affectsMySide
-                    ? "me"
-                    : "opp"
-                : sourceIdent,
-        );
-        const targetIndex = this.getNodeIndex(targetIdent);
-
         const edge = new Edge();
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.SWITCH_EDGE);
-        edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
-        edge.setFeature(FeatureEdge.TARGET_INDEX, targetIndex);
+        if (sourceIdent !== undefined && targetIdent !== undefined) {
+            const target = this.entityNodes.get(targetIdent);
+            const sourceIndex = this.getNodeIndex(
+                sourceIdent === undefined
+                    ? target?.affectsMySide
+                        ? "me"
+                        : "opp"
+                    : sourceIdent,
+            );
+            const targetIndex = this.getNodeIndex(targetIdent);
+
+            edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
+            edge.setFeature(FeatureEdge.TARGET_INDEX, targetIndex);
+        }
         edge.addMajorArg(argName);
         this.addEdge(edge);
         return edge;
     }
 
-    addCantEdge(argName: EdgeArgNames, sourceIdent: string) {
-        const sourceIndex = this.getNodeIndex(sourceIdent);
+    addCantEdge(argName: EdgeArgNames, sourceIdent?: string) {
         const edge = new Edge();
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.CANT_EDGE);
-        edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
-        edge.setFeature(FeatureEdge.TARGET_INDEX, sourceIndex);
+        if (sourceIdent !== undefined) {
+            const sourceIndex = this.getNodeIndex(sourceIdent);
+            edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
+            edge.setFeature(FeatureEdge.TARGET_INDEX, sourceIndex);
+        }
         edge.addMajorArg(argName);
         return this.addEdge(edge);
     }
 
-    addMoveEdge(sourceIdent: string, targetIdent: string) {
-        const sourceIndex = this.getNodeIndex(sourceIdent);
-        const targetIndex = this.getNodeIndex(targetIdent);
+    addMoveEdge(sourceIdent?: string, targetIdent?: string) {
         const edge = new Edge();
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.MOVE_EDGE);
-        edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
-        edge.setFeature(FeatureEdge.TARGET_INDEX, targetIndex);
+        if (sourceIdent !== undefined) {
+            const sourceIndex = this.getNodeIndex(sourceIdent);
+            edge.setFeature(FeatureEdge.SOURCE_INDEX, sourceIndex);
+        }
+        if (targetIdent !== undefined) {
+            const targetIndex = this.getNodeIndex(targetIdent);
+            edge.setFeature(FeatureEdge.TARGET_INDEX, targetIndex);
+        }
         edge.addMajorArg("move");
         return this.addEdge(edge);
     }
@@ -932,6 +940,8 @@ export class EventHandler2 implements Protocol.Handler {
         if (latestTurn.edges.length === 0) {
             if (isMinorArg) {
                 latestTurn.addEffectEdge(argName);
+            } else {
+                console.log(argName);
             }
         }
         const latestEdge = latestTurn.getLatestEdge();
