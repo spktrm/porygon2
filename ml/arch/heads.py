@@ -6,7 +6,7 @@ import flax.linen as nn
 
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, PointerLogits, Resnet
+from ml.arch.modules import Logits, PointerLogits, Resnet, VectorMerge
 from ml.func import legal_policy, legal_log_policy
 
 

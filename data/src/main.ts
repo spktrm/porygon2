@@ -12,7 +12,6 @@ import {
 } from "@pkmn/dex";
 import { Generations } from "@pkmn/data";
 import dotenv from "dotenv";
-import { Protocol } from "@pkmn/protocol";
 
 dotenv.config();
 const accessToken = process.env.ACCESS_TOKEN;
@@ -305,11 +304,87 @@ async function main(): Promise<void> {
             ),
         ]),
         genders: enumerate([unkToken, "M", "F", "N"]),
-        hyphenArgs: enumerate([
+        battleMinorArgs: enumerate([
             unkToken,
-            ...Object.keys(Protocol.ARGS)
+            ...[
+                "|-formechange|",
+                "|-fail|",
+                "|-block|",
+                "|-notarget|",
+                "|-miss|",
+                "|-damage|",
+                "|-heal|",
+                "|-sethp|",
+                "|-status|",
+                "|-curestatus|",
+                "|-cureteam|",
+                "|-boost|",
+                "|-unboost|",
+                "|-setboost|",
+                "|-swapboost|",
+                "|-invertboost|",
+                "|-clearboost|",
+                "|-clearallboost|",
+                "|-clearpositiveboost|",
+                "|-clearnegativeboost|",
+                "|-copyboost|",
+                "|-weather|",
+                "|-fieldstart|",
+                "|-fieldend|",
+                "|-sidestart|",
+                "|-sideend|",
+                "|-swapsideconditions|",
+                "|-start|",
+                "|-end|",
+                "|-crit|",
+                "|-supereffective|",
+                "|-resisted|",
+                "|-immune|",
+                "|-item|",
+                "|-enditem|",
+                "|-ability|",
+                "|-endability|",
+                "|-transform|",
+                "|-mega|",
+                "|-primal|",
+                "|-burst|",
+                "|-zpower|",
+                "|-zbroken|",
+                "|-activate|",
+                "|-fieldactivate|",
+                "|-hint|",
+                "|-center|",
+                "|-message|",
+                "|-combine|",
+                "|-waiting|",
+                "|-prepare|",
+                "|-mustrecharge|",
+                "|-hitcount|",
+                "|-singlemove|",
+                "|-singleturn|",
+                "|-anim|",
+                "|-ohko|",
+                "|-candynamax|",
+                "|-terastallize|",
+            ]
+
                 .filter((x) => x.startsWith("|-"))
                 .map((str) => str.replace(/\|/g, "")),
+        ]),
+        battleMajorArgs: enumerate([
+            unkToken,
+            ...[
+                "|move|",
+                "|switch|",
+                "|drag|",
+                "|detailschange|",
+                "|replace|",
+                "|swap|",
+                "|cant|",
+                "|faint|",
+                "|message|",
+                "|custom|",
+            ].map((str) => str.replace(/\|/g, "")),
         ]),
     };
 

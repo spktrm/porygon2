@@ -142,7 +142,7 @@ export const GetMoveDamange: (args: {
     return critChance * Calc(true) + (1 - critChance) * Calc(false);
 };
 
-export const GetMaxDamageAction: EvalActionFnType = ({ handler }) => {
+export const GetMaxDamageAction: EvalActionFnType = async ({ handler }) => {
     const battle = handler.privateBattle;
     const generation = Generations.get(battle.gen.num);
     const request = battle.request as AnyObject;

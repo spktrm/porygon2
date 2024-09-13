@@ -25,12 +25,12 @@ enum FeatureEntity {
     MOVEPP1 = 21;
     MOVEPP2 = 22;
     MOVEPP3 = 23;
+    HAS_STATUS = 24;
 }
 
 enum FeatureMoveset {
     MOVEID = 0;
     PPUSED = 1;
-    PPMAX = 2;
 }
 
 enum FeatureTurnContext {
@@ -47,4 +47,74 @@ enum FeatureWeather {
     WEATHER_ID = 0;
     MIN_DURATION = 1;
     MAX_DURATION = 2;
+}
+
+enum FeatureAdditionalInformation {
+    NUM_FAINTED = 0;
+    HP_TOTAL = 1;
+
+    NUM_TYPES_PAD = 2;
+    NUM_TYPES_UNK = 3;
+    NUM_TYPES_BUG = 4;
+    NUM_TYPES_DARK = 5;
+    NUM_TYPES_DRAGON = 6;
+    NUM_TYPES_ELECTRIC = 7;
+    NUM_TYPES_FAIRY = 8;
+    NUM_TYPES_FIGHTING = 9;
+    NUM_TYPES_FIRE = 10;
+    NUM_TYPES_FLYING = 11;
+    NUM_TYPES_GHOST = 12;
+    NUM_TYPES_GRASS = 13;
+    NUM_TYPES_GROUND = 14;
+    NUM_TYPES_ICE = 15;
+    NUM_TYPES_NORMAL = 16;
+    NUM_TYPES_POISON = 17;
+    NUM_TYPES_PSYCHIC = 18;
+    NUM_TYPES_ROCK = 19;
+    NUM_TYPES_STEEL = 20;
+    NUM_TYPES_STELLAR = 21;
+    NUM_TYPES_WATER = 22;    
+
+    TOTAL_POKEMON = 23;
+    WISHING = 24;
+
+    MEMBER0_HP = 25;
+    MEMBER1_HP = 26;
+    MEMBER2_HP = 27;
+    MEMBER3_HP = 28;
+    MEMBER4_HP = 29;
+    MEMBER5_HP = 30;
+}
+
+enum EdgeTypes {
+    MOVE_EDGE = 0;
+    SWITCH_EDGE = 1;
+    EFFECT_EDGE = 2;
+    CANT_EDGE = 3;
+}
+
+enum FeatureEdge {
+    SOURCE_INDEX = 0;
+    TARGET_INDEX = 1;
+    TURN_ORDER_VALUE = 2;
+    EDGE_TYPE_TOKEN = 3;
+    MAJOR_ARGS = 4; // Stored as 32 bit binary
+    MINOR_ARGS1 = 5; // Stored as 64 bit binary
+    MINOR_ARGS2 = 6; // Stored as 64 bit binary
+    MOVE_TOKEN = 7;
+    ITEM_TOKEN = 8;
+    ABILITY_TOKEN = 9;
+    FROM_TYPE_TOKEN = 10;
+    FROM_SOURCE_TOKEN = 11;
+    DAMAGE_TOKEN = 12; // damage / 1024 -> hp ratio
+    EFFECT_TOKEN = 13;
+    BOOST_ATK_VALUE = 14;
+    BOOST_DEF_VALUE = 15;
+    BOOST_SPA_VALUE = 16;
+    BOOST_SPD_VALUE = 17;
+    BOOST_SPE_VALUE = 18;
+    BOOST_ACC_VALUE = 19;
+    BOOST_EVA_VALUE = 20;
+    STATUS_TOKEN = 21;
+    ACTIVATE_EFFECT = 22;
 }

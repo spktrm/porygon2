@@ -174,7 +174,7 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 4
+    batch_size: int = 8
     # The learning rate for `params`.
     learning_rate: float = 0.00005
     # The config related to the ADAM optimizer used for updating `params`.
@@ -206,7 +206,7 @@ class ActorCriticConfig:
     # The seed that fully controls the randomness.
     seed: int = 42
 
-    do_eval: bool = False
+    do_eval: bool = True
     num_eval_games: int = 200
     generation: int = 3
 

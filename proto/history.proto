@@ -13,12 +13,13 @@ message History {
     bytes boosts = 2;
     bytes sideConditions = 3;
     bytes volatileStatus = 4;
-    bytes hyphenArgs = 5;
+    bytes additionalInformation = 5;
+    bytes hyphenArgs = 6;
 
     // one sided
-    bytes weather = 6;
-    bytes pseudoweather = 7;
-    bytes turnContext = 8;
+    bytes weather = 7;
+    bytes pseudoweather = 8;
+    bytes turnContext = 9;
 
-    int32 length = 9;
+    int32 length = 10;
 }

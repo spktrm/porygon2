@@ -1,8 +1,9 @@
 import {
     AbilitiesEnum,
+    BattlemajorargsEnum,
+    BattleminorargsEnum,
     BoostsEnum,
     GendersEnum,
-    HyphenargsEnum,
     ItemeffectEnum,
     ItemsEnum,
     MovesEnum,
@@ -14,6 +15,7 @@ import {
     WeathersEnum,
 } from "../../protos/enums_pb";
 import {
+    FeatureAdditionalInformation,
     FeatureEntity,
     FeatureMoveset,
     FeatureTurnContext,
@@ -34,7 +36,8 @@ export type EnumMappings =
     | typeof WeathersEnum
     | typeof PseudoweatherEnum
     | typeof GendersEnum
-    | typeof HyphenargsEnum;
+    | typeof BattlemajorargsEnum
+    | typeof BattleminorargsEnum;
 
 function GenerateEnumKeyMapping<T extends EnumMappings>(
     mapping: T,
@@ -63,13 +66,18 @@ export const MappingLookup = {
     Sideconditions: SideconditionsEnum,
     Weathers: WeathersEnum,
     PseudoWeathers: PseudoweatherEnum,
-    Hyphenargs: HyphenargsEnum,
+    BattleMinorArgs: BattleminorargsEnum,
+    BattleMajorArgs: BattlemajorargsEnum,
 };
 
 export const numBoosts = Object.keys(BoostsEnum).length;
 export const numVolatiles = Object.keys(VolatilestatusEnum).length;
 export const numSideConditions = Object.keys(SideconditionsEnum).length;
-export const numHyphenArgs = Object.keys(HyphenargsEnum).length;
+export const numAdditionalInformations = Object.keys(
+    FeatureAdditionalInformation,
+).length;
+export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
+export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
 export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
 
 export type Mappings = keyof typeof MappingLookup;
@@ -107,16 +115,15 @@ export const sideIdMapping: {
 };
 
 export interface SideObject {
-    active: Uint8Array;
+    team: Uint8Array;
     boosts: Uint8Array;
     sideConditions: Uint8Array;
     volatileStatus: Uint8Array;
-    hyphenArgs: Uint8Array;
+    additionalInformation: Uint8Array;
 }
 
 export interface FieldObject {
     weather: Uint8Array;
-    pseudoweather: Uint8Array;
     turnContext: Uint8Array;
 }
 
@@ -126,7 +133,7 @@ export const numPokemonFields = Object.keys(FeatureEntity).length;
 export const numTurnContextFields = Object.keys(FeatureTurnContext).length;
 export const numWeatherFields = Object.keys(FeatureWeather).length;
 export const numMoveFields = Object.keys(FeatureMoveset).length;
-export const numMovesetFields = 10 * numMoveFields;
+export const numMovesetFields = 2 * 10 * numMoveFields;
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);

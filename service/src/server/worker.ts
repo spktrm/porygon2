@@ -16,7 +16,7 @@ if (!isTraining) {
     game.handlers[1].sendFn = async (state) => {
         const jobKey = game.queueSystem.createJob();
         state.setKey(jobKey);
-        const action = getEvalAction(game.handlers[1], gameId);
+        const action = await getEvalAction(game.handlers[1], gameId);
         game.queueSystem.submitResult(jobKey, action);
         return jobKey;
     };

@@ -10,14 +10,16 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 0.25
+    width_factor = 1
 
     entity_size = int(256 * width_factor)
-    vector_size = int(2048 * width_factor)
+    vector_size = int(1024 * width_factor)
     use_layer_norm = True
 
     # Encoder Configuration
     cfg.encoder = ConfigDict()
+    cfg.encoder.entity_size = entity_size
+    cfg.encoder.vector_size = vector_size
 
     cfg.encoder.move_encoder = ConfigDict()
     cfg.encoder.move_encoder.entity_size = entity_size
@@ -27,7 +29,6 @@ def get_model_cfg():
 
     cfg.encoder.side_encoder = ConfigDict()
     cfg.encoder.side_encoder.entity_size = entity_size
-
     cfg.encoder.side_encoder.merge = ConfigDict()
     cfg.encoder.side_encoder.merge.output_size = vector_size // 2
     cfg.encoder.side_encoder.merge.gating_type = GatingType.POINTWISE
@@ -49,7 +50,7 @@ def get_model_cfg():
     cfg.encoder.team_encoder.to_vector.use_layer_norm = use_layer_norm
 
     cfg.encoder.field_encoder = ConfigDict()
-    cfg.encoder.field_encoder.vector_size = entity_size
+    cfg.encoder.field_encoder.vector_size = vector_size
 
     cfg.encoder.history_encoder = ConfigDict()
     cfg.encoder.history_encoder.entity_size = entity_size

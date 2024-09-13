@@ -422,8 +422,15 @@ def get_loss_heuristic(
     legal: chex.Array,
 ) -> chex.Array:
 
-    heuristic_dist = heuristic_dist * legal
-    target_probs = legal_policy(heuristic_dist, legal)
+    # heuristic_dist = heuristic_dist * legal
+    # target_probs = legal_policy(heuristic_dist, legal)
+
+    # num_actions = legal.shape[-1]
+    target_probs = jnp.where(
+        jnp.expand_dims(heuristic_action >= 0, axis=-1),
+        heuristic_dist,
+        legal / legal.sum(axis=-1, keepdims=True),
+    )
 
     # Cross entropy loss: -sum(target_probs * log_pi)
     xentropy = -target_probs * log_pi

@@ -21,20 +21,16 @@ message LegalActions {
 message Info {
     int32 gameId = 1;
     bool done = 2;
-    float playerOneReward = 3;
-    float playerTwoReward = 4;
+    float winReward = 3;
+    float hpReward = 4;
     bool playerIndex = 5;
     int32 turn = 6;
-    int32 heuristicAction = 7;
-    int32 lastAction = 8;
-    int32 lastMove = 9;
-    bytes heuristicDistribution = 10;
-}
-
-message Move {
-    enums.MovesEnum moveId = 1;
-    int32 pp = 2;
-    int32 maxpp = 3;
+    int32 turnsSinceSwitch = 7;
+    int32 heuristicAction = 8;
+    int32 lastAction = 9;
+    int32 lastMove = 10;
+    float switchReward = 11;
+    bytes heuristicDist = 12;
 }
 
 message State {
@@ -44,6 +40,4 @@ message State {
     bytes moveset = 4;
     bytes team = 5;
     string key = 6;
-    bytes myPublic = 7;
-    bytes oppPublic = 8;
 }

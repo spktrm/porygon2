@@ -220,8 +220,12 @@ class Learner:
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(ts.actor.action, ts.actor.policy.shape[-1])
 
+        rewards = (
+            ts.actor.win_rewards
+        )  # + ts.actor.hp_rewards + ts.actor.switch_rewards
+
         for player in range(self.config.num_players):
-            reward = ts.actor.rewards[:, :, player]  # [T, B, Player]
+            reward = rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = v_trace(
                 params_target_output.v,
                 valid,
@@ -271,26 +275,26 @@ class Learner:
             params_output.pi, params_output.log_pi, ts.env.legal, valid
         )
 
-        loss_heuristic = get_loss_heuristic(
-            params_output.log_pi,
-            valid,
-            ts.env.heuristic_action,
-            ts.env.heuristic_dist,
-            ts.env.legal,
-        )
+        # loss_heuristic = get_loss_heuristic(
+        #     params_output.log_pi,
+        #     valid,
+        #     ts.env.heuristic_action,
+        #     ts.env.heuristic_dist,
+        #     ts.env.legal,
+        # )
 
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
-            + self.config.heuristic_loss_coef * loss_heuristic
+            # + self.config.heuristic_loss_coef * loss_heuristic
         )
 
         return loss, dict(
             loss_v=loss_v,
             loss_nerd=loss_nerd,
             loss_entropy=loss_entropy,
-            loss_heuristic=loss_heuristic,
+            # loss_heuristic=loss_heuristic,
         )
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -318,7 +322,13 @@ class Learner:
             learner_steps,
         )
 
-        # Update `params`` using the computed gradient.
+        param_norm = jax.tree.map(lambda p: jnp.linalg.norm(p), params)
+        grad_norm = jax.tree.map(lambda g: jnp.linalg.norm(g), grad)
+
+        param_norm_sum = jax.tree.reduce(lambda a, b: a + b, param_norm)
+        grad_norm_sum = jax.tree.reduce(lambda a, b: a + b, grad_norm)
+
+        # Update `params` using the computed gradient.
         updates, optimizer_state = self.optimizer.update(grad, optimizer_state, params)
         params = optax.apply_updates(params, updates)
 
@@ -338,6 +348,11 @@ class Learner:
 
         lengths = timestep.env.valid.sum(0)
 
+        params_are_good = jax.tree.reduce(
+            lambda a, b: jnp.logical_and(a, b),
+            jax.tree.map(lambda x: jnp.isfinite(x).all(), self.params),
+        )
+
         logs = {
             "loss": loss_val,
             **dict(info.items()),
@@ -345,6 +360,9 @@ class Learner:
             "trajectory_length_min": lengths.min(),
             "trajectory_length_max": lengths.max(),
             "alpha": alpha,
+            "param_norm_sum": param_norm_sum,
+            "grad_norm_sum": grad_norm_sum,
+            "params_are_good": params_are_good,
         }
 
         return (
@@ -378,6 +396,10 @@ class Learner:
             self.learner_steps,
             update_target_net,
         )
+
+        if not logs.get("params_are_good", True):
+            with open("bad_batch.pkl", "wb") as f:
+                pickle.dump(timestep, f)
 
         self.learner_steps += 1
         self.actor_steps += timestep.env.valid.sum()

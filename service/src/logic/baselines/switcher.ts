@@ -622,11 +622,11 @@ type SwitcherEvalActionFnType = (
         switchThreshold?: number;
         boostThresold?: number;
     },
-) => number;
+) => Promise<number>;
 
 const scores = [];
 
-export const GetBestSwitchAction: SwitcherEvalActionFnType = ({
+export const GetBestSwitchAction: SwitcherEvalActionFnType = async ({
     handler,
     switchThreshold = 0,
     boostThresold = 0,

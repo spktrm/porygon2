@@ -2,7 +2,6 @@ import { Action } from "../../protos/action_pb";
 import { StreamHandler } from "./handler";
 import { GetMaxDamageAction } from "./baselines/max_dmg";
 import { GetBestSwitchAction } from "./baselines/switcher";
-import { GetSearchAction } from "./baselines/search";
 import { Battle as World } from "@pkmn/sim";
 import { GetRandomAction } from "./baselines/random";
 
@@ -12,50 +11,48 @@ export type evalFuncArgs = {
     [k: string]: any;
 };
 
-export type EvalActionFnType = (args: evalFuncArgs) => number;
+export type EvalActionFnType = (args: evalFuncArgs) => Promise<number>;
 
 export function partial(
     fn: EvalActionFnType,
     presetArgs: { [k: string]: any },
-): (remainingArgs: evalFuncArgs) => number {
-    return function (remainingArgs: evalFuncArgs): number {
+): EvalActionFnType {
+    return function (remainingArgs: evalFuncArgs): Promise<number> {
         const allArgs = { ...presetArgs, ...remainingArgs };
         return fn(allArgs);
     };
 }
 
 export const evalActionMapping: EvalActionFnType[] = [
-    // Random
-    GetRandomAction,
-    // Default
-    () => {
+    GetRandomAction, // Random - 0
+    async () => {
         return -1;
-    },
+    }, // Default - 1
     GetMaxDamageAction,
-    partial(GetBestSwitchAction, { switchThreshold: 1.6 }),
-    partial(GetBestSwitchAction, { switchThreshold: 1.2 }),
-    partial(GetBestSwitchAction, { switchThreshold: 0.8 }),
-    partial(GetBestSwitchAction, { switchThreshold: 0.4 }),
-    partial(GetBestSwitchAction, { switchThreshold: 0.2 }),
-    partial(GetBestSwitchAction, { switchThreshold: 0 }),
-    partial(GetBestSwitchAction, { switchThreshold: -0.2 }),
-    partial(GetBestSwitchAction, { switchThreshold: -0.4 }),
-    partial(GetBestSwitchAction, { switchThreshold: -0.8 }),
-    partial(GetBestSwitchAction, { switchThreshold: -1.2 }),
-    partial(GetBestSwitchAction, { switchThreshold: -1.6 }),
-    GetSearchAction,
+    partial(GetBestSwitchAction, { switchThreshold: 1.6 }), // - 2
+    partial(GetBestSwitchAction, { switchThreshold: 1.2 }), // - 3
+    partial(GetBestSwitchAction, { switchThreshold: 0.8 }), // - 4
+    partial(GetBestSwitchAction, { switchThreshold: 0.4 }), // - 5
+    partial(GetBestSwitchAction, { switchThreshold: 0.2 }), // - 6
+    partial(GetBestSwitchAction, { switchThreshold: 0 }), // - 7
+    partial(GetBestSwitchAction, { switchThreshold: -0.2 }), // - 8
+    partial(GetBestSwitchAction, { switchThreshold: -0.4 }), // - 9
+    partial(GetBestSwitchAction, { switchThreshold: -0.8 }), // - 10
+    partial(GetBestSwitchAction, { switchThreshold: -1.2 }), // - 11
+    partial(GetBestSwitchAction, { switchThreshold: -1.6 }), // - 12
+    // GetSearchAction,
 ];
 
 export const numEvals = Object.keys(evalActionMapping).length;
 
-export function getEvalAction(
+export async function getEvalAction(
     handler: StreamHandler,
     evalIndex: number,
-): Action {
+): Promise<Action> {
     let action = new Action();
 
     const evalFunc = evalActionMapping[evalIndex];
-    const actionIndex = evalFunc({ handler });
+    const actionIndex = await evalFunc({ handler });
 
     action.setIndex(actionIndex);
     if (actionIndex < 0) {

@@ -18,18 +18,15 @@ def get_history(state: State):
     history = state.history
     history_length = history.length
     moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape(
-        (-1, NUM_MOVE_FIELDS)
+        (2, -1, NUM_MOVE_FIELDS)
     )
 
     team = np.frombuffer(state.team, dtype=np.int16).reshape((6, -1))
-    my_public = np.frombuffer(state.myPublic, dtype=np.int16).reshape((6, -1))
-    opp_public = np.frombuffer(state.oppPublic, dtype=np.int16).reshape((6, -1))
 
     private_side_entities = team
-    public_side_entities = np.stack((my_public, opp_public))
 
     active_entities = np.frombuffer(history.active, dtype=np.int16).reshape(
-        (history_length, 2, -1)
+        (history_length, 2, 6, -1)
     )
     side_conditions = np.frombuffer(history.sideConditions, dtype=np.uint8).reshape(
         (history_length, 2, -1)
@@ -37,6 +34,9 @@ def get_history(state: State):
     volatile_status = np.frombuffer(history.volatileStatus, dtype=np.uint8).reshape(
         (history_length, 2, -1)
     )
+    additional_information = np.frombuffer(
+        history.additionalInformation, dtype=np.float32
+    ).reshape((history_length, 2, -1))
     boosts = np.frombuffer(history.boosts, dtype=np.int8).reshape(
         (history_length, 2, -1)
     )
@@ -55,10 +55,10 @@ def get_history(state: State):
     return (
         moveset,
         private_side_entities,
-        public_side_entities,
         padnstack(active_entities),
         padnstack(side_conditions),
         padnstack(volatile_status),
+        padnstack(additional_information),
         padnstack(boosts),
         padnstack(weather),
         padnstack(pseudoweather),
@@ -71,10 +71,10 @@ def process_state(state: State) -> EnvStep:
     (
         moveset,
         private_side_entities,
-        public_side_entities,
         active_entities,
         side_conditions,
         volatile_status,
+        additional_information,
         boosts,
         weather,
         pseudoweather,
@@ -88,13 +88,17 @@ def process_state(state: State) -> EnvStep:
         game_id=np.array(state.info.gameId, dtype=np.int32),
         turn=np.array(state.info.turn, dtype=np.int32),
         heuristic_action=np.array(state.info.heuristicAction, dtype=np.int32),
-        heuristic_dist=np.frombuffer(
-            state.info.heuristicDistribution, dtype=np.float32
-        ),
+        heuristic_dist=np.frombuffer(state.info.heuristicDist, dtype=np.float32),
         prev_action=np.array(state.info.lastAction, dtype=np.int32),
         prev_move=np.array(state.info.lastMove, dtype=np.int32),
-        rewards=np.array(
-            [state.info.playerOneReward, state.info.playerTwoReward], dtype=np.float32
+        win_rewards=np.array(
+            [state.info.winReward, -state.info.winReward], dtype=np.float32
+        ),
+        hp_rewards=np.array(
+            [state.info.hpReward, -state.info.hpReward], dtype=np.float32
+        ),
+        switch_rewards=np.array(
+            [state.info.switchReward, -state.info.switchReward], dtype=np.float32
         ),
         legal=np.array(
             [
@@ -114,13 +118,13 @@ def process_state(state: State) -> EnvStep:
         active_entities=active_entities,
         side_conditions=side_conditions,
         volatile_status=volatile_status,
+        additional_information=additional_information,
         boosts=boosts,
         weather=weather,
         pseudoweather=pseudoweather,
         hyphen_args=hyphen_args,
         turn_context=turn_context,
         private_side_entities=private_side_entities,
-        public_side_entities=public_side_entities,
         moveset=moveset,
     )
 

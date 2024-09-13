@@ -8,7 +8,9 @@ class EnvStep:
     turn: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()
-    rewards: chex.Array = ()
+    win_rewards: chex.Array = ()
+    switch_rewards: chex.Array = ()
+    hp_rewards: chex.Array = ()
     heuristic_action: chex.Array = ()
     heuristic_dist: chex.Array = ()
     prev_action: chex.Array = ()
@@ -26,6 +28,7 @@ class EnvStep:
     boosts: chex.Array = ()
     side_conditions: chex.Array = ()
     volatile_status: chex.Array = ()
+    additional_information: chex.Array = ()
     hyphen_args: chex.Array = ()
     terrain: chex.Array = ()
     pseudoweather: chex.Array = ()
@@ -36,7 +39,9 @@ class EnvStep:
 class ActorStep:
     action: chex.Array = ()
     policy: chex.Array = ()
-    rewards: chex.Array = ()
+    win_rewards: chex.Array = ()
+    hp_rewards: chex.Array = ()
+    switch_rewards: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)

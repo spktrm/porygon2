@@ -49,7 +49,7 @@ async function processGame(
             const action = await ActionFromResponse(response);
             game.queueSystem.submitResult(jobKey, action);
         } else {
-            const action = getEvalAction(game.handlers[0], evalIndex1);
+            const action = await getEvalAction(game.handlers[0], evalIndex1);
             game.queueSystem.submitResult(jobKey, action);
         }
         return jobKey;
@@ -65,13 +65,13 @@ async function processGame(
             const action = await ActionFromResponse(response);
             game.queueSystem.submitResult(jobKey, action);
         } else {
-            const action = getEvalAction(game.handlers[1], evalIndex2);
+            const action = await getEvalAction(game.handlers[1], evalIndex2);
             game.queueSystem.submitResult(jobKey, action);
         }
         return jobKey;
     };
     await game.run();
-    const [r1, r2] = game.getRewardFromHpDiff(0);
+    const r1 = game.getRewardFromHpDiff();
     return r1;
 }
 

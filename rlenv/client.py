@@ -1,3 +1,4 @@
+import pickle
 import jax
 import chex
 import functools
@@ -33,10 +34,17 @@ class BatchCollector:
     def actor_step(self, params: Params, env_step: EnvStep):
         output = self._network_jit_apply(params, env_step)
         pi = output.pi
-        action = np.apply_along_axis(
-            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
+        try:
+            action = np.apply_along_axis(
+                lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
+            )
+        except:
+            with open("bad_state.pkl", "wb") as f:
+                pickle.dump(env_step, f)
+
+        actor_step = ActorStep(
+            policy=pi, win_rewards=(), hp_rewards=(), switch_rewards=(), action=action
         )
-        actor_step = ActorStep(policy=pi, rewards=(), action=action)
         return action, actor_step
 
     def collect_batch_trajectory(
@@ -58,7 +66,9 @@ class BatchCollector:
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
-                    rewards=env_step.rewards,
+                    win_rewards=env_step.win_rewards,
+                    hp_rewards=env_step.hp_rewards,
+                    switch_rewards=env_step.switch_rewards,
                 ),
             )
             timesteps.append(timestep)

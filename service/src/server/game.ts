@@ -24,6 +24,8 @@ export class Game {
     world: World | null;
     ts: number;
     tied: boolean;
+    earlyFinish: boolean;
+    numFainted: number[][];
 
     constructor(args: { port: MessagePort | null; gameId: number }) {
         const { gameId, port } = args;
@@ -34,6 +36,8 @@ export class Game {
         this.queueSystem = new TaskQueueSystem<Action>();
         this.ts = 0;
         this.tied = false;
+        this.earlyFinish = false;
+        this.numFainted = [[0, 0]];
 
         this.handlers = Object.fromEntries(
             [0, 1].map((playerIndex) => [
@@ -60,60 +64,85 @@ export class Game {
         }
     }
 
-    getRewardFromHpDiff(playerIndex: number): [number, number] {
-        const omniscientHandler = this.handlers[playerIndex];
-        const publicBattle = omniscientHandler.publicBattle;
-        const sideHpSums = [
-            publicBattle.sides[playerIndex],
-            publicBattle.sides[1 - playerIndex],
-        ].map((side) =>
-            side.team
-                .map((pokemon) => pokemon.hp / pokemon.maxhp)
-                .reduce((a, b) => a + b),
-        );
+    getRewardFromHpDiff(): number {
+        const sideHpSums = this.world?.sides.map((side) =>
+            side.pokemon.reduce(
+                (total, member) => total + member.hp / member.maxhp,
+                0,
+            ),
+        ) ?? [6, 6];
+
         if (sideHpSums[0] === sideHpSums[1]) {
-            this.tied = true;
-            return [0, 0];
+            if (this.done) {
+                this.tied = true;
+            }
+            return 0;
         }
-        return [
-            sideHpSums[0] > sideHpSums[1] ? 1 : -1,
-            sideHpSums[1] > sideHpSums[0] ? 1 : -1,
-        ];
+        return sideHpSums[0] > sideHpSums[1] ? 1 : -1;
     }
 
-    getRewardFromFinish(playerIndex: number): [number, number] {
-        const winner = this.getWinner();
-        const omniscientHandler = this.handlers[playerIndex];
-        const publicBattle = omniscientHandler.publicBattle;
-        if (winner) {
-            const p1Reward = publicBattle.p1.name === winner ? 1 : -1;
-            const p2Reward = publicBattle.p2.name === winner ? 1 : -1;
-            return [p1Reward, p2Reward];
-        } else {
-            this.tied = true;
-            return [0, 0];
+    getRewardFromFinish(): number {
+        if (this.done) {
+            const winner = this.getWinner();
+            if (winner === this.world?.p1.name) {
+                return 1;
+            } else if (winner === this.world?.p2.name) {
+                return -1;
+            }
         }
+        return 0;
     }
 
-    getRewards(playerIndex: number): [number, number] {
-        return this.getRewardFromHpDiff(playerIndex);
-        // return this.getRewardFromFinish(sideId);
+    getRewardFromPrevHpDiff(): number {
+        const prevFainted = this.numFainted.at(-1) ?? [0, 0];
+
+        const numFainted = this.world?.sides.map((side) =>
+            side.pokemon.reduce((total, member) => total + +member.fainted, 0),
+        ) ?? [0, 0];
+        this.numFainted.push(numFainted);
+
+        const fOfX = (value: number) => {
+            return 2 ** Math.floor(value - 7);
+        };
+
+        const calcScore = (playerIndex: number) => {
+            const diff = prevFainted[playerIndex] - numFainted[playerIndex];
+            return diff * fOfX(numFainted[playerIndex]);
+        };
+
+        const score = calcScore(0) - calcScore(1);
+        if (isNaN(score)) {
+            throw Error("Score is nan");
+        }
+
+        return score;
     }
 
     sendState(state: State) {
         const isDone = this.done;
         let info = state.getInfo();
-        if (isDone && info) {
-            info.setDone(isDone);
-            const playerIndex = info.getPlayerindex();
-            const [r1, r2] = this.getRewards(playerIndex ? 1 : 0);
-            info.setPlayeronereward(r1);
-            info.setPlayertworeward(r2);
+        if (info) {
+            const winReward = this.getRewardFromFinish();
+            const hpReward = this.getRewardFromPrevHpDiff();
+
+            const p1SwitchReward = this.handlers[0].getSwitchReward();
+            const p2SwitchReward = this.handlers[1].getSwitchReward();
+            const switchReward =
+                0.5 *
+                Math.sign(p1SwitchReward - p2SwitchReward) *
+                Math.abs(hpReward);
+
+            info.setSwitchreward(switchReward);
+            info.setWinreward(winReward);
+            info.setHpreward(hpReward);
+
+            if (isDone) {
+                info.setDone(isDone);
+                state.setLegalactions(AllValidActions);
+            }
             state.setInfo(info);
-            state.setLegalactions(AllValidActions);
         }
-        let stateArr: Uint8Array;
-        stateArr = state.serializeBinary();
+        const stateArr = state.serializeBinary();
         this.ts += 1;
         return this.port?.postMessage(stateArr, [stateArr.buffer]);
     }
@@ -149,6 +178,7 @@ export class Game {
                 handler = this.handlers[playerIndex];
             }
             if (this.ts > MAX_TS) {
+                this.earlyFinish = true;
                 break;
             }
         }
@@ -189,9 +219,12 @@ export class Game {
 
         await players;
 
-        this.done = true;
-        const state = this.handlers[0].getState();
-        this.sendState(state);
+        return new Promise(async (resolve, reject) => {
+            this.done = true;
+            const state = await this.handlers[0].getState();
+            this.sendState(state);
+            resolve(true);
+        });
     }
 
     reset() {
@@ -202,5 +235,7 @@ export class Game {
         this.world = null;
         this.ts = 0;
         this.tied = false;
+        this.numFainted = [[0, 0]];
+        this.earlyFinish = false;
     }
 }

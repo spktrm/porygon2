@@ -1,6 +1,9 @@
 import os
 import json
 import traceback
+from sklearn.discriminant_analysis import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler
 import umap
 
 import pandas as pd
@@ -8,8 +11,12 @@ import numpy as np
 import plotly.express as px
 
 from typing import Any, Dict, List, Sequence
+from community import community_louvain
+
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity
+import networkx as nx
+from pyvis.network import Network
 
 from embeddings.encoders import onehot_encode, z_score_scale
 from embeddings.protocols import (
@@ -17,6 +24,7 @@ from embeddings.protocols import (
     ITEMS_PROTOCOLS,
     MOVES_PROTOCOLS,
     SPECIES_PROTOCOLS,
+    FeatureType,
     Protocol,
 )
 
@@ -75,10 +83,14 @@ def concat_encodings(dataframes: Sequence[pd.DataFrame]) -> pd.DataFrame:
 
 def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = True):
     feature_vector_dfs = []
+    feature_vector_categorical_dfs = []
+    feature_vector_scalar_dfs = []
+
     for protoc in protocols:
-        func = protoc["func"]
+        func = protoc.get("func", lambda x: x.to_frame())
         feature = protoc.get("feature")
         feature_fn = protoc.get("feature_fn")
+        feature_type = protoc.get("feature_type")
 
         if feature_fn is None:
             if feature not in df.columns:
@@ -88,7 +100,12 @@ def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = T
             series = df[feature]
             feature_df = func(series)
             if not feature_df.empty:
-                feature_vector_dfs.append(feature_df)
+                if feature_type is FeatureType.CATEGORICAL:
+                    feature_vector_categorical_dfs.append(feature_df)
+                elif feature_type is FeatureType.SCALAR:
+                    feature_vector_scalar_dfs.append(feature_df)
+                else:
+                    feature_vector_dfs.append(feature_df)
         else:
             for feature in df.columns:
                 if feature not in df.columns:
@@ -99,9 +116,46 @@ def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = T
                     series = df[feature]
                     feature_df = func(series)
                     if not feature_df.empty:
-                        feature_vector_dfs.append(feature_df)
+                        if feature_type is FeatureType.CATEGORICAL:
+                            feature_vector_categorical_dfs.append(feature_df)
+                        elif feature_type is FeatureType.SCALAR:
+                            feature_vector_scalar_dfs.append(feature_df)
+                        else:
+                            feature_vector_dfs.append(feature_df)
 
-    concat_df = concat_encodings(feature_vector_dfs)
+    concat_dfs = []
+
+    categorical_concat_df = pd.DataFrame()
+    # Perform PCA on categorical embeddings
+    if feature_vector_categorical_dfs:
+        categorical_concat_df = concat_encodings(feature_vector_categorical_dfs)
+
+        categorical_pipeline = Pipeline(
+            [
+                ("pca", PCA(n_components=0.95, svd_solver="full")),
+                ("scaler", StandardScaler()),
+            ]
+        )
+        categorical_pca = categorical_pipeline.fit_transform(categorical_concat_df)
+        categorical_pca_df = pd.DataFrame(
+            categorical_pca,
+            index=categorical_concat_df.index,
+            columns=[f"PCA_{i+1}" for i in range(categorical_pca.shape[1])],
+        )
+        concat_dfs.append(categorical_pca_df)
+
+    scalar_concat_df = pd.DataFrame()
+    if feature_vector_scalar_dfs:
+        scalar_concat_df = concat_encodings(feature_vector_scalar_dfs)
+        concat_dfs.append(scalar_concat_df)
+
+    feature_concat_df = pd.DataFrame()
+    if feature_vector_dfs:
+        feature_concat_df = concat_encodings(feature_vector_dfs)
+        concat_dfs.append(feature_concat_df)
+
+    concat_df = concat_encodings(concat_dfs)
+    concat_df.map(lambda x: max(min(x, 3), -3))
     concat_df.index = df["name"].map(to_id)
 
     return concat_df
@@ -214,7 +268,7 @@ class GenerationEncodings:
             concat_encodings([df, weakness_df]),
             [
                 {
-                    "feature_fn": lambda x: x.startswith("damageTaken."),
+                    "feature": "id",
                     "func": onehot_encode,
                 },
                 {
@@ -226,7 +280,13 @@ class GenerationEncodings:
         encodings = get_encodings(
             concat_encodings([df, weakness_df]),
             (
-                [{"feature": "id", "func": onehot_encode}]
+                [
+                    {
+                        "feature": "id",
+                        "func": onehot_encode,
+                        "feature_type": FeatureType.CATEGORICAL,
+                    }
+                ]
                 if self.onehot_id_only
                 else SPECIES_PROTOCOLS
             ),
@@ -238,7 +298,13 @@ class GenerationEncodings:
         encodings = get_encodings(
             df,
             (
-                [{"feature": "id", "func": onehot_encode}]
+                [
+                    {
+                        "feature": "id",
+                        "func": onehot_encode,
+                        "feature_type": FeatureType.CATEGORICAL,
+                    }
+                ]
                 if self.onehot_id_only
                 else MOVES_PROTOCOLS
             ),
@@ -250,7 +316,13 @@ class GenerationEncodings:
         encodings = get_encodings(
             df,
             (
-                [{"feature": "id", "func": onehot_encode}]
+                [
+                    {
+                        "feature": "id",
+                        "func": onehot_encode,
+                        "feature_type": FeatureType.CATEGORICAL,
+                    }
+                ]
                 if self.onehot_id_only
                 else ABILITIES_PROTOCOLS
             ),
@@ -262,12 +334,85 @@ class GenerationEncodings:
         encodings = get_encodings(
             df,
             (
-                [{"feature": "id", "func": onehot_encode}]
+                [
+                    {
+                        "feature": "id",
+                        "func": onehot_encode,
+                        "feature_type": FeatureType.CATEGORICAL,
+                    }
+                ]
                 if self.onehot_id_only
                 else ITEMS_PROTOCOLS
             ),
         )
         return to_lookup_table(encodings, self.stoi["items"])
+
+
+def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
+    """
+    Convert a cosine similarity matrix to a PyVis graph and export it to HTML.
+
+    Parameters:
+    - cosine_matrix: numpy array, the cosine similarity matrix
+    - labels: list, optional labels for the nodes (default: None)
+    - threshold: float, minimum similarity to create an edge (default: 0.5)
+    - filename: str, name of the output HTML file (default: "cosine_similarity_graph.html")
+    """
+    # Create a NetworkX graph
+    G = nx.Graph()
+
+    # Add nodes
+    num_nodes = cosine_matrix.shape[0]
+    if labels is None:
+        labels = [str(i) for i in range(num_nodes)]
+
+    for i in range(num_nodes):
+        G.add_node(i, label=labels[i], title=labels[i])
+
+    # Add edges based on cosine similarity
+    for i in range(num_nodes):
+        for j in range(i + 1, num_nodes):
+            if cosine_matrix[i, j] >= threshold:
+                G.add_edge(
+                    i,
+                    j,
+                    weight=cosine_matrix[i, j],
+                    title=f"Similarity: {cosine_matrix[i, j]:.2f}",
+                )
+
+    # Detect communities
+    communities = community_louvain.best_partition(G)
+    nx.set_node_attributes(G, communities, "group")
+
+    # Create PyVis network
+    net = Network(width="100%", height="100vh", bgcolor="#222222", font_color="white")
+    net.from_nx(G)
+
+    # Customize appearance
+    net.set_options(
+        """
+    var options = {
+        "nodes": {
+            "font": {"size": 72},
+            "size": 200
+        },
+        "edges": {
+            "color": {"inherit": true},
+            "smooth": false
+        },
+        "physics": {
+            "barnesHut": {
+                "gravitationalConstant": -80000,
+                "springLength": 250,
+                "springConstant": 0.001
+            },
+            "minVelocity": 0.75
+        }
+    }
+    """
+    )
+
+    return net
 
 
 def main(plot: bool = False, onehot_id_only: bool = False):
@@ -318,11 +463,30 @@ def main(plot: bool = False, onehot_id_only: bool = False):
             with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
                 np.save(f, new)
 
-            if plot and gen == 3:
-                cosine_sim = cosine_similarity(encoded)
+            cosine_sim = cosine_similarity(PCA(0.99).fit_transform(encoded))
+            cosine_sim_thresholded = np.where(cosine_sim > 0.999, -1e9, cosine_sim)
 
+            flat = cosine_sim_thresholded.flatten()
+            # Calculate the number of elements to keep
+            k = int(np.ceil(cosine_sim_thresholded.size * 0.01))
+
+            # Find the kth largest value
+            kth_largest = np.partition(flat, -k)[-k]
+
+            # Create the mask
+            flat_mask = flat >= kth_largest
+            threshold = flat[flat_mask].min()
+
+            names = np.array(list(enc.stoi[name]))[mask.flatten()]
+            graph = cosine_matrix_to_pyvis(
+                cosine_matrix=cosine_sim,
+                labels=names,
+                threshold=threshold,
+            )
+            graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
+
+            if plot and gen == 3:
                 # Step 3: Plot the cosine similarity matrix as a heatmap
-                names = np.array(list(enc.stoi[name]))[mask.flatten()]
                 df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
 
                 fig = px.imshow(

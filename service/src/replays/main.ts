@@ -12,21 +12,21 @@ function getReward(data: {
         if (line.startsWith("|win|")) {
             const winnerName = line.split("|")[2];
             if (winnerName === players[0]) {
-                return [1, -1];
+                return 1;
             } else if (winnerName === players[1]) {
-                return [-1, 1];
+                return -1;
             }
         } else if (line.startsWith("|tie|")) {
-            return [0, 0];
+            return 0;
         }
     }
-    return [0, 0];
+    return 0;
 }
 
 function processGame(data: any) {
     const states: Uint8Array[] = [];
 
-    const [p1Reward, p2Reward] = getReward(data);
+    const reward = getReward(data);
 
     const handlers = [0, 1].map((playerIndex) => {
         return new StreamHandler({
@@ -34,8 +34,7 @@ function processGame(data: any) {
             sendFn: async (state) => {
                 const info = state.getInfo();
                 if (info) {
-                    info.setPlayeronereward(p1Reward);
-                    info.setPlayertworeward(p2Reward);
+                    info.setWinreward(reward);
                     state.setInfo(info);
                 }
                 states.push(state.serializeBinary());

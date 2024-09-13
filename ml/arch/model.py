@@ -2,6 +2,7 @@ import jax
 import math
 import chex
 import pickle
+import jax.numpy as jnp
 import flax.linen as nn
 
 from pprint import pprint
@@ -26,9 +27,9 @@ class Model(nn.Module):
         self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep) -> ModelOutput:
-        current_state, action_embeddings = self.encoder(env_step)
+        current_state, my_action_embeddings = self.encoder(env_step)
         logit, pi, log_pi = self.policy_head(
-            current_state, action_embeddings, env_step.legal
+            current_state, my_action_embeddings, env_step.legal
         )
         v = self.value_head(current_state)
         return ModelOutput(pi=pi, v=v, log_pi=log_pi, logit=logit)

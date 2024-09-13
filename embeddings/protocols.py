@@ -1,3 +1,5 @@
+from enum import Enum, auto
+import numpy as np
 import pandas as pd
 
 from typing import Callable, List, TypedDict
@@ -11,9 +13,15 @@ from embeddings.encoders import (
 )
 
 
+class FeatureType(Enum):
+    CATEGORICAL = auto()
+    SCALAR = auto()
+
+
 class Protocol(TypedDict):
     feature: str
     feature_fn: Callable[[str], bool]
+    feature_type: FeatureType
     func: Callable[[pd.Series], pd.DataFrame]
 
 
@@ -22,6 +30,7 @@ SPECIES_PROTOCOLS: List[Protocol] = [
         {
             "feature": stat_feature,
             "func": binary_encode,
+            "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
             "baseStats.hp",
@@ -31,32 +40,50 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "baseStats.spd",
             "baseStats.spe",
             "bst",
+        ]
+    ],
+    *[
+        {
+            "feature": stat_feature,
+            "func": z_score_scale,
+            "feature_type": FeatureType.SCALAR,
+        }
+        for stat_feature in [
+            "baseStats.hp",
+            "baseStats.atk",
+            "baseStats.def",
+            "baseStats.spa",
+            "baseStats.spd",
+            "baseStats.spe",
+            "bst",
+        ]
+    ],
+    *[
+        {
+            "feature": stat_feature,
+            "feature_type": FeatureType.SCALAR,
+        }
+        for stat_feature in [
+            "genderRatio.M",
+            "genderRatio.F",
         ]
     ],
     {
         "feature": "weightkg",
         "func": lambda x: binary_encode(10 * x),
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature": "weightkg",
+        "func": lambda x: z_score_scale(x.map(lambda x: np.log1p(x))),
+        "feature_type": FeatureType.SCALAR,
     },
     *[
         {
             "feature": stat_feature,
-            "func": z_score_scale,
+            "func": onehot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
         }
-        for stat_feature in [
-            "baseStats.hp",
-            "baseStats.atk",
-            "baseStats.def",
-            "baseStats.spa",
-            "baseStats.spd",
-            "baseStats.spe",
-            "bst",
-            "weightkg",
-            "genderRatio.M",
-            "genderRatio.F",
-        ]
-    ],
-    *[
-        {"feature": stat_feature, "func": onehot_encode}
         for stat_feature in [
             "id",
             "nfe",
@@ -70,7 +97,11 @@ SPECIES_PROTOCOLS: List[Protocol] = [
         ]
     ],
     *[
-        {"feature": stat_feature, "func": multihot_encode}
+        {
+            "feature": stat_feature,
+            "func": multihot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
         for stat_feature in [
             "abilities",
             "types",
@@ -78,12 +109,20 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "otherFormes",
         ]
     ],
-    {"feature_fn": lambda x: x.startswith("damageTaken."), "func": lambda x: x},
+    {
+        "feature_fn": lambda x: x.startswith("damageTaken."),
+        "func": lambda x: x,
+        "feature_type": FeatureType.SCALAR,
+    },
 ]
 
 MOVES_PROTOCOLS: List[Protocol] = [
     *[
-        {"feature": stat_feature, "func": onehot_encode}
+        {
+            "feature": stat_feature,
+            "func": onehot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
         for stat_feature in [
             "id",
             "category",
@@ -113,66 +152,166 @@ MOVES_PROTOCOLS: List[Protocol] = [
             "ohko",
         ]
     ],
-    *[{"feature": stat_feature, "func": multihot_encode} for stat_feature in []],
-    {"feature_fn": lambda x: x.startswith("flags."), "func": lambda x: x.fillna(0)},
-    {"feature_fn": lambda x: x.startswith("condition."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("boosts."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("secondary."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("self."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("selfBoost."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("ignore"), "func": onehot_encode},
-    {"feature": "basePower", "func": z_score_scale},
+    *[
+        {
+            "feature": stat_feature,
+            "func": multihot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
+        for stat_feature in []
+    ],
+    {
+        "feature_fn": lambda x: x.startswith("flags."),
+        "func": lambda x: x.fillna(0),
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("condition."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("boosts."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("secondary."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("self."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("selfBoost."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("ignore"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature": "basePower",
+        "func": z_score_scale,
+        "feature_type": FeatureType.SCALAR,
+    },
     {
         "feature": "basePower",
         "func": binary_encode,
+        "feature_type": FeatureType.CATEGORICAL,
     },
     {
         "feature": "desc",
         "func": text_encoding,
+        "feature_type": FeatureType.SCALAR,
     },
     {
         "feature": "accuracy",
         "func": lambda x: binary_encode(
             x.map(lambda v: 100 if isinstance(v, bool) else v)
         ),
+        "feature_type": FeatureType.CATEGORICAL,
     },
     {
-        "feature": "pp",
-        "func": lambda x: binary_encode(x.map(lambda v: int(v * 8 / 5))),
+        "feature": "accuracy",
+        "func": lambda x: x.map(lambda v: (100 if isinstance(v, bool) else v) / 100),
+        "feature_type": FeatureType.SCALAR,
     },
     {
         "feature": "accuracy",
         "func": lambda x: x.map(lambda v: 1 if isinstance(v, bool) else 0),
     },
-    {"feature_fn": lambda x: x.startswith("damageTaken."), "func": lambda x: x},
+    {
+        "feature": "pp",
+        "func": lambda x: binary_encode(x.map(lambda v: int(v * 8 / 5))),
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature": "pp",
+        "func": lambda x: x.map(lambda v: int(v * 8 / 5) / 64),
+        "feature_type": FeatureType.SCALAR,
+    },
 ]
 
 ITEMS_PROTOCOLS: List[Protocol] = [
-    *[{"feature": stat_feature, "func": onehot_encode} for stat_feature in ["id"]],
-    {"feature_fn": lambda x: x.startswith("fling."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("on"), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("is"), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("naturalGift."), "func": onehot_encode},
-    *[{"feature": stat_feature, "func": multihot_encode} for stat_feature in []],
+    *[
+        {
+            "feature": stat_feature,
+            "func": onehot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
+        for stat_feature in ["id"]
+    ],
+    {
+        "feature_fn": lambda x: x.startswith("fling."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("on"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("is"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("naturalGift."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    *[
+        {
+            "feature": stat_feature,
+            "func": multihot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
+        for stat_feature in []
+    ],
     {
         "feature": "desc",
         "func": text_encoding,
+        "feature_type": FeatureType.SCALAR,
     },
 ]
 
 ABILITIES_PROTOCOLS: List[Protocol] = [
     *[
-        {"feature": stat_feature, "func": onehot_encode}
+        {
+            "feature": stat_feature,
+            "func": onehot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
+        }
         for stat_feature in [
             "id",
             "suppressWeather",
         ]
     ],
-    {"feature_fn": lambda x: x.startswith("condition."), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("on"), "func": onehot_encode},
-    {"feature_fn": lambda x: x.startswith("is"), "func": onehot_encode},
+    {
+        "feature_fn": lambda x: x.startswith("condition."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("on"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("is"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
     {
         "feature": "desc",
         "func": text_encoding,
+        "feature_type": FeatureType.SCALAR,
     },
 ]

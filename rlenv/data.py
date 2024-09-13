@@ -17,7 +17,8 @@ from rlenv.protos.enums_pb2 import (
     VolatilestatusEnum,
     WeathersEnum,
 )
-from rlenv.protos.state_pb2 import Move, State
+from rlenv.protos.features_pb2 import FeatureMoveset
+from rlenv.protos.state_pb2 import State
 
 
 with open(os.path.join(os.path.dirname(__file__), "ex"), "rb") as f:
@@ -41,7 +42,7 @@ NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffectEnum.keys())
 
-NUM_MOVE_FIELDS = len(Move.DESCRIPTOR.fields)
+NUM_MOVE_FIELDS = len(FeatureMoveset.DESCRIPTOR.values)
 
 NUM_HISTORY = 8
 NUM_PLAYERS = 2

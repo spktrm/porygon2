@@ -5,7 +5,7 @@ import { AnyObject } from "@pkmn/sim";
 import { Protocol } from "@pkmn/protocol";
 import { Battle as World } from "@pkmn/sim";
 
-import { EventHandler, StateHandler } from "./state";
+import { EventHandler, EventHandler2, StateHandler } from "./state";
 
 import { State } from "../../protos/state_pb";
 import { Action } from "../../protos/action_pb";
@@ -23,11 +23,13 @@ export class StreamHandler {
     recvFn: recvFnType;
 
     log: string[];
+    actionLog: (Action | undefined)[];
     gameId: number;
 
     publicBattle: Battle;
     privateBattle: Battle;
     eventHandler: EventHandler;
+    eventHandler2: EventHandler2;
     world: World | null;
 
     rqid: string | undefined;
@@ -43,10 +45,12 @@ export class StreamHandler {
 
         this.gameId = gameId;
         this.log = [];
+        this.actionLog = [];
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
         this.eventHandler = new EventHandler(this);
+        this.eventHandler2 = new EventHandler2(this);
 
         this.world = null;
         this.rqid = undefined;
@@ -71,12 +75,31 @@ export class StreamHandler {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
         if (!key) return;
+        this.eventHandler2.storeLastKey(key);
+        if (key in this.eventHandler2) {
+            (this.eventHandler2 as any)[key](args, kwArgs);
+        }
         if (key in this.eventHandler) {
             (this.eventHandler as any)[key](args, kwArgs);
         }
-        if (line.startsWith("|-")) {
-            this.eventHandler.handleHyphenLine(args, kwArgs);
+    }
+
+    getSwitchReward(maxLogLength: number = 5) {
+        let count = 0;
+        if (this.actionLog.length === 0) {
+            return count;
         }
+        const actionLog = this.actionLog.slice(-maxLogLength);
+        let numActions = 0;
+        for (const action of [...actionLog].reverse()) {
+            if (action && action.getIndex() !== -1) {
+                if (action.getIndex() >= 4) {
+                    break;
+                }
+                numActions += 1;
+            }
+        }
+        return (maxLogLength - numActions) / maxLogLength;
     }
 
     isActionRequired(chunk: string): boolean {
@@ -104,8 +127,9 @@ export class StreamHandler {
         return this.privateBattle.request as requestType;
     }
 
-    getState(): State {
-        return new StateHandler(this).getState();
+    async getState(): Promise<State> {
+        const handler = new StateHandler(this);
+        return await handler.getState();
     }
 
     getPlayerIndex(): number | undefined {
@@ -122,7 +146,7 @@ export class StreamHandler {
     }
 
     async stateActionStep(): Promise<Action | undefined> {
-        const state = this.getState();
+        const state = await this.getState();
         const legalActions = state.getLegalactions();
         const request = this.privateBattle.request;
         if (request && legalActions) {
@@ -138,7 +162,9 @@ export class StreamHandler {
             }
         }
         const key = await this.sendFn(state);
-        return await this.recvFn(key);
+        const action = await this.recvFn(key);
+        this.actionLog.push(action);
+        return action;
     }
 
     ensureRequestApplied() {
@@ -172,11 +198,14 @@ export class StreamHandler {
     }
 
     reset() {
+        this.eventHandler.reset();
+        this.eventHandler2.reset();
+
         this.log = [];
+        this.actionLog = [];
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
-        this.eventHandler.reset();
 
         this.rqid = undefined;
         this.playerIndex = undefined;

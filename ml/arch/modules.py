@@ -647,3 +647,82 @@ class PretrainedEmbedding:
 
     def __call__(self, indices):
         return self.embeddings[indices]
+
+
+class DoubleConv(nn.Module):
+    filters: int
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Conv(self.filters, (3, 3), padding="SAME")(x)
+        x = nn.relu(x)
+        x = nn.Conv(self.filters, (3, 3), padding="SAME")(x)
+        return nn.relu(x)
+
+
+class Down(nn.Module):
+    filters: int
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.max_pool(x, (2, 2), strides=(2, 2))
+        return DoubleConv(self.filters)(x)
+
+
+class Up(nn.Module):
+    filters: int
+
+    @nn.compact
+    def __call__(self, x, skip):
+        x = jax.image.resize(
+            x, (x.shape[0] * 2, x.shape[1] * 2, x.shape[2]), method="nearest"
+        )
+        x = jnp.concatenate([x, skip], axis=-1)
+        return DoubleConv(self.filters)(x)
+
+
+class UNet(nn.Module):
+    num_classes: int
+    scale: int = 1
+
+    @nn.compact
+    def __call__(self, x):
+        # Encoder
+        c1 = DoubleConv(int(8 * self.scale))(x)
+        c2 = Down(int(16 * self.scale))(c1)
+        c3 = Down(int(32 * self.scale))(c2)
+        c4 = Down(int(64 * self.scale))(c3)
+
+        # Bridge
+        c5 = Down(int(128 * self.scale))(c4)
+
+        # Decoder
+        u6 = Up(int(64 * self.scale))(c5, c4)
+        u7 = Up(int(32 * self.scale))(u6, c3)
+        u8 = Up(int(16 * self.scale))(u7, c2)
+        u9 = Up(int(8 * self.scale))(u8, c1)
+
+        return nn.Conv(self.num_classes, (1, 1))(u9)
+
+
+class CNN(nn.Module):
+    output_size: int
+    scale: int = 1
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Conv(features=int(8 * self.scale), kernel_size=(3, 3))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.Conv(features=int(16 * self.scale), kernel_size=(3, 3))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.Conv(features=int(32 * self.scale), kernel_size=(3, 3))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.Conv(features=int(64 * self.scale), kernel_size=(3, 3))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = x.reshape(-1)  # flatten
+        x = nn.Dense(features=self.output_size)(x)
+        return x
