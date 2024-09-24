@@ -9,9 +9,11 @@
     "license": "ISC",
     "description": "",
     "dependencies": {
-        "@pkmn/data": "^0.9.8",
-        "@pkmn/dex": "^0.9.8",
-        "@pkmn/protocol": "^0.6.25",
+        "@pkmn/client": "^0.6.26",
+        "@pkmn/data": "^0.9.15",
+        "@pkmn/dex": "^0.9.15",
+        "@pkmn/randoms": "^0.9.15",
+        "@pkmn/sim": "^0.9.15",
         "@types/node": "^20.14.9",
         "dotenv": "^16.4.5"
     }

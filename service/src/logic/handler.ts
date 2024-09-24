@@ -5,7 +5,7 @@ import { AnyObject } from "@pkmn/sim";
 import { Protocol } from "@pkmn/protocol";
 import { Battle as World } from "@pkmn/sim";
 
-import { EventHandler, EventHandler2, StateHandler } from "./state";
+import { EventHandler2, StateHandler } from "./state";
 
 import { State } from "../../protos/state_pb";
 import { Action } from "../../protos/action_pb";
@@ -28,7 +28,6 @@ export class StreamHandler {
 
     publicBattle: Battle;
     privateBattle: Battle;
-    eventHandler: EventHandler;
     eventHandler2: EventHandler2;
     world: World | null;
 
@@ -49,7 +48,6 @@ export class StreamHandler {
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
-        this.eventHandler = new EventHandler(this);
         this.eventHandler2 = new EventHandler2(this);
 
         this.world = null;
@@ -75,12 +73,8 @@ export class StreamHandler {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
         if (!key) return;
-        this.eventHandler2.storeLastKey(key);
         if (key in this.eventHandler2) {
             (this.eventHandler2 as any)[key](args, kwArgs);
-        }
-        if (key in this.eventHandler) {
-            (this.eventHandler as any)[key](args, kwArgs);
         }
     }
 
@@ -198,7 +192,6 @@ export class StreamHandler {
     }
 
     reset() {
-        this.eventHandler.reset();
         this.eventHandler2.reset();
 
         this.log = [];

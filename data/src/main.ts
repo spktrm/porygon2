@@ -1,102 +1,391 @@
 import * as fs from "fs";
+import * as path from "path";
+
+import { Dex, Format, RuleTable } from "@pkmn/sim";
 import {
     Ability,
-    Dex,
-    GenID,
-    ID,
     Item,
     Move,
     Species,
     Type,
     toID,
+    Dex as dexDex,
+    TypeName,
 } from "@pkmn/dex";
 import { Generations } from "@pkmn/data";
-import dotenv from "dotenv";
 
-dotenv.config();
-const accessToken = process.env.ACCESS_TOKEN;
+const PS_DIRECTORY = "ps/";
+const BATCH_SIZE = 128;
+const PARENT_DATA_DIR = `data`;
 
-const owner = "pkmn";
-const repo = "ps";
-const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/`;
+const PAD_TOKEN = "_PAD";
+const UNK_TOKEN = "_UNK";
+const NULL_TOKEN = "_NULL";
+const SWITCH_TOKEN = "_SWITCH";
+const EXTRA_TOKENS = [NULL_TOKEN, PAD_TOKEN, UNK_TOKEN];
 
-async function getFilenames(path: string): Promise<string[]> {
-    const response = await fetch(`${apiUrl}${path}`, {
-        headers: {
-            Authorization: `token ${accessToken}`,
-            Accept: "application/vnd.github.v3+json",
-        },
-    });
+type CustomScrapingFunction = (content: string, file: string) => string[];
 
-    if (!response.ok) {
-        console.error(
-            `GitHub API responded with ${response.status} for path ${path}`,
+type Enums =
+    | "pseudoWeather"
+    | "status"
+    | "volatileStatus"
+    | "genderName"
+    | "effectTypes"
+    | "sideCondition"
+    | "weather"
+    | "terrain"
+    | "battleMajorArgs"
+    | "battleMinorArgs"
+    | "boosts"
+    | "itemEffectTypes"
+    | "lastItemEffectTypes";
+
+const customScrapingFunctions: {
+    [key in Enums]: CustomScrapingFunction;
+} = {
+    pseudoWeather: (content: string, file: string): string[] => {
+        const patterns = [
+            /pseudoWeather:\s*['"](\w+)['"]/g,
+            /addPseudoWeather\(['"](\w+)['"]/g,
+            /removePseudoWeather\(['"](\w+)['"]/g,
+            /field\.addPseudoWeather\(['"](\w+)['"]/g,
+            /field\.removePseudoWeather\(['"](\w+)['"]/g,
+            /field\.hasPseudoWeather\(['"](\w+)['"]/g,
+            /field\.getPseudoWeather\(['"](\w+)['"]/g,
+            /this\.field\.addPseudoWeather\(['"](\w+)['"]/g,
+            /this\.field\.removePseudoWeather\(['"](\w+)['"]/g,
+            /this\.field\.hasPseudoWeather\(['"](\w+)['"]/g,
+            /this\.field\.getPseudoWeather\(['"](\w+)['"]/g,
+        ];
+        return applyPatterns(content, patterns);
+    },
+    status: (content: string, file: string): string[] => {
+        const patterns = [
+            /status:\s*['"](\w+)['"]/g,
+            /\bstatusData\s*\[\s*['"](\w+)['"]\s*\]/g,
+            /\bcure(?:Target|Ally)?Status\s*\(\s*['"](\w+)['"]/g,
+            /\bset(?:Status|Condition)\s*\(\s*['"](\w+)['"]/g,
+            /\btry(?:Set|Add)Status\s*\(\s*['"](\w+)['"]/g,
+            /StatusCondition\.(\w+)/g,
+            /status\.id\s*===?\s*['"](\w+)['"]/g,
+            /status\.name\s*===?\s*['"](\w+)['"]/g,
+            /status\.effectType\s*===?\s*['"](\w+)['"]/g,
+            /pokemon\.hasStatus\(['"](\w+)['"]/g,
+            /pokemon\.setStatus\(['"](\w+)['"]/g,
+            /pokemon\.cureStatus\(['"](\w+)['"]/g,
+            /this\.hasStatus\(['"](\w+)['"]/g,
+            /this\.setStatus\(['"](\w+)['"]/g,
+            /this\.cureStatus\(['"](\w+)['"]/g,
+        ];
+        return applyPatterns(content, patterns);
+    },
+    volatileStatus: (content: string, file: string): string[] => {
+        const patterns = [
+            /volatileStatus:\s*['"](\w+)['"]/g,
+            /addVolatile\(['"](\w+)['"]/g,
+            /removeVolatile\(['"](\w+)['"]/g,
+            /pokemon\.addVolatile\(['"](\w+)['"]/g,
+            /pokemon\.removeVolatile\(['"](\w+)['"]/g,
+            /pokemon\.hasVolatile\(['"](\w+)['"]/g,
+            /pokemon\.getVolatile\(['"](\w+)['"]/g,
+            /this\.addVolatile\(['"](\w+)['"]/g,
+            /this\.removeVolatile\(['"](\w+)['"]/g,
+            /this\.hasVolatile\(['"](\w+)['"]/g,
+            /this\.getVolatile\(['"](\w+)['"]/g,
+            /volatileStatuses\[['"](\w+)['"]\]/g,
+            /volatileStatusData\[['"](\w+)['"]\]/g,
+        ];
+        const matchedVolatiles = applyPatterns(content, patterns);
+
+        // Look for the VOLATILES constant
+        const volatileMatch = content.match(
+            /const\s+VOLATILES\s*=\s*\[([\s\S]*?)\]/,
         );
+        if (volatileMatch) {
+            const volatileContent = volatileMatch[1];
+            const volatileItems = volatileContent.match(/['"](\w+)['"]/g);
+            if (volatileItems) {
+                matchedVolatiles.push(
+                    ...volatileItems.map((item) => item.replace(/['"]/g, "")),
+                );
+            }
+        }
+
+        return [...new Set(matchedVolatiles)]; // Remove duplicates
+    },
+    genderName: (content: string, file: string): string[] => {
+        const match = content.match(
+            /export\s+type\s+GenderName\s*=\s*([\s\S]*?);/,
+        );
+        if (match) {
+            const genderContent = match[1];
+            const genders = genderContent.match(/['"](\w*)['"]/g);
+            if (genders) {
+                return genders.map((gender) => gender.replace(/['"]/g, ""));
+            }
+        }
         return [];
-    }
-
-    const data = await response.json();
-    const paths = [];
-
-    for (const item of data) {
-        if (item.type === "file") {
-            console.log(item.path);
-            paths.push(item.download_url);
-        } else if (item.type === "dir") {
-            paths.push(...(await getFilenames(item.path)));
+    },
+    effectTypes: (content: string, file: string): string[] => {
+        const match = content.match(
+            /export\s+type\s+EffectType\s*=\s*([\s\S]*?);/,
+        );
+        if (match) {
+            const effectTypeContent = match[1];
+            const effectTypes = effectTypeContent.match(/['"](\w+)['"]/g);
+            if (effectTypes) {
+                return effectTypes.map((effectType) =>
+                    effectType.replace(/['"]/g, ""),
+                );
+            }
         }
-    }
-    return paths;
-}
-
-// Helper function to convert a string to an identifier
-function toId(string: string): string {
-    return string.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-// Helper function to reduce an array to unique, sorted identifiers
-function reduce(arr: string[]): string[] {
-    return Array.from(new Set(arr.map(toId).filter((x) => !!x))).sort();
-}
-
-// function findDuplicates(arr: string[]): string[] {
-//     return arr.filter((item, index) => {
-//         return arr.indexOf(item) !== index;
-//     });
-// }
-
-// Helper function to create an enumeration from an array
-function enumerate(arr: string[]): { [key: string]: number } {
-    const enumeration: { [key: string]: number } = {};
-    let count = 0;
-    for (const item of arr.sort()) {
-        if (!Object.keys(enumeration).includes(item)) {
-            enumeration[item] = count;
+        return [];
+    },
+    sideCondition: (content: string, file: string): string[] => {
+        const patterns = [
+            /sideCondition:\s*['"](\w+)['"]/g,
+            /addSideCondition\(['"](\w+)['"]/g,
+            /removeSideCondition\(['"](\w+)['"]/g,
+            /field\.addSideCondition\(['"](\w+)['"]/g,
+            /field\.removeSideCondition\(['"](\w+)['"]/g,
+            /field\.hasSideCondition\(['"](\w+)['"]/g,
+            /field\.getSideCondition\(['"](\w+)['"]/g,
+            /this\.field\.addSideCondition\(['"](\w+)['"]/g,
+            /this\.field\.removeSideCondition\(['"](\w+)['"]/g,
+            /this\.field\.hasSideCondition\(['"](\w+)['"]/g,
+            /this\.field\.getSideCondition\(['"](\w+)['"]/g,
+            /sideConditions\[['"](\w+)['"]\]/g,
+        ];
+        return applyPatterns(content, patterns);
+    },
+    weather: (content: string, file: string): string[] => {
+        const patterns = [
+            /weather:\s*['"](\w+)['"]/g,
+            /setWeather\(['"](\w+)['"]/g,
+            /clearWeather\(['"](\w+)['"]/g,
+            /battle\.setWeather\(['"](\w+)['"]/g,
+            /battle\.clearWeather\(['"](\w+)['"]/g,
+            /battle\.weather\.id\s*===?\s*['"](\w+)['"]/g,
+            /this\.setWeather\(['"](\w+)['"]/g,
+            /this\.clearWeather\(['"](\w+)['"]/g,
+            /this\.weather\.id\s*===?\s*['"](\w+)['"]/g,
+            /field\.setWeather\(['"](\w+)['"]/g,
+            /field\.clearWeather\(['"](\w+)['"]/g,
+            /field\.weather\.id\s*===?\s*['"](\w+)['"]/g,
+        ];
+        return applyPatterns(content, patterns);
+    },
+    terrain: (content: string, file: string): string[] => {
+        const patterns = [
+            /terrain:\s*['"](\w+)['"]/g,
+            /setTerrain\(['"](\w+)['"]/g,
+            /clearTerrain\(['"](\w+)['"]/g,
+            /battle\.setTerrain\(['"](\w+)['"]/g,
+            /battle\.clearTerrain\(['"](\w+)['"]/g,
+            /battle\.terrain\.id\s*===?\s*['"](\w+)['"]/g,
+            /this\.setTerrain\(['"](\w+)['"]/g,
+            /this\.clearTerrain\(['"](\w+)['"]/g,
+            /this\.terrain\.id\s*===?\s*['"](\w+)['"]/g,
+            /field\.setTerrain\(['"](\w+)['"]/g,
+            /field\.clearTerrain\(['"](\w+)['"]/g,
+            /field\.terrain\.id\s*===?\s*['"](\w+)['"]/g,
+        ];
+        const terrainMap: { [key: string]: string } = {
+            electric: "electricterrain",
+            grassy: "grassyterrain",
+            psychic: "psychicterrain",
+            misty: "mistyterrain",
+            electricterrain: "electricterrain",
+            mistyterrain: "mistyterrain",
+            grassyterrain: "grassyterrain",
+            psychicterrain: "psychicterrain",
+        };
+        const terrains = applyPatterns(content, patterns);
+        return terrains.map((t) => terrainMap[t.toLowerCase()] || t);
+    },
+    battleMajorArgs: (content: string, file: string): string[] => {
+        if (content.includes("interface BattleMajorArgs")) {
+            const interfaceMatch = content.match(
+                /interface\s+BattleMajorArgs\s*{[\s\S]*?}/,
+            );
+            if (interfaceMatch) {
+                const interfaceContent = interfaceMatch[0];
+                const argMatches =
+                    interfaceContent.match(/['"]?\|(\w+)\|['"]?:/g) || [];
+                return argMatches.map((match) =>
+                    match.replace(/['"]?\|(\w+)\|['"]?:/, "$1").toLowerCase(),
+                );
+            }
         }
-        count += 1;
+        return [];
+    },
+    battleMinorArgs: (content: string, file: string): string[] => {
+        if (content.includes("interface BattleMinorArgs")) {
+            const interfaceMatch = content.match(
+                /interface\s+BattleMinorArgs\s*{[\s\S]*?}/,
+            );
+            if (interfaceMatch) {
+                const interfaceContent = interfaceMatch[0];
+                const argMatches =
+                    interfaceContent.match(/['"]?\|-?(\w+)\|['"]?:/g) || [];
+                return argMatches.map((match) =>
+                    match.replace(/['"]?\|-?(\w+)\|['"]?:/, "$1").toLowerCase(),
+                );
+            }
+        }
+        return [];
+    },
+    boosts: (content: string, file: string): string[] => {
+        const boostMatch = content.match(
+            /const\s+BOOSTS\s*:\s*BoostID\[\]\s*=\s*\[([\s\S]*?)\]/,
+        );
+        if (boostMatch) {
+            const boostContent = boostMatch[1];
+            const boostItems = boostContent.match(/['"](\w+)['"]/g);
+            if (boostItems) {
+                return boostItems.map((item) => item.replace(/['"]/g, ""));
+            }
+        }
+        return [];
+    },
+    itemEffectTypes: (content: string, file: string): string[] => {
+        const patterns = [
+            /export\s+type\s+ItemEffect\s*=\s*([\s\S]*?);/g,
+            /item\.effectType\s*===?\s*['"]([\w\s]+)['"]/g,
+            /item\.hasEffect\(['"]([\w\s]+)['"]\)/g,
+            /item\.addEffect\(['"]([\w\s]+)['"]\)/g,
+            /item\.removeEffect\(['"]([\w\s]+)['"]\)/g,
+            /this\.addItemEffect\(['"]([\w\s]+)['"]\)/g,
+            /this\.removeItemEffect\(['"]([\w\s]+)['"]\)/g,
+            /item\.effects\[['"]([\w\s]+)['"]\]/g,
+            /itemEffect\(['"]([\w\s]+)['"]\)/g,
+            /['"]effectType['"]\s*:\s*['"]([\w\s]+)['"]/g,
+            /['"]on\w+['"]\s*:\s*['"]([\w\s]+)['"]/g,
+            /['"]([\w\s]+)['"]\s*:\s*function\s*\(/g,
+            /poke\.itemEffect\s*=\s*['"]([\w\s]+)['"]/g, // Added pattern
+            /this\.itemEffect\s*=\s*['"]([\w\s]+)['"]/g, // Added pattern
+        ];
+
+        const effects: string[] = [];
+
+        // Match the export type ItemEffect
+        const typeMatch = content.match(
+            /export\s+type\s+ItemEffect\s*=\s*([\s\S]*?);/,
+        );
+        if (typeMatch) {
+            const effectsContent = typeMatch[1];
+            const typeEffects = effectsContent.match(/['"]([\w\s]+)['"]/g);
+            if (typeEffects) {
+                effects.push(
+                    ...typeEffects.map((effect) => effect.replace(/['"]/g, "")),
+                );
+            }
+        }
+
+        // Apply other patterns
+        const otherEffects = applyPatterns(content, patterns.slice(1));
+        effects.push(...otherEffects);
+
+        return effects;
+    },
+    lastItemEffectTypes: (content: string, file: string): string[] => {
+        const patterns = [
+            /export\s+type\s+LastItemEffect\s*=\s*([\s\S]*?);/g,
+            /poke\.lastItemEffect\s*=\s*['"]([\w\s]+)['"]/g, // Added pattern
+            /this\.lastItemEffect\s*=\s*['"]([\w\s]+)['"]/g, // Added pattern
+            /['"]lastItemEffect['"]\s*:\s*['"]([\w\s]+)['"]/g,
+            /item\.lastEffect\s*=\s*['"]([\w\s]+)['"]/g,
+            /item\.lastItemEffect\s*=\s*['"]([\w\s]+)['"]/g,
+            /item\.lastEffectType\s*=\s*['"]([\w\s]+)['"]/g,
+        ];
+
+        const effects: string[] = [];
+
+        // Match the export type LastItemEffect
+        const typeMatch = content.match(
+            /export\s+type\s+LastItemEffect\s*=\s*([\s\S]*?);/,
+        );
+        if (typeMatch) {
+            const effectsContent = typeMatch[1];
+            const typeEffects = effectsContent.match(/['"]([\w\s]+)['"]/g);
+            if (typeEffects) {
+                effects.push(
+                    ...typeEffects.map((effect) => effect.replace(/['"]/g, "")),
+                );
+            }
+        }
+
+        // Apply other patterns
+        const otherEffects = applyPatterns(content, patterns.slice(1));
+        effects.push(...otherEffects);
+
+        return effects;
+    },
+};
+
+function applyPatterns(content: string, patterns: RegExp[]): string[] {
+    const matches: string[] = [];
+    for (const pattern of patterns) {
+        const found = [...content.matchAll(pattern)].map((match) =>
+            toID(match[1]),
+        );
+        matches.push(...found);
     }
-    return enumeration;
+    return matches;
 }
 
-// Function to fetch text content from a URL
-async function fetchText(url: string): Promise<string> {
-    const response = await fetch(url);
-    return response.text();
+function getFiles(dir: string): string[] {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    const files = entries
+        .filter((file) => !file.isDirectory())
+        .filter((file) => {
+            const fileName = file.name.toLowerCase();
+            // Exclude test files
+            return (
+                !fileName.includes(".test.") &&
+                !fileName.includes(".spec.") &&
+                !fileName.endsWith(".test") &&
+                !fileName.endsWith(".spec")
+            );
+        })
+        .map((file) => path.join(dir, file.name));
+
+    const folders = entries
+        .filter((folder) => folder.isDirectory())
+        .filter((folder) => {
+            const folderName = folder.name.toLowerCase();
+            // Exclude test directories
+            return (
+                folderName !== "test" &&
+                folderName !== "__tests__" &&
+                !folderName.endsWith(".test") &&
+                !folderName.endsWith(".spec")
+            );
+        });
+
+    for (const folder of folders) {
+        files.push(...getFiles(path.join(dir, folder.name)));
+    }
+
+    return files;
 }
 
-// Function to download all files and concatenate their content
-async function downloadAll(): Promise<string[]> {
-    const urls = [
-        ...(await getFilenames("sim")),
-        ...(await getFilenames("client")),
-    ];
-    const requests = urls.map((url) => fetchText(url));
-    return Promise.all(requests);
-}
-
-// Function to extract unique strings from source text based on a regular expression
-function extractPatterns(src: string, pattern: RegExp): string[] {
-    return [...src.matchAll(pattern)].map((match) => match[1]);
+async function processInBatches<T>(
+    items: T[],
+    batchSize: number,
+    processFn: (item: T) => Promise<void>,
+) {
+    for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        console.log(
+            `Processing batch ${i / batchSize + 1}/${Math.ceil(
+                items.length / batchSize,
+            )}`,
+        );
+        await Promise.all(batch.map(processFn));
+    }
 }
 
 type GenData = {
@@ -111,43 +400,80 @@ type GenData = {
     //     }[];
 };
 
-async function getGenData(gen: number): Promise<GenData> {
-    const format = `gen${gen}` as ID;
-    const generations = new Generations(Dex);
-    const dex = generations.dex.mod(format as GenID);
-    const species = (dex.species as any).all();
+async function getGenData(
+    genNo: number,
+    ruletable?: RuleTable,
+    format?: Format,
+): Promise<GenData> {
+    const dex = new Dex.ModdedDex(`gen${genNo}`);
+    const gens = new Generations(dexDex).get(genNo);
+    const species = dex.species.all();
     const promises = species.map((species: { id: string }) =>
         dex.learnsets.get(species.id),
     );
+    const abilities = dex.abilities.all();
     const learnsets = await Promise.all(promises);
-    const moves = (dex.moves as any).all();
+    const moves = dex.moves.all();
+    const items = dex.items.all();
+    const typechart = dex.types
+        .all()
+        .filter((type) => type.isNonstandard === null);
+
     const data = {
-        species: species,
-        moves: moves,
-        abilities: (dex.abilities as any).all(),
-        items: (dex.items as any).all(),
-        typechart: (dex.types as any).all(),
-        learnsets: learnsets,
+        species: (ruletable
+            ? species.filter((x) => {
+                  return (
+                      !ruletable.isBannedSpecies(x) &&
+                      !ruletable.isRestrictedSpecies(x) &&
+                      x.isNonstandard === null
+                  );
+              })
+            : species
+        ).map((x) => {
+            const effectiveness = Object.fromEntries(
+                typechart.map((type) => [
+                    type.name,
+                    gens.types.totalEffectiveness(
+                        type.name as TypeName,
+                        x.types as TypeName[],
+                    ),
+                ]),
+            );
+            return {
+                ...x,
+                effectiveness,
+            };
+        }),
+        moves: ruletable
+            ? moves.filter((x) => {
+                  return (
+                      !ruletable.check(`move:${x.id}`) &&
+                      x.isNonstandard === null
+                  );
+              })
+            : moves,
+        abilities: ruletable
+            ? abilities.filter((x) => {
+                  return (
+                      !ruletable.check(`ability:${x.id}`) &&
+                      x.isNonstandard === null
+                  );
+              })
+            : abilities,
+        items: ruletable
+            ? items.filter((x) => {
+                  return (
+                      !ruletable.check(`item:${x.id}`) &&
+                      x.isNonstandard === null
+                  );
+              })
+            : dex.items.all(),
+        typechart,
+        learnsets,
     };
-    return data;
+
+    return data as unknown as GenData;
 }
-
-function mapId<T extends { id: string; [key: string]: any }>(
-    arr: T[],
-): string[] {
-    return arr.map((item) => item.id);
-}
-
-const padToken = "!PAD!";
-const unkToken = "!UNK!";
-const nullToken = "!NULL!";
-const noneToken = "!NONE!";
-const switchToken = "!SWITCH!";
-const extraTokens = [noneToken, unkToken, padToken];
-
-// function formatKey(key: string): string {
-//     return key.startsWith("<") ? key : key.toLowerCase().replace(/[\W_]+/g, "");
-// }
 
 function formatData(data: GenData) {
     const moveIds = [
@@ -173,248 +499,127 @@ function formatData(data: GenData) {
             moveIds.push(x.slice(0, -2));
             moveIds.push(x.slice(0, -2) + `70`);
         });
+
+    const getId = (item: any) => {
+        return toID(item.id);
+    };
+
     return {
-        species: enumerate([...extraTokens, ...mapId(data.species)]),
-        moves: enumerate([...extraTokens, switchToken, ...moveIds, "recharge"]),
-        abilities: enumerate([...extraTokens, ...mapId(data.abilities)]),
-        items: enumerate([...extraTokens, nullToken, ...mapId(data.items)]),
+        species: data.species.map(getId),
+        moves: [SWITCH_TOKEN, ...moveIds, "recharge"],
+        abilities: data.abilities.map(getId),
+        items: data.items.map(getId),
     };
 }
 
-// The main function that executes the download and processing
-async function main(): Promise<void> {
-    const sources = await downloadAll();
-    const src = sources.join("\n");
+function standardize(values: string[], extraTokens: string[]) {
+    return Object.fromEntries(
+        [
+            ...extraTokens,
+            ...Array.from(values).sort((a, b) => a.localeCompare(b)),
+        ].map((value, index) => [value, index]),
+    );
+}
 
-    // Extract patterns for different categories
-    const weathersPattern = /['|"]-weather['|"],\s*['|"](.*)['|"],/g;
+async function scrapeRepo() {
+    const allFiles = getFiles(PS_DIRECTORY);
+    const jsAndTsFiles = allFiles.filter(
+        (file) => file.endsWith(".js") || file.endsWith(".ts"),
+    );
 
-    const terrainPattern = /terrain:\s*['|"](.*)['|"],/g;
-    const pseudoWeatherPattern = /pseudoWeather:\s['|"](.*?)['|"]/g;
+    console.log(
+        `Found ${jsAndTsFiles.length} JavaScript/TypeScript files to process.`,
+    );
 
-    const itemEffectPatterns = [
-        /itemEffect = ['|"](.*?)['|"]/g,
-        /lastItemEffect = ['|"](.*?)['|"]/g,
-    ];
+    const keywords: { [key: string]: Set<string> } = {};
+    for (const category of Object.keys(customScrapingFunctions)) {
+        keywords[category as Enums] = new Set<string>();
+    }
 
-    // Define patterns for volatile status
-    const volatileStatusPatterns = [
-        /removeVolatile\('([^']+)'/g,
-        /hasVolatile\('([^']+)'/g,
-        /volatiles\??\.([a-zA-Z_]\w*)/g,
-        /volatileStatus:\s*['|"](.*)['|'],/g,
-        /this\.add\('-start',\s*[^,]+,\s*([^,)]+)/g,
-        /addVolatile\('([^']+)'/g,
-    ];
+    await processInBatches(jsAndTsFiles, BATCH_SIZE, async (file) => {
+        const content = fs.readFileSync(file, "utf-8");
 
-    // Use a Set to ensure uniqueness
-    let volatileStatusSet = new Set<string>();
-
-    // Process each pattern and add the results to the Set
-    volatileStatusPatterns.forEach((pattern) => {
-        const matches = src.match(pattern);
-        if (matches) {
-            matches.forEach((match) => {
-                match = match.replace(pattern, "$1"); // Extract the captured group
-                match = match
-                    .replace(/['|"|\[|\]|\(|\)|,]/g, "") // Clean up any extra characters
-                    .trim();
-                match = match.startsWith("move: ")
-                    ? match.slice("move: ".length)
-                    : match;
-                match = match.startsWith("ability: ")
-                    ? match.slice("ability: ".length)
-                    : match;
-                if (match) {
-                    volatileStatusSet.add(match);
+        // Process all custom scraping functions
+        for (const [category, scrapeFn] of Object.entries(
+            customScrapingFunctions,
+        )) {
+            const extracted = scrapeFn(content, file);
+            extracted.forEach((value: string) => {
+                const formattedValue = toID(value);
+                if (formattedValue) {
+                    keywords[category].add(formattedValue);
                 }
             });
         }
     });
 
-    // Convert the Set to an array and reduce it to unique, sorted identifiers
-    let volatileStatus = reduce(["wrap", ...Array.from(volatileStatusSet)]);
+    const genData = await getGenData(9);
+    const allFormats = Dex.formats.all().map((format) => ({
+        format,
+        formatId: format.id,
+        ruletable: Dex.formats.getRuleTable(format),
+    }));
+    const data: { [k: string]: { [k: string]: number } } = {};
 
-    let weathers = extractPatterns(src, weathersPattern);
-    weathers = reduce(weathers).map((t) => t.replace("raindance", "rain"));
-    weathers = reduce(weathers).map((t) => t.replace("sandstorm", "sand"));
-    weathers = reduce(weathers).map((t) => t.replace("sunnyday", "sun"));
+    const genFormatData = formatData(genData);
+    for (const [category, values] of Object.entries({
+        ...genFormatData,
+        ...keywords,
+    })) {
+        data[category] = standardize(Array.from(values), EXTRA_TOKENS);
+    }
+    const conditions = [
+        ...keywords.sideCondition,
+        ...keywords.volatileStatus,
+        "recoil",
+        "drain",
+    ];
+    data["Condition"] = standardize(conditions, EXTRA_TOKENS);
 
-    const sideConditionPattern =
-        /this\.add\('-sidestart',\s*[^,]+,\s*'([^']+)'/g;
-    let sideConditions = reduce(
-        extractPatterns(src, sideConditionPattern).map((sideCondition) =>
-            sideCondition.startsWith("move: ")
-                ? sideCondition.slice("move: ".length)
-                : sideCondition,
-        ),
+    data["Effect"] = standardize(
+        [
+            ...genData.abilities.map((x) => `ability_${x.id}`),
+            ...genData.items.map((x) => `item_${x.id}`),
+            ...genData.moves.map((x) => `move_${x.id}`),
+            ...[...keywords.status].map((x) => `status_${x}`),
+            ...[...keywords.weather].map((x) => `weather_${x}`),
+            ...conditions.map((x) => `condition_${x}`),
+        ],
+        EXTRA_TOKENS,
     );
 
-    let terrain = extractPatterns(src, terrainPattern);
-    terrain = reduce(terrain).map((t) => t.replace("terrain", ""));
-
-    let pseudoweather = extractPatterns(src, pseudoWeatherPattern);
-    pseudoweather = reduce(pseudoweather);
-
-    let itemEffects = [];
-    for (const pattern of itemEffectPatterns) {
-        itemEffects.push(...extractPatterns(src, pattern));
-    }
-    itemEffects = reduce([
-        "eaten",
-        "popped",
-        "consumed",
-        "held up",
-        ...itemEffects,
-    ]);
-
-    const genData = await getGenData(9);
-
-    // Create the data object
-    const data = {
-        pseudoWeather: enumerate([nullToken, ...pseudoweather.sort()]),
-        volatileStatus: enumerate([nullToken, ...volatileStatus.sort()]),
-        itemEffect: enumerate([nullToken, ...itemEffects.sort()]),
-        weathers: enumerate([nullToken, ...weathers.sort()]),
-        terrain: enumerate([nullToken, ...terrain.sort()]),
-        sideConditions: enumerate([nullToken, ...sideConditions.sort()]),
-        ...formatData(genData),
-        statuses: enumerate([
-            nullToken,
-            "slp",
-            "psn",
-            "brn",
-            "frz",
-            "par",
-            "tox",
-        ]),
-        boosts: enumerate([
-            "atk",
-            "def",
-            "spa",
-            "spd",
-            "spe",
-            "accuracy",
-            "evasion",
-        ]),
-        types: enumerate([
-            ...extraTokens,
-            ...genData.typechart.flatMap((type) =>
-                type.isNonstandard === "Future" ? [] : type.id,
-            ),
-        ]),
-        genders: enumerate([unkToken, "M", "F", "N"]),
-        battleMinorArgs: enumerate([
-            unkToken,
-            ...[
-                "|-formechange|",
-                "|-fail|",
-                "|-block|",
-                "|-notarget|",
-                "|-miss|",
-                "|-damage|",
-                "|-heal|",
-                "|-sethp|",
-                "|-status|",
-                "|-curestatus|",
-                "|-cureteam|",
-                "|-boost|",
-                "|-unboost|",
-                "|-setboost|",
-                "|-swapboost|",
-                "|-invertboost|",
-                "|-clearboost|",
-                "|-clearallboost|",
-                "|-clearpositiveboost|",
-                "|-clearnegativeboost|",
-                "|-copyboost|",
-                "|-weather|",
-                "|-fieldstart|",
-                "|-fieldend|",
-                "|-sidestart|",
-                "|-sideend|",
-                "|-swapsideconditions|",
-                "|-start|",
-                "|-end|",
-                "|-crit|",
-                "|-supereffective|",
-                "|-resisted|",
-                "|-immune|",
-                "|-item|",
-                "|-enditem|",
-                "|-ability|",
-                "|-endability|",
-                "|-transform|",
-                "|-mega|",
-                "|-primal|",
-                "|-burst|",
-                "|-zpower|",
-                "|-zbroken|",
-                "|-activate|",
-                "|-fieldactivate|",
-                "|-hint|",
-                "|-center|",
-                "|-message|",
-                "|-combine|",
-                "|-waiting|",
-                "|-prepare|",
-                "|-mustrecharge|",
-                "|-hitcount|",
-                "|-singlemove|",
-                "|-singleturn|",
-                "|-anim|",
-                "|-ohko|",
-                "|-candynamax|",
-                "|-terastallize|",
-            ]
-
-                .filter((x) => x.startsWith("|-"))
-                .map((str) => str.replace(/\|/g, "")),
-        ]),
-        battleMajorArgs: enumerate([
-            unkToken,
-            ...[
-                "|move|",
-                "|switch|",
-                "|drag|",
-                "|detailschange|",
-                "|replace|",
-                "|swap|",
-                "|cant|",
-                "|faint|",
-                "|message|",
-                "|custom|",
-            ].map((str) => str.replace(/\|/g, "")),
-        ]),
-    };
-
-    const parentDataDir = `data/`;
-
-    if (!fs.existsSync(parentDataDir)) {
-        fs.mkdirSync(parentDataDir, { recursive: true });
-    }
-
-    // Write the data to a JSON file
     fs.writeFileSync(
-        `${parentDataDir}/data.json`,
+        `${PARENT_DATA_DIR}/data.json`,
         JSON.stringify(data, null, 2),
     );
 
-    for (const genNo of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
-        const parentDir = `${parentDataDir}/gen${genNo}/`;
+    const datas = [];
+    const parentDirs = [];
+
+    for (const { format, formatId, ruletable } of allFormats) {
+        const genNo = parseInt(formatId[3]);
+        const formatString = formatId.slice(4);
+        const parentDir = `${PARENT_DATA_DIR}/gen${genNo}/${formatString}/`;
+
         if (!fs.existsSync(parentDir)) {
             fs.mkdirSync(parentDir, { recursive: true });
         }
-        const genData = await getGenData(genNo);
-        for (const [key, value] of Object.entries(genData)) {
-            const ourPath = `${parentDir}/${key}.json`;
+
+        const genDataPromise = getGenData(genNo, ruletable, format);
+
+        datas.push(genDataPromise);
+        parentDirs.push(parentDir);
+    }
+
+    const results = await Promise.all(datas);
+
+    for (const [index, result] of results.entries()) {
+        for (const [key, values] of Object.entries(result)) {
+            const ourPath = `${parentDirs.at(index) ?? ""}/${key}.json`;
             console.log(`writing ${ourPath}`);
-            fs.writeFileSync(ourPath, JSON.stringify(value, null, 2));
+            fs.writeFileSync(ourPath, JSON.stringify(values, null, 2));
         }
     }
 }
 
-// Execute the main function
-main().catch((error) => {
-    console.error("An error occurred:", error);
-});
+scrapeRepo().catch((err) => console.error("Error during scraping:", err));

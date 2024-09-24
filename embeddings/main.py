@@ -1,10 +1,9 @@
 import os
 import json
 import traceback
+
 from sklearn.discriminant_analysis import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler
-import umap
 
 import pandas as pd
 import numpy as np
@@ -29,6 +28,10 @@ from embeddings.protocols import (
 )
 
 
+with open("data/data/randombattle_data.json", "r") as f:
+    randombattle_data = json.load(f)
+
+
 def to_id(string: str) -> str:
     return "".join(c for c in string if c.isalnum()).lower()
 
@@ -40,7 +43,6 @@ def get_df(data: List[Dict[str, Any]], sortby: str = None):
         if (d.get("tier") != "Illegal")
         and (d.get("isNonstandard") not in ["Future", "Unobtainable"])
     ]
-
     df = pd.json_normalize(data)
     for mask_fn in [
         lambda: df["isNonstandard"].map(lambda x: x is None),
@@ -129,20 +131,7 @@ def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = T
     # Perform PCA on categorical embeddings
     if feature_vector_categorical_dfs:
         categorical_concat_df = concat_encodings(feature_vector_categorical_dfs)
-
-        categorical_pipeline = Pipeline(
-            [
-                ("pca", PCA(n_components=0.95, svd_solver="full")),
-                ("scaler", StandardScaler()),
-            ]
-        )
-        categorical_pca = categorical_pipeline.fit_transform(categorical_concat_df)
-        categorical_pca_df = pd.DataFrame(
-            categorical_pca,
-            index=categorical_concat_df.index,
-            columns=[f"PCA_{i+1}" for i in range(categorical_pca.shape[1])],
-        )
-        concat_dfs.append(categorical_pca_df)
+        concat_dfs.append(categorical_concat_df)
 
     scalar_concat_df = pd.DataFrame()
     if feature_vector_scalar_dfs:
@@ -155,7 +144,6 @@ def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = T
         concat_dfs.append(feature_concat_df)
 
     concat_df = concat_encodings(concat_dfs)
-    concat_df.map(lambda x: max(min(x, 3), -3))
     concat_df.index = df["name"].map(to_id)
 
     return concat_df
@@ -194,7 +182,11 @@ class GenerationEncodings:
     NAMES = ["abilities", "items", "move", "species", "typechart"]
 
     def __init__(
-        self, gen: int, stoi: Dict[str, int] = None, onehot_id_only: bool = False
+        self,
+        gen: int,
+        format: str,
+        stoi: Dict[str, int] = None,
+        onehot_id_only: bool = False,
     ):
         if stoi is None:
             with open("data/data.json", "r", encoding="utf-8") as f:
@@ -205,7 +197,7 @@ class GenerationEncodings:
         self.stoi = stoi
 
         self.gendata = {}
-        gen_dir = f"data/data/gen{gen}/"
+        gen_dir = f"data/data/gen{gen}/{format}/"
         for fname in os.listdir(gen_dir):
             if not fname.endswith(".json"):
                 continue
@@ -214,6 +206,7 @@ class GenerationEncodings:
             with open(fpath, "r") as f:
                 self.gendata[fname_head] = json.load(f)
 
+        self.format = format
         self.typechart_df = get_df(self.gendata["typechart"])
 
     def get_species_df(self):
@@ -264,21 +257,22 @@ class GenerationEncodings:
                 weakness_data[col].append(damage_multipliers[tidx])
 
         weakness_df = pd.DataFrame(weakness_data, index=df.index)
-        weakness_df = get_encodings(
-            concat_encodings([df, weakness_df]),
-            [
-                {
-                    "feature": "id",
-                    "func": onehot_encode,
-                },
-                {
-                    "feature_fn": lambda x: x.startswith("damageTaken."),
-                    "func": z_score_scale,
-                },
-            ],
-        )
+        # weakness_df = get_encodings(
+        #     concat_encodings([df, weakness_df]),
+        #     [
+        #         {
+        #             "feature": "id",
+        #             "func": onehot_encode,
+        #         },
+        #         {
+        #             "feature_fn": lambda x: x.startswith("damageTaken."),
+        #             "func": z_score_scale,
+        #         },
+        #     ],
+        # )
         encodings = get_encodings(
-            concat_encodings([df, weakness_df]),
+            # concat_encodings([df, weakness_df]),
+            df,
             (
                 [
                     {
@@ -291,6 +285,12 @@ class GenerationEncodings:
                 else SPECIES_PROTOCOLS
             ),
         )
+        if self.format == "randombattle":
+            encodings = encodings[
+                df["name"].isin(
+                    randombattle_data[f"gen{self.gen}randombattle"]["species"]
+                )
+            ]
         return to_lookup_table(encodings, self.stoi["species"])
 
     def get_moves_df(self):
@@ -309,6 +309,12 @@ class GenerationEncodings:
                 else MOVES_PROTOCOLS
             ),
         )
+        if self.format == "randombattle":
+            encodings = encodings[
+                df["id"]
+                .isin(randombattle_data[f"gen{self.gen}randombattle"]["moves"])
+                .values
+            ]
         return to_lookup_table(encodings, self.stoi["moves"])
 
     def get_abilities_df(self):
@@ -327,6 +333,12 @@ class GenerationEncodings:
                 else ABILITIES_PROTOCOLS
             ),
         )
+        if self.format == "randombattle":
+            encodings = encodings[
+                df["name"].isin(
+                    randombattle_data[f"gen{self.gen}randombattle"]["abilities"]
+                )
+            ]
         return to_lookup_table(encodings, self.stoi["abilities"])
 
     def get_items_df(self):
@@ -345,6 +357,12 @@ class GenerationEncodings:
                 else ITEMS_PROTOCOLS
             ),
         )
+        if self.format == "randombattle":
+            encodings = encodings[
+                df["name"].isin(
+                    randombattle_data[f"gen{self.gen}randombattle"]["items"]
+                )
+            ]
         return to_lookup_table(encodings, self.stoi["items"])
 
 
@@ -420,73 +438,68 @@ def main(plot: bool = False, onehot_id_only: bool = False):
         data = json.load(f)
 
     name: str
-    for gen in range(3, 10):
+    for gen in range(3, 5):
         print(gen)
-
-        enc = GenerationEncodings(gen, data, onehot_id_only)
-        for name, func in [
-            ("species", enc.get_species_df),
-            ("moves", enc.get_moves_df),
-            ("abilities", enc.get_abilities_df),
-            ("items", enc.get_items_df),
-        ]:
-            try:
-                encodings_arr = func()
-            except NoDataFramesError:
-                traceback.print_exc()
+        for format in os.listdir(f"data/data/gen{gen}/"):
+            if not os.path.isdir(f"data/data/gen{gen}/{format}"):
                 continue
-            except VectorContainsNanError as e:
-                raise e
-            except Exception as e:
-                raise e
+            enc = GenerationEncodings(gen, format, data, onehot_id_only)
+            for name, func in [
+                ("species", enc.get_species_df),
+                ("moves", enc.get_moves_df),
+                ("abilities", enc.get_abilities_df),
+                ("items", enc.get_items_df),
+            ]:
+                try:
+                    encodings_arr = func()
+                except NoDataFramesError:
+                    traceback.print_exc()
+                    continue
+                except VectorContainsNanError as e:
+                    raise e
+                except Exception as e:
+                    raise e
 
-            mask = abs(encodings_arr).sum(-1) > 0
-            # pca = PCA(min(*encodings_arr[mask].shape, 128))
-            # encoded = pca.fit_transform(encodings_arr[mask])
-            encoded = encodings_arr[mask]
-            # encoded = StandardScaler().fit_transform(encoded)
-            # encoded = MinMaxScaler((-1, 1)).fit_transform(encoded)
+                mask = abs(encodings_arr).sum(-1) > 0
+                pca = PCA(0.95)
+                encoded = pca.fit_transform(encodings_arr[mask])
+                encoded = encodings_arr[mask]
+                encoded = StandardScaler().fit_transform(encoded)
+                encoded = encoded.clip(min=-3, max=3)
 
-            print(
-                (
-                    name,
-                    # repr(encodings_arr.shape),
-                    repr(encoded.shape),
-                    encoded.min(),
-                    encoded.max(),
-                    # pca.explained_variance_ratio_[: pca.n_components_].sum(),
+                print(
+                    (
+                        name,
+                        # repr(encodings_arr.shape),
+                        repr(encoded.shape),
+                        encoded.min(),
+                        encoded.max(),
+                        # pca.explained_variance_ratio_[: pca.n_components_].sum(),
+                    )
                 )
-            )
 
-            new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
-            new[mask] = encoded
-            with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
-                np.save(f, new)
+                new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
+                new[mask] = encoded
+                with open(f"data/data/gen{gen}/{format}/{name}.npy", "wb") as f:
+                    np.save(f, new)
 
-            cosine_sim = cosine_similarity(PCA(0.99).fit_transform(encoded))
-            cosine_sim_thresholded = np.where(cosine_sim > 0.999, -1e9, cosine_sim)
+                cosine_sim = cosine_similarity(encoded)
+                cosine_sim_flat = cosine_sim.flatten()
+                threshold_mask = (
+                    (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
+                )
+                threshold = np.mean(cosine_sim_flat, where=threshold_mask) + 3 * np.std(
+                    cosine_sim_flat, where=threshold_mask
+                )
 
-            flat = cosine_sim_thresholded.flatten()
-            # Calculate the number of elements to keep
-            k = int(np.ceil(cosine_sim_thresholded.size * 0.01))
+                names = np.array(list(enc.stoi[name]))[mask.flatten()]
+                graph = cosine_matrix_to_pyvis(
+                    cosine_matrix=cosine_sim,
+                    labels=names,
+                    threshold=threshold,
+                )
+                graph.write_html(f"data/data/gen{gen}/{format}/{name}_graph.html")
 
-            # Find the kth largest value
-            kth_largest = np.partition(flat, -k)[-k]
-
-            # Create the mask
-            flat_mask = flat >= kth_largest
-            threshold = flat[flat_mask].min()
-
-            names = np.array(list(enc.stoi[name]))[mask.flatten()]
-            graph = cosine_matrix_to_pyvis(
-                cosine_matrix=cosine_sim,
-                labels=names,
-                threshold=threshold,
-            )
-            graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
-
-            if plot and gen == 3:
-                # Step 3: Plot the cosine similarity matrix as a heatmap
                 df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
 
                 fig = px.imshow(
@@ -494,12 +507,14 @@ def main(plot: bool = False, onehot_id_only: bool = False):
                     text_auto=True,
                     aspect="auto",
                     labels=dict(
-                        x="Sample Index", y="Sample Index", color="Cosine Similarity"
+                        x="Sample Index",
+                        y="Sample Index",
+                        color="Cosine Similarity",
                     ),
                     title=f"Gen{gen} {name.capitalize()} Cosine Similarity Heatmap",
                 )
-                fig.show()
+                fig.write_html(f"data/data/gen{gen}/{format}/{name}_cosine_sim.html")
 
 
 if __name__ == "__main__":
-    main(True)
+    main(False)

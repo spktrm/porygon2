@@ -5,11 +5,14 @@ with open("data/data/data.json") as f:
 
 
 def toid(string: str) -> str:
-    return "".join(c for c in string if c.isalnum()).lower()
+    return "".join(c for c in string if c.isalnum() or c == "_").lower()
 
 
-def generate_enum(title: str, data: dict[str, int]):
-    data = [f"\t{title}_{toid(key)} = {value};" for key, value in data.items()]
+def generate_enum(title: str, data: dict[str, int], use_toid: bool = True):
+    data = [
+        f"\t{title.upper()}_{((toid if use_toid else lambda x:x)(key)).upper()} = {value};"
+        for key, value in data.items()
+    ]
     return f"enum {title.capitalize()}Enum {{\n" + "\n".join(data) + "\n}"
 
 

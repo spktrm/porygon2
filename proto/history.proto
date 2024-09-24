@@ -2,24 +2,10 @@ syntax = "proto3";
 
 package history;
 
-enum ActionTypeEnum {
-    move = 0;
-    switch = 1;
-}
 
 message History {
     // two sided
-    bytes active = 1;
-    bytes boosts = 2;
-    bytes sideConditions = 3;
-    bytes volatileStatus = 4;
-    bytes additionalInformation = 5;
-    bytes hyphenArgs = 6;
-
-    // one sided
-    bytes weather = 7;
-    bytes pseudoweather = 8;
-    bytes turnContext = 9;
-
-    int32 length = 10;
+    bytes edges = 1;
+    bytes nodes = 2;
+    int32 length = 3;
 }

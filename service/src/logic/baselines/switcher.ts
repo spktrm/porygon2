@@ -313,9 +313,7 @@ const calcMovePrior: (args: {
 }) => number = ({ handler, move, attacker, defender, attackerScore }) => {
     const battle = handler.privateBattle;
     const { id } = move;
-    const attackerRecentDamage = handler.eventHandler.getRecentDamage(
-        attacker.ident,
-    );
+    const attackerRecentDamage = 0; // TODO: decouple this from general state creation
 
     const moveData = battle.gens.dex.moves.get(id);
     const moveAccuracy =

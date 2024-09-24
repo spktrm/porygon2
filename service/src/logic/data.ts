@@ -1,18 +1,23 @@
+import { toID } from "@pkmn/data";
 import {
     AbilitiesEnum,
     BattlemajorargsEnum,
     BattleminorargsEnum,
     BoostsEnum,
-    GendersEnum,
-    ItemeffectEnum,
+    ConditionEnum,
+    EffectEnum,
+    EffecttypesEnum,
+    GendernameEnum,
+    ItemeffecttypesEnum,
     ItemsEnum,
+    LastitemeffecttypesEnum,
     MovesEnum,
     PseudoweatherEnum,
-    SideconditionsEnum,
+    SideconditionEnum,
     SpeciesEnum,
-    StatusesEnum,
+    StatusEnum,
     VolatilestatusEnum,
-    WeathersEnum,
+    WeatherEnum,
 } from "../../protos/enums_pb";
 import {
     FeatureAdditionalInformation,
@@ -26,25 +31,28 @@ import { LegalActions } from "../../protos/state_pb";
 export type EnumMappings =
     | typeof SpeciesEnum
     | typeof ItemsEnum
-    | typeof StatusesEnum
-    | typeof ItemeffectEnum
+    | typeof StatusEnum
+    | typeof ItemeffecttypesEnum
+    | typeof LastitemeffecttypesEnum
     | typeof MovesEnum
     | typeof AbilitiesEnum
     | typeof BoostsEnum
     | typeof VolatilestatusEnum
-    | typeof SideconditionsEnum
-    | typeof WeathersEnum
+    | typeof SideconditionEnum
+    | typeof ConditionEnum
+    | typeof WeatherEnum
     | typeof PseudoweatherEnum
-    | typeof GendersEnum
+    | typeof GendernameEnum
     | typeof BattlemajorargsEnum
-    | typeof BattleminorargsEnum;
+    | typeof BattleminorargsEnum
+    | typeof EffectEnum;
 
 function GenerateEnumKeyMapping<T extends EnumMappings>(
     mapping: T,
 ): { [k: string]: keyof T } {
     return Object.fromEntries(
         Object.keys(mapping).map((key) => {
-            const preKey = key.split("_").pop() ?? "";
+            const preKey = key.split("_").slice(1).join("_") ?? "";
             return [preKey.toLowerCase(), key as keyof T];
         }),
     );
@@ -56,23 +64,26 @@ export type BenchIndex = MoveIndex | 4 | 5;
 export const MappingLookup = {
     Species: SpeciesEnum,
     Items: ItemsEnum,
-    Statuses: StatusesEnum,
-    ItemEffects: ItemeffectEnum,
-    Moves: MovesEnum,
-    Genders: GendersEnum,
-    Abilities: AbilitiesEnum,
-    Boosts: BoostsEnum,
+    Status: StatusEnum,
+    ItemEffect: ItemeffecttypesEnum,
+    LastItemEffect: LastitemeffecttypesEnum,
+    Move: MovesEnum,
+    Gender: GendernameEnum,
+    Ability: AbilitiesEnum,
+    Boost: BoostsEnum,
     Volatilestatus: VolatilestatusEnum,
-    Sideconditions: SideconditionsEnum,
-    Weathers: WeathersEnum,
-    PseudoWeathers: PseudoweatherEnum,
-    BattleMinorArgs: BattleminorargsEnum,
-    BattleMajorArgs: BattlemajorargsEnum,
+    Sidecondition: SideconditionEnum,
+    Condition: ConditionEnum,
+    Weather: WeatherEnum,
+    PseudoWeather: PseudoweatherEnum,
+    BattleMinorArg: BattleminorargsEnum,
+    BattleMajorArg: BattlemajorargsEnum,
+    Effect: EffectEnum,
 };
 
 export const numBoosts = Object.keys(BoostsEnum).length;
 export const numVolatiles = Object.keys(VolatilestatusEnum).length;
-export const numSideConditions = Object.keys(SideconditionsEnum).length;
+export const numSideConditions = Object.keys(SideconditionEnum).length;
 export const numAdditionalInformations = Object.keys(
     FeatureAdditionalInformation,
 ).length;

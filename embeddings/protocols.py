@@ -150,6 +150,9 @@ MOVES_PROTOCOLS: List[Protocol] = [
             "recoil",
             "heal",
             "ohko",
+            "willCrit",
+            "tracksTarget",
+            "thawsTarget",
         ]
     ],
     *[
@@ -176,6 +179,16 @@ MOVES_PROTOCOLS: List[Protocol] = [
         "feature_type": FeatureType.CATEGORICAL,
     },
     {
+        "feature_fn": lambda x: x.startswith("on"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("override"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
         "feature_fn": lambda x: x.startswith("secondary."),
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,
@@ -189,6 +202,10 @@ MOVES_PROTOCOLS: List[Protocol] = [
         "feature_fn": lambda x: x.startswith("selfBoost."),
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("effectiveness."),
+        "feature_type": FeatureType.SCALAR,
     },
     {
         "feature_fn": lambda x: x.startswith("ignore"),
@@ -245,8 +262,18 @@ ITEMS_PROTOCOLS: List[Protocol] = [
             "func": onehot_encode,
             "feature_type": FeatureType.CATEGORICAL,
         }
-        for stat_feature in ["id"]
+        for stat_feature in ["id", "affectsFainted", "itemUser"]
     ],
+    {
+        "feature_fn": lambda x: x.startswith("condition."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("boosts."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
     {
         "feature_fn": lambda x: x.startswith("fling."),
         "func": onehot_encode,
@@ -292,8 +319,17 @@ ABILITIES_PROTOCOLS: List[Protocol] = [
         for stat_feature in [
             "id",
             "suppressWeather",
+            "affectsFainted",
+            "rating",
+            "sourceEffect",
+            "supressWeather",
         ]
     ],
+    {
+        "feature_fn": lambda x: x.startswith("flags."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
     {
         "feature_fn": lambda x: x.startswith("condition."),
         "func": onehot_encode,
