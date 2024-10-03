@@ -185,11 +185,9 @@ def v_trace(
     inv_mu = _policy_ratio(
         jnp.ones_like(merged_policy), acting_policy, actions_oh, valid
     )
-    num_legal_actions = (acting_policy > 0).sum(axis=-1).clip(min=1)
     eta_reg_entropy = (
         -eta
         * jnp.sum(merged_policy * merged_log_policy, axis=-1)
-        * jax.lax.rsqrt(num_legal_actions.astype(float))
         * jnp.squeeze(player_others, axis=-1)
     )
     eta_log_policy = -eta * merged_log_policy * player_others
@@ -446,9 +444,8 @@ def get_loss_entropy(
     valid: chex.Array,
 ) -> chex.Array:
     loss_entropy = (policy * log_policy).sum(-1)
-    # num_legal_actions = legal.sum(-1)
-    # denom = jnp.log(num_legal_actions)
-    # denom = jnp.where(num_legal_actions <= 1, 1, denom)
-    # loss_entropy = loss_entropy / denom
-
+    num_legal_actions = legal.sum(-1)
+    denom = jnp.log(num_legal_actions)
+    denom = jnp.where(num_legal_actions <= 1, 1, denom)
+    loss_entropy = loss_entropy / denom
     return renormalize(loss_entropy, valid)

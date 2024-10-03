@@ -1,3 +1,4 @@
+from re import L
 import jax
 import chex
 import numpy as np
@@ -8,77 +9,38 @@ from ml_collections import ConfigDict
 from functools import partial
 
 from ml.arch.modules import (
-    CNN,
     MLP,
-    GatingType,
     PretrainedEmbedding,
     Resnet,
     ToAvgVector,
     Transformer,
-    UNet,
     VectorMerge,
 )
 
 from rlenv.data import (
+    NUM_ABILITIES,
+    NUM_EDGE_TYPES,
     NUM_GENDERS,
     NUM_HISTORY,
     NUM_ITEM_EFFECTS,
+    NUM_ITEMS,
+    NUM_MAJOR_ARGS,
+    NUM_MINOR_ARGS,
     NUM_MOVES,
+    NUM_SPECIES,
     NUM_STATUS,
-    NUM_WEATHER,
-    SPIKES_TOKEN,
-    TOXIC_SPIKES_TOKEN,
+    NUM_VOLATILE_STATUS,
 )
 from rlenv.interfaces import EnvStep
 
 from rlenv.protos.enums_pb2 import SpeciesEnum
 from rlenv.protos.features_pb2 import (
+    EdgeTypes,
     FeatureAdditionalInformation,
+    FeatureEdge,
     FeatureEntity,
     FeatureMoveset,
-    FeatureTurnContext,
-    FeatureWeather,
 )
-
-
-NUM_TYPES_INDICES = [
-    FeatureAdditionalInformation.NUM_TYPES_PAD,
-    FeatureAdditionalInformation.NUM_TYPES_UNK,
-    FeatureAdditionalInformation.NUM_TYPES_BUG,
-    FeatureAdditionalInformation.NUM_TYPES_DARK,
-    FeatureAdditionalInformation.NUM_TYPES_DRAGON,
-    FeatureAdditionalInformation.NUM_TYPES_ELECTRIC,
-    FeatureAdditionalInformation.NUM_TYPES_FAIRY,
-    FeatureAdditionalInformation.NUM_TYPES_FIGHTING,
-    FeatureAdditionalInformation.NUM_TYPES_FIRE,
-    FeatureAdditionalInformation.NUM_TYPES_FLYING,
-    FeatureAdditionalInformation.NUM_TYPES_GHOST,
-    FeatureAdditionalInformation.NUM_TYPES_GRASS,
-    FeatureAdditionalInformation.NUM_TYPES_GROUND,
-    FeatureAdditionalInformation.NUM_TYPES_ICE,
-    FeatureAdditionalInformation.NUM_TYPES_NORMAL,
-    FeatureAdditionalInformation.NUM_TYPES_POISON,
-    FeatureAdditionalInformation.NUM_TYPES_PSYCHIC,
-    FeatureAdditionalInformation.NUM_TYPES_ROCK,
-    FeatureAdditionalInformation.NUM_TYPES_STEEL,
-    FeatureAdditionalInformation.NUM_TYPES_STELLAR,
-    FeatureAdditionalInformation.NUM_TYPES_WATER,
-]
-
-MEMBER_HP_INDICES = [
-    FeatureAdditionalInformation.MEMBER0_HP,
-    FeatureAdditionalInformation.MEMBER1_HP,
-    FeatureAdditionalInformation.MEMBER2_HP,
-    FeatureAdditionalInformation.MEMBER3_HP,
-    FeatureAdditionalInformation.MEMBER4_HP,
-    FeatureAdditionalInformation.MEMBER5_HP,
-]
-
-
-def _encode_multi_onehot(x: chex.Array, num_classes: int):
-    result = jnp.zeros(num_classes)
-    result = result.at[x].set(1)
-    return result
 
 
 def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array:
@@ -91,24 +53,25 @@ def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array
     return result.astype(jnp.float32)
 
 
-SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/species.npy")
-ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/abilities.npy")
-ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/items.npy")
-MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/moves.npy")
+SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/species.npy")
+ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/abilities.npy")
+ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/items.npy")
+MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/moves.npy")
 
 
 class MoveEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        self.embed_moves = nn.Embed(NUM_MOVES, features=self.cfg.entity_size)
         self.move_linear = nn.Dense(features=self.cfg.entity_size)
         self.pp_linear = nn.Dense(features=self.cfg.entity_size)
 
     def encode_move(self, move: chex.Array):
         pp_left = move[FeatureMoveset.PPUSED]
         move_id = move[FeatureMoveset.MOVEID]
-        pp_onehot = _binary_scale_embedding(pp_left.astype(np.int32), 65)
-        move_onehot = MOVE_ONEHOT(move_id)
+        pp_onehot = _binary_scale_embedding(pp_left.astype(jnp.int32), 65)
+        move_onehot = self.embed_moves(move_id)
         embedding = self.move_linear(move_onehot)
         return embedding + self.pp_linear(pp_onehot)
 
@@ -123,428 +86,442 @@ class EntityEncoder(nn.Module):
     def setup(self):
         entity_size = self.cfg.entity_size
 
-        self.onehot_linear = nn.Dense(features=entity_size)
-        self.species_linear = nn.Dense(features=entity_size)
-        self.ability_linear = nn.Dense(features=entity_size)
+        self.embed_species = nn.Embed(NUM_SPECIES, features=entity_size)
+        self.embed_ability = nn.Embed(NUM_ABILITIES, features=entity_size)
+        self.embed_item = nn.Embed(NUM_ITEMS, features=entity_size)
+        self.embed_moves = nn.Embed(NUM_MOVES, features=entity_size)
+
         self.item_linear = nn.Dense(features=entity_size)
         self.moves_linear = nn.Dense(features=entity_size)
+        self.onehot_linear = nn.Dense(features=entity_size)
+        self.side_linear = nn.Dense(features=entity_size)
 
         self.level_linear = nn.Dense(features=entity_size)
         self.hp_linear = nn.Dense(features=entity_size)
         self.active_linear = nn.Dense(features=entity_size)
+        self.volatiles_linear = nn.Dense(features=entity_size)
+        self.boosts_linear = nn.Dense(features=entity_size)
 
-        self.merge = VectorMerge(entity_size, gating_type=GatingType.POINTWISE)
+        self.output = nn.Dense(features=entity_size)
+
+    def encode_hp(self, entity: chex.Array):
+        hp = entity[FeatureEntity.ENTITY_HP]
+        maxhp = jnp.clip(entity[FeatureEntity.ENTITY_MAXHP], a_min=1)
+        return jnp.clip(hp / maxhp, a_min=0, a_max=1)
+
+    def encode_moveset(self, entity: chex.Array):
+        # Moves and PP encoding using JAX indexing
+        move_indices = jax.lax.slice(
+            entity, (FeatureEntity.ENTITY_MOVEID0,), (FeatureEntity.ENTITY_MOVEPP0,)
+        )
+        pp_indices = jax.lax.slice(
+            entity, (FeatureEntity.ENTITY_MOVEPP0,), (FeatureEntity.ENTITY_HAS_STATUS,)
+        )
+        # Use jax.vmap to handle moves and PP encoding for batch efficiency
+        return jnp.concatenate(
+            (
+                jax.vmap(self.embed_moves)(move_indices),
+                jax.vmap(partial(_binary_scale_embedding, world_dim=64))(
+                    pp_indices.astype(jnp.int32)
+                ),
+            ),
+            axis=-1,
+        )
+
+    def encode_boosts(self, entity: chex.Array):
+        boosts = jax.lax.slice(
+            entity,
+            (FeatureEntity.ENTITY_BOOST_ATK_VALUE,),
+            (FeatureEntity.ENTITY_VOLATILES0,),
+        )
+        return boosts / 2.0
+
+    def encode_item(self, entity: chex.Array):
+        return jnp.concatenate(
+            (
+                self.embed_item(entity[FeatureEntity.ENTITY_ITEM]),
+                jax.nn.one_hot(
+                    entity[FeatureEntity.ENTITY_ITEM_EFFECT], NUM_ITEM_EFFECTS
+                ),
+            )
+        )
+
+    def encode_volatiles(self, entity: chex.Array):
+        volatiles = jax.lax.slice(
+            entity,
+            (FeatureEntity.ENTITY_VOLATILES0,),
+            (FeatureEntity.ENTITY_VOLATILES8 + 1,),
+        )
+        bitmask = jnp.arange(16)
+        onehot = (volatiles[..., None] & bitmask) > 0
+        return jax.lax.slice(
+            onehot.flatten().astype(jnp.float32), (0,), (NUM_VOLATILE_STATUS,)
+        )
 
     def encode_entity(self, entity: chex.Array):
-        hp = entity[FeatureEntity.HP]
-        maxhp = entity[FeatureEntity.MAXHP].clip(min=1)
+        hp_ratio = self.encode_hp(entity)
+        hp_token = jnp.floor(1023 * hp_ratio).astype(jnp.int32)
 
-        hp_ratio = (hp / maxhp).clip(min=0, max=1)
-        hp_token = (1023 * hp_ratio).astype(int)
-
-        embeddings = [
+        # Embeddings for basic features (using one-hot encodings)
+        basic_embeddings = [
             hp_ratio[jnp.newaxis],
-            jax.nn.one_hot(entity[FeatureEntity.GENDER], NUM_GENDERS),
-            jax.nn.one_hot(entity[FeatureEntity.STATUS], NUM_STATUS),
-            jax.nn.one_hot(entity[FeatureEntity.BEING_CALLED_BACK], 2),
-            jax.nn.one_hot(entity[FeatureEntity.TRAPPED], 2),
-            jax.nn.one_hot(entity[FeatureEntity.NEWLY_SWITCHED], 2),
-            jax.nn.one_hot(entity[FeatureEntity.TOXIC_TURNS], 8),
-            jax.nn.one_hot(entity[FeatureEntity.SLEEP_TURNS], 4),
-            jax.nn.one_hot(entity[FeatureEntity.FAINTED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_GENDER], NUM_GENDERS),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_STATUS], NUM_STATUS),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_BEING_CALLED_BACK], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_TRAPPED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_NEWLY_SWITCHED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_TOXIC_TURNS], 8),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_SLEEP_TURNS], 4),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_FAINTED], 2),
         ]
 
-        # Put all the encoded one-hots in a single boolean vector:
-        boolean_code = jnp.concatenate(embeddings, axis=0)
-        move_indices = jnp.array(
-            [
-                FeatureEntity.MOVEID0,
-                FeatureEntity.MOVEID1,
-                FeatureEntity.MOVEID2,
-                FeatureEntity.MOVEID3,
-            ]
-        )
-        pp_indices = jnp.array(
-            [
-                FeatureEntity.MOVEPP0,
-                FeatureEntity.MOVEPP1,
-                FeatureEntity.MOVEPP2,
-                FeatureEntity.MOVEPP3,
-            ]
-        )
-        moveset_onehot = jnp.concatenate(
-            (
-                MOVE_ONEHOT(entity[move_indices]),
-                jax.vmap(partial(_binary_scale_embedding, world_dim=64))(
-                    entity[pp_indices].astype(np.int32)
-                ),
-            ),
-            axis=-1,
-        )
+        # Concatenate boolean features into a single vector
+        boolean_code = jnp.concatenate(basic_embeddings, axis=0)
 
-        item_onehot = jnp.concatenate(
-            (
-                ITEM_ONEHOT(entity[FeatureEntity.ITEM]),
-                jax.nn.one_hot(entity[FeatureEntity.ITEM_EFFECT], NUM_ITEM_EFFECTS),
-            )
-        )
+        item_onehot = self.encode_item(entity)
+        boosts = self.encode_boosts(entity)
+        moveset_onehot = self.encode_moveset(entity)
+        volatiles_onehot = self.encode_volatiles(entity)
 
+        # Final embedding combination (linear layers applied to encoded features)
         embedding = (
-            self.hp_linear(_binary_scale_embedding(hp_token.astype(np.int32), 1024))
+            self.hp_linear(_binary_scale_embedding(hp_token, 1024))
             + self.level_linear(
                 _binary_scale_embedding(
-                    entity[FeatureEntity.LEVEL].astype(np.int32), 101
+                    entity[FeatureEntity.ENTITY_LEVEL].astype(jnp.int32), 101
                 )
             )
-            + self.active_linear(jax.nn.one_hot(entity[FeatureEntity.ACTIVE], 2))
-            + self.onehot_linear(boolean_code.astype(np.float32))
+            + self.active_linear(jax.nn.one_hot(entity[FeatureEntity.ENTITY_ACTIVE], 2))
+            + self.onehot_linear(boolean_code.astype(jnp.float32))
+            + self.boosts_linear(boosts)
+            + self.volatiles_linear(volatiles_onehot)
+            + self.embed_species(entity[FeatureEntity.ENTITY_SPECIES])
+            + self.embed_ability(entity[FeatureEntity.ENTITY_ABILITY])
+            + self.item_linear(item_onehot)
+            + self.side_linear(jax.nn.one_hot(entity[FeatureEntity.ENTITY_SIDE], 2))
+            + jax.vmap(self.moves_linear)(moveset_onehot).sum(axis=0)  # Sum over moves
         )
-        embedding = self.merge(
-            embedding,
-            self.species_linear(SPECIES_ONEHOT(entity[FeatureEntity.SPECIES])),
-            self.ability_linear(ABILITY_ONEHOT(entity[FeatureEntity.ABILITY])),
-            self.item_linear(item_onehot),
-            self.moves_linear(moveset_onehot).sum(0),
-        )
+
         return embedding
 
-    def __call__(self, active_entities: chex.Array, side_entities: chex.Array):
-        _encode = jax.vmap(jax.vmap(self.encode_entity))
+    def batch_encode(self, entities: chex.Array) -> chex.Array:
+        func = jax.vmap(jax.vmap(self.encode_entity))
+        return func(entities)
 
-        active_embeddings = _encode(active_entities)
-        side_embeddings = _encode(side_entities)
-
-        side_species_token = side_entities[..., FeatureEntity.SPECIES]
-        valid_team_mask = side_species_token != SpeciesEnum.species_none
-        valid_team_mask = valid_team_mask | (
-            side_species_token != SpeciesEnum.species_pad
-        )
-
-        return active_embeddings, side_embeddings, valid_team_mask
+    def __call__(self, entities: chex.Array):
+        return self.batch_encode(entities)
 
 
-class SideEncoder(nn.Module):
+class EdgeEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        # self.boosts_linear = nn.Dense(features=self.cfg.entity_size)
-        # self.side_conditions_linear = nn.Dense(features=self.cfg.entity_size)
-        # self.volatile_status_linear = nn.Dense(features=self.cfg.entity_size)
-        # self.hyphen_args_linear = nn.Dense(features=self.cfg.entity_size)
-        # self.additional_information_linear = nn.Dense(features=self.cfg.entity_size)
+        entity_size = self.cfg.entity_size
 
-        output_size = self.cfg.merge.output_size
-        self.side_mlp = MLP((output_size,))
-        self.team_mlp = MLP((output_size,))
-        self.merge = VectorMerge(output_size=output_size, gating_type=GatingType.NONE)
+        self.linear_pokemon1 = nn.Dense(entity_size)
+        self.linear_pokemon2 = nn.Dense(entity_size)
 
-    def encode(
+        # Embedding layers for categorical tokens
+        self.embedding_move = nn.Embed(num_embeddings=NUM_MOVES, features=entity_size)
+        self.embedding_item = nn.Embed(num_embeddings=NUM_ITEMS, features=entity_size)
+        self.embedding_ability = nn.Embed(
+            num_embeddings=NUM_ABILITIES, features=entity_size
+        )
+        self.embedding_status = nn.Embed(
+            num_embeddings=NUM_STATUS, features=entity_size
+        )
+        self.embedding_edge_type = nn.Embed(
+            num_embeddings=NUM_EDGE_TYPES, features=entity_size
+        )
+        self.embedding_major_arg = nn.Embed(
+            num_embeddings=NUM_MAJOR_ARGS, features=entity_size
+        )
+        self.embedding_minor_arg = nn.Embed(
+            num_embeddings=NUM_MINOR_ARGS, features=entity_size
+        )
+        self.embedding_turn_order = nn.Embed(20, entity_size)
+
+        # Linear layers for numeric features
+        self.linear_boosts = nn.Dense(entity_size)
+
+        self.linear_side_affecting = nn.Dense(entity_size)
+
+        # Dense layers for damage scalar and one-hot encoding
+        self.linear_damage_scalar = nn.Dense(entity_size)
+        self.linear_damage_onehot = nn.Dense(entity_size)
+
+        self.output = nn.Dense(entity_size)
+
+    def encode_damage_category(self, damage: chex.Array, num_bins: int = 16):
+        divisor = 2048 / num_bins
+        token = jnp.floor((damage + 1023) / divisor)
+        token = jnp.where(damage == 0, num_bins + 1, token)
+        return jax.nn.one_hot(token, num_bins + 1)
+
+    def encode_edge(
         self,
-        team_embedding: chex.Array,
-        boosts: chex.Array,
-        side_conditions: chex.Array,
-        volatile_status: chex.Array,
-        additional_information: chex.Array,
-        hyphen_args: chex.Array,
-    ):
-        boosts_float = jnp.sign(boosts) * jnp.log1p(jnp.abs(boosts))
-        boosts_onehot = jax.nn.one_hot(boosts + 6, 13).astype(np.float32)
+        edge: chex.Array,
+        poke1_embedding: chex.Array,
+        poke2_embedding: chex.Array,
+    ) -> chex.Array:
+        # Process categorical features with embeddings
 
-        side_conditions_onehot = (side_conditions > 0).astype(np.float32)
-        spikes_onehot = jax.nn.one_hot(side_conditions[SPIKES_TOKEN], 4).astype(
-            np.float32
-        )
-        toxic_spikes_onehot = jax.nn.one_hot(
-            side_conditions[TOXIC_SPIKES_TOKEN], 3
-        ).astype(np.float32)
-        side_conditions_onehot = (side_conditions > 0).astype(np.float32)
-        side_conditions_onehot = jnp.concatenate(
-            (side_conditions_onehot, spikes_onehot, toxic_spikes_onehot), axis=-1
+        has_poke1 = edge[FeatureEdge.POKE1_INDEX] >= 0
+        poke1_embed = self.linear_pokemon1(jnp.where(has_poke1, poke1_embedding, 0))
+        poke2_embed = self.linear_pokemon2(
+            jnp.where(edge[FeatureEdge.POKE2_INDEX] >= 0, poke2_embedding, 0)
         )
 
-        volatile_status_onehot = (volatile_status > 0).astype(np.float32)
+        move_embed = self.embedding_move(edge[FeatureEdge.MOVE_TOKEN])
+        item_embed = self.embedding_item(edge[FeatureEdge.ITEM_TOKEN])
+        ability_embed = self.embedding_ability(edge[FeatureEdge.ABILITY_TOKEN])
+        status_embed = self.embedding_status(edge[FeatureEdge.STATUS_TOKEN])
+        major_args_embed = self.embedding_major_arg(edge[FeatureEdge.MAJOR_ARG])
+        minor_args_embed = self.embedding_minor_arg(edge[FeatureEdge.MINOR_ARG])
+        edge_type_embed = self.embedding_edge_type(edge[FeatureEdge.EDGE_TYPE_TOKEN])
 
-        hyphen_args_onehot = jnp.unpackbits(hyphen_args).astype(np.float32)
+        # # Process numeric and binary features with linear layers
+        boosts = jax.lax.slice(
+            edge, (FeatureEdge.BOOST_ATK_VALUE,), (FeatureEdge.BOOST_EVASION_VALUE + 1,)
+        )
+        boosts_embed = self.linear_boosts(boosts)
 
-        boosts_encoding = jnp.concatenate(
-            (boosts_float.flatten(), boosts_onehot.flatten()), axis=-1
-        )
+        # Scaling damage value
 
-        total_pokemon = (
-            additional_information[FeatureAdditionalInformation.TOTAL_POKEMON]
-            .clip(min=1)
-            .astype(int)
-        )
-        team_hp = additional_information[jnp.array(MEMBER_HP_INDICES)]
-        team_hp_prob = team_hp / team_hp.sum().clip(min=1)
-        team_hp_entropy = -jnp.sum(
-            team_hp_prob * jnp.where(team_hp_prob > 0, jnp.log(team_hp_prob), 0)
-        )
-        num_types = additional_information[jnp.array(NUM_TYPES_INDICES)]
-        num_types_prob = num_types / total_pokemon
-        num_types_entropy = -jnp.sum(
-            num_types_prob * jnp.where(num_types_prob > 0, jnp.log(num_types_prob), 0)
-        )
-        additional_information_encoding = jnp.concatenate(
+        damage_token = edge[FeatureEdge.DAMAGE_TOKEN]
+        damage_raw = damage_token / 1023
+        damage_features = jnp.concat(
             (
-                jax.nn.one_hot(
-                    additional_information[FeatureAdditionalInformation.NUM_FAINTED],
-                    5,
-                ),
-                num_types_prob,
-                num_types_entropy[None],
-                additional_information[FeatureAdditionalInformation.WISHING][None],
-                team_hp_entropy[None],
+                damage_raw[..., None],  # raw
+                jnp.abs(damage_raw)[..., None],  # magnitude
+                jnp.sign(damage_token)[..., None],  # direction
+                self.encode_damage_category(damage_token),  # category
+            ),
+            axis=-1,
+        )
+        damage_embed = self.linear_damage_scalar(damage_features)
+
+        # # Normalize turn order value
+        turn_order_embed = self.embedding_turn_order(edge[FeatureEdge.TURN_ORDER_VALUE])
+
+        side_affecting_embed = self.linear_side_affecting(
+            _binary_scale_embedding(
+                edge[FeatureEdge.EDGE_AFFECTING_SIDE].astype(jnp.int32), 3
             )
         )
 
-        side_encoding = jnp.concat(
-            (
-                boosts_encoding,
-                side_conditions_onehot,
-                volatile_status_onehot,
-                hyphen_args_onehot,
-                additional_information_encoding,
-            ),
-            axis=-1,
+        # Concatenate all features into a single embedding
+        combined = (
+            poke1_embed
+            + poke2_embed
+            + move_embed
+            + item_embed
+            + ability_embed
+            + status_embed
+            + boosts_embed
+            + damage_embed
+            + turn_order_embed
+            + edge_type_embed
+            + major_args_embed
+            + minor_args_embed
+            + jnp.where(has_poke1, side_affecting_embed, 0)
         )
-        return self.merge(self.team_mlp(team_embedding), self.side_mlp(side_encoding))
 
-        # return self.merge(
-        #     self.boosts_linear(boosts_encoding),
-        #     self.side_conditions_linear(side_conditions_onehot),
-        #     self.volatile_status_linear(volatile_status_onehot),
-        #     self.hyphen_args_linear(hyphen_args_onehot),
-        #     self.additional_information_linear(additional_information_encoding),
-        # )
+        return combined
+
+    def batch_encode(
+        self,
+        edges: chex.Array,
+        poke1_embeddings: chex.Array,
+        poke2_embeddings: chex.Array,
+    ) -> chex.Array:
+        func = jax.vmap(jax.vmap(self.encode_edge))
+        return func(edges, poke1_embeddings, poke2_embeddings)
 
     def __call__(
         self,
-        team_embedding: chex.Array,
-        boosts: chex.Array,
-        side_conditions: chex.Array,
-        volatile_status: chex.Array,
-        additional_information: chex.Array,
-        hyphen_args: chex.Array,
-    ):
-        _encode = jax.vmap(jax.vmap(self.encode))
-        return _encode(
-            team_embedding,
-            boosts,
-            side_conditions,
-            volatile_status,
-            additional_information,
-            hyphen_args,
-        )
+        edges: chex.Array,
+        poke1_embeddings: chex.Array,
+        poke2_embeddings: chex.Array,
+    ) -> chex.Array:
+        return self.batch_encode(edges, poke1_embeddings, poke2_embeddings)
 
 
-class TeamEncoder(nn.Module):
-    cfg: ConfigDict
+def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
 
-    def setup(self):
-        self.transformer = Transformer(**self.cfg.transformer.to_dict())
-        self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
+    # Compute dot products along the last dimension (D)
+    dot_product = np.sum(arr1 * arr2, axis=-1)
 
-    def __call__(self, team_embeddings: chex.Array, valid_mask: chex.Array):
-        team_embeddings = self.transformer(team_embeddings, valid_mask)
-        teams_embedding = self.to_vector(team_embeddings, valid_mask)
-        return teams_embedding, team_embeddings
+    # Compute the L2 norms along the last dimension (D)
+    norm_arr1 = jnp.linalg.norm(arr1, axis=-1)
+    norm_arr2 = jnp.linalg.norm(arr2, axis=-1)
 
+    # Compute cosine similarity, handle division by zero if needed
+    cosine_sim = dot_product / (norm_arr1 * norm_arr2 + 1e-8)
 
-class FieldEncoder(nn.Module):
-    cfg: ConfigDict
-
-    def setup(self):
-        self.field_linear = nn.Dense(features=self.cfg.vector_size)
-        self.player_linear = nn.Embed(num_embeddings=2, features=self.cfg.vector_size)
-        self.turn_linear = nn.Embed(
-            num_embeddings=2 * NUM_HISTORY, features=self.cfg.vector_size
-        )
-        self.history_move_linear = nn.Dense(features=self.cfg.vector_size)
-
-    def encode(
-        self,
-        terrain: chex.Array,
-        pseudoweather: chex.Array,
-        weather: chex.Array,
-        turn_context: chex.Array,
-        max_turn: chex.Array,
-    ):
-        # terrain_onehot = jax.nn.one_hot(terrain[0], NUM_TERRAIN)
-        pseudoweather_onehot = (pseudoweather > 0).astype(np.float32)
-        weather_onehot = jax.nn.one_hot(weather[FeatureWeather.WEATHER_ID], NUM_WEATHER)
-        weather_min_onehot = jax.nn.one_hot(weather[FeatureWeather.MIN_DURATION], 8)
-        weather_max_onehot = jax.nn.one_hot(weather[FeatureWeather.MAX_DURATION], 8)
-
-        turn = turn_context[FeatureTurnContext.TURN]
-        relative_turn = (max_turn - turn).clip(min=0)
-
-        move_counter_onehot = jax.nn.one_hot(
-            turn_context[FeatureTurnContext.MOVE_COUNTER], 4
-        )
-        switch_counter_onehot = jax.nn.one_hot(
-            turn_context[FeatureTurnContext.SWITCH_COUNTER], 4
-        )
-        history_move_onehot = MOVE_ONEHOT(turn_context[FeatureTurnContext.IS_MY_TURN])
-
-        field_onehot = jnp.concatenate(
-            (
-                # terrain_onehot,
-                pseudoweather_onehot,
-                weather_onehot,
-                weather_min_onehot,
-                weather_max_onehot,
-                move_counter_onehot,
-                switch_counter_onehot,
-            ),
-            axis=-1,
-        )
-
-        embeddings = [
-            self.field_linear(field_onehot),
-            self.player_linear(turn_context[FeatureTurnContext.IS_MY_TURN]),
-            self.turn_linear(relative_turn),
-            self.history_move_linear(history_move_onehot),
-        ]
-
-        return jnp.stack(embeddings).sum(0)
-
-    def __call__(
-        self,
-        terrain: chex.Array,
-        pseudoweather: chex.Array,
-        weather: chex.Array,
-        turn_context: chex.Array,
-    ):
-        turn = turn_context[..., FeatureTurnContext.TURN]
-        valid_mask = turn_context[..., FeatureTurnContext.VALID]
-        max_turn = turn.max()
-        _encode = partial(self.encode, max_turn=max_turn)
-        field_embedding = jax.vmap(_encode)(
-            terrain, pseudoweather, weather, turn_context
-        )
-        return valid_mask, field_embedding
-
-
-class HistoryEncoder(nn.Module):
-    cfg: ConfigDict
-
-    def setup(self):
-        self.transformer = Transformer(**self.cfg.transformer.to_dict())
-
-    def __call__(self, state_history: chex.Array, valid_mask: chex.Array):
-        return self.transformer(state_history, valid_mask)
-
-
-def encode_team(team_embeddings: chex.Array, valid_mask: chex.Array):
-    return jnp.max(jnp.where(valid_mask[..., None], team_embeddings, -1e9), axis=0)
+    return cosine_sim
 
 
 class PublicEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        entity_size = self.cfg.entity_size
+
+        self.positional_embedding = nn.Embed(NUM_HISTORY, entity_size)
+
         self.entity_encoder = EntityEncoder(self.cfg.entity_encoder)
-        self.side_encoder = SideEncoder(self.cfg.side_encoder)
-        self.field_encoder = FieldEncoder(self.cfg.field_encoder)
-        self.history_encoder = HistoryEncoder(self.cfg.history_encoder)
-        self.state_resnet = Resnet(**self.cfg.state_resnet)
-        self.unet = UNet(8)
-        self.compress = CNN(512)
+        self.edge_encoder = EdgeEncoder(self.cfg.edge_encoder)
+
+        self.node_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        self.edge_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+
+        self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        self.history_transformer = Transformer(**self.cfg.history_transformer.to_dict())
+
+        self.linear_latent_action = MLP((entity_size,))
+        self.linear_dynamics = MLP((entity_size,))
+
+    def repr_learn(self, st: chex.Array, stp1: chex.Array):
+        # Concatenate st and stp1 to get latent action
+        latent_action = self.linear_latent_action(jnp.concatenate((st, stp1), axis=-1))
+        latent_action_probs = jax.nn.softmax(latent_action.reshape(-1, 32), axis=-1)
+        latent_action_ohe = jax.nn.one_hot(
+            jnp.argmax(latent_action_probs, axis=-1), num_classes=32
+        ).reshape(latent_action.shape)
+        latent_action_probs = latent_action_probs.reshape(latent_action.shape)
+        latent_action = latent_action_probs + jax.lax.stop_gradient(
+            latent_action_ohe - latent_action_probs
+        )
+
+        # Predict the next state (stp1) using dynamics and latent action
+        pred_stp1 = self.linear_dynamics(jnp.concatenate((st, latent_action), axis=-1))
+
+        def normalize(arr: chex.Array) -> chex.Array:
+            return arr / jnp.linalg.norm(arr, axis=-1)
+
+        stp1 = normalize(stp1)
+        pred_stp1 = normalize(pred_stp1)
+
+        # Compute cosine similarity (negative for loss minimization)
+        return -(pred_stp1 * stp1).sum(axis=-1)
 
     def __call__(self, env_step: EnvStep):
-        _encode_entity = jax.vmap(jax.vmap(jax.vmap(self.entity_encoder.encode_entity)))
-        team_embeddings = _encode_entity(env_step.active_entities)
+        node_embeddings = self.entity_encoder.batch_encode(env_step.history_nodes)
 
-        species_token = env_step.active_entities[..., FeatureEntity.SPECIES]
-        invalid_mask = (species_token == SpeciesEnum.species_none) | (
-            species_token == SpeciesEnum.species_pad
+        poke1_index_data = jax.lax.dynamic_index_in_dim(
+            env_step.history_edges,
+            FeatureEdge.POKE1_INDEX,
+            axis=-1,
+            keepdims=False,
         )
-        team_embeddings = jax.vmap(jax.vmap(encode_team))(
-            team_embeddings, ~invalid_mask
+        poke2_index_data = jax.lax.dynamic_index_in_dim(
+            env_step.history_edges,
+            FeatureEdge.POKE1_INDEX,
+            axis=-1,
+            keepdims=False,
+        )
+        poke1_embeddings = jnp.einsum(
+            "ijk,ilj->ilk",
+            node_embeddings,
+            jnp.where(
+                jnp.expand_dims(poke1_index_data, axis=-1) >= 0,
+                jax.nn.one_hot(poke1_index_data, 12),
+                0,
+            ),
+        )
+        poke2_embeddings = jnp.einsum(
+            "ijk,ilj->ilk",
+            node_embeddings,
+            jnp.where(
+                jnp.expand_dims(poke2_index_data, axis=-1) >= 0,
+                jax.nn.one_hot(poke2_index_data, 12),
+                0,
+            ),
+        )
+        edge_embeddings = self.edge_encoder.batch_encode(
+            env_step.history_edges, poke1_embeddings, poke2_embeddings
         )
 
-        side_embeddings = self.side_encoder(
-            team_embeddings,
-            env_step.boosts,
-            env_step.side_conditions,
-            env_step.volatile_status,
-            env_step.additional_information,
-            env_step.hyphen_args,
+        species_token = env_step.history_nodes[..., FeatureEntity.ENTITY_SPECIES]
+        invalid_node_mask = (species_token == SpeciesEnum.SPECIES__NULL) | (
+            species_token == SpeciesEnum.SPECIES__PAD
+        )
+        valid_node_mask = ~invalid_node_mask
+
+        edge_type_token = env_step.history_edges[..., FeatureEdge.EDGE_TYPE_TOKEN]
+        invalid_edge_mask = edge_type_token == EdgeTypes.EDGE_TYPE_NONE
+
+        node_embeddings = jax.vmap(
+            self.node_transformer, in_axes=(0, None, 0, None), out_axes=0
+        )(node_embeddings, None, valid_node_mask, None)
+
+        edge_embeddings = jax.vmap(
+            self.edge_transformer, in_axes=(0, None, 0, None), out_axes=0
+        )(edge_embeddings, None, ~invalid_edge_mask, None)
+
+        cross_node_embeddings = jax.vmap(self.context_transformer)(
+            node_embeddings, edge_embeddings, valid_node_mask, ~invalid_edge_mask
         )
 
-        valid_mask, field_embeddings = self.field_encoder(
-            env_step.terrain,
-            env_step.pseudoweather,
-            env_step.weather,
-            env_step.turn_context,
+        repr_loss = jax.vmap(self.repr_learn)(
+            cross_node_embeddings[1], cross_node_embeddings[0]
         )
 
-        field_embeddings = field_embeddings.reshape(-1, 32, 32)
-        history = side_embeddings.reshape(field_embeddings.shape) + field_embeddings
+        positional_embeddings = self.positional_embedding(jnp.arange(NUM_HISTORY))
+        contextual_node_embeddings_w_pos = cross_node_embeddings + jnp.expand_dims(
+            positional_embeddings, axis=1
+        )
 
-        history = jnp.where(valid_mask[..., None, None], history, 0)
-        state = self.unet(jnp.transpose(history, (1, 2, 0)))
-        state = self.compress(state)
+        contextual_node_embeddings_w_pos = jax.vmap(
+            self.history_transformer, in_axes=(1, None, 1, None), out_axes=1
+        )(contextual_node_embeddings_w_pos, None, valid_node_mask, None)
 
-        return state
+        denominator = valid_node_mask.sum(axis=0)
+        contextual_node_embeddings_w_pos = jnp.einsum(
+            "ij,ijk->jk", valid_node_mask, contextual_node_embeddings_w_pos
+        ) / denominator[..., None].clip(min=1)
 
-
-class SupervisedBackbone(nn.Module):
-    cfg: ConfigDict
-
-    def setup(self):
-        self.public_encoder = PublicEncoder(self.cfg)
-        self.next_turn = MLP((self.cfg.history_merge.output_size, 2))
-        self.move_pred = MLP((self.cfg.history_merge.output_size, NUM_MOVES))
-        self.action_pred = MLP((self.cfg.history_merge.output_size, 2))
-        self.value_pred = MLP((self.cfg.history_merge.output_size, 1))
-
-    def __call__(self, env_step: EnvStep):
-        current_state = self.public_encoder(env_step)
-        next_turn = self.next_turn(current_state)
-        next_move = self.move_pred(current_state)
-        next_action = self.action_pred(current_state)
-        value = self.value_pred(current_state)
-        return next_turn, next_move, next_action, value
+        return contextual_node_embeddings_w_pos, denominator > 0, repr_loss.mean()
 
 
 class Encoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.public_encoder = PublicEncoder(self.cfg)
-
+        self.turn_encoder = nn.Embed(50, self.cfg.vector_size)
+        self.public_encoder = PublicEncoder(self.cfg.public)
+        self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
         self.move_encoder = MoveEncoder(self.cfg.move_encoder)
-        self.state_merge = VectorMerge(**self.cfg.state_merge.to_dict())
         self.state_resnet = Resnet(**self.cfg.state_resnet)
-        self.action_merge = VectorMerge(**self.cfg.action_merge.to_dict())
 
     def __call__(self, env_step: EnvStep):
-        species_token = env_step.private_side_entities[..., FeatureEntity.SPECIES]
-        invalid_team_mask = (species_token == SpeciesEnum.species_none) | (
-            species_token == SpeciesEnum.species_pad
+        species_token = env_step.team[..., FeatureEntity.ENTITY_SPECIES]
+        invalid_private_mask = (species_token == SpeciesEnum.SPECIES__NULL) | (
+            species_token == SpeciesEnum.SPECIES__PAD
         )
+        valid_private_mask = ~invalid_private_mask
 
         _encode_entity = jax.vmap(self.public_encoder.entity_encoder.encode_entity)
-        private_side_embeddings = _encode_entity(env_step.private_side_entities)
 
-        private_team_embedding = encode_team(
-            private_side_embeddings, ~invalid_team_mask
+        private_entity_embeddings = _encode_entity(env_step.team)
+        public_entity_embeddings, valid_public_mask, repr_loss = self.public_encoder(
+            env_step
         )
 
-        current_state = self.public_encoder(env_step)
-        current_state = self.state_merge(current_state, private_team_embedding)
-        current_state = self.state_resnet(current_state)
-
-        move_embeddings = self.move_encoder(env_step.moveset[0])
-
-        action_entites = jnp.concatenate(
-            (
-                jnp.expand_dims(private_side_embeddings[0], axis=0).repeat(4, 0),
-                private_side_embeddings,
-            )
+        private_entity_embeddings = self.context_transformer(
+            private_entity_embeddings,
+            public_entity_embeddings,
+            valid_private_mask,
+            valid_public_mask,
         )
-        action_embeddings = self.action_merge(move_embeddings, action_entites)
 
-        return current_state, action_embeddings
+        current_state = self.to_vector(private_entity_embeddings, valid_private_mask)
+        current_state = self.state_resnet(current_state) + self.turn_encoder(
+            jnp.clip(env_step.turn, max=49)
+        )
+
+        move_embeddings = self.move_encoder(env_step.moveset[0, :4])
+
+        return current_state, move_embeddings, private_entity_embeddings, repr_loss

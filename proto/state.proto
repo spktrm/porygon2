@@ -29,8 +29,9 @@ message Info {
     int32 heuristicAction = 8;
     int32 lastAction = 9;
     int32 lastMove = 10;
-    float switchReward = 11;
+    float faintedReward = 11;
     bytes heuristicDist = 12;
+    float switchReward = 13;
 }
 
 message State {

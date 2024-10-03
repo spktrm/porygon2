@@ -5,6 +5,7 @@
     "scripts": {
         "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts",
         "compile-proto": "./scripts/compile_proto.sh",
+        "kill": "killall python && killall node ",
         "start": "npm run compile-base && node dist/start.js",
         "start-training-server": "node dist/server/index.js --type training",
         "start-evaluation-server": "node dist/server/index.js --type evaluation",

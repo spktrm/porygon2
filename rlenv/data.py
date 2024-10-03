@@ -1,8 +1,12 @@
 import os
+from typing import Literal
 
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
+    BattlemajorargsEnum,
+    BattleminorargsEnum,
     BoostsEnum,
+    EffectEnum,
     GendernameEnum,
     ItemeffecttypesEnum,
     ItemsEnum,
@@ -16,7 +20,12 @@ from rlenv.protos.enums_pb2 import (
     VolatilestatusEnum,
     WeatherEnum,
 )
-from rlenv.protos.features_pb2 import FeatureMoveset
+from rlenv.protos.features_pb2 import (
+    EdgeFromTypes,
+    EdgeTypes,
+    FeatureEdge,
+    FeatureMoveset,
+)
 from rlenv.protos.state_pb2 import State
 
 
@@ -38,17 +47,22 @@ NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
+NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
+NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
+NUM_EDGE_FROM_TYPES = len(EdgeFromTypes.keys())
+NUM_EDGE_TYPES = len(EdgeTypes.keys())
+NUM_EFFECTS = len(EffectEnum.keys())
 
 NUM_MOVE_FIELDS = len(FeatureMoveset.DESCRIPTOR.values)
+NUM_EDGE_FIELDS = len(FeatureEdge.DESCRIPTOR.values)
 
-NUM_HISTORY = 8
+NUM_HISTORY = 16
 NUM_PLAYERS = 2
 
-BASE_SOCKET_PATH = "/tmp/pokemon-{}.sock"
-TRAINING_SOCKET_PATH = BASE_SOCKET_PATH.format("training")
-EVALUATION_SOCKET_PATH = BASE_SOCKET_PATH.format("evaluation")
+TRAINING_SOCKET_PATH = "/tmp/pokemon-training.sock"
+EVALUATION_SOCKET_PATH = "/tmp/pokemon-evaluation.sock"
 SocketPath = str
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES

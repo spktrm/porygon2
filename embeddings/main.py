@@ -186,7 +186,7 @@ class GenerationEncodings:
         gen: int,
         format: str,
         stoi: Dict[str, int] = None,
-        onehot_id_only: bool = False,
+        onehot_id_only: bool = True,
     ):
         if stoi is None:
             with open("data/data.json", "r", encoding="utf-8") as f:

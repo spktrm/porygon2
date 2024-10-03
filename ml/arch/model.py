@@ -6,16 +6,17 @@ import jax.numpy as jnp
 import flax.linen as nn
 
 from pprint import pprint
-from typing import Dict
+from typing import Any, Dict
 from ml_collections import ConfigDict
+import numpy as np
 
 from ml.arch.config import get_model_cfg
-from ml.arch.encoder import Encoder, SupervisedBackbone
+from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
 
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep, ModelOutput
+from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
 
 
 class Model(nn.Module):
@@ -27,12 +28,14 @@ class Model(nn.Module):
         self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep) -> ModelOutput:
-        current_state, my_action_embeddings = self.encoder(env_step)
+        current_state, move_embeddings, switch_embeddings, repr_loss = self.encoder(
+            env_step
+        )
         logit, pi, log_pi = self.policy_head(
-            current_state, my_action_embeddings, env_step.legal
+            current_state, move_embeddings, switch_embeddings, env_step.legal
         )
         v = self.value_head(current_state)
-        return ModelOutput(pi=pi, v=v, log_pi=log_pi, logit=logit)
+        return ModelOutput(pi=pi, v=v, log_pi=log_pi, logit=logit, repr_loss=repr_loss)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -77,23 +80,59 @@ def get_model(config: ConfigDict) -> nn.Module:
     return Model(config)
 
 
-# def main2():
-#     model_cfg = get_model_cfg().encoder
-#     model = SupervisedBackbone(model_cfg)
+def assert_no_nan_or_inf(gradients, path=""):
+    if isinstance(gradients, dict):
+        for key, value in gradients.items():
+            new_path = f"{path}/{key}" if path else key
+            assert_no_nan_or_inf(value, new_path)
+    else:
+        if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
+            raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
 
-#     with open("replays/bad_batch", "rb") as f:
-#         bad_batch = pickle.load(f)
 
-#     key = jax.random.key(42)
+def test(params: Any):
+    from ml.learner import Learner
+    from ml.config import VtraceConfig
+    from rlenv.utils import stack_steps
 
-#     params = model.init(key, get_ex_step())
-#     output = jax.vmap(model.apply, (None, 0))(params, bad_batch)
-#     return output
+    config = get_model_cfg()
+    network = get_model(config)
+
+    learner = Learner(network, VtraceConfig())
+
+    learner.params = params
+    learner.params_target = params
+    learner.params_prev = params
+    learner.params_prev_ = params
+
+    batch_size = 8
+
+    batch = stack_steps(
+        [
+            TimeStep(
+                env=jax.tree.map(
+                    lambda x: x[None].repeat(batch_size, 0),
+                    get_ex_step(np.random.randint(0, 2)),
+                ),
+                actor=ActorStep(
+                    action=np.random.randint(0, 9, (batch_size,)),
+                    policy=np.random.random((batch_size, 10)),
+                    win_rewards=np.zeros((batch_size, 2)),
+                    hp_rewards=np.zeros((batch_size, 2)),
+                    fainted_rewards=np.zeros((batch_size, 2)),
+                ),
+            )
+            for _ in range(64)
+        ]
+    )
+    logs = learner.step(batch)
+    pprint(logs)
 
 
 def main():
     config = get_model_cfg()
     network = get_model(config)
+    ex_step = get_ex_step()
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -103,11 +142,12 @@ def main():
         params = step["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, get_ex_step())
+        params = network.init(key, ex_step)
 
-    network.apply(params, get_ex_step())
-
+    outputs = network.apply(params, ex_step)
     pprint(get_num_params(params))
+
+    test(params)
 
 
 if __name__ == "__main__":

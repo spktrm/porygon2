@@ -6,7 +6,7 @@ import flax.linen as nn
 
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, PointerLogits, Resnet, VectorMerge
+from ml.arch.modules import Logits, PointerLogits, Resnet
 from ml.func import legal_policy, legal_log_policy
 
 
@@ -14,20 +14,22 @@ class PolicyHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.query = Resnet(**self.cfg.query.to_dict())
-        self.action_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
+        self.move_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
+        self.switch_logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
 
     def __call__(
         self,
         state_embedding: chex.Array,
-        action_embeddings: chex.Array,
+        move_embeddings: chex.Array,
+        switch_embeddings: chex.Array,
         legal: chex.Array,
     ):
-        query = self.query(state_embedding)
-
         denom = jnp.array(self.cfg.key_size, dtype=jnp.float32)
 
-        logits = self.action_logits(query, action_embeddings)
+        move_logits = self.move_logits(state_embedding, move_embeddings)
+        switch_logits = self.switch_logits(state_embedding, switch_embeddings)
+
+        logits = jnp.concatenate((move_logits, switch_logits), axis=-1)
         logits = jax.lax.rsqrt(denom) * logits
 
         policy = legal_policy(logits, legal)
@@ -40,9 +42,7 @@ class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.resnet = Resnet(**self.cfg.resnet.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(self, x: chex.Array):
-        x = self.resnet(x)
         return self.logits(x)

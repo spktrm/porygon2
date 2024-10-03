@@ -1,4 +1,3 @@
-from enum import Enum
 from typing import Sequence
 
 import chex
@@ -28,7 +27,7 @@ class FineTuning:
     # The learner step after which the policy post processing (aka finetuning)
     # will be enabled when learning. A strictly negative value is equivalent
     # to infinity, ie disables finetuning completely.
-    from_learner_steps: int = -1
+    from_learner_steps: int = 50_000
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
     policy_threshold: float = 0.03
@@ -174,7 +173,7 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 8
+    batch_size: int = 4
     # The learning rate for `params`.
     learning_rate: float = 0.00005
     # The config related to the ADAM optimizer used for updating `params`.
@@ -187,7 +186,7 @@ class ActorCriticConfig:
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
     entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (10_000,)
+    entropy_schedule_size: Sequence[int] = (1000,)
 
     # The weight of the reward regularisation term in RNaD.
     eta_reward_transform: float = 0.0
@@ -219,7 +218,7 @@ class VtraceConfig(ActorCriticConfig):
 
 @chex.dataclass(frozen=True)
 class RNaDConfig(ActorCriticConfig):
-    eta_reward_transform: float = 0.1
+    eta_reward_transform: float = 0.2
 
 
 @chex.dataclass(frozen=True)

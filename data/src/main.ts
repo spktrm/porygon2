@@ -112,6 +112,20 @@ const customScrapingFunctions: {
             }
         }
 
+        // Look for the STARTABLE constant
+        const startableMatch = content.match(
+            /const\s+STARTABLE\s*=\s*new\s+Set\(\[\s*([\s\S]*?)\s*\]\)/,
+        );
+        if (startableMatch) {
+            const startableContent = startableMatch[1];
+            const startableItems = startableContent.match(/['"](\w+)['"]/g);
+            if (startableItems) {
+                matchedVolatiles.push(
+                    ...startableItems.map((item) => item.replace(/['"]/g, "")),
+                );
+            }
+        }
+
         return [...new Set(matchedVolatiles)]; // Remove duplicates
     },
     genderName: (content: string, file: string): string[] => {

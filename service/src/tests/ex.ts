@@ -23,12 +23,13 @@ async function main(verbose: boolean = false) {
     port.postMessage = (buffer) => {
         const state = State.deserializeBinary(buffer);
         const key = state.getKey();
-        const info = state.getInfo();
-        const turn = info?.getTurn() ?? 0;
+        const info = state.getInfo()!;
+        const turn = info.getTurn();
+        const playerIndex = info.getPlayerindex();
         const legalActions = state.getLegalactions();
 
         if (info && legalActions) {
-            if (turn > 10) {
+            if (turn > 10 && playerIndex === true) {
                 writeFileSync("../rlenv/ex", buffer);
                 exit(0);
             } else {

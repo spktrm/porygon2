@@ -33,6 +33,16 @@ enum FeatureEntity {
     ENTITY_BOOST_SPE_VALUE = 29;
     ENTITY_BOOST_ACCURACY_VALUE = 30;
     ENTITY_BOOST_EVASION_VALUE = 31;
+    ENTITY_VOLATILES0 = 32; // Stored as a 160 bit binary
+    ENTITY_VOLATILES1 = 33; // Stored as a 160 bit binary
+    ENTITY_VOLATILES2 = 34; // Stored as a 160 bit binary
+    ENTITY_VOLATILES3 = 35; // Stored as a 160 bit binary
+    ENTITY_VOLATILES4 = 36; // Stored as a 160 bit binary
+    ENTITY_VOLATILES5 = 37; // Stored as a 160 bit binary
+    ENTITY_VOLATILES6 = 38; // Stored as a 160 bit binary
+    ENTITY_VOLATILES7 = 39; // Stored as a 160 bit binary
+    ENTITY_VOLATILES8 = 40; // Stored as a 160 bit binary
+    ENTITY_SIDE = 41; // Stored as a 160 bit binary
 }
 
 enum FeatureMoveset {
@@ -94,10 +104,11 @@ enum FeatureAdditionalInformation {
 }
 
 enum EdgeTypes {
-    MOVE_EDGE = 0;
-    SWITCH_EDGE = 1;
-    EFFECT_EDGE = 2;
-    CANT_EDGE = 3;
+    EDGE_TYPE_NONE = 0;
+    MOVE_EDGE = 1;
+    SWITCH_EDGE = 2;
+    EFFECT_EDGE = 3;
+    CANT_EDGE = 4;
 }
 
 enum EdgeFromTypes {
@@ -118,22 +129,22 @@ enum FeatureEdge {
     POKE2_INDEX = 1;
     TURN_ORDER_VALUE = 2;
     EDGE_TYPE_TOKEN = 3;
-    MAJOR_ARGS = 4; // Stored as 32 bit binary
-    MINOR_ARGS1 = 5; // Stored as 64 bit binary
-    MINOR_ARGS2 = 6; // Stored as 64 bit binary
-    MOVE_TOKEN = 7;
-    ITEM_TOKEN = 8;
-    ABILITY_TOKEN = 9;
-    FROM_TYPE_TOKEN = 10;
-    FROM_SOURCE_TOKEN = 11;
-    DAMAGE_TOKEN = 12; // floor(1024 * hpRatio)
-    EFFECT_TOKEN = 13;
-    BOOST_ATK_VALUE = 14;
-    BOOST_DEF_VALUE = 15;
-    BOOST_SPA_VALUE = 16;
-    BOOST_SPD_VALUE = 17;
-    BOOST_SPE_VALUE = 18;
-    BOOST_ACCURACY_VALUE = 19;
-    BOOST_EVASION_VALUE = 20;
-    STATUS_TOKEN = 21;
+    MAJOR_ARG = 4;
+    MINOR_ARG = 5;
+    MOVE_TOKEN = 6;
+    ITEM_TOKEN = 7;
+    ABILITY_TOKEN = 8;
+    FROM_TYPE_TOKEN = 9;
+    FROM_SOURCE_TOKEN = 10;
+    DAMAGE_TOKEN = 11; // floor(1023 * hpRatio)
+    EFFECT_TOKEN = 12;
+    BOOST_ATK_VALUE = 13;
+    BOOST_DEF_VALUE = 14;
+    BOOST_SPA_VALUE = 15;
+    BOOST_SPD_VALUE = 16;
+    BOOST_SPE_VALUE = 17;
+    BOOST_ACCURACY_VALUE = 18;
+    BOOST_EVASION_VALUE = 19;
+    STATUS_TOKEN = 20;
+    EDGE_AFFECTING_SIDE = 21;
 }

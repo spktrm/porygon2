@@ -9,6 +9,7 @@ import { actionIndexMapping, AllValidActions, MAX_TS } from "../logic/data";
 import { TaskQueueSystem } from "../utils";
 import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
+import { Tracker } from "../logic/state";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -25,7 +26,8 @@ export class Game {
     ts: number;
     tied: boolean;
     earlyFinish: boolean;
-    numFainted: number[][];
+
+    tracker: Tracker;
 
     constructor(args: { port: MessagePort | null; gameId: number }) {
         const { gameId, port } = args;
@@ -37,7 +39,7 @@ export class Game {
         this.ts = 0;
         this.tied = false;
         this.earlyFinish = false;
-        this.numFainted = [[0, 0]];
+        this.tracker = new Tracker();
 
         this.handlers = Object.fromEntries(
             [0, 1].map((playerIndex) => [
@@ -64,84 +66,28 @@ export class Game {
         }
     }
 
-    getRewardFromHpDiff(): number {
-        const sideHpSums = this.world?.sides.map((side) =>
-            side.pokemon.reduce(
-                (total, member) => total + member.hp / member.maxhp,
-                0,
-            ),
-        ) ?? [6, 6];
-
-        if (sideHpSums[0] === sideHpSums[1]) {
-            if (this.done) {
-                this.tied = true;
-            }
-            return 0;
-        }
-        return sideHpSums[0] > sideHpSums[1] ? 1 : -1;
-    }
-
-    getRewardFromFinish(): number {
-        if (this.done) {
-            const winner = this.getWinner();
-            if (winner === this.world?.p1.name) {
-                return 1;
-            } else if (winner === this.world?.p2.name) {
-                return -1;
-            }
-        }
-        return 0;
-    }
-
-    getRewardFromPrevHpDiff(): number {
-        const prevFainted = this.numFainted.at(-1) ?? [0, 0];
-
-        const numFainted = this.world?.sides.map((side) =>
-            side.pokemon.reduce((total, member) => total + +member.fainted, 0),
-        ) ?? [0, 0];
-        this.numFainted.push(numFainted);
-
-        const fOfX = (value: number) => {
-            return 2 ** Math.floor(value - 7);
-        };
-
-        const calcScore = (playerIndex: number) => {
-            const diff = prevFainted[playerIndex] - numFainted[playerIndex];
-            return diff * fOfX(numFainted[playerIndex]);
-        };
-
-        const score = calcScore(0) - calcScore(1);
-        if (isNaN(score)) {
-            throw Error("Score is nan");
-        }
-
-        return score;
-    }
-
     sendState(state: State) {
+        this.tracker.update(this.world!);
+
         const isDone = this.done;
-        let info = state.getInfo();
-        if (info) {
-            const winReward = this.getRewardFromFinish();
-            const hpReward = this.getRewardFromPrevHpDiff();
+        let info = state.getInfo()!;
+        const playerIndex = info.getPlayerindex();
 
-            const p1SwitchReward = this.handlers[0].getSwitchReward();
-            const p2SwitchReward = this.handlers[1].getSwitchReward();
-            const switchReward =
-                0.5 *
-                Math.sign(p1SwitchReward - p2SwitchReward) *
-                Math.abs(hpReward);
+        const winReward = this.tracker.getRewardFromFinish(this.world!);
+        const hpReward = this.tracker.getHpChangeReward();
+        const faintedReward = this.tracker.getFaintedChangeReward();
 
-            info.setSwitchreward(switchReward);
+        info.setHpreward(hpReward);
+        info.setFaintedreward(faintedReward);
+
+        if (isDone) {
             info.setWinreward(winReward);
-            info.setHpreward(hpReward);
-
-            if (isDone) {
-                info.setDone(isDone);
-                state.setLegalactions(AllValidActions);
-            }
-            state.setInfo(info);
+            info.setDone(isDone);
+            state.setLegalactions(AllValidActions);
         }
+
+        state.setInfo(info);
+
         const stateArr = state.serializeBinary();
         this.ts += 1;
         return this.port?.postMessage(stateArr, [stateArr.buffer]);
@@ -235,7 +181,7 @@ export class Game {
         this.world = null;
         this.ts = 0;
         this.tied = false;
-        this.numFainted = [[0, 0]];
+        this.tracker.reset();
         this.earlyFinish = false;
     }
 }

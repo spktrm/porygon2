@@ -5,7 +5,7 @@ import { AnyObject } from "@pkmn/sim";
 import { Protocol } from "@pkmn/protocol";
 import { Battle as World } from "@pkmn/sim";
 
-import { EventHandler2, StateHandler } from "./state";
+import { EventHandler as EventHandler, StateHandler, Tracker } from "./state";
 
 import { State } from "../../protos/state_pb";
 import { Action } from "../../protos/action_pb";
@@ -28,9 +28,10 @@ export class StreamHandler {
 
     publicBattle: Battle;
     privateBattle: Battle;
-    eventHandler2: EventHandler2;
-    world: World | null;
 
+    eventHandler: EventHandler;
+
+    world: World | null;
     rqid: string | undefined;
     playerIndex: 0 | 1 | undefined;
 
@@ -48,7 +49,8 @@ export class StreamHandler {
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
-        this.eventHandler2 = new EventHandler2(this);
+
+        this.eventHandler = new EventHandler(this);
 
         this.world = null;
         this.rqid = undefined;
@@ -73,27 +75,9 @@ export class StreamHandler {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
         if (!key) return;
-        if (key in this.eventHandler2) {
-            (this.eventHandler2 as any)[key](args, kwArgs);
+        if (key in this.eventHandler) {
+            (this.eventHandler as any)[key](args, kwArgs);
         }
-    }
-
-    getSwitchReward(maxLogLength: number = 5) {
-        let count = 0;
-        if (this.actionLog.length === 0) {
-            return count;
-        }
-        const actionLog = this.actionLog.slice(-maxLogLength);
-        let numActions = 0;
-        for (const action of [...actionLog].reverse()) {
-            if (action && action.getIndex() !== -1) {
-                if (action.getIndex() >= 4) {
-                    break;
-                }
-                numActions += 1;
-            }
-        }
-        return (maxLogLength - numActions) / maxLogLength;
     }
 
     isActionRequired(chunk: string): boolean {
@@ -192,13 +176,13 @@ export class StreamHandler {
     }
 
     reset() {
-        this.eventHandler2.reset();
-
         this.log = [];
         this.actionLog = [];
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
+
+        this.eventHandler.reset();
 
         this.rqid = undefined;
         this.playerIndex = undefined;

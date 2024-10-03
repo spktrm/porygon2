@@ -5,8 +5,9 @@ import numpy as np
 
 from typing import Sequence
 
-from rlenv.data import EX_STATE, NUM_MOVE_FIELDS, SocketPath
+from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_MOVE_FIELDS, SocketPath
 from rlenv.interfaces import EnvStep
+from rlenv.protos.features_pb2 import FeatureEdge, FeatureEntity
 from rlenv.protos.state_pb2 import State
 from rlenv.protos.action_pb2 import Action
 from rlenv.utils import padnstack
@@ -14,77 +15,69 @@ from rlenv.utils import padnstack
 uvloop.install()
 
 
-def get_history(state: State):
+def get_history(state: State, player_index: int):
     history = state.history
     history_length = history.length
     moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape(
         (2, -1, NUM_MOVE_FIELDS)
     )
-
-    team = np.frombuffer(state.team, dtype=np.int16).reshape((6, -1))
-
-    private_side_entities = team
-
-    active_entities = np.frombuffer(history.active, dtype=np.int16).reshape(
-        (history_length, 2, 6, -1)
+    team = np.frombuffer(bytearray(state.team), dtype=np.int16).reshape((6, -1))
+    team[..., FeatureEntity.ENTITY_SIDE] ^= player_index
+    team.flags.writeable = False
+    history_edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
+        (history_length, -1, NUM_EDGE_FIELDS)
     )
-    side_conditions = np.frombuffer(history.sideConditions, dtype=np.uint8).reshape(
-        (history_length, 2, -1)
+    edge_affecting_side = history_edges[..., FeatureEdge.EDGE_AFFECTING_SIDE]
+    history_edges[..., FeatureEdge.EDGE_AFFECTING_SIDE] = np.where(
+        edge_affecting_side < 2,
+        edge_affecting_side ^ player_index,
+        edge_affecting_side,
     )
-    volatile_status = np.frombuffer(history.volatileStatus, dtype=np.uint8).reshape(
-        (history_length, 2, -1)
+    history_edges.flags.writeable = False
+    history_nodes = np.frombuffer(bytearray(history.nodes), dtype=np.int16).reshape(
+        (history_length, 12, -1)
     )
-    additional_information = np.frombuffer(
-        history.additionalInformation, dtype=np.float32
-    ).reshape((history_length, 2, -1))
-    boosts = np.frombuffer(history.boosts, dtype=np.int8).reshape(
-        (history_length, 2, -1)
-    )
-    hyphen_args = np.frombuffer(history.hyphenArgs, dtype=np.uint8).reshape(
-        (history_length, 2, -1)
-    )
-    weather = np.frombuffer(history.weather, dtype=np.uint8).reshape(
-        (history_length, -1)
-    )
-    pseudoweather = np.frombuffer(history.pseudoweather, dtype=np.uint8).reshape(
-        (history_length, -1)
-    )
-    turn_context = np.frombuffer(history.turnContext, dtype=np.int16).reshape(
-        (history_length, -1)
-    )
-    return (
-        moveset,
-        private_side_entities,
-        padnstack(active_entities),
-        padnstack(side_conditions),
-        padnstack(volatile_status),
-        padnstack(additional_information),
-        padnstack(boosts),
-        padnstack(weather),
-        padnstack(pseudoweather),
-        padnstack(hyphen_args),
-        padnstack(turn_context, np.zeros_like),
-    )
+    history_nodes[..., FeatureEntity.ENTITY_SIDE] ^= player_index
+    history_nodes.flags.writeable = False
+    return (moveset, team, padnstack(history_edges), padnstack(history_nodes))
 
 
-def process_state(state: State) -> EnvStep:
+def get_legal_mask(state: State, stage: int):
+    mask = np.array(
+        [
+            state.legalActions.move1,
+            state.legalActions.move2,
+            state.legalActions.move3,
+            state.legalActions.move4,
+            state.legalActions.switch1,
+            state.legalActions.switch2,
+            state.legalActions.switch3,
+            state.legalActions.switch4,
+            state.legalActions.switch5,
+            state.legalActions.switch6,
+        ],
+        dtype=bool,
+    )
+    can_move = np.any(mask[:4])
+    if stage == 0:
+        mask[:4] = False
+        mask[4] = can_move
+    elif stage == 1:
+        mask[4:] = False
+    return mask
+
+
+def process_state(state: State, stage: int) -> EnvStep:
+    player_index = state.info.playerIndex
     (
         moveset,
-        private_side_entities,
-        active_entities,
-        side_conditions,
-        volatile_status,
-        additional_information,
-        boosts,
-        weather,
-        pseudoweather,
-        hyphen_args,
-        turn_context,
-    ) = get_history(state)
-    # hyphen_args = np.unpackbits(hyphen_args, axis=-1).view(bool).astype(float)
+        team,
+        history_edges,
+        history_nodes,
+    ) = get_history(state, player_index)
     return EnvStep(
         valid=~np.array(state.info.done, dtype=bool),
-        player_id=np.array(state.info.playerIndex, dtype=np.int32),
+        player_id=np.array(player_index, dtype=np.int32),
         game_id=np.array(state.info.gameId, dtype=np.int32),
         turn=np.array(state.info.turn, dtype=np.int32),
         heuristic_action=np.array(state.info.heuristicAction, dtype=np.int32),
@@ -97,45 +90,28 @@ def process_state(state: State) -> EnvStep:
         hp_rewards=np.array(
             [state.info.hpReward, -state.info.hpReward], dtype=np.float32
         ),
+        fainted_rewards=np.array(
+            [state.info.faintedReward, -state.info.faintedReward], dtype=np.float32
+        ),
         switch_rewards=np.array(
             [state.info.switchReward, -state.info.switchReward], dtype=np.float32
         ),
-        legal=np.array(
-            [
-                state.legalActions.move1,
-                state.legalActions.move2,
-                state.legalActions.move3,
-                state.legalActions.move4,
-                state.legalActions.switch1,
-                state.legalActions.switch2,
-                state.legalActions.switch3,
-                state.legalActions.switch4,
-                state.legalActions.switch5,
-                state.legalActions.switch6,
-            ],
-            dtype=bool,
-        ),
-        active_entities=active_entities,
-        side_conditions=side_conditions,
-        volatile_status=volatile_status,
-        additional_information=additional_information,
-        boosts=boosts,
-        weather=weather,
-        pseudoweather=pseudoweather,
-        hyphen_args=hyphen_args,
-        turn_context=turn_context,
-        private_side_entities=private_side_entities,
+        legal=get_legal_mask(state, stage),
+        team=team,
         moveset=moveset,
+        history_edges=history_edges,
+        history_nodes=history_nodes,
     )
 
 
-def get_ex_step() -> EnvStep:
-    return process_state(EX_STATE)
+def get_ex_step(stage: int = 0) -> EnvStep:
+    return process_state(EX_STATE, stage=stage)
 
 
 class Environment:
     env_idx: int
     state: State
+    stage: int
     env_step: EnvStep
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
@@ -147,6 +123,7 @@ class Environment:
         self.env_idx = env_idx
         self.reader = reader
         self.writer = writer
+        self.stage = 0
         return self
 
     async def _read(self) -> EnvStep:
@@ -158,7 +135,7 @@ class Environment:
 
         state = State.FromString(buffer)
         self.state = state
-        self.env_step = process_state(self.state)
+        self.env_step = process_state(self.state, self.stage)
         return self.env_step
 
     async def _check_for_single_action(self) -> EnvStep:
@@ -168,7 +145,7 @@ class Environment:
         else:
             return self.env_step
 
-    def _get_acton_bytes(self, action_index: int) -> bytes:
+    def _get_action_bytes(self, action_index: int) -> bytes:
         action = Action()
         action.key = self.state.key
         action.index = action_index
@@ -176,23 +153,41 @@ class Environment:
         # Serialize the action
         return action.SerializeToString()
 
-    async def step(self, action: int) -> EnvStep:
+    async def step(self, action_index: int) -> EnvStep:
         if self.state.info.done:
             return self.env_step
 
-        self.stage = 0
-        serialized_action = self._get_acton_bytes(action)
+        if self.stage == 0:
+            # Ensure initial action is between 4 and 9
+            if action_index == 4:
+                self.stage = 1
+                # Do not send the action yet; wait for the next action
+                self.env_step = process_state(self.state, self.stage)
+                return await self._check_for_single_action()
+            else:
+                # Send the action as is
+                serialized_action = self._get_action_bytes(action_index)
+                await self._write_action(serialized_action)
+                await self._read()
+                return await self._check_for_single_action()
+        elif self.stage == 1:
+            # Combine the initial action (4) and the second action (0-3)
+            serialized_action = self._get_action_bytes(action_index)
+            await self._write_action(serialized_action)
+            # Reset stage
+            self.stage = 0
+            await self._read()
+            return await self._check_for_single_action()
+
+    async def _write_action(self, serialized_action: bytes):
         # Get the size of the serialized action
         action_size = len(serialized_action)
-
         # Create a byte buffer for the size (4 bytes for a 32-bit integer)
         size_buffer = struct.pack(">I", action_size)
-
         # Write the size buffer followed by the serialized action
         self.writer.write(size_buffer)
         self.writer.write(serialized_action)
         await self.writer.drain()
-        return await self._read()
 
     async def reset(self):
         return await self._read()

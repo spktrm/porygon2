@@ -1,3 +1,4 @@
+from pprint import pprint
 import uvicorn
 
 from fastapi import FastAPI, Request
@@ -21,9 +22,15 @@ async def predict(request: Request):
     data = await request.body()
     state = State.FromString(data)
 
-    env_step = process_state(state)
-    # Make predictions using the model
+    env_step = process_state(state, stage=0)
     response = await run_in_threadpool(model.predict, env_step)
+    pprint(state.info)
+    pprint(response.pi)
+
+    if response.action == 4:
+        env_step = process_state(state, stage=1)
+        response = await run_in_threadpool(model.predict, env_step)
+        pprint(response.pi)
 
     return response
 

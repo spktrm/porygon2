@@ -18,6 +18,7 @@ from ml.func import (
     get_loss_heuristic,
     get_loss_nerd,
     get_loss_v,
+    renormalize,
     v_trace,
     _player_others,
 )
@@ -190,20 +191,20 @@ class Learner:
         alpha: float,
         learner_steps: int,
     ) -> float:
-        rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
+        reg_rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
             jax.vmap(self.network.apply, (None, 0), 0), (None, 0), 0
         )
-        params_output = rollout(params, ts.env)
+        params_output = reg_rollout(params, ts.env)
 
         policy_pprocessed = self.config.finetune(
             params_output.pi, ts.env.legal, learner_steps
         )
 
-        params_target_output = rollout(params_target, ts.env)
+        params_target_output = reg_rollout(params_target, ts.env)
 
         if self.config.eta_reward_transform > 0:
-            params_prev_output = rollout(params_prev, ts.env)
-            _params_prev_output = rollout(params_prev_, ts.env)
+            params_prev_output = reg_rollout(params_prev, ts.env)
+            _params_prev_output = reg_rollout(params_prev_, ts.env)
             # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
             # For the stability reasons, reward changes smoothly between iterations.
             # The mixing between old and new reward transform is a convex combination
@@ -222,7 +223,11 @@ class Learner:
 
         rewards = (
             ts.actor.win_rewards
-        )  # + ts.actor.hp_rewards + ts.actor.switch_rewards
+            # + ts.actor.switch_rewards
+            # + 0.428 * ts.actor.fainted_rewards / 6
+            # + 0.214 * ts.actor.hp_rewards / 6
+            # + 0.214 * ts.actor.switch_rewards
+        )
 
         for player in range(self.config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -283,17 +288,21 @@ class Learner:
         #     ts.env.legal,
         # )
 
+        repr_loss = renormalize(params_output.repr_loss, valid)
+
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
             # + self.config.heuristic_loss_coef * loss_heuristic
+            + repr_loss
         )
 
         return loss, dict(
             loss_v=loss_v,
             loss_nerd=loss_nerd,
             loss_entropy=loss_entropy,
+            repr_loss=repr_loss,
             # loss_heuristic=loss_heuristic,
         )
 
@@ -322,12 +331,6 @@ class Learner:
             learner_steps,
         )
 
-        param_norm = jax.tree.map(lambda p: jnp.linalg.norm(p), params)
-        grad_norm = jax.tree.map(lambda g: jnp.linalg.norm(g), grad)
-
-        param_norm_sum = jax.tree.reduce(lambda a, b: a + b, param_norm)
-        grad_norm_sum = jax.tree.reduce(lambda a, b: a + b, grad_norm)
-
         # Update `params` using the computed gradient.
         updates, optimizer_state = self.optimizer.update(grad, optimizer_state, params)
         params = optax.apply_updates(params, updates)
@@ -346,12 +349,12 @@ class Learner:
             lambda: (params_prev, params_prev_),
         )
 
-        lengths = timestep.env.valid.sum(0)
+        valid = timestep.env.valid
+        lengths = valid.sum(0)
 
-        params_are_good = jax.tree.reduce(
-            lambda a, b: jnp.logical_and(a, b),
-            jax.tree.map(lambda x: jnp.isfinite(x).all(), self.params),
-        )
+        not_moving = timestep.actor.action >= 4
+        move_ratio = renormalize(timestep.actor.action == 4, valid & not_moving)
+        switch_ratio = renormalize(timestep.actor.action > 4, valid & not_moving)
 
         logs = {
             "loss": loss_val,
@@ -360,9 +363,11 @@ class Learner:
             "trajectory_length_min": lengths.min(),
             "trajectory_length_max": lengths.max(),
             "alpha": alpha,
-            "param_norm_sum": param_norm_sum,
-            "grad_norm_sum": grad_norm_sum,
-            "params_are_good": params_are_good,
+            "gradient_norm": optax.global_norm(grad),
+            "param_norm": optax.global_norm(params),
+            "param_updates_norm": optax.global_norm(updates),
+            "move_ratio": move_ratio,
+            "switch_ratio": switch_ratio,
         }
 
         return (

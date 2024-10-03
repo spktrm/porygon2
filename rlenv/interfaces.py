@@ -9,6 +9,7 @@ class EnvStep:
     game_id: chex.Array = ()
     player_id: chex.Array = ()
     win_rewards: chex.Array = ()
+    fainted_rewards: chex.Array = ()
     switch_rewards: chex.Array = ()
     hp_rewards: chex.Array = ()
     heuristic_action: chex.Array = ()
@@ -19,20 +20,11 @@ class EnvStep:
     # Private Info
     moveset: chex.Array = ()
     legal: chex.Array = ()
-    private_side_entities: chex.Array = ()
+    team: chex.Array = ()
 
     # Public Info
-    turn_context: chex.Array = ()
-    active_entities: chex.Array = ()
-    public_side_entities: chex.Array = ()
-    boosts: chex.Array = ()
-    side_conditions: chex.Array = ()
-    volatile_status: chex.Array = ()
-    additional_information: chex.Array = ()
-    hyphen_args: chex.Array = ()
-    terrain: chex.Array = ()
-    pseudoweather: chex.Array = ()
-    weather: chex.Array = ()
+    history_edges: chex.Array = ()
+    history_nodes: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -42,6 +34,7 @@ class ActorStep:
     win_rewards: chex.Array = ()
     hp_rewards: chex.Array = ()
     switch_rewards: chex.Array = ()
+    fainted_rewards: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -56,3 +49,4 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
+    repr_loss: chex.Array = ()

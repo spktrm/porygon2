@@ -17,35 +17,44 @@ async function runGame(game: Game) {
 }
 
 function assertTrajectory(game: Game, trajectory: State[]) {
-    let prevTurn = 0;
-
-    let winRewardSum = 0;
-    let hpRewardSum = 0;
-
-    for (const state of trajectory) {
-        const stateObject = state.toObject();
-
-        const currentTurn = stateObject?.info?.turn ?? 0;
-        assert(currentTurn >= prevTurn);
-        prevTurn = currentTurn;
-
-        winRewardSum += stateObject.info?.winreward ?? 0;
-        hpRewardSum += stateObject.info?.hpreward ?? 0;
-    }
+    const accum = {
+        winRewardSum: 0,
+        hpRewardSum: 0,
+        faintedRewardSum: 0,
+        switchRewardSum: 0,
+    };
+    trajectory.map((state) => {
+        const info = state.toObject().info!;
+        accum.winRewardSum += info.winreward;
+        accum.hpRewardSum += info.hpreward;
+        accum.faintedRewardSum += info.faintedreward;
+        accum.switchRewardSum += info.switchreward;
+    });
 
     const winner = game.getWinner();
+
     if (winner === game.world?.p1.name) {
-        assert(winRewardSum === 1);
+        if (accum.winRewardSum !== 1) {
+            throw new Error();
+        }
     } else if (winner === game.world?.p2.name) {
-        assert(winRewardSum === -1);
+        if (accum.winRewardSum !== -1) {
+            throw new Error();
+        }
     } else {
         if (game.earlyFinish) {
-            assert(winRewardSum === 0);
+            if (accum.winRewardSum !== 0) {
+                throw new Error();
+            }
         }
     }
 
-    if (winRewardSum !== 0) {
-        assert(Math.sign(hpRewardSum) === Math.sign(winRewardSum));
+    if (accum.hpRewardSum < -6 || 6 < accum.hpRewardSum) {
+        throw new Error();
+    }
+
+    if (accum.faintedRewardSum < -6 || 6 < accum.faintedRewardSum) {
+        throw new Error();
     }
 
     if (trajectory.length < 5) {

@@ -10,7 +10,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 1
+    width_factor = 0.25
 
     entity_size = int(256 * width_factor)
     vector_size = int(1024 * width_factor)
@@ -21,72 +21,72 @@ def get_model_cfg():
     cfg.encoder.entity_size = entity_size
     cfg.encoder.vector_size = vector_size
 
+    # move encoder
     cfg.encoder.move_encoder = ConfigDict()
     cfg.encoder.move_encoder.entity_size = entity_size
 
-    cfg.encoder.entity_encoder = ConfigDict()
-    cfg.encoder.entity_encoder.entity_size = entity_size
+    cfg.encoder.public = ConfigDict()
+    cfg.encoder.public.entity_size = entity_size
 
-    cfg.encoder.side_encoder = ConfigDict()
-    cfg.encoder.side_encoder.entity_size = entity_size
-    cfg.encoder.side_encoder.merge = ConfigDict()
-    cfg.encoder.side_encoder.merge.output_size = vector_size // 2
-    cfg.encoder.side_encoder.merge.gating_type = GatingType.POINTWISE
-    cfg.encoder.side_encoder.merge.use_layer_norm = use_layer_norm
+    # public entity encoder
+    cfg.encoder.public.entity_encoder = ConfigDict()
+    cfg.encoder.public.entity_encoder.entity_size = entity_size
 
-    transformer_num_layers = max(int(depth_factor * 3), 1)
-    cfg.encoder.team_encoder = ConfigDict()
-    cfg.encoder.team_encoder.transformer = ConfigDict()
-    cfg.encoder.team_encoder.transformer.units_stream_size = entity_size
-    cfg.encoder.team_encoder.transformer.transformer_num_layers = transformer_num_layers
-    cfg.encoder.team_encoder.transformer.transformer_num_heads = transformer_num_layers
-    cfg.encoder.team_encoder.transformer.transformer_key_size = entity_size // 2
-    cfg.encoder.team_encoder.transformer.transformer_value_size = entity_size // 2
-    cfg.encoder.team_encoder.transformer.resblocks_hidden_size = entity_size // 2
-    cfg.encoder.team_encoder.transformer.use_layer_norm = use_layer_norm
+    # public edge encoder
+    cfg.encoder.public.edge_encoder = ConfigDict()
+    cfg.encoder.public.edge_encoder.entity_size = entity_size
 
-    cfg.encoder.team_encoder.to_vector = ConfigDict()
-    cfg.encoder.team_encoder.to_vector.units_hidden_sizes = (entity_size, vector_size)
-    cfg.encoder.team_encoder.to_vector.use_layer_norm = use_layer_norm
+    transformer_num_layers = 1  # max(int(depth_factor * 3), 1)
+    transformer_num_heads = 2
 
-    cfg.encoder.field_encoder = ConfigDict()
-    cfg.encoder.field_encoder.vector_size = vector_size
+    # public context transformer
+    #
+    # transforms context from each turn into each public entity from that turn
+    cfg.encoder.public.context_transformer = ConfigDict()
+    cfg.encoder.public.context_transformer.stream_size = entity_size
+    cfg.encoder.public.context_transformer.num_layers = transformer_num_layers
+    cfg.encoder.public.context_transformer.num_heads = transformer_num_heads
+    cfg.encoder.public.context_transformer.key_size = entity_size // 2
+    cfg.encoder.public.context_transformer.value_size = entity_size // 2
+    cfg.encoder.public.context_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.public.context_transformer.use_layer_norm = use_layer_norm
 
-    cfg.encoder.history_encoder = ConfigDict()
-    cfg.encoder.history_encoder.entity_size = entity_size
-    cfg.encoder.history_encoder.vector_size = vector_size
-    cfg.encoder.history_encoder.transformer = ConfigDict()
-    cfg.encoder.history_encoder.transformer.units_stream_size = vector_size
-    cfg.encoder.history_encoder.transformer.transformer_num_layers = (
-        transformer_num_layers
-    )
-    cfg.encoder.history_encoder.transformer.transformer_num_heads = (
-        transformer_num_layers
-    )
-    cfg.encoder.history_encoder.transformer.transformer_key_size = vector_size // 2
-    cfg.encoder.history_encoder.transformer.transformer_value_size = vector_size // 2
-    cfg.encoder.history_encoder.transformer.resblocks_hidden_size = vector_size // 2
-    cfg.encoder.history_encoder.transformer.use_layer_norm = use_layer_norm
+    # public history transformer
+    #
+    # contextualizes each entity along its previous history
+    cfg.encoder.public.history_transformer = ConfigDict()
+    cfg.encoder.public.history_transformer.stream_size = entity_size
+    cfg.encoder.public.history_transformer.num_layers = transformer_num_layers
+    cfg.encoder.public.history_transformer.num_heads = transformer_num_heads
+    cfg.encoder.public.history_transformer.key_size = entity_size // 2
+    cfg.encoder.public.history_transformer.value_size = entity_size // 2
+    cfg.encoder.public.history_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.public.history_transformer.use_layer_norm = use_layer_norm
 
-    cfg.encoder.history_encoder.to_vector = ConfigDict()
-    cfg.encoder.history_encoder.to_vector.units_hidden_sizes = (vector_size,)
-    cfg.encoder.history_encoder.to_vector.use_layer_norm = use_layer_norm
+    # context transformer
+    #
+    # transforms context from each contextualized historical entity into the private entities
+    # available for choice that turn
+    cfg.encoder.context_transformer = ConfigDict()
+    cfg.encoder.context_transformer.stream_size = entity_size
+    cfg.encoder.context_transformer.num_layers = transformer_num_layers
+    cfg.encoder.context_transformer.num_heads = transformer_num_heads
+    cfg.encoder.context_transformer.key_size = entity_size // 2
+    cfg.encoder.context_transformer.value_size = entity_size // 2
+    cfg.encoder.context_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.context_transformer.use_layer_norm = use_layer_norm
 
-    cfg.encoder.history_merge = ConfigDict()
-    cfg.encoder.history_merge.output_size = vector_size
-    cfg.encoder.history_merge.gating_type = GatingType.POINTWISE
-    cfg.encoder.history_merge.use_layer_norm = use_layer_norm
+    # to vector
+    #
+    # pools the private entities into a single vector
+    cfg.encoder.to_vector = ConfigDict()
+    cfg.encoder.to_vector.units_hidden_sizes = (entity_size, vector_size)
+    cfg.encoder.to_vector.output_stream_size = vector_size
+    cfg.encoder.to_vector.use_layer_norm = use_layer_norm
 
-    cfg.encoder.state_merge = ConfigDict()
-    cfg.encoder.state_merge.output_size = vector_size
-    cfg.encoder.state_merge.gating_type = GatingType.POINTWISE
-    cfg.encoder.state_merge.use_layer_norm = use_layer_norm
-
-    cfg.encoder.action_merge = ConfigDict()
-    cfg.encoder.action_merge.output_size = entity_size
-    cfg.encoder.action_merge.gating_type = GatingType.POINTWISE
-    cfg.encoder.action_merge.use_layer_norm = use_layer_norm
-
+    # state resnet
+    #
+    # resnet for feature extraction
     cfg.encoder.state_resnet = ConfigDict()
     cfg.encoder.state_resnet.num_resblocks = max(int(depth_factor * 8), 1)
     cfg.encoder.state_resnet.use_layer_norm = use_layer_norm
@@ -110,7 +110,6 @@ def get_model_cfg():
     cfg.value_head.resnet = ConfigDict()
     cfg.value_head.resnet.num_resblocks = max(int(depth_factor * 2), 1)
     cfg.value_head.resnet.use_layer_norm = use_layer_norm
-
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.num_logits = 1
     cfg.value_head.logits.use_layer_norm = use_layer_norm

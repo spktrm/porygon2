@@ -31,7 +31,7 @@ class InferenceModel:
             step = pickle.load(f)
         self.params = step["params"]
 
-    # @functools.partial(jax.jit, static_argnums=(0,))
+    @functools.partial(jax.jit, static_argnums=(0,))
     def _network_jit_apply(
         self, env_step: EnvStep
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
