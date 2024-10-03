@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
-import aiohttp
-import asyncio
 
+import aiohttp
 from tqdm import tqdm
 
 

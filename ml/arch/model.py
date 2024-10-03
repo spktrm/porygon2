@@ -1,20 +1,19 @@
-import jax
 import math
-import chex
 import pickle
-import jax.numpy as jnp
-import flax.linen as nn
-
 from pprint import pprint
 from typing import Any, Dict
-from ml_collections import ConfigDict
+
+import chex
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
 import numpy as np
+from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
-
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
 
@@ -28,14 +27,23 @@ class Model(nn.Module):
         self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep) -> ModelOutput:
-        current_state, move_embeddings, switch_embeddings, repr_loss = self.encoder(
-            env_step
-        )
+        (
+            current_state,
+            move_embeddings,
+            switch_embeddings,
+            # repr_loss,
+        ) = self.encoder(env_step)
         logit, pi, log_pi = self.policy_head(
             current_state, move_embeddings, switch_embeddings, env_step.legal
         )
         v = self.value_head(current_state)
-        return ModelOutput(pi=pi, v=v, log_pi=log_pi, logit=logit, repr_loss=repr_loss)
+        return ModelOutput(
+            pi=pi,
+            v=v,
+            log_pi=log_pi,
+            logit=logit,
+            # repr_loss=repr_loss,
+        )
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -91,8 +99,8 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 
 def test(params: Any):
-    from ml.learner import Learner
     from ml.config import VtraceConfig
+    from ml.learner import Learner
     from rlenv.utils import stack_steps
 
     config = get_model_cfg()
@@ -144,7 +152,7 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex_step)
 
-    outputs = network.apply(params, ex_step)
+    network.apply(params, ex_step)
     pprint(get_num_params(params))
 
     test(params)

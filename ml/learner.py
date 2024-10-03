@@ -1,28 +1,26 @@
+import functools
 import os
 import pickle
-import jax
-import optax
-import functools
+from typing import Callable, Sequence, Tuple, Union
 
-import numpy as np
+import flax.linen as nn
+import jax
 import jax.numpy as jnp
 import jax.tree_util as tree
-import flax.linen as nn
-
-from typing import Any, Callable, Sequence, Tuple, Union
+import numpy as np
+import optax
 
 from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
-from ml.utils import Params
 from ml.func import (
+    _player_others,
     get_loss_entropy,
     get_loss_heuristic,
     get_loss_nerd,
     get_loss_v,
     renormalize,
     v_trace,
-    _player_others,
 )
-
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, ModelOutput, TimeStep
 
@@ -288,21 +286,21 @@ class Learner:
         #     ts.env.legal,
         # )
 
-        repr_loss = renormalize(params_output.repr_loss, valid)
+        # repr_loss = renormalize(params_output.repr_loss, valid)
 
         loss = (
             self.config.value_loss_coef * loss_v
             + self.config.policy_loss_coef * loss_nerd
             + self.config.entropy_loss_coef * loss_entropy
             # + self.config.heuristic_loss_coef * loss_heuristic
-            + repr_loss
+            # + repr_loss
         )
 
         return loss, dict(
             loss_v=loss_v,
             loss_nerd=loss_nerd,
             loss_entropy=loss_entropy,
-            repr_loss=repr_loss,
+            # repr_loss=repr_loss,
             # loss_heuristic=loss_heuristic,
         )
 

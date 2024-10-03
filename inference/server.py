@@ -1,12 +1,11 @@
 from pprint import pprint
-import uvicorn
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-
-from inference.interfaces import PredictionResponse
 from model import InferenceModel
 
+from inference.interfaces import PredictionResponse
 from rlenv.env import process_state
 from rlenv.protos.state_pb2 import State
 

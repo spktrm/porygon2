@@ -1,12 +1,11 @@
-from re import L
-import jax
-import chex
-import numpy as np
-import jax.numpy as jnp
-import flax.linen as nn
-
-from ml_collections import ConfigDict
 from functools import partial
+
+import chex
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
+from ml_collections import ConfigDict
 
 from ml.arch.modules import (
     MLP,
@@ -16,7 +15,6 @@ from ml.arch.modules import (
     Transformer,
     VectorMerge,
 )
-
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_EDGE_TYPES,
@@ -32,7 +30,6 @@ from rlenv.data import (
     NUM_VOLATILE_STATUS,
 )
 from rlenv.interfaces import EnvStep
-
 from rlenv.protos.enums_pb2 import SpeciesEnum
 from rlenv.protos.features_pb2 import (
     EdgeTypes,
@@ -373,38 +370,38 @@ class PublicEncoder(nn.Module):
         self.entity_encoder = EntityEncoder(self.cfg.entity_encoder)
         self.edge_encoder = EdgeEncoder(self.cfg.edge_encoder)
 
-        self.node_transformer = Transformer(**self.cfg.context_transformer.to_dict())
-        self.edge_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        # self.node_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        # self.edge_transformer = Transformer(**self.cfg.context_transformer.to_dict())
 
         self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
         self.history_transformer = Transformer(**self.cfg.history_transformer.to_dict())
 
-        self.linear_latent_action = MLP((entity_size,))
-        self.linear_dynamics = MLP((entity_size,))
+        # self.linear_latent_action = MLP((entity_size,))
+        # self.linear_dynamics = MLP((entity_size,))
 
-    def repr_learn(self, st: chex.Array, stp1: chex.Array):
-        # Concatenate st and stp1 to get latent action
-        latent_action = self.linear_latent_action(jnp.concatenate((st, stp1), axis=-1))
-        latent_action_probs = jax.nn.softmax(latent_action.reshape(-1, 32), axis=-1)
-        latent_action_ohe = jax.nn.one_hot(
-            jnp.argmax(latent_action_probs, axis=-1), num_classes=32
-        ).reshape(latent_action.shape)
-        latent_action_probs = latent_action_probs.reshape(latent_action.shape)
-        latent_action = latent_action_probs + jax.lax.stop_gradient(
-            latent_action_ohe - latent_action_probs
-        )
+    # def repr_learn(self, st: chex.Array, stp1: chex.Array):
+    #     # Concatenate st and stp1 to get latent action
+    #     latent_action = self.linear_latent_action(jnp.concatenate((st, stp1), axis=-1))
+    #     latent_action_probs = jax.nn.softmax(latent_action.reshape(-1, 32), axis=-1)
+    #     latent_action_ohe = jax.nn.one_hot(
+    #         jnp.argmax(latent_action_probs, axis=-1), num_classes=32
+    #     ).reshape(latent_action.shape)
+    #     latent_action_probs = latent_action_probs.reshape(latent_action.shape)
+    #     latent_action = latent_action_probs + jax.lax.stop_gradient(
+    #         latent_action_ohe - latent_action_probs
+    #     )
 
-        # Predict the next state (stp1) using dynamics and latent action
-        pred_stp1 = self.linear_dynamics(jnp.concatenate((st, latent_action), axis=-1))
+    #     # Predict the next state (stp1) using dynamics and latent action
+    #     pred_stp1 = self.linear_dynamics(jnp.concatenate((st, latent_action), axis=-1))
 
-        def normalize(arr: chex.Array) -> chex.Array:
-            return arr / jnp.linalg.norm(arr, axis=-1)
+    #     def normalize(arr: chex.Array) -> chex.Array:
+    #         return arr / jnp.linalg.norm(arr, axis=-1)
 
-        stp1 = normalize(stp1)
-        pred_stp1 = normalize(pred_stp1)
+    #     stp1 = normalize(stp1)
+    #     pred_stp1 = normalize(pred_stp1)
 
-        # Compute cosine similarity (negative for loss minimization)
-        return -(pred_stp1 * stp1).sum(axis=-1)
+    #     # Compute cosine similarity (negative for loss minimization)
+    #     return -(pred_stp1 * stp1).sum(axis=-1)
 
     def __call__(self, env_step: EnvStep):
         node_embeddings = self.entity_encoder.batch_encode(env_step.history_nodes)
@@ -452,21 +449,21 @@ class PublicEncoder(nn.Module):
         edge_type_token = env_step.history_edges[..., FeatureEdge.EDGE_TYPE_TOKEN]
         invalid_edge_mask = edge_type_token == EdgeTypes.EDGE_TYPE_NONE
 
-        node_embeddings = jax.vmap(
-            self.node_transformer, in_axes=(0, None, 0, None), out_axes=0
-        )(node_embeddings, None, valid_node_mask, None)
+        # node_embeddings = jax.vmap(
+        #     self.node_transformer, in_axes=(0, None, 0, None), out_axes=0
+        # )(node_embeddings, None, valid_node_mask, None)
 
-        edge_embeddings = jax.vmap(
-            self.edge_transformer, in_axes=(0, None, 0, None), out_axes=0
-        )(edge_embeddings, None, ~invalid_edge_mask, None)
+        # edge_embeddings = jax.vmap(
+        #     self.edge_transformer, in_axes=(0, None, 0, None), out_axes=0
+        # )(edge_embeddings, None, ~invalid_edge_mask, None)
 
         cross_node_embeddings = jax.vmap(self.context_transformer)(
             node_embeddings, edge_embeddings, valid_node_mask, ~invalid_edge_mask
         )
 
-        repr_loss = jax.vmap(self.repr_learn)(
-            cross_node_embeddings[1], cross_node_embeddings[0]
-        )
+        # repr_loss = jax.vmap(self.repr_learn)(
+        #     cross_node_embeddings[1], cross_node_embeddings[0]
+        # )
 
         positional_embeddings = self.positional_embedding(jnp.arange(NUM_HISTORY))
         contextual_node_embeddings_w_pos = cross_node_embeddings + jnp.expand_dims(
@@ -482,7 +479,7 @@ class PublicEncoder(nn.Module):
             "ij,ijk->jk", valid_node_mask, contextual_node_embeddings_w_pos
         ) / denominator[..., None].clip(min=1)
 
-        return contextual_node_embeddings_w_pos, denominator > 0, repr_loss.mean()
+        return contextual_node_embeddings_w_pos, denominator > 0  # , repr_loss.mean()
 
 
 class Encoder(nn.Module):
@@ -506,9 +503,11 @@ class Encoder(nn.Module):
         _encode_entity = jax.vmap(self.public_encoder.entity_encoder.encode_entity)
 
         private_entity_embeddings = _encode_entity(env_step.team)
-        public_entity_embeddings, valid_public_mask, repr_loss = self.public_encoder(
-            env_step
-        )
+        (
+            public_entity_embeddings,
+            valid_public_mask,
+            # repr_loss,
+        ) = self.public_encoder(env_step)
 
         private_entity_embeddings = self.context_transformer(
             private_entity_embeddings,
@@ -524,4 +523,4 @@ class Encoder(nn.Module):
 
         move_embeddings = self.move_encoder(env_step.moveset[0, :4])
 
-        return current_state, move_embeddings, private_entity_embeddings, repr_loss
+        return current_state, move_embeddings, private_entity_embeddings  # , repr_loss

@@ -146,7 +146,7 @@ export const numWeatherFields = Object.keys(FeatureWeather).length;
 export const numMoveFields = Object.keys(FeatureMoveset).length;
 export const numMovesetFields = 2 * 10 * numMoveFields;
 
-export const NUM_HISTORY = 16;
+export const NUM_HISTORY = 8;
 
 export const AllValidActions = new LegalActions();
 AllValidActions.setMove1(true);

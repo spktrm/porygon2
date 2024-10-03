@@ -1,11 +1,9 @@
 import os
-import jax
-import chex
-
-import jax.numpy as jnp
-
 from typing import Callable
 
+import chex
+import jax
+import jax.numpy as jnp
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params

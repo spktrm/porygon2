@@ -1,8 +1,6 @@
-import jax
-
-import numpy as np
 import flax.linen as nn
-
+import jax
+import numpy as np
 from tqdm import tqdm
 
 from ml.config import RNaDConfig

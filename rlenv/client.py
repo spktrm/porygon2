@@ -1,17 +1,16 @@
-import pickle
-import jax
-import chex
 import functools
-import numpy as np
-import flax.linen as nn
-
+import pickle
 from typing import Callable, Sequence
+
+import chex
+import flax.linen as nn
+import jax
+import numpy as np
 
 from ml.config import FineTuning
 from ml.utils import Params
-
 from rlenv.data import EVALUATION_SOCKET_PATH, SocketPath
-from rlenv.env import ParallelEnvironment, EnvStep
+from rlenv.env import EnvStep, ParallelEnvironment
 from rlenv.interfaces import ActorStep, ModelOutput, TimeStep
 from rlenv.utils import stack_steps
 

@@ -1,10 +1,9 @@
+from typing import Sequence, TypeVar
+
 import jax
 import numpy as np
 
-from typing import Sequence, TypeVar
-
 from rlenv.data import NUM_HISTORY
-
 
 T = TypeVar("T")
 

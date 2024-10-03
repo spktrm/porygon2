@@ -1,13 +1,11 @@
 import json
-from pprint import pprint
 import random
+from pprint import pprint
+
 import numpy as np
-
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-
 import plotly.express as px
-
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 
 with open("data/data/gen3/species.npy", "rb") as f:
     SPECIES_ONEHOT = np.load(f)

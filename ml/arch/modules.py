@@ -1,16 +1,19 @@
-import jax
-import chex
-
-import numpy as np
-import flax.linen as nn
-from flax.linen.dtypes import promote_dtype
-
-import jax.numpy as jnp
-import jax.nn.initializers as initjax
-import jax.lax as lax
-
 from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
+
+import chex
+import flax.linen as nn
+import jax
+import jax.experimental
+import jax.experimental.host_callback
+import jax.lax as lax
+import jax.nn.initializers as initjax
+import jax.numpy as jnp
+import numpy as np
+from flax.linen.dtypes import promote_dtype
+
+np.set_printoptions(precision=2, suppress=True)
+jnp.set_printoptions(precision=2, suppress=True)
 
 
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
@@ -172,6 +175,8 @@ class MultiHeadAttention(nn.Module):
         if mask is not None:
             attn_weights = jnp.where(mask, attn_weights, 0)
 
+        jax.debug.print("x: {:.2f}", attn_weights)
+
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
         attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
@@ -248,7 +253,7 @@ class Transformer(nn.Module):
                 value_size=self.value_size,
                 model_size=self.stream_size,
             )(query=q, key=kv, value=kv, mask=logits_mask)
-            attn_output = jnp.where(q_mask[..., jnp.newaxis], attn_output, 0)
+            # attn_output = jnp.where(q_mask[..., jnp.newaxis], attn_output, 0)
             q = q + attn_output
             # Apply pre-layer normalization before the residual block
             if self.use_layer_norm:
@@ -259,7 +264,6 @@ class Transformer(nn.Module):
             q = q + dense_output
             q = jnp.where(q_mask[..., jnp.newaxis], q, 0)
 
-        q = jnp.where(q_mask[..., jnp.newaxis], q, 0)
         return q
 
 

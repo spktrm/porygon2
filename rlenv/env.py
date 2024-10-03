@@ -1,15 +1,15 @@
-import struct
 import asyncio
-import uvloop
-import numpy as np
-
+import struct
 from typing import Sequence
+
+import numpy as np
+import uvloop
 
 from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_MOVE_FIELDS, SocketPath
 from rlenv.interfaces import EnvStep
+from rlenv.protos.action_pb2 import Action
 from rlenv.protos.features_pb2 import FeatureEdge, FeatureEntity
 from rlenv.protos.state_pb2 import State
-from rlenv.protos.action_pb2 import Action
 from rlenv.utils import padnstack
 
 uvloop.install()

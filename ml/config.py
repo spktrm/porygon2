@@ -3,7 +3,6 @@ from typing import Sequence
 import chex
 import haiku as hk
 import jax
-
 from jax import numpy as jnp
 
 

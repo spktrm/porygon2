@@ -1,18 +1,18 @@
 import json
 import pickle
 from pprint import pprint
+
 import wandb
 
 wandb.require("core")
 
 from tqdm import trange
 
-from ml.learner import Learner
-from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
+from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
+from ml.learner import Learner
 from ml.utils import Params, get_most_recent_file
-
 from rlenv.client import BatchCollector
 from rlenv.data import EVALUATION_SOCKET_PATH, TRAINING_SOCKET_PATH
 
@@ -39,7 +39,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = RNaDConfig()
+    learner_config = VtraceConfig()
     model_config = get_model_cfg()
     pprint(learner_config)
 

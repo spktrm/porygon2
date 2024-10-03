@@ -1,5 +1,4 @@
 import os
-from typing import Literal
 
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -27,7 +26,6 @@ from rlenv.protos.features_pb2 import (
     FeatureMoveset,
 )
 from rlenv.protos.state_pb2 import State
-
 
 with open(os.path.join(os.path.dirname(__file__), "ex"), "rb") as f:
     EX_BUFFER = f.read()
@@ -58,7 +56,7 @@ NUM_EFFECTS = len(EffectEnum.keys())
 NUM_MOVE_FIELDS = len(FeatureMoveset.DESCRIPTOR.values)
 NUM_EDGE_FIELDS = len(FeatureEdge.DESCRIPTOR.values)
 
-NUM_HISTORY = 16
+NUM_HISTORY = 8
 NUM_PLAYERS = 2
 
 TRAINING_SOCKET_PATH = "/tmp/pokemon-training.sock"

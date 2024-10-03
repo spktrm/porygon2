@@ -1,3 +1,5 @@
+from typing import Any, Dict, Tuple
+
 import jax
 import jax.numpy as jnp
 import optax
@@ -6,7 +8,6 @@ from flax.training import train_state
 from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from typing import Any, Dict, Tuple
 
 
 # Load and preprocess the Iris dataset

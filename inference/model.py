@@ -1,18 +1,15 @@
-import chex
-import jax
 import pickle
-import functools
-import numpy as np
-
 from typing import Tuple
 
-from inference.interfaces import PredictionResponse
+import chex
+import jax
+import numpy as np
 
+from inference.interfaces import PredictionResponse
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
-
 from rlenv.interfaces import EnvStep
 
 
@@ -31,12 +28,12 @@ class InferenceModel:
             step = pickle.load(f)
         self.params = step["params"]
 
-    @functools.partial(jax.jit, static_argnums=(0,))
+    # @functools.partial(jax.jit, static_argnums=(0,))
     def _network_jit_apply(
         self, env_step: EnvStep
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         output = self.network.apply(self.params, env_step)
-        pi = self.finetuning(output.pi, env_step.legal, 1)
+        pi = self.finetuning.post_process_policy(output.pi, env_step.legal)
         return pi, output.v, output.log_pi, output.logit
 
     def predict(self, env_step: EnvStep):
