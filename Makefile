@@ -3,3 +3,6 @@ datas:
 
 protos:
 	sh scripts/compile_protos.sh
+
+lint:
+	sh scripts/lint.sh
