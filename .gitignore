@@ -12,11 +12,9 @@ data/data/
 **/*.ipynb
 
 # rlenv ignores
-rlenv/protos/** 
 rlenv/ex
 
 # server ignores
-service/protos/**
 
 # replays ignores
 replays/data/**
