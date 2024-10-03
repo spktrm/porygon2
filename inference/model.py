@@ -2,7 +2,6 @@ import pickle
 from typing import Tuple
 
 import chex
-import jax
 import numpy as np
 
 from inference.interfaces import PredictionResponse

@@ -3,8 +3,6 @@ import pprint
 
 from ml_collections import ConfigDict
 
-from ml.arch.modules import GatingType
-
 
 def get_model_cfg():
     cfg = ConfigDict()

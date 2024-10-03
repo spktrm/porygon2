@@ -3,8 +3,6 @@ import random
 from pprint import pprint
 
 import numpy as np
-import plotly.express as px
-from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 with open("data/data/gen3/species.npy", "rb") as f:

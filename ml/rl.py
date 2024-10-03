@@ -10,7 +10,7 @@ from tqdm import trange
 
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
+from ml.config import VtraceConfig
 from ml.learner import Learner
 from ml.utils import Params, get_most_recent_file
 from rlenv.client import BatchCollector

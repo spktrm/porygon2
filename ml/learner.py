@@ -14,7 +14,6 @@ from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.func import (
     _player_others,
     get_loss_entropy,
-    get_loss_heuristic,
     get_loss_nerd,
     get_loss_v,
     renormalize,

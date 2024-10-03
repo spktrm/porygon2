@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, PointerLogits, Resnet
+from ml.arch.modules import Logits, PointerLogits
 from ml.func import legal_log_policy, legal_policy
 
 

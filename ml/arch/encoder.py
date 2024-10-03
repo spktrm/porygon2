@@ -7,14 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from ml.arch.modules import (
-    MLP,
-    PretrainedEmbedding,
-    Resnet,
-    ToAvgVector,
-    Transformer,
-    VectorMerge,
-)
+from ml.arch.modules import PretrainedEmbedding, Resnet, ToAvgVector, Transformer
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_EDGE_TYPES,
@@ -33,7 +26,6 @@ from rlenv.interfaces import EnvStep
 from rlenv.protos.enums_pb2 import SpeciesEnum
 from rlenv.protos.features_pb2 import (
     EdgeTypes,
-    FeatureAdditionalInformation,
     FeatureEdge,
     FeatureEntity,
     FeatureMoveset,

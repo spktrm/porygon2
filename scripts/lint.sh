@@ -9,7 +9,7 @@ run_in_dir() {
     dir=$1
     echo "Running function in $dir"
 
-    autoflake -r --in-place --remove-unused-variables $dir
+    autoflake -r --in-place --remove-unused-variables --remove-all-unused-imports $dir
     isort $dir
     black $dir
 }

@@ -2,7 +2,6 @@ from typing import Any, Sequence, Tuple
 
 import chex
 import jax
-import jax.scipy.special as jsp
 from jax import lax
 from jax import numpy as jnp
 from jax import tree_util as tree
