@@ -3,6 +3,8 @@ import pprint
 
 from ml_collections import ConfigDict
 
+from ml.arch.modules import GatingType
+
 
 def get_model_cfg():
     cfg = ConfigDict()
@@ -88,6 +90,14 @@ def get_model_cfg():
     cfg.encoder.state_resnet = ConfigDict()
     cfg.encoder.state_resnet.num_resblocks = max(int(depth_factor * 8), 1)
     cfg.encoder.state_resnet.use_layer_norm = use_layer_norm
+
+    # action merge
+    #
+    # merges the entity with its relevant action
+    cfg.encoder.action_merge = ConfigDict()
+    cfg.encoder.action_merge.gating_type = GatingType.POINTWISE
+    cfg.encoder.action_merge.use_layer_norm = use_layer_norm
+    cfg.encoder.action_merge.output_size = entity_size
 
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()

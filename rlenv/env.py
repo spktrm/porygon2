@@ -42,7 +42,7 @@ def get_history(state: State, player_index: int):
     return (moveset, team, padnstack(history_edges), padnstack(history_nodes))
 
 
-def get_legal_mask(state: State, stage: int):
+def get_legal_mask(state: State):
     mask = np.array(
         [
             state.legalActions.move1,
@@ -58,16 +58,10 @@ def get_legal_mask(state: State, stage: int):
         ],
         dtype=bool,
     )
-    can_move = np.any(mask[:4])
-    if stage == 0:
-        mask[:4] = False
-        mask[4] = can_move
-    elif stage == 1:
-        mask[4:] = False
     return mask
 
 
-def process_state(state: State, stage: int) -> EnvStep:
+def process_state(state: State) -> EnvStep:
     player_index = state.info.playerIndex
     (
         moveset,
@@ -96,7 +90,7 @@ def process_state(state: State, stage: int) -> EnvStep:
         switch_rewards=np.array(
             [state.info.switchReward, -state.info.switchReward], dtype=np.float32
         ),
-        legal=get_legal_mask(state, stage),
+        legal=get_legal_mask(state),
         team=team,
         moveset=moveset,
         history_edges=history_edges,
@@ -104,14 +98,13 @@ def process_state(state: State, stage: int) -> EnvStep:
     )
 
 
-def get_ex_step(stage: int = 0) -> EnvStep:
-    return process_state(EX_STATE, stage=stage)
+def get_ex_step() -> EnvStep:
+    return process_state(EX_STATE)
 
 
 class Environment:
     env_idx: int
     state: State
-    stage: int
     env_step: EnvStep
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
@@ -123,7 +116,6 @@ class Environment:
         self.env_idx = env_idx
         self.reader = reader
         self.writer = writer
-        self.stage = 0
         return self
 
     async def _read(self) -> EnvStep:
@@ -135,7 +127,7 @@ class Environment:
 
         state = State.FromString(buffer)
         self.state = state
-        self.env_step = process_state(self.state, self.stage)
+        self.env_step = process_state(self.state)
         return self.env_step
 
     async def _check_for_single_action(self) -> EnvStep:
@@ -149,35 +141,16 @@ class Environment:
         action = Action()
         action.key = self.state.key
         action.index = action_index
-
-        # Serialize the action
         return action.SerializeToString()
 
     async def step(self, action_index: int) -> EnvStep:
         if self.state.info.done:
             return self.env_step
 
-        if self.stage == 0:
-            # Ensure initial action is between 4 and 9
-            if action_index == 4:
-                self.stage = 1
-                # Do not send the action yet; wait for the next action
-                self.env_step = process_state(self.state, self.stage)
-                return await self._check_for_single_action()
-            else:
-                # Send the action as is
-                serialized_action = self._get_action_bytes(action_index)
-                await self._write_action(serialized_action)
-                await self._read()
-                return await self._check_for_single_action()
-        elif self.stage == 1:
-            # Combine the initial action (4) and the second action (0-3)
-            serialized_action = self._get_action_bytes(action_index)
-            await self._write_action(serialized_action)
-            # Reset stage
-            self.stage = 0
-            await self._read()
-            return await self._check_for_single_action()
+        serialized_action = self._get_action_bytes(action_index)
+        await self._write_action(serialized_action)
+        await self._read()
+        return await self._check_for_single_action()
 
     async def _write_action(self, serialized_action: bytes):
         # Get the size of the serialized action

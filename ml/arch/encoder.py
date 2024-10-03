@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Tuple
 
 import chex
 import flax.linen as nn
@@ -7,7 +8,13 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from ml.arch.modules import PretrainedEmbedding, Resnet, ToAvgVector, Transformer
+from ml.arch.modules import (
+    PretrainedEmbedding,
+    Resnet,
+    ToAvgVector,
+    Transformer,
+    VectorMerge,
+)
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_EDGE_TYPES,
@@ -336,102 +343,87 @@ class EdgeEncoder(nn.Module):
         return self.batch_encode(edges, poke1_embeddings, poke2_embeddings)
 
 
-def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
-
-    # Compute dot products along the last dimension (D)
-    dot_product = np.sum(arr1 * arr2, axis=-1)
-
-    # Compute the L2 norms along the last dimension (D)
-    norm_arr1 = jnp.linalg.norm(arr1, axis=-1)
-    norm_arr2 = jnp.linalg.norm(arr2, axis=-1)
-
-    # Compute cosine similarity, handle division by zero if needed
-    cosine_sim = dot_product / (norm_arr1 * norm_arr2 + 1e-8)
-
-    return cosine_sim
-
-
 class PublicEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        """
+        Initializes the necessary encoders and transformers for the model.
+        """
         entity_size = self.cfg.entity_size
 
         self.positional_embedding = nn.Embed(NUM_HISTORY, entity_size)
-
         self.entity_encoder = EntityEncoder(self.cfg.entity_encoder)
         self.edge_encoder = EdgeEncoder(self.cfg.edge_encoder)
-
-        # self.node_transformer = Transformer(**self.cfg.context_transformer.to_dict())
-        # self.edge_transformer = Transformer(**self.cfg.context_transformer.to_dict())
 
         self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
         self.history_transformer = Transformer(**self.cfg.history_transformer.to_dict())
 
-        # self.linear_latent_action = MLP((entity_size,))
-        # self.linear_dynamics = MLP((entity_size,))
-
-    # def repr_learn(self, st: chex.Array, stp1: chex.Array):
-    #     # Concatenate st and stp1 to get latent action
-    #     latent_action = self.linear_latent_action(jnp.concatenate((st, stp1), axis=-1))
-    #     latent_action_probs = jax.nn.softmax(latent_action.reshape(-1, 32), axis=-1)
-    #     latent_action_ohe = jax.nn.one_hot(
-    #         jnp.argmax(latent_action_probs, axis=-1), num_classes=32
-    #     ).reshape(latent_action.shape)
-    #     latent_action_probs = latent_action_probs.reshape(latent_action.shape)
-    #     latent_action = latent_action_probs + jax.lax.stop_gradient(
-    #         latent_action_ohe - latent_action_probs
-    #     )
-
-    #     # Predict the next state (stp1) using dynamics and latent action
-    #     pred_stp1 = self.linear_dynamics(jnp.concatenate((st, latent_action), axis=-1))
-
-    #     def normalize(arr: chex.Array) -> chex.Array:
-    #         return arr / jnp.linalg.norm(arr, axis=-1)
-
-    #     stp1 = normalize(stp1)
-    #     pred_stp1 = normalize(pred_stp1)
-
-    #     # Compute cosine similarity (negative for loss minimization)
-    #     return -(pred_stp1 * stp1).sum(axis=-1)
-
-    def __call__(self, env_step: EnvStep):
+    def _compute_embeddings(
+        self, env_step: EnvStep
+    ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+        """
+        Computes embeddings for nodes, edges, and positional embeddings.
+        """
         node_embeddings = self.entity_encoder.batch_encode(env_step.history_nodes)
-
-        poke1_index_data = jax.lax.dynamic_index_in_dim(
-            env_step.history_edges,
-            FeatureEdge.POKE1_INDEX,
-            axis=-1,
-            keepdims=False,
-        )
-        poke2_index_data = jax.lax.dynamic_index_in_dim(
-            env_step.history_edges,
-            FeatureEdge.POKE1_INDEX,
-            axis=-1,
-            keepdims=False,
-        )
-        poke1_embeddings = jnp.einsum(
-            "ijk,ilj->ilk",
-            node_embeddings,
-            jnp.where(
-                jnp.expand_dims(poke1_index_data, axis=-1) >= 0,
-                jax.nn.one_hot(poke1_index_data, 12),
-                0,
-            ),
-        )
-        poke2_embeddings = jnp.einsum(
-            "ijk,ilj->ilk",
-            node_embeddings,
-            jnp.where(
-                jnp.expand_dims(poke2_index_data, axis=-1) >= 0,
-                jax.nn.one_hot(poke2_index_data, 12),
-                0,
-            ),
+        poke1_embeddings, poke2_embeddings = self._get_poke_embeddings(
+            node_embeddings, env_step
         )
         edge_embeddings = self.edge_encoder.batch_encode(
             env_step.history_edges, poke1_embeddings, poke2_embeddings
         )
+        positional_embeddings = self.positional_embedding(jnp.arange(NUM_HISTORY))
 
+        return node_embeddings, edge_embeddings, positional_embeddings
+
+    def _get_poke_embeddings(
+        self, node_embeddings: chex.Array, env_step: EnvStep
+    ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Extracts poke embeddings for both ends of the edges (poke1 and poke2).
+        """
+        poke1_index_data = self._get_index_data(
+            env_step.history_edges, FeatureEdge.POKE1_INDEX
+        )
+        poke2_index_data = self._get_index_data(
+            env_step.history_edges, FeatureEdge.POKE2_INDEX
+        )
+
+        poke1_embeddings = self._apply_one_hot_embeddings(
+            node_embeddings, poke1_index_data
+        )
+        poke2_embeddings = self._apply_one_hot_embeddings(
+            node_embeddings, poke2_index_data
+        )
+
+        return poke1_embeddings, poke2_embeddings
+
+    def _get_index_data(self, edges: chex.Array, index: int) -> chex.Array:
+        """
+        Retrieves index data for a given feature from edges.
+        """
+        return jax.lax.dynamic_index_in_dim(edges, index, axis=-1, keepdims=False)
+
+    def _apply_one_hot_embeddings(
+        self, node_embeddings: chex.Array, index_data: chex.Array
+    ) -> chex.Array:
+        """
+        Applies one-hot encoding to index data and performs matrix multiplication with node embeddings.
+        """
+        return jnp.einsum(
+            "ijk,ilj->ilk",
+            node_embeddings,
+            jnp.where(
+                jnp.expand_dims(index_data, axis=-1) >= 0,
+                jax.nn.one_hot(index_data, 12),
+                0,
+            ),
+        )
+
+    def _create_masks(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+        """
+        Creates masks to indicate valid nodes and edges.
+        """
         species_token = env_step.history_nodes[..., FeatureEntity.ENTITY_SPECIES]
         invalid_node_mask = (species_token == SpeciesEnum.SPECIES__NULL) | (
             species_token == SpeciesEnum.SPECIES__PAD
@@ -441,78 +433,210 @@ class PublicEncoder(nn.Module):
         edge_type_token = env_step.history_edges[..., FeatureEdge.EDGE_TYPE_TOKEN]
         invalid_edge_mask = edge_type_token == EdgeTypes.EDGE_TYPE_NONE
 
-        # node_embeddings = jax.vmap(
-        #     self.node_transformer, in_axes=(0, None, 0, None), out_axes=0
-        # )(node_embeddings, None, valid_node_mask, None)
+        return valid_node_mask, invalid_edge_mask
 
-        # edge_embeddings = jax.vmap(
-        #     self.edge_transformer, in_axes=(0, None, 0, None), out_axes=0
-        # )(edge_embeddings, None, ~invalid_edge_mask, None)
+    def _add_positional_embeddings(
+        self, embeddings: chex.Array, positional_embeddings: chex.Array
+    ) -> chex.Array:
+        """
+        Adds positional embeddings to the given embeddings.
+        """
+        return embeddings + jnp.expand_dims(positional_embeddings, axis=1)
 
+    def _apply_transformers(
+        self,
+        node_embeddings: chex.Array,
+        edge_embeddings: chex.Array,
+        positional_embeddings: chex.Array,
+        valid_node_mask: chex.Array,
+        invalid_edge_mask: chex.Array,
+    ) -> chex.Array:
+        """
+        Applies the context and history transformers to the node embeddings,
+        edge embeddings, and positional information.
+        """
+        # Apply context transformer across nodes and edges
         cross_node_embeddings = jax.vmap(self.context_transformer)(
             node_embeddings, edge_embeddings, valid_node_mask, ~invalid_edge_mask
         )
 
-        # repr_loss = jax.vmap(self.repr_learn)(
-        #     cross_node_embeddings[1], cross_node_embeddings[0]
-        # )
-
-        positional_embeddings = self.positional_embedding(jnp.arange(NUM_HISTORY))
-        contextual_node_embeddings_w_pos = cross_node_embeddings + jnp.expand_dims(
-            positional_embeddings, axis=1
+        # Add positional information and apply the history transformer
+        contextual_node_embeddings_w_pos = self._add_positional_embeddings(
+            cross_node_embeddings, positional_embeddings
         )
-
         contextual_node_embeddings_w_pos = jax.vmap(
             self.history_transformer, in_axes=(1, None, 1, None), out_axes=1
         )(contextual_node_embeddings_w_pos, None, valid_node_mask, None)
 
-        denominator = valid_node_mask.sum(axis=0)
-        contextual_node_embeddings_w_pos = jnp.einsum(
-            "ij,ijk->jk", valid_node_mask, contextual_node_embeddings_w_pos
-        ) / denominator[..., None].clip(min=1)
+        return contextual_node_embeddings_w_pos
 
-        return contextual_node_embeddings_w_pos, denominator > 0  # , repr_loss.mean()
+    def _aggregate_embeddings(
+        self, embeddings: chex.Array, valid_mask: chex.Array
+    ) -> chex.Array:
+        """
+        Averages the valid embeddings across nodes.
+        """
+        denominator = valid_mask.sum(axis=0)
+        return (
+            jnp.einsum("ij,ijk->jk", valid_mask, embeddings)
+            / denominator[..., None].clip(min=1),
+            denominator > 0,
+        )
+
+    def __call__(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+        """
+        Forward pass for the PublicEncoder model, processing an environment step to produce embeddings.
+        """
+        # Compute node, edge, and positional embeddings
+        node_embeddings, edge_embeddings, positional_embeddings = (
+            self._compute_embeddings(env_step)
+        )
+
+        # Create masks for valid nodes and edges
+        valid_node_mask, invalid_edge_mask = self._create_masks(env_step)
+
+        # Apply transformers to contextualize embeddings
+        contextual_node_embeddings_w_pos = self._apply_transformers(
+            node_embeddings,
+            edge_embeddings,
+            positional_embeddings,
+            valid_node_mask,
+            invalid_edge_mask,
+        )
+
+        # Aggregate embeddings and return final result
+        return self._aggregate_embeddings(
+            contextual_node_embeddings_w_pos, valid_node_mask
+        )
 
 
 class Encoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        """
+        Initializes necessary encoders and transformers for the encoder model.
+        """
         self.turn_encoder = nn.Embed(50, self.cfg.vector_size)
         self.public_encoder = PublicEncoder(self.cfg.public)
         self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
         self.to_vector = ToAvgVector(**self.cfg.to_vector.to_dict())
         self.move_encoder = MoveEncoder(self.cfg.move_encoder)
         self.state_resnet = Resnet(**self.cfg.state_resnet)
+        self.action_merge = VectorMerge(**self.cfg.action_merge)
 
-    def __call__(self, env_step: EnvStep):
+    def _create_private_entity_embeddings(
+        self, env_step: EnvStep
+    ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Creates private entity embeddings and generates the mask for valid private entities.
+        """
         species_token = env_step.team[..., FeatureEntity.ENTITY_SPECIES]
         invalid_private_mask = (species_token == SpeciesEnum.SPECIES__NULL) | (
             species_token == SpeciesEnum.SPECIES__PAD
         )
         valid_private_mask = ~invalid_private_mask
 
+        # Encode private entities using the public encoder's entity encoder
         _encode_entity = jax.vmap(self.public_encoder.entity_encoder.encode_entity)
-
         private_entity_embeddings = _encode_entity(env_step.team)
-        (
-            public_entity_embeddings,
-            valid_public_mask,
-            # repr_loss,
-        ) = self.public_encoder(env_step)
 
-        private_entity_embeddings = self.context_transformer(
+        return private_entity_embeddings, valid_private_mask
+
+    def _get_public_entity_embeddings(
+        self, env_step: EnvStep
+    ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Retrieves the public entity embeddings and the valid public mask from the public encoder.
+        """
+        public_entity_embeddings, valid_public_mask = self.public_encoder(env_step)
+        return public_entity_embeddings, valid_public_mask
+
+    def _apply_context_transformer(
+        self,
+        private_entity_embeddings: chex.Array,
+        public_entity_embeddings: chex.Array,
+        valid_private_mask: chex.Array,
+        valid_public_mask: chex.Array,
+    ) -> chex.Array:
+        """
+        Applies the context transformer to merge private and public entity embeddings.
+        """
+        return self.context_transformer(
             private_entity_embeddings,
             public_entity_embeddings,
             valid_private_mask,
             valid_public_mask,
         )
 
+    def _compute_current_state(
+        self,
+        private_entity_embeddings: chex.Array,
+        valid_private_mask: chex.Array,
+        env_step: EnvStep,
+    ) -> chex.Array:
+        """
+        Computes the current state representation using the entity embeddings,
+        ResNet, and turn embeddings.
+        """
         current_state = self.to_vector(private_entity_embeddings, valid_private_mask)
         current_state = self.state_resnet(current_state) + self.turn_encoder(
             jnp.clip(env_step.turn, max=49)
         )
+        return current_state
 
-        move_embeddings = self.move_encoder(env_step.moveset[0, :4])
+    def _compute_action_embeddings(
+        self, private_entity_embeddings: chex.Array, env_step: EnvStep
+    ) -> chex.Array:
+        """
+        Computes action embeddings by merging private entity embeddings and move embeddings.
+        """
+        # Concatenate private entity embeddings
+        entity_embeddings = jnp.concatenate(
+            (
+                jnp.tile(private_entity_embeddings[0], (4, 1)),
+                private_entity_embeddings,
+            ),
+            axis=0,
+        )
 
-        return current_state, move_embeddings, private_entity_embeddings  # , repr_loss
+        # Encode moves and merge them with entity embeddings
+        action_embeddings = self.move_encoder(env_step.moveset[0])
+        action_embeddings = self.action_merge(entity_embeddings, action_embeddings)
+
+        return action_embeddings
+
+    def __call__(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+        """
+        Forward pass of the Encoder model, processing an environment step to produce
+        the current state and action embeddings.
+        """
+        # Private entity embeddings and valid mask
+        private_entity_embeddings, valid_private_mask = (
+            self._create_private_entity_embeddings(env_step)
+        )
+
+        # Public entity embeddings and valid mask
+        public_entity_embeddings, valid_public_mask = (
+            self._get_public_entity_embeddings(env_step)
+        )
+
+        # Apply context transformer to merge public and private entity embeddings
+        private_entity_embeddings = self._apply_context_transformer(
+            private_entity_embeddings,
+            public_entity_embeddings,
+            valid_private_mask,
+            valid_public_mask,
+        )
+
+        # Compute the current state using the updated private embeddings and valid mask
+        current_state = self._compute_current_state(
+            private_entity_embeddings, valid_private_mask, env_step
+        )
+
+        # Compute action embeddings by merging private entity embeddings with move embeddings
+        action_embeddings = self._compute_action_embeddings(
+            private_entity_embeddings, env_step
+        )
+
+        return current_state, action_embeddings

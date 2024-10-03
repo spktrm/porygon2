@@ -7,6 +7,21 @@ from jax import numpy as jnp
 from jax import tree_util as tree
 
 
+def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
+
+    # Compute dot products along the last dimension (D)
+    dot_product = jnp.sum(arr1 * arr2, axis=-1)
+
+    # Compute the L2 norms along the last dimension (D)
+    norm_arr1 = jnp.linalg.norm(arr1, axis=-1)
+    norm_arr2 = jnp.linalg.norm(arr2, axis=-1)
+
+    # Compute cosine similarity, handle division by zero if needed
+    cosine_sim = dot_product / (norm_arr1 * norm_arr2 + 1e-8)
+
+    return cosine_sim
+
+
 def legal_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Array:
     """A soft-max policy that respects legal_actions."""
     chex.assert_equal_shape((logits, legal_actions))

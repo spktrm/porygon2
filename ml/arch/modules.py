@@ -25,7 +25,7 @@ def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
 
 
 def activation_fn(array: chex.Array):
-    return jax.nn.relu(array)
+    return jax.nn.leaky_relu(array)
 
 
 class GatingType(Enum):
@@ -240,13 +240,13 @@ class Transformer(nn.Module):
             kv = q
         if self.use_layer_norm:
             kv = nn.LayerNorm()(kv)
-        kv = jax.nn.relu(kv)
+        kv = activation_fn(kv)
 
         for _ in range(self.num_layers):
             # Apply pre-layer normalization before attention
             if self.use_layer_norm:
                 q = nn.LayerNorm()(q)
-            q = jax.nn.relu(q)
+            q = activation_fn(q)
             attn_output = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -322,34 +322,6 @@ class PointerLogits(nn.Module):
         return logits
 
 
-class CNNEncoder(nn.Module):
-
-    hidden_sizes: Sequence[int]
-    kernel_size: Sequence[int] = (3,)
-    output_size: int = None
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, valid_mask: jnp.ndarray):
-        x = x * valid_mask[..., None]
-        for size in self.hidden_sizes:
-            if self.use_layer_norm:
-                x = nn.LayerNorm()(x)
-            x = activation_fn(x)
-            x = nn.Conv(
-                features=size,
-                kernel_size=self.kernel_size,
-                strides=(1,),
-                padding="VALID",
-            )(x)
-        x = x.reshape(-1)
-        if self.use_layer_norm:
-            x = nn.LayerNorm()(x)
-        x = activation_fn(x)
-        x = SNDense(features=self.output_size or x.shape[-1])(x)
-        return x
-
-
 class ToAvgVector(nn.Module):
     """Per-unit processing then average over the units dimension."""
 
@@ -373,56 +345,6 @@ class ToAvgVector(nn.Module):
         x = activation_fn(x)
         x = SNDense(features=self.output_stream_size or x.shape[-1])(x)
         return x
-
-
-class ToScatter(nn.Module):
-    units_stream_size: int
-    units_hidden_sizes: Sequence[int]
-    vector_stream_size: int
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array):
-        for size in self.units_hidden_sizes:
-            if self.use_layer_norm:
-                x = nn.LayerNorm()(x)
-            x = activation_fn(x)
-            x = SNDense(features=size)(x)
-
-        mask_onehot = jax.nn.one_hot(mask, 6)
-        mask_onehot = jnp.concatenate((mask_onehot, mask_onehot[..., -2:]), axis=-1)
-        grouped = mask_onehot.swapaxes(-2, -1) @ x
-        x = grouped.flatten()
-
-        if self.use_layer_norm:
-            x = nn.LayerNorm()(x)
-        x = activation_fn(x)
-        x = SNDense(features=self.vector_stream_size)(x)
-        return x
-
-
-class SumMergeLax(nn.Module):
-    """Merge streams using iterative sum with LAX scan for efficiency.
-
-    This class is designed to sum inputs (streams) more efficiently by leveraging JAX's LAX scan,
-    suitable for large-scale operations. Inputs should have matching dimensions.
-    Compatible with any stream type (vector, units, or visual).
-    """
-
-    @nn.compact
-    def __call__(self, *inputs: Sequence[jnp.ndarray]) -> jnp.ndarray:
-        def sum_scan(carry, x):
-            return carry + x, None
-
-        # Initialize carry with the first input, rest of the inputs are processed
-        initial_carry = inputs[0]
-        inputs_rest = jnp.stack(
-            inputs[1:]
-        )  # Stack the rest of inputs for proper scanning
-
-        # Using lax.scan for efficient summation
-        summed_output, _ = jax.lax.scan(sum_scan, initial_carry, inputs_rest)
-        return summed_output
 
 
 class VectorMerge(nn.Module):
@@ -520,130 +442,6 @@ class GLU(nn.Module):
         gated_input = activation_fn(gated_input)
         output = SNDense(self.output_size or input.shape[-1])(gated_input)
         return output
-
-
-class ToVisualScatter(nn.Module):
-    """Scatter the units into their positions in the visual stream.
-
-    This means that each element of the units stream will be embedded and placed
-    in the visual stream, at the location corresponding to its (x, y) coordinate
-    in the world map.
-    """
-
-    units_hidden_sizes: Sequence[int]
-    kernel_size: int
-    output_spatial_size_x: int
-    output_spatial_size_y: int
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(
-        self,
-        z: chex.Array,
-        unit_x: chex.Array,
-        unit_y: chex.Array,
-        non_empty_units: chex.Array,
-    ) -> chex.Array:
-        non_empty_units = non_empty_units[:, jnp.newaxis]
-
-        for size in self.units_hidden_sizes:
-            if self.use_layer_norm:
-                z = nn.LayerNorm()(z)
-            z = activation_fn(z)
-            z = SNDense(features=size)(z)
-        z = jnp.where(non_empty_units, z, 0)
-
-        one_hot_x = jax.nn.one_hot(unit_x, self.output_spatial_size_x)
-        one_hot_y = jax.nn.one_hot(unit_y, self.output_spatial_size_y)
-        z = jnp.einsum("uy,uf->uyf", one_hot_y, z)
-        z = jnp.einsum("ux,uyf->yxf", one_hot_x, z)
-
-        if self.use_layer_norm:
-            z = nn.LayerNorm()(z)
-        z = activation_fn(z)
-        z = nn.Conv(
-            features=z.shape[-1],
-            kernel_size=(self.kernel_size, self.kernel_size),
-        )(z)
-        return z
-
-
-class Downscale(nn.Module):
-    """Downscale the visual stream.."""
-
-    output_features_size: int
-    downscale_factor: int
-    kernel_size: int
-    ndims: int
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
-        if self.use_layer_norm:
-            x = nn.LayerNorm()(x)
-        x = activation_fn(x)
-        x = nn.Conv(
-            features=self.output_features_size,
-            kernel_size=(self.kernel_size,) * self.ndims,
-            strides=(self.downscale_factor,) * self.ndims,
-        )(x)
-        return x
-
-
-class VisualResblock(nn.Module):
-    """Convolutional (2d) residual block."""
-
-    kernel_size: int
-    ndims: int
-    num_layers: int = 2
-    hidden_size: Optional[int] = None
-    use_layer_norm: bool = True
-
-    def __call__(self, x: chex.Array) -> chex.Array:
-        chex.assert_rank(x, self.ndims + 1)
-        chex.assert_type(x, jnp.float32)
-        shortcut = x
-        input_size = x.shape[-1]
-        for i in range(self.num_layers):
-            if i < self.num_layers - 1:
-                output_size = self.hidden_size or input_size
-                kwargs = {}
-            else:
-                output_size = input_size
-                kwargs = dict(
-                    kernel_init=jax.nn.initializers.normal(stddev=0.005),
-                    bias_init=jax.nn.initializers.constant(0.0),
-                )
-            if self.use_layer_norm:
-                x = nn.LayerNorm()(x)
-            x = activation_fn(x)
-            x = nn.Conv(
-                features=output_size,
-                kernel_size=(self.kernel_size,) * self.ndims,
-                **kwargs,
-            )(x)
-        return x + shortcut
-
-
-class VisualResnet(nn.Module):
-    """Resnet processing of the visual stream."""
-
-    num_resblocks: int
-    ndims: int
-    kernel_size: int = 3
-    use_layer_norm: bool = True
-    num_hidden_feature_planes: Optional[int] = None
-
-    @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
-        for _ in range(self.num_resblocks):
-            x = VisualResblock(
-                kernel_size=self.kernel_size,
-                ndims=self.ndims,
-                hidden_size=self.num_hidden_feature_planes,
-                use_layer_norm=self.use_layer_norm,
-            )(x)
-        return x
 
 
 class AutoEncoder(nn.Module):
