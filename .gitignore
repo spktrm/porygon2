@@ -22,6 +22,7 @@ replays/data/**
 # ml ignores
 ml/wandb/
 
+**/*.env
 wandb/
 
 ckpts/
