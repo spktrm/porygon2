@@ -220,7 +220,7 @@ class Learner:
 
         rewards = (
             ts.actor.win_rewards
-            # + ts.actor.switch_rewards
+            + ts.actor.switch_rewards
             # + 0.428 * ts.actor.fainted_rewards / 6
             # + 0.214 * ts.actor.hp_rewards / 6
             # + 0.214 * ts.actor.switch_rewards
@@ -349,9 +349,11 @@ class Learner:
         valid = timestep.env.valid
         lengths = valid.sum(0)
 
-        not_moving = timestep.actor.action >= 4
-        move_ratio = renormalize(timestep.actor.action == 4, valid & not_moving)
-        switch_ratio = renormalize(timestep.actor.action > 4, valid & not_moving)
+        can_move = timestep.env.legal[..., :4].any(axis=-1)
+        can_switch = timestep.env.legal[..., 4:].any(axis=-1)
+
+        move_ratio = renormalize(timestep.actor.action < 4, can_switch & valid)
+        switch_ratio = renormalize(timestep.actor.action > 4, can_move & valid)
 
         logs = {
             "loss": loss_val,

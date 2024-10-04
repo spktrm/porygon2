@@ -1,5 +1,6 @@
 from pprint import pprint
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
@@ -16,20 +17,22 @@ app = FastAPI()
 model = InferenceModel()
 
 
+def pprint_nparray(arr: np.ndarray):
+    print(np.array2string(arr, precision=2, suppress_small=True))
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: Request):
     data = await request.body()
     state = State.FromString(data)
 
-    env_step = process_state(state, stage=0)
+    env_step = process_state(state)
     response = await run_in_threadpool(model.predict, env_step)
     pprint(state.info)
-    pprint(response.pi)
 
-    if response.action == 4:
-        env_step = process_state(state, stage=1)
-        response = await run_in_threadpool(model.predict, env_step)
-        pprint(response.pi)
+    pprint_nparray(np.array(response.pi))
+    pprint_nparray(np.array(response.logit))
+    pprint_nparray(np.array(response.v))
 
     return response
 

@@ -4,6 +4,7 @@ import { Action } from "../../protos/action_pb";
 import { StreamHandler } from "../logic/handler";
 import { actionIndexMapping } from "../logic/data";
 import { getEvalAction } from "../logic/eval";
+import { inspect } from "util";
 
 const offline = "localhost";
 const online = "sim.smogon.com";
@@ -11,9 +12,7 @@ const online = "sim.smogon.com";
 const queueSystem = new TaskQueueSystem<Action>();
 
 async function ActionFromResponse(response: Response): Promise<Action> {
-    const { pi, v, action: actionIndex, prev_pi } = await response.json();
-    console.log(pi);
-    console.log(v);
+    const { action: actionIndex } = await response.json();
     const action = new Action();
     action.setIndex(actionIndex);
     return action;
@@ -150,7 +149,7 @@ class PokemonShowdownBot {
     private async handleMessage(message: string): Promise<void> {
         console.log("Received:", message);
         const lines = message.split("\n");
-        for (let line of lines) {
+        for (const line of lines) {
             if (line.startsWith("|challstr|")) {
                 this.login(line.slice("|challstr|".length));
             } else if (line.startsWith("|updatesearch|")) {
@@ -166,6 +165,12 @@ class PokemonShowdownBot {
                     }
                 }
                 await battle.receive(lines.slice(1).join("\n"));
+                if (lines[1].startsWith("|request|")) {
+                    try {
+                        const data = JSON.parse(lines[1].split("|")[2]);
+                        console.log(inspect(data, false, null, true));
+                    } catch (err) {}
+                }
                 return;
             } else if (line.startsWith("|win|") || line.startsWith("|tie|")) {
                 this.send(`|/search gen3randombattle`);

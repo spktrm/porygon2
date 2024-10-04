@@ -178,9 +178,11 @@ function getArrayFromPokemon(candidate: Pokemon | null): Int16Array {
     if (moveSlots) {
         for (let move of moveSlots) {
             const { id, ppUsed } = move;
+            const maxPP = pokemon.side.battle.gens.dex.moves.get(id).pp;
             const idValue = IndexValueFromEnum<typeof MovesEnum>("Move", id);
+
             moveIds.push(idValue);
-            movePps.push(isNaN(ppUsed) ? +!!ppUsed : ppUsed);
+            movePps.push((1024 * (isNaN(ppUsed) ? +!!ppUsed : ppUsed)) / maxPP);
         }
     }
     let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
@@ -600,19 +602,22 @@ function getEffectToken(effect: Partial<Effect>): number {
 
 export class EventHandler implements Protocol.Handler {
     readonly handler: StreamHandler;
-    history: any[];
+
     currHp: Map<string, number>;
     actives: Map<ID, PokemonIdent>;
+    actionWindow: { [k: number]: number[] };
     lastKey: Protocol.ArgName | undefined;
     turns: Turn[];
     rewardQueue: number[];
 
     constructor(handler: StreamHandler) {
         this.handler = handler;
-        this.history = [];
         this.currHp = new Map();
         this.actives = new Map();
-
+        this.actionWindow = {
+            0: [],
+            1: [],
+        };
         this.turns = [];
         this.rewardQueue = [];
         this.resetTurns();
@@ -661,6 +666,7 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
         const poke1Index = latestTurn.getNodeIndex(poke1.originalIdent);
+        this.actionWindow[poke1.side.n].push(0);
 
         const move = this.getMove(moveId);
         const moveIndex = IndexValueFromEnum("Move", move.id);
@@ -698,6 +704,9 @@ export class EventHandler implements Protocol.Handler {
         const moveIndex = MovesEnum.MOVES__SWITCH;
 
         const poke1 = this.getPokemon(poke1Ident)!;
+        if (argName === "switch") {
+            this.actionWindow[poke1.side.n].push(1);
+        }
         const trueIdent = poke1.originalIdent;
         if (!latestTurn.nodes.has(trueIdent)) {
             latestTurn.addNode(poke1);
@@ -788,6 +797,7 @@ export class EventHandler implements Protocol.Handler {
             let rew = 0;
 
             if (
+                0 < oppTurnsActive &&
                 oppTurnsActive < poke1TurnsActive &&
                 !(opposite.side.lastPokemon?.fainted ?? false)
             ) {
@@ -795,14 +805,6 @@ export class EventHandler implements Protocol.Handler {
                     (oppTurnsActive <= 2
                         ? 1
                         : 1 / (oppTurnsActive - 1) ** 1.5) *
-                    (opposite.side.n ? -1 : 1);
-            }
-
-            if (poke1TurnsActive < oppTurnsActive) {
-                rew +=
-                    (poke1TurnsActive < 2
-                        ? 1
-                        : 1 / (poke1TurnsActive - 1) ** 1.5) *
                     (opposite.side.n ? -1 : 1);
             }
 
@@ -1652,10 +1654,15 @@ export class EventHandler implements Protocol.Handler {
     }
 
     reset() {
-        this.history = [];
-        this.resetTurns();
         this.currHp = new Map();
         this.actives = new Map();
+        this.actionWindow = {
+            0: [],
+            1: [],
+        };
+        this.turns = [];
+        this.rewardQueue = [];
+        this.resetTurns();
     }
 }
 

@@ -175,8 +175,6 @@ class MultiHeadAttention(nn.Module):
         if mask is not None:
             attn_weights = jnp.where(mask, attn_weights, 0)
 
-        jax.debug.print("x: {:.2f}", attn_weights)
-
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
         attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]

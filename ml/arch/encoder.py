@@ -85,8 +85,8 @@ class EntityEncoder(nn.Module):
         self.embed_species = nn.Embed(NUM_SPECIES, features=entity_size)
         self.embed_ability = nn.Embed(NUM_ABILITIES, features=entity_size)
         self.embed_item = nn.Embed(NUM_ITEMS, features=entity_size)
-        self.embed_moves = nn.Embed(NUM_MOVES, features=entity_size)
 
+        self.moveset_linear = nn.Dense(features=entity_size)
         self.item_linear = nn.Dense(features=entity_size)
         self.moves_linear = nn.Dense(features=entity_size)
         self.onehot_linear = nn.Dense(features=entity_size)
@@ -110,19 +110,18 @@ class EntityEncoder(nn.Module):
         move_indices = jax.lax.slice(
             entity, (FeatureEntity.ENTITY_MOVEID0,), (FeatureEntity.ENTITY_MOVEPP0,)
         )
+        move_indices_onehot = jax.nn.one_hot(move_indices, NUM_MOVES)
         pp_indices = jax.lax.slice(
-            entity, (FeatureEntity.ENTITY_MOVEPP0,), (FeatureEntity.ENTITY_HAS_STATUS,)
+            entity,
+            (FeatureEntity.ENTITY_MOVEPP0,),
+            (FeatureEntity.ENTITY_HAS_STATUS,),
         )
-        # Use jax.vmap to handle moves and PP encoding for batch efficiency
+        pp_indices_broadcasted = (
+            jnp.expand_dims(pp_indices / 1024, axis=-1) * move_indices_onehot
+        )
         return jnp.concatenate(
-            (
-                jax.vmap(self.embed_moves)(move_indices),
-                jax.vmap(partial(_binary_scale_embedding, world_dim=64))(
-                    pp_indices.astype(jnp.int32)
-                ),
-            ),
-            axis=-1,
-        )
+            (move_indices_onehot, pp_indices_broadcasted), axis=-1
+        ).sum(0)
 
     def encode_boosts(self, entity: chex.Array):
         boosts = jax.lax.slice(
@@ -160,7 +159,6 @@ class EntityEncoder(nn.Module):
 
         # Embeddings for basic features (using one-hot encodings)
         basic_embeddings = [
-            hp_ratio[jnp.newaxis],
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_GENDER], NUM_GENDERS),
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_STATUS], NUM_STATUS),
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_BEING_CALLED_BACK], 2),
@@ -169,33 +167,28 @@ class EntityEncoder(nn.Module):
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_TOXIC_TURNS], 8),
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_SLEEP_TURNS], 4),
             jax.nn.one_hot(entity[FeatureEntity.ENTITY_FAINTED], 2),
+            jax.nn.one_hot(entity[FeatureEntity.ENTITY_ACTIVE], 2),
+            _binary_scale_embedding(
+                entity[FeatureEntity.ENTITY_LEVEL].astype(jnp.int32), 101
+            ),
+            hp_ratio[jnp.newaxis],
+            _binary_scale_embedding(hp_token, 1024),
+            self.encode_item(entity),
+            self.encode_boosts(entity),
+            self.encode_volatiles(entity),
         ]
 
         # Concatenate boolean features into a single vector
         boolean_code = jnp.concatenate(basic_embeddings, axis=0)
-
-        item_onehot = self.encode_item(entity)
-        boosts = self.encode_boosts(entity)
         moveset_onehot = self.encode_moveset(entity)
-        volatiles_onehot = self.encode_volatiles(entity)
 
         # Final embedding combination (linear layers applied to encoded features)
         embedding = (
-            self.hp_linear(_binary_scale_embedding(hp_token, 1024))
-            + self.level_linear(
-                _binary_scale_embedding(
-                    entity[FeatureEntity.ENTITY_LEVEL].astype(jnp.int32), 101
-                )
-            )
-            + self.active_linear(jax.nn.one_hot(entity[FeatureEntity.ENTITY_ACTIVE], 2))
-            + self.onehot_linear(boolean_code.astype(jnp.float32))
-            + self.boosts_linear(boosts)
-            + self.volatiles_linear(volatiles_onehot)
+            self.onehot_linear(boolean_code.astype(jnp.float32))
             + self.embed_species(entity[FeatureEntity.ENTITY_SPECIES])
             + self.embed_ability(entity[FeatureEntity.ENTITY_ABILITY])
-            + self.item_linear(item_onehot)
             + self.side_linear(jax.nn.one_hot(entity[FeatureEntity.ENTITY_SIDE], 2))
-            + jax.vmap(self.moves_linear)(moveset_onehot).sum(axis=0)  # Sum over moves
+            + self.moveset_linear(moveset_onehot)
         )
 
         return embedding

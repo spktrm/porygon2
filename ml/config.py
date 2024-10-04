@@ -157,7 +157,7 @@ class AdamConfig:
 class NerdConfig:
     """Nerd related params."""
 
-    beta: float = 3.0
+    beta: float = 2.0
     clip: float = 10_000
 
 

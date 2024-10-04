@@ -10,10 +10,13 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 0.25
+    width_factor = 1
 
-    entity_size = int(256 * width_factor)
-    vector_size = int(1024 * width_factor)
+    base_entity_size = 256
+    base_vector_size = 1024
+
+    entity_size = int(base_entity_size * width_factor)
+    vector_size = int(base_vector_size * width_factor)
     use_layer_norm = True
 
     # Encoder Configuration

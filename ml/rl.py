@@ -2,12 +2,9 @@ import json
 import pickle
 from pprint import pprint
 
-import wandb
-
-wandb.require("core")
-
 from tqdm import trange
 
+import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
 from ml.config import VtraceConfig
@@ -18,23 +15,26 @@ from rlenv.data import EVALUATION_SOCKET_PATH, TRAINING_SOCKET_PATH
 
 
 def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 200):
-    win_rewards_sum = 0
-    hp_rewards_sum = 0
-    fainted_rewards_sum = 0
-    for _ in trange(0, num_eval_games):
+    win_rewards, hp_rewards, fainted_rewards = 0, 0, 0
+
+    for _ in trange(num_eval_games):
         batch = collector.collect_batch_trajectory(params)
-        win_rewards_sum += (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
-        hp_rewards_sum += (batch.actor.hp_rewards[..., 0] * batch.env.valid).sum(0)
-        fainted_rewards_sum += (
-            batch.actor.fainted_rewards[..., 0] * batch.env.valid
-        ).sum(0)
-    # winrates = (rewards_sum / num_eval_games + 1) / 2
-    winrates = win_rewards_sum / num_eval_games
-    hp_diff = hp_rewards_sum / num_eval_games
-    fainted_reward = fainted_rewards_sum / num_eval_games
-    winrates = {f"wr{i}": wr for i, wr in enumerate(winrates.tolist())}
-    hp_diff = {f"hp{i}": wr for i, wr in enumerate(hp_diff.tolist())}
-    fainted_reward = {f"f{i}": wr for i, wr in enumerate(fainted_reward.tolist())}
+        valid_mask = batch.env.valid
+
+        win_rewards += (batch.actor.win_rewards[..., 0] * valid_mask).sum(0)
+        hp_rewards += (batch.actor.hp_rewards[..., 0] * valid_mask).sum(0)
+        fainted_rewards += (batch.actor.fainted_rewards[..., 0] * valid_mask).sum(0)
+
+    winrates = {
+        f"wr{i}": wr for i, wr in enumerate((win_rewards / num_eval_games).tolist())
+    }
+    hp_diff = {
+        f"hp{i}": hp for i, hp in enumerate((hp_rewards / num_eval_games).tolist())
+    }
+    fainted_reward = {
+        f"f{i}": f for i, f in enumerate((fainted_rewards / num_eval_games).tolist())
+    }
+
     wandb.log({**winrates, **hp_diff, **fainted_reward})
 
 

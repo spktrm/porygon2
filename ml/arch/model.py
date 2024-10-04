@@ -22,28 +22,31 @@ class Model(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        """
+        Initializes the encoder, policy head, and value head using the configuration.
+        """
         self.encoder = Encoder(self.cfg.encoder)
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep) -> ModelOutput:
-        (
-            current_state,
-            move_embeddings,
-            switch_embeddings,
-            # repr_loss,
-        ) = self.encoder(env_step)
+        """
+        Forward pass for the Model. It first processes the env_step through the encoder,
+        and then applies the policy and value heads to generate the output.
+        """
+        # Get current state and action embeddings from the encoder
+        current_state, action_embeddings = self.encoder(env_step)
+
+        # Apply the policy head
         logit, pi, log_pi = self.policy_head(
-            current_state, move_embeddings, switch_embeddings, env_step.legal
+            current_state, action_embeddings, env_step.legal
         )
+
+        # Apply the value head
         v = self.value_head(current_state)
-        return ModelOutput(
-            pi=pi,
-            v=v,
-            log_pi=log_pi,
-            logit=logit,
-            # repr_loss=repr_loss,
-        )
+
+        # Return the model output
+        return ModelOutput(pi=pi, v=v, log_pi=log_pi, logit=logit)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -120,7 +123,7 @@ def test(params: Any):
             TimeStep(
                 env=jax.tree.map(
                     lambda x: x[None].repeat(batch_size, 0),
-                    get_ex_step(np.random.randint(0, 2)),
+                    get_ex_step(),
                 ),
                 actor=ActorStep(
                     action=np.random.randint(0, 9, (batch_size,)),
