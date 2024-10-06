@@ -1,6 +1,8 @@
 # Porygon2
 
-<img src="porygon2.png" alt="porygon2" display="block" margin-left="auto" margin-right="auto" width="%50"/>
+<p align="center">
+    <img src="porygon2.png" alt="porygon2" width="300"/>
+</p>
 
 Porygon2 provides:
 
