@@ -362,6 +362,11 @@ class Learner:
             "switch_ratio": switch_ratio,
         }
 
+        for key in ["encoder", "value_head", "policy_head"]:
+            logs[f"{key}_param_norm"] = optax.global_norm(params["params"][key])
+            logs[f"{key}_grad_norm"] = optax.global_norm(grad["params"][key])
+            logs[f"{key}_update_norm"] = optax.global_norm(updates["params"][key])
+
         return (
             params,
             params_target,
