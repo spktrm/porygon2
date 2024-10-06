@@ -21,7 +21,7 @@ def get_history(state: State, player_index: int):
     moveset = np.frombuffer(state.moveset, dtype=np.int16).reshape(
         (2, -1, NUM_MOVE_FIELDS)
     )
-    team = np.frombuffer(bytearray(state.team), dtype=np.int16).reshape((6, -1))
+    team = np.frombuffer(bytearray(state.team), dtype=np.int16).reshape((2, 6, -1))
     team[..., FeatureEntity.ENTITY_SIDE] ^= player_index
     team.flags.writeable = False
     history_edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
@@ -43,22 +43,9 @@ def get_history(state: State, player_index: int):
 
 
 def get_legal_mask(state: State):
-    mask = np.array(
-        [
-            state.legalActions.move1,
-            state.legalActions.move2,
-            state.legalActions.move3,
-            state.legalActions.move4,
-            state.legalActions.switch1,
-            state.legalActions.switch2,
-            state.legalActions.switch3,
-            state.legalActions.switch4,
-            state.legalActions.switch5,
-            state.legalActions.switch6,
-        ],
-        dtype=bool,
-    )
-    return mask
+    buffer = np.frombuffer(state.legalActions, dtype=np.uint8)
+    mask = np.unpackbits(buffer, axis=-1)
+    return mask[:10].astype(bool)
 
 
 def process_state(state: State) -> EnvStep:

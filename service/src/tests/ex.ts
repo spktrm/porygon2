@@ -26,14 +26,13 @@ async function main(verbose: boolean = false) {
         const info = state.getInfo()!;
         const turn = info.getTurn();
         const playerIndex = info.getPlayerindex();
-        const legalActions = state.getLegalactions();
+        const legalActions = state.getLegalactions_asU8();
 
         if (info && legalActions) {
-            if (turn > 10 && playerIndex === true) {
+            if (turn > 12 && playerIndex === true) {
                 writeFileSync("../rlenv/ex", buffer);
                 exit(0);
             } else {
-                const playerIndex = info.getPlayerindex();
                 const action = new Action();
                 action.setKey(key);
                 const randomIndex = chooseRandom(legalActions);

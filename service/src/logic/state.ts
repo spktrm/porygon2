@@ -7,7 +7,7 @@ import {
     PokemonIdent,
     Protocol,
 } from "@pkmn/protocol";
-import { Info, LegalActions, State } from "../../protos/state_pb";
+import { Info, State } from "../../protos/state_pb";
 import {
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -505,13 +505,11 @@ class Turn {
         );
     }
 
-    newTurn(update: boolean = true): Turn {
+    newTurn(): Turn {
         const turn = new Turn(this.eventHandler, this.turn);
         turn.nodes = new Map(this.nodes);
         turn.nodeData.set(this.nodeData);
-        if (update) {
-            this.updateFromBattle();
-        }
+        turn.updateFromBattle();
         return turn;
     }
 
@@ -1718,7 +1716,7 @@ export class Tracker {
         return score;
     }
 
-    getRewardFromFinish(world: Battle) {
+    getRewardFromFinish(world: Battle, earlyFinish: boolean = false) {
         if (world.ended) {
             const winner = world.winner;
             if (winner === world.p1.name) {
@@ -1726,6 +1724,16 @@ export class Tracker {
             } else if (winner === world.p2.name) {
                 return -1;
             }
+        }
+        if (earlyFinish) {
+            const [p1TotalHp, p2TotalHp] = world.sides.map(
+                (side) =>
+                    side.pokemon.reduce(
+                        (prev, curr) => prev + curr.hp / curr.maxhp,
+                        0,
+                    ) / side.pokemon.length,
+            );
+            return p1TotalHp - p2TotalHp;
         }
         return 0;
     }
@@ -1744,8 +1752,8 @@ export class StateHandler {
         this.handler = handler;
     }
 
-    static getLegalActions(request?: AnyObject | null): LegalActions {
-        const legalActions = new LegalActions();
+    static getLegalActions(request?: AnyObject | null): OneDBoolean {
+        const legalActions = new OneDBoolean(10, Uint8Array);
 
         if (request === undefined || request === null) {
         } else {
@@ -1764,7 +1772,7 @@ export class StateHandler {
                             (currentPokemon.condition.endsWith(" fnt") ? 0 : 1)
                     ) {
                         const switchIndex = j as 1 | 2 | 3 | 4 | 5 | 6;
-                        legalActions[`setSwitch${switchIndex}`](true);
+                        legalActions.set(3 + switchIndex, true);
                     }
                 }
             } else if (request.active) {
@@ -1777,7 +1785,7 @@ export class StateHandler {
                     const currentMove = possibleMoves[j - 1];
                     if (!currentMove.disabled) {
                         const moveIndex = j as 1 | 2 | 3 | 4;
-                        legalActions[`setMove${moveIndex}`](true);
+                        legalActions.set(-1 + moveIndex, true);
                     }
                 }
 
@@ -1797,7 +1805,7 @@ export class StateHandler {
 
                 for (const j of switches) {
                     const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
-                    legalActions[`setSwitch${switchIndex}`](true);
+                    legalActions.set(3 + switchIndex, true);
                 }
             } else if (request.teamPreview) {
                 const pokemon = request.side.pokemon;
@@ -1812,7 +1820,7 @@ export class StateHandler {
 
                 for (const j of canSwitch) {
                     const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
-                    legalActions[`setSwitch${switchIndex}`](true);
+                    legalActions.set(3 + switchIndex, true);
                 }
             }
         }
@@ -1824,30 +1832,37 @@ export class StateHandler {
         let offset = 0;
 
         const playerIndex = this.handler.getPlayerIndex();
-        const PlaceMoveset = (member: Pokemon) => {
-            const moveSlots = member.moveSlots.slice(0, 4);
-            for (const move of moveSlots) {
-                const { id, ppUsed } = move;
-                movesetArr[offset + FeatureMoveset.MOVEID] =
-                    id === undefined
-                        ? MovesEnum.MOVES__UNK
-                        : IndexValueFromEnum<typeof MovesEnum>("Move", id);
-                movesetArr[offset + FeatureMoveset.PPUSED] = ppUsed;
-                offset += numMoveFields;
+        const PlaceMoveset = (side: Side) => {
+            const active = side.active[0];
+
+            if (active !== null) {
+                const moveSlots = active.moveSlots.slice(0, 4);
+                for (const move of moveSlots) {
+                    const { id, ppUsed } = move;
+                    movesetArr[offset + FeatureMoveset.MOVEID] =
+                        id === undefined
+                            ? MovesEnum.MOVES__UNK
+                            : IndexValueFromEnum<typeof MovesEnum>("Move", id);
+                    movesetArr[offset + FeatureMoveset.PPUSED] = ppUsed;
+                    offset += numMoveFields;
+                }
+                for (
+                    let remainingIndex = moveSlots.length;
+                    remainingIndex < 4;
+                    remainingIndex++
+                ) {
+                    movesetArr[offset + FeatureMoveset.MOVEID] =
+                        MovesEnum.MOVES__UNK;
+                    movesetArr[offset + FeatureMoveset.PPUSED] = 0;
+                    offset += numMoveFields;
+                }
+            } else {
+                offset += 4 * numMoveFields;
             }
-            for (
-                let remainingIndex = moveSlots.length;
-                remainingIndex < 4;
-                remainingIndex++
-            ) {
-                movesetArr[offset + FeatureMoveset.MOVEID] =
-                    MovesEnum.MOVES__UNK;
-                movesetArr[offset + FeatureMoveset.PPUSED] = 0;
-                offset += numMoveFields;
-            }
+
             for (
                 let remainingIndex = 0;
-                remainingIndex < member.side.totalPokemon;
+                remainingIndex < side.totalPokemon;
                 remainingIndex++
             ) {
                 movesetArr[offset + FeatureMoveset.MOVEID] =
@@ -1856,7 +1871,7 @@ export class StateHandler {
                 offset += numMoveFields;
             }
             for (
-                let remainingIndex = member.side.totalPokemon;
+                let remainingIndex = side.totalPokemon;
                 remainingIndex < 6;
                 remainingIndex++
             ) {
@@ -1870,8 +1885,8 @@ export class StateHandler {
             const mySide = this.handler.privateBattle.sides[playerIndex];
             const oppSide = this.handler.privateBattle.sides[1 - playerIndex];
 
-            for (const potentialSwitch of [mySide.team[0], oppSide.team[0]]) {
-                PlaceMoveset(potentialSwitch);
+            for (const side of [mySide, oppSide]) {
+                PlaceMoveset(side);
             }
         }
 
@@ -1879,22 +1894,35 @@ export class StateHandler {
     }
 
     getPrivateTeam(playerIndex: number): Int16Array {
-        const side = this.handler.privateBattle.sides[playerIndex];
-        const team: Int16Array[] = [];
-        for (const member of side.team) {
-            team.push(getArrayFromPokemon(member));
+        const teams: Int16Array[] = [];
+        for (const side of [
+            this.handler.privateBattle.sides[playerIndex],
+            this.handler.privateBattle.sides[1 - playerIndex],
+        ]) {
+            const team: Int16Array[] = [];
+            const sortedTeam = [...side.team].sort(
+                (a, b) => +!a.isActive() - +!b.isActive(),
+            );
+            for (const member of sortedTeam) {
+                team.push(getArrayFromPokemon(member));
+            }
+            for (
+                let memberIndex = team.length;
+                memberIndex < side.totalPokemon;
+                memberIndex++
+            ) {
+                team.push(side.n ? unkPokemon1 : unkPokemon0);
+            }
+            for (
+                let memberIndex = team.length;
+                memberIndex < 6;
+                memberIndex++
+            ) {
+                team.push(nullPokemon);
+            }
+            teams.push(...team);
         }
-        for (
-            let memberIndex = team.length;
-            memberIndex < side.totalPokemon;
-            memberIndex++
-        ) {
-            team.push(side.n ? unkPokemon1 : unkPokemon0);
-        }
-        for (let memberIndex = team.length; memberIndex < 6; memberIndex++) {
-            team.push(nullPokemon);
-        }
-        return concatenateArrays(team);
+        return concatenateArrays(teams);
     }
 
     getPublicTeam(playerIndex: number): Int16Array {
@@ -1917,19 +1945,10 @@ export class StateHandler {
     }
 
     getHistory(numHistory: number = NUM_HISTORY) {
-        const latestTurn = this.handler.eventHandler.getLatestTurn();
+        const historyEdges: Int16Array[] = [];
+        const historyNodes: Int16Array[] = [];
 
-        const latestTurnCopy = latestTurn.newTurn();
-        latestTurnCopy.updateFromBattle();
-        latestTurnCopy.lockTurn();
-
-        const historyEdges: Int16Array[] = [latestTurnCopy.edgeData];
-        const historyNodes: Int16Array[] = [latestTurnCopy.nodeData];
-
-        const finalSlice = this.handler.eventHandler.turns.slice(
-            -numHistory + 1,
-            -1,
-        );
+        const finalSlice = this.handler.eventHandler.turns.slice(-numHistory);
         for (const { edgeData, nodeData } of [...finalSlice].reverse()) {
             historyEdges.push(edgeData);
             historyNodes.push(nodeData);
@@ -1937,7 +1956,7 @@ export class StateHandler {
         return {
             historyEdges: concatenateArrays(historyEdges),
             historyNodes: concatenateArrays(historyNodes),
-            trueHistorySize: finalSlice.length + 1,
+            trueHistorySize: finalSlice.length,
         };
     }
 
@@ -1967,7 +1986,7 @@ export class StateHandler {
         const legalActions = StateHandler.getLegalActions(
             this.handler.privateBattle.request,
         );
-        state.setLegalactions(legalActions);
+        state.setLegalactions(legalActions.buffer);
 
         state.setInfo(info);
 

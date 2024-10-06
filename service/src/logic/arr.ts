@@ -45,27 +45,30 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         );
     }
 
+    private getElementAndBit(index: number): [number, number] {
+        const element = (index / this.bitsPerElement) | 0;
+        const bit = this.bitsPerElement - 1 - (index & this.mask); // Big-endian adjustment
+        return [element, bit];
+    }
+
     toggle(index: number): void {
         if (index < 0 || index >= this.length)
             throw new RangeError("Index out of bounds");
-        const element = (index / this.bitsPerElement) | 0;
-        const bit = index & this.mask;
+        const [element, bit] = this.getElementAndBit(index);
         this.data[element] ^= 1 << bit;
     }
 
     get(index: number): boolean {
         if (index < 0 || index >= this.length)
             throw new RangeError("Index out of bounds");
-        const element = (index / this.bitsPerElement) | 0;
-        const bit = index & this.mask;
+        const [element, bit] = this.getElementAndBit(index);
         return !!(this.data[element] & (1 << bit));
     }
 
     set(index: number, value: boolean): void {
         if (index < 0 || index >= this.length)
             throw new RangeError("Index out of bounds");
-        const element = (index / this.bitsPerElement) | 0;
-        const bit = index & this.mask;
+        const [element, bit] = this.getElementAndBit(index);
         if (value) {
             this.data[element] |= 1 << bit;
         } else {

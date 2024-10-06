@@ -14,7 +14,9 @@
         "@pkmn/dex": "^0.9.15",
         "@pkmn/randoms": "^0.9.15",
         "@pkmn/sim": "^0.9.15",
-        "@types/node": "^20.14.9",
         "dotenv": "^16.4.5"
+    },
+    "devDependencies": {
+        "@types/node": "^22.7.4"
     }
 }

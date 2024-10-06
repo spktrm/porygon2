@@ -5801,6 +5801,7 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_WEATHER_SANDSTORM: _ClassVar[EffectEnum]
     EFFECT_WEATHER_SNOW: _ClassVar[EffectEnum]
     EFFECT_WEATHER_SUNNYDAY: _ClassVar[EffectEnum]
+
 SPECIES__NULL: SpeciesEnum
 SPECIES__PAD: SpeciesEnum
 SPECIES__UNK: SpeciesEnum

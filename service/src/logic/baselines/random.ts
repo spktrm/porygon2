@@ -1,12 +1,16 @@
 import { EvalActionFnType } from "../eval";
-import { chooseRandom } from "../utils";
+import { StateHandler } from "../state";
+import { chooseRandom, getLegalActionIndices } from "../utils";
 
 export const GetRandomAction: EvalActionFnType = async ({ handler }) => {
-    const state = await handler.getState();
-    const legalActions = state.getLegalactions();
+    const legalActions = StateHandler.getLegalActions(
+        handler.privateBattle.request,
+    );
     if (legalActions) {
-        const randomIndex = chooseRandom(legalActions);
-        return randomIndex;
+        const legalIndices = getLegalActionIndices(
+            legalActions.toBinaryVector(),
+        );
+        return legalIndices[Math.floor(Math.random() * legalIndices.length)];
     } else {
         return -1;
     }

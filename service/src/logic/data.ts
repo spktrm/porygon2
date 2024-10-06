@@ -26,7 +26,7 @@ import {
     FeatureTurnContext,
     FeatureWeather,
 } from "../../protos/features_pb";
-import { LegalActions } from "../../protos/state_pb";
+import { OneDBoolean } from "./arr";
 
 export type EnumMappings =
     | typeof SpeciesEnum
@@ -148,14 +148,7 @@ export const numMovesetFields = 2 * 10 * numMoveFields;
 
 export const NUM_HISTORY = 8;
 
-export const AllValidActions = new LegalActions();
-AllValidActions.setMove1(true);
-AllValidActions.setMove2(true);
-AllValidActions.setMove3(true);
-AllValidActions.setMove4(true);
-AllValidActions.setSwitch1(true);
-AllValidActions.setSwitch2(true);
-AllValidActions.setSwitch3(true);
-AllValidActions.setSwitch4(true);
-AllValidActions.setSwitch5(true);
-AllValidActions.setSwitch6(true);
+export const AllValidActions = new OneDBoolean(10, Uint8Array);
+for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
+    AllValidActions.set(actionIndex, true);
+}

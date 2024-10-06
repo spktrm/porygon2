@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Tuple
 
 import chex
@@ -9,12 +8,14 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     PretrainedEmbedding,
     Resnet,
     ToAvgVector,
     Transformer,
     VectorMerge,
 )
+from ml.func import cosine_similarity
 from rlenv.data import (
     NUM_ABILITIES,
     NUM_EDGE_TYPES,
@@ -352,6 +353,9 @@ class PublicEncoder(nn.Module):
         self.context_transformer = Transformer(**self.cfg.context_transformer.to_dict())
         self.history_transformer = Transformer(**self.cfg.history_transformer.to_dict())
 
+        self.projection = MLP((entity_size, entity_size, entity_size))
+        self.projection_head = MLP((entity_size, entity_size))
+
     def _compute_embeddings(
         self, env_step: EnvStep
     ) -> Tuple[chex.Array, chex.Array, chex.Array]:
@@ -436,6 +440,22 @@ class PublicEncoder(nn.Module):
         """
         return embeddings + jnp.expand_dims(positional_embeddings, axis=1)
 
+    def _repr_loss(
+        self,
+        predicted_node_embeddings: chex.Array,
+        actual_node_embeddings: chex.Array,
+        loss_mask: chex.Array,
+    ) -> chex.Array:
+        dynamic_project = self.projection_head(
+            self.projection(predicted_node_embeddings)
+        )
+        obs_project = self.projection(actual_node_embeddings)
+        loss_value = -cosine_similarity(  # We want the negative since we want to maximise similarity
+            dynamic_project, jax.lax.stop_gradient(obs_project)
+        )
+        num_diffs = loss_mask.sum().clip(min=1)
+        return jnp.where(loss_mask, loss_value, 0).sum() / num_diffs
+
     def _apply_transformers(
         self,
         node_embeddings: chex.Array,
@@ -453,6 +473,11 @@ class PublicEncoder(nn.Module):
             node_embeddings, edge_embeddings, valid_node_mask, ~invalid_edge_mask
         )
 
+        node_diff = cosine_similarity(node_embeddings[0], node_embeddings[1])
+        repr_loss = self._repr_loss(
+            cross_node_embeddings[1], node_embeddings[0], node_diff < 1
+        )
+
         # Add positional information and apply the history transformer
         contextual_node_embeddings_w_pos = self._add_positional_embeddings(
             cross_node_embeddings, positional_embeddings
@@ -461,7 +486,7 @@ class PublicEncoder(nn.Module):
             self.history_transformer, in_axes=(1, None, 1, None), out_axes=1
         )(contextual_node_embeddings_w_pos, None, valid_node_mask, None)
 
-        return contextual_node_embeddings_w_pos
+        return contextual_node_embeddings_w_pos, repr_loss
 
     def _aggregate_embeddings(
         self, embeddings: chex.Array, valid_mask: chex.Array
@@ -489,7 +514,7 @@ class PublicEncoder(nn.Module):
         valid_node_mask, invalid_edge_mask = self._create_masks(env_step)
 
         # Apply transformers to contextualize embeddings
-        contextual_node_embeddings_w_pos = self._apply_transformers(
+        contextual_node_embeddings_w_pos, repr_loss = self._apply_transformers(
             node_embeddings,
             edge_embeddings,
             positional_embeddings,
@@ -498,9 +523,10 @@ class PublicEncoder(nn.Module):
         )
 
         # Aggregate embeddings and return final result
-        return self._aggregate_embeddings(
+        public_embeddings, valid_mask = self._aggregate_embeddings(
             contextual_node_embeddings_w_pos, valid_node_mask
         )
+        return public_embeddings, valid_mask, repr_loss
 
 
 class Encoder(nn.Module):
@@ -517,6 +543,7 @@ class Encoder(nn.Module):
         self.move_encoder = MoveEncoder(self.cfg.move_encoder)
         self.state_resnet = Resnet(**self.cfg.state_resnet)
         self.action_merge = VectorMerge(**self.cfg.action_merge)
+        self.action_transformer = Transformer(**self.cfg.context_transformer.to_dict())
 
     def _create_private_entity_embeddings(
         self, env_step: EnvStep
@@ -531,19 +558,23 @@ class Encoder(nn.Module):
         valid_private_mask = ~invalid_private_mask
 
         # Encode private entities using the public encoder's entity encoder
-        _encode_entity = jax.vmap(self.public_encoder.entity_encoder.encode_entity)
+        _encode_entity = jax.vmap(
+            jax.vmap(self.public_encoder.entity_encoder.encode_entity)
+        )
         private_entity_embeddings = _encode_entity(env_step.team)
 
-        return private_entity_embeddings, valid_private_mask
+        private_entity_embeddings = private_entity_embeddings.reshape(
+            -1, private_entity_embeddings.shape[-1]
+        )
+        return private_entity_embeddings, valid_private_mask.reshape(-1)
 
     def _get_public_entity_embeddings(
         self, env_step: EnvStep
-    ) -> Tuple[chex.Array, chex.Array]:
+    ) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """
         Retrieves the public entity embeddings and the valid public mask from the public encoder.
         """
-        public_entity_embeddings, valid_public_mask = self.public_encoder(env_step)
-        return public_entity_embeddings, valid_public_mask
+        return self.public_encoder(env_step)
 
     def _apply_context_transformer(
         self,
@@ -566,7 +597,7 @@ class Encoder(nn.Module):
         self,
         private_entity_embeddings: chex.Array,
         valid_private_mask: chex.Array,
-        env_step: EnvStep,
+        turn: chex.Array,
     ) -> chex.Array:
         """
         Computes the current state representation using the entity embeddings,
@@ -574,12 +605,12 @@ class Encoder(nn.Module):
         """
         current_state = self.to_vector(private_entity_embeddings, valid_private_mask)
         current_state = self.state_resnet(current_state) + self.turn_encoder(
-            jnp.clip(env_step.turn, max=49)
+            jnp.clip(turn, max=49)
         )
         return current_state
 
     def _compute_action_embeddings(
-        self, private_entity_embeddings: chex.Array, env_step: EnvStep
+        self, private_entity_embeddings: chex.Array, moveset: chex.Array
     ) -> chex.Array:
         """
         Computes action embeddings by merging private entity embeddings and move embeddings.
@@ -587,15 +618,17 @@ class Encoder(nn.Module):
         # Concatenate private entity embeddings
         entity_embeddings = jnp.concatenate(
             (
-                jnp.tile(private_entity_embeddings[0], (4, 1)),
+                jnp.tile(private_entity_embeddings[:1], (4, 1)),
                 private_entity_embeddings,
             ),
             axis=0,
         )
 
         # Encode moves and merge them with entity embeddings
-        action_embeddings = self.move_encoder(env_step.moveset[0])
-        action_embeddings = self.action_merge(entity_embeddings, action_embeddings)
+        action_embeddings = self.move_encoder(moveset)
+        action_embeddings = jax.vmap(self.action_merge)(
+            entity_embeddings, action_embeddings
+        )
 
         return action_embeddings
 
@@ -610,7 +643,7 @@ class Encoder(nn.Module):
         )
 
         # Public entity embeddings and valid mask
-        public_entity_embeddings, valid_public_mask = (
+        public_entity_embeddings, valid_public_mask, repr_loss = (
             self._get_public_entity_embeddings(env_step)
         )
 
@@ -624,12 +657,18 @@ class Encoder(nn.Module):
 
         # Compute the current state using the updated private embeddings and valid mask
         current_state = self._compute_current_state(
-            private_entity_embeddings, valid_private_mask, env_step
+            private_entity_embeddings, valid_private_mask, env_step.turn
         )
 
         # Compute action embeddings by merging private entity embeddings with move embeddings
-        action_embeddings = self._compute_action_embeddings(
-            private_entity_embeddings, env_step
+        action_embeddings = jax.vmap(self._compute_action_embeddings)(
+            private_entity_embeddings.reshape(2, 6, -1), env_step.moveset
+        )
+        action_embeddings = self.action_transformer(
+            action_embeddings[0],
+            action_embeddings[1],
+            env_step.legal,
+            jnp.ones_like(env_step.legal),
         )
 
-        return current_state, action_embeddings
+        return current_state, action_embeddings, repr_loss

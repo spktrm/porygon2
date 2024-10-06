@@ -35,7 +35,27 @@ class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.logits = Logits(**self.cfg.logits.to_dict())
+        self.logits = Logits(**self.cfg.logits.to_dict(), std_init=0.001)
 
     def __call__(self, x: chex.Array):
         return self.logits(x)
+
+
+class ValueHeadNash(nn.Module):
+    cfg: ConfigDict
+
+    # def setup(self):
+    #     self.logits = Logits(**self.cfg.logits.to_dict())
+
+    @nn.compact
+    def __call__(
+        self,
+        my_action_embeddings: chex.Array,
+        opp_action_embeddings: chex.Array,
+        my_pi: chex.Array,
+        opp_pi: chex.Array,
+    ):
+        payoff = my_action_embeddings @ opp_action_embeddings.T
+        denom = jnp.array(my_action_embeddings.shape[-1], dtype=jnp.float32)
+        payoff = payoff * jax.lax.rsqrt(denom)
+        return (my_pi @ payoff @ opp_pi).reshape(-1)

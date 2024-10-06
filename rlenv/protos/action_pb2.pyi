@@ -12,4 +12,9 @@ class Action(_message.Message):
     key: str
     index: int
     text: str
-    def __init__(self, key: _Optional[str] = ..., index: _Optional[int] = ..., text: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        key: _Optional[str] = ...,
+        index: _Optional[int] = ...,
+        text: _Optional[str] = ...,
+    ) -> None: ...

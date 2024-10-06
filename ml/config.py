@@ -204,7 +204,7 @@ class ActorCriticConfig:
     # The seed that fully controls the randomness.
     seed: int = 42
 
-    do_eval: bool = True
+    do_eval: bool = False
     num_eval_games: int = 200
     generation: int = 3
 
@@ -212,7 +212,7 @@ class ActorCriticConfig:
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
     # gamma: float = 0.995
-    entropy_loss_coef: float = 1e-3
+    entropy_loss_coef: float = 1e-2
 
 
 @chex.dataclass(frozen=True)

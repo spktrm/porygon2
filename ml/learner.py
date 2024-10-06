@@ -154,13 +154,6 @@ class Learner:
         self.params_prev = network.init(key, ex)
         self.params_prev_ = network.init(key, ex)
 
-        # with open("replays/foundation.ckpt", "rb") as f:
-        #     public_encoder = pickle.load(f)["params"]["public_encoder"]
-        #     self.params["params"]["encoder"]["public_encoder"] = public_encoder
-        #     self.params_target["params"]["encoder"]["public_encoder"] = public_encoder
-        #     self.params_prev["params"]["encoder"]["public_encoder"] = public_encoder
-        #     self.params_prev_["params"]["encoder"]["public_encoder"] = public_encoder
-
         # Parameter optimizers.
         self.optimizer = optax.chain(
             optax.clip(self.config.clip_gradient),
@@ -220,9 +213,9 @@ class Learner:
 
         rewards = (
             ts.actor.win_rewards
-            + ts.actor.switch_rewards
-            # + 0.428 * ts.actor.fainted_rewards / 6
-            # + 0.214 * ts.actor.hp_rewards / 6
+            # + ts.actor.switch_rewards
+            # + 0.5 * ts.actor.fainted_rewards / 6
+            # + 0.25 * ts.actor.hp_rewards / 6
             # + 0.214 * ts.actor.switch_rewards
         )
 

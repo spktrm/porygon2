@@ -42,7 +42,7 @@ enum FeatureEntity {
     ENTITY_VOLATILES6 = 38; // Stored as a 160 bit binary
     ENTITY_VOLATILES7 = 39; // Stored as a 160 bit binary
     ENTITY_VOLATILES8 = 40; // Stored as a 160 bit binary
-    ENTITY_SIDE = 41; // Stored as a 160 bit binary
+    ENTITY_SIDE = 41;
 }
 
 enum FeatureMoveset {

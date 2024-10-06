@@ -85,6 +85,7 @@ class Logits(nn.Module):
     num_logits: int
     num_linear_layers: int = 2
     use_layer_norm: bool = True
+    std_init: float = 0.1
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -96,7 +97,7 @@ class Logits(nn.Module):
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
-            x = SNDense(features=output_size)(x)
+            x = SNDense(features=output_size, std_init=self.std_init)(x)
         return x
 
 

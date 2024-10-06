@@ -12,4 +12,9 @@ class History(_message.Message):
     edges: bytes
     nodes: bytes
     length: int
-    def __init__(self, edges: _Optional[bytes] = ..., nodes: _Optional[bytes] = ..., length: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        edges: _Optional[bytes] = ...,
+        nodes: _Optional[bytes] = ...,
+        length: _Optional[int] = ...,
+    ) -> None: ...

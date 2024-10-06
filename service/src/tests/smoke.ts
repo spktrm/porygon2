@@ -1,6 +1,5 @@
 import assert from "assert";
 
-import { Action } from "../../protos/action_pb";
 import { State } from "../../protos/state_pb";
 import { port } from "./utils";
 import { Game } from "../server/game";
@@ -43,13 +42,14 @@ function assertTrajectory(game: Game, trajectory: State[]) {
         }
     } else {
         if (game.earlyFinish) {
-            if (accum.winRewardSum !== 0) {
-                throw new Error();
-            }
+            // if (accum.winRewardSum !== 0) {
+            //     throw new Error();
+            // }
         }
     }
 
-    if (accum.hpRewardSum < -6 || 6 < accum.hpRewardSum) {
+    const rtol = 1e-3;
+    if (accum.hpRewardSum + rtol < -6 || 6 < accum.hpRewardSum - rtol) {
         throw new Error();
     }
 

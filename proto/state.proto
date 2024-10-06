@@ -5,19 +5,6 @@ package rlenv;
 import "history.proto";
 import "enums.proto";
 
-message LegalActions {
-    bool move1 = 1;
-    bool move2 = 2;
-    bool move3 = 3;
-    bool move4 = 4;
-    bool switch1 = 5;
-    bool switch2 = 6;
-    bool switch3 = 7;
-    bool switch4 = 8;
-    bool switch5 = 9;
-    bool switch6 = 10;
-}
-
 message Info {
     int32 gameId = 1;
     bool done = 2;
@@ -36,7 +23,7 @@ message Info {
 
 message State {
     Info info = 1;
-    LegalActions legalActions = 2;
+    bytes legalActions = 2;
     history.History history = 3;
     bytes moveset = 4;
     bytes team = 5;

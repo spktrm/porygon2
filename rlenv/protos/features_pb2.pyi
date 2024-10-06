@@ -149,6 +149,7 @@ class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BOOST_EVASION_VALUE: _ClassVar[FeatureEdge]
     STATUS_TOKEN: _ClassVar[FeatureEdge]
     EDGE_AFFECTING_SIDE: _ClassVar[FeatureEdge]
+
 ENTITY_SPECIES: FeatureEntity
 ENTITY_ITEM: FeatureEntity
 ENTITY_ITEM_EFFECT: FeatureEntity

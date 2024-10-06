@@ -125,13 +125,12 @@ export class StreamHandler {
 
     async stateActionStep(): Promise<Action | undefined> {
         const state = await this.getState();
-        const legalActions = state.getLegalactions();
+        const legalActions = state.getLegalactions_asU8();
         const request = this.privateBattle.request;
         if (request && legalActions) {
-            const legalObj = legalActions.toObject();
-            const numValidMoves = Object.values(legalObj)
-                .map((x) => (x ? 1 : 0) as number)
-                .reduce((a, b) => a + b);
+            const numValidMoves = legalActions.reduce(
+                (prev, curr) => prev + curr,
+            );
             if (numValidMoves <= 1) {
                 const action = new Action();
                 action.setIndex(-1);

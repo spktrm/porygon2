@@ -49,4 +49,4 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
-    # repr_loss: chex.Array = ()
+    repr_loss: chex.Array = ()

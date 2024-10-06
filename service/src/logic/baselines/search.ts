@@ -1,9 +1,9 @@
-import { EvalActionFnType } from "../eval";
 import { Battle } from "@pkmn/sim";
 import { SideID } from "@pkmn/types";
 import { createHash } from "crypto";
 import { StreamHandler } from "../handler";
 import { StateHandler } from "../state";
+import { legalActionBufferToVector } from "../utils";
 
 const CHOICES = [
     "move 1",
@@ -100,17 +100,10 @@ class State {
     getLegalActions(playerIndex?: number) {
         if (!playerIndex) playerIndex = this.currentPlayer();
 
-        const legalActionMask = StateHandler.getLegalActions(
+        const legalActions = StateHandler.getLegalActions(
             this.battle!.sides[playerIndex].activeRequest,
         );
-        const legalActions = Object.entries(legalActionMask.toObject())
-            .map(([key, value], index) => {
-                return { index, value };
-            })
-            .filter(({ value }) => value)
-            .map(({ index }) => index);
-
-        return legalActions;
+        return legalActions.toBinaryVector();
     }
 
     applyAction(moveIndex?: number): boolean {

@@ -59,13 +59,13 @@ def main():
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
 
-        # for key, value in step.items():
-        #     setattr(learner, key, value)
+        for key, value in step.items():
+            setattr(learner, key, value)
 
-        learner.params = step["params"]
-        learner.params_target = step["params"]
-        learner.params_prev = step["params"]
-        learner.params_prev_ = step["params"]
+        # learner.params = step["params"]
+        # learner.params_target = step["params"]
+        # learner.params_prev = step["params"]
+        # learner.params_prev_ = step["params"]
 
         # for key, value in step.items():
         #     setattr(learner, key, value)
