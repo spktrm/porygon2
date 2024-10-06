@@ -4,6 +4,8 @@
     <img src="porygon2.png" alt="porygon2" width="300"/>
 </p>
 
+Successor from [meloetta](https://github.com/spktrm/meloetta/), hence porygon **2**
+
 Porygon2 provides:
 
 -   A UNIX server written in Node.js wrapped around the `sim` and `client` packages from [pkmn](https://github.com/pkmn).
