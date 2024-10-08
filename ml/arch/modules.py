@@ -266,6 +266,158 @@ class Transformer(nn.Module):
         return q
 
 
+class CrossAttentionLayer(nn.Module):
+    hidden_size: int
+    num_heads: int
+    dtype: Any = jnp.float32
+
+    @nn.compact
+    def __call__(
+        self,
+        query_seq: chex.Array,
+        key_value_seq: chex.Array,
+        attention_mask: chex.Array = None,
+    ):
+        """
+        Cross-attention layer where the query sequence attends to the key-value sequence.
+
+        Args:
+            query_seq: Array of shape (query_length, hidden_size)
+            key_value_seq: Array of shape (key_value_length, hidden_size)
+            query_mask: Optional boolean array of shape (query_length,)
+            key_value_mask: Optional boolean array of shape (key_value_length,)
+
+        Returns:
+            attention_output: Array of shape (query_length, hidden_size)
+        """
+
+        # MultiHeadDotProductAttention module
+        attention = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads,
+            dtype=self.dtype,
+            qkv_features=self.hidden_size // 2,
+            out_features=self.hidden_size,
+            kernel_init=nn.initializers.xavier_uniform(),
+            bias_init=nn.initializers.zeros,
+        )
+
+        # Apply attention
+        attention_output = attention(
+            inputs_q=query_seq,
+            inputs_kv=key_value_seq,
+            mask=attention_mask,
+        )  # Shape: (1, query_length, hidden_size)
+
+        return attention_output  # Shape: (query_length, hidden_size)
+
+
+class CrossTransformer(nn.Module):
+    num_layers: int
+    hidden_size: int
+    num_heads: int
+    dtype: Any = jnp.float32
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(
+        self,
+        query_seq: chex.Array,
+        key_value_seq: chex.Array,
+        query_mask: chex.Array = None,
+        key_value_mask: chex.Array = None,
+    ):
+        # Prepare masks
+        if query_mask is not None:
+            # Convert to float mask and add batch dimension
+            query_mask = query_mask.astype(self.dtype)
+        else:
+            *_, query_length, __ = query_seq.shape
+            query_mask = jnp.ones((1, query_length), dtype=self.dtype)
+
+        if key_value_mask is not None:
+            key_value_mask = key_value_mask.astype(self.dtype)
+        else:
+            *_, key_length, __ = key_value_seq.shape
+            key_value_mask = jnp.ones((1, key_length), dtype=self.dtype)
+
+        # Create attention bias
+        attention_mask = self.make_attention_mask(query_mask, key_value_mask)
+        transposed_attention_mask = jnp.swapaxes(attention_mask, -1, -2)
+
+        expanded_query_mask = jnp.expand_dims(query_mask, axis=-1)
+        expanded_key_value_mask = jnp.expand_dims(key_value_mask, axis=-1)
+
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                query_seq = nn.LayerNorm()(query_seq)
+                key_value_seq = nn.LayerNorm()(key_value_seq)
+
+            query_seq = activation_fn(query_seq)
+            key_value_seq = activation_fn(key_value_seq)
+
+            contextualized_query = CrossAttentionLayer(
+                hidden_size=self.hidden_size, num_heads=self.num_heads
+            )(query_seq, key_value_seq, attention_mask)
+            contextualized_key_value = CrossAttentionLayer(
+                hidden_size=self.hidden_size, num_heads=self.num_heads
+            )(key_value_seq, query_seq, transposed_attention_mask)
+
+            contextualized_query = jnp.where(
+                expanded_query_mask, contextualized_query, 0
+            )
+            contextualized_key_value = jnp.where(
+                expanded_key_value_mask, contextualized_key_value, 0
+            )
+
+            query_seq = query_seq + contextualized_query
+            key_value_seq = key_value_seq + contextualized_key_value
+
+            query_seq = MLP(
+                (self.hidden_size, self.hidden_size), use_layer_norm=self.use_layer_norm
+            )(query_seq)
+            key_value_seq = MLP(
+                (self.hidden_size, self.hidden_size), use_layer_norm=self.use_layer_norm
+            )(key_value_seq)
+
+            query_seq = query_seq + contextualized_query
+            key_value_seq = key_value_seq + contextualized_key_value
+
+            query_seq = jnp.where(expanded_query_mask, query_seq, 0)
+            key_value_seq = jnp.where(expanded_key_value_mask, key_value_seq, 0)
+
+        return query_seq, key_value_seq
+
+    def make_attention_mask(
+        self, query_mask: chex.Array, key_value_mask: chex.Array
+    ) -> chex.Array:
+        """Creates an additive attention bias mask.
+
+        Args:
+            query_mask: (batch_size, query_length)
+            key_value_mask: (batch_size, key_length)
+
+        Returns:
+            attention_bias: (batch_size, 1, query_length, key_length)
+        """
+        # Expand dimensions
+        query_mask = query_mask[..., None]  # Shape: (batch_size, query_length, 1)
+        key_value_mask = key_value_mask[
+            ..., None, :
+        ]  # Shape: (batch_size, 1, key_length)
+
+        # Compute combined mask
+        attention_mask = (
+            query_mask * key_value_mask
+        )  # Shape: (batch_size, query_length, key_length)
+
+        # Expand dimensions to match attention module
+        attention_mask = attention_mask[
+            ..., None, :, :
+        ]  # Shape: (batch_size, 1, query_length, key_length)
+
+        return attention_mask.astype(self.dtype)
+
+
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 

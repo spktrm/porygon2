@@ -43,34 +43,25 @@ def get_model_cfg():
     #
     # transforms context from each turn into each public entity from that turn
     cfg.encoder.context_transformer = ConfigDict()
-    cfg.encoder.context_transformer.stream_size = entity_size
+    cfg.encoder.context_transformer.hidden_size = entity_size
     cfg.encoder.context_transformer.num_layers = transformer_num_layers
     cfg.encoder.context_transformer.num_heads = transformer_num_heads
-    cfg.encoder.context_transformer.key_size = entity_size // 2
-    cfg.encoder.context_transformer.value_size = entity_size // 2
-    cfg.encoder.context_transformer.resblocks_hidden_size = entity_size // 2
     cfg.encoder.context_transformer.use_layer_norm = use_layer_norm
 
     # public history transformer
     #
     # contextualizes each entity along its previous history
     cfg.encoder.history_transformer = ConfigDict()
-    cfg.encoder.history_transformer.stream_size = entity_size
+    cfg.encoder.history_transformer.hidden_size = entity_size
     cfg.encoder.history_transformer.num_layers = transformer_num_layers
     cfg.encoder.history_transformer.num_heads = transformer_num_heads
-    cfg.encoder.history_transformer.key_size = entity_size // 2
-    cfg.encoder.history_transformer.value_size = entity_size // 2
-    cfg.encoder.history_transformer.resblocks_hidden_size = entity_size // 2
     cfg.encoder.history_transformer.use_layer_norm = use_layer_norm
 
     # action transformer
     cfg.encoder.action_transformer = ConfigDict()
-    cfg.encoder.action_transformer.stream_size = entity_size
+    cfg.encoder.action_transformer.hidden_size = entity_size
     cfg.encoder.action_transformer.num_layers = transformer_num_layers
     cfg.encoder.action_transformer.num_heads = transformer_num_heads
-    cfg.encoder.action_transformer.key_size = entity_size // 2
-    cfg.encoder.action_transformer.value_size = entity_size // 2
-    cfg.encoder.action_transformer.resblocks_hidden_size = entity_size // 2
     cfg.encoder.action_transformer.use_layer_norm = use_layer_norm
 
     # to vector
