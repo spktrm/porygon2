@@ -2,6 +2,10 @@ import json
 import pickle
 from pprint import pprint
 
+# from jax import config
+
+# config.update("jax_debug_nans", True)
+
 from tqdm import trange
 
 import wandb

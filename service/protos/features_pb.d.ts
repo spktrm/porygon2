@@ -46,6 +46,7 @@ export interface FeatureEntityMap {
   ENTITY_VOLATILES7: 39;
   ENTITY_VOLATILES8: 40;
   ENTITY_SIDE: 41;
+  ENTITY_HP_TOKEN: 42;
 }
 
 export const FeatureEntity: FeatureEntityMap;

@@ -35,7 +35,7 @@ class Model(nn.Module):
         and then applies the policy and value heads to generate the output.
         """
         # Get current state and action embeddings from the encoder
-        current_state, my_action_embeddings, repr_loss = self.encoder(env_step)
+        current_state, my_action_embeddings = self.encoder(env_step)
 
         # Apply the policy head
         logit, my_pi, log_pi = self.policy_head(
@@ -51,9 +51,7 @@ class Model(nn.Module):
         v = self.value_head(current_state)
 
         # Return the model output
-        return ModelOutput(
-            pi=my_pi, v=v, log_pi=log_pi, logit=logit, repr_loss=repr_loss
-        )
+        return ModelOutput(pi=my_pi, v=v, log_pi=log_pi, logit=logit)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -151,6 +149,8 @@ def main():
     config = get_model_cfg()
     network = get_model(config)
     ex_step = get_ex_step()
+    # with open("bad_state.pkl", "rb") as f:
+    #     ex_step = pickle.load(f)
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -162,7 +162,10 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex_step)
 
-    network.apply(params, ex_step)
+    # for i in range(4):
+    #     step = jax.tree.map(lambda x: x[i], ex_step)
+    #     out = network.apply(params, step)
+    out = network.apply(params, ex_step)
     pprint(get_num_params(params))
 
     test(params)

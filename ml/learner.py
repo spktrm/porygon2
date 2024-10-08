@@ -13,6 +13,7 @@ import optax
 from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
 from ml.func import (
     _player_others,
+    get_entropy,
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v,
@@ -192,19 +193,19 @@ class Learner:
 
         params_target_output = reg_rollout(params_target, ts.env)
 
-        if self.config.eta_reward_transform > 0:
-            params_prev_output = reg_rollout(params_prev, ts.env)
-            _params_prev_output = reg_rollout(params_prev_, ts.env)
-            # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
-            # For the stability reasons, reward changes smoothly between iterations.
-            # The mixing between old and new reward transform is a convex combination
-            # parametrised by alpha.
-            log_policy_reg = params_output.log_pi - (
-                alpha * params_prev_output.log_pi
-                + (1 - alpha) * _params_prev_output.log_pi
-            )
-        else:
-            log_policy_reg = jnp.zeros_like(params_output.log_pi)
+        # if self.config.eta_reward_transform > 0:
+        #     params_prev_output = reg_rollout(params_prev, ts.env)
+        #     _params_prev_output = reg_rollout(params_prev_, ts.env)
+        #     # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
+        #     # For the stability reasons, reward changes smoothly between iterations.
+        #     # The mixing between old and new reward transform is a convex combination
+        #     # parametrised by alpha.
+        #     log_policy_reg = params_output.log_pi - (
+        #         alpha * params_prev_output.log_pi
+        #         + (1 - alpha) * _params_prev_output.log_pi
+        #     )
+        # else:
+        log_policy_reg = params_output.log_pi
 
         valid = ts.env.valid * (ts.env.legal.sum(axis=-1) > 1)
 
@@ -266,10 +267,6 @@ class Learner:
             threshold=self.config.nerd.beta,
         )
 
-        loss_entropy = get_loss_entropy(
-            params_output.pi, params_output.log_pi, ts.env.legal, valid
-        )
-
         # loss_heuristic = get_loss_heuristic(
         #     params_output.log_pi,
         #     valid,
@@ -279,6 +276,10 @@ class Learner:
         # )
 
         # repr_loss = renormalize(params_output.repr_loss, valid)
+
+        loss_entropy = get_loss_entropy(
+            params_output.pi, params_output.log_pi, ts.env.legal, valid
+        )
 
         loss = (
             self.config.value_loss_coef * loss_v

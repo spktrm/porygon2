@@ -28,16 +28,13 @@ def get_model_cfg():
     cfg.encoder.move_encoder = ConfigDict()
     cfg.encoder.move_encoder.entity_size = entity_size
 
-    cfg.encoder.public = ConfigDict()
-    cfg.encoder.public.entity_size = entity_size
-
     # public entity encoder
-    cfg.encoder.public.entity_encoder = ConfigDict()
-    cfg.encoder.public.entity_encoder.entity_size = entity_size
+    cfg.encoder.entity_encoder = ConfigDict()
+    cfg.encoder.entity_encoder.entity_size = entity_size
 
     # public edge encoder
-    cfg.encoder.public.edge_encoder = ConfigDict()
-    cfg.encoder.public.edge_encoder.entity_size = entity_size
+    cfg.encoder.edge_encoder = ConfigDict()
+    cfg.encoder.edge_encoder.entity_size = entity_size
 
     transformer_num_layers = 1  # max(int(depth_factor * 3), 1)
     transformer_num_heads = 2
@@ -45,31 +42,6 @@ def get_model_cfg():
     # public context transformer
     #
     # transforms context from each turn into each public entity from that turn
-    cfg.encoder.public.context_transformer = ConfigDict()
-    cfg.encoder.public.context_transformer.stream_size = entity_size
-    cfg.encoder.public.context_transformer.num_layers = transformer_num_layers
-    cfg.encoder.public.context_transformer.num_heads = transformer_num_heads
-    cfg.encoder.public.context_transformer.key_size = entity_size // 2
-    cfg.encoder.public.context_transformer.value_size = entity_size // 2
-    cfg.encoder.public.context_transformer.resblocks_hidden_size = entity_size // 2
-    cfg.encoder.public.context_transformer.use_layer_norm = use_layer_norm
-
-    # public history transformer
-    #
-    # contextualizes each entity along its previous history
-    cfg.encoder.public.history_transformer = ConfigDict()
-    cfg.encoder.public.history_transformer.stream_size = entity_size
-    cfg.encoder.public.history_transformer.num_layers = transformer_num_layers
-    cfg.encoder.public.history_transformer.num_heads = transformer_num_heads
-    cfg.encoder.public.history_transformer.key_size = entity_size // 2
-    cfg.encoder.public.history_transformer.value_size = entity_size // 2
-    cfg.encoder.public.history_transformer.resblocks_hidden_size = entity_size // 2
-    cfg.encoder.public.history_transformer.use_layer_norm = use_layer_norm
-
-    # context transformer
-    #
-    # transforms context from each contextualized historical entity into the private entities
-    # available for choice that turn
     cfg.encoder.context_transformer = ConfigDict()
     cfg.encoder.context_transformer.stream_size = entity_size
     cfg.encoder.context_transformer.num_layers = transformer_num_layers
@@ -78,6 +50,28 @@ def get_model_cfg():
     cfg.encoder.context_transformer.value_size = entity_size // 2
     cfg.encoder.context_transformer.resblocks_hidden_size = entity_size // 2
     cfg.encoder.context_transformer.use_layer_norm = use_layer_norm
+
+    # public history transformer
+    #
+    # contextualizes each entity along its previous history
+    cfg.encoder.history_transformer = ConfigDict()
+    cfg.encoder.history_transformer.stream_size = entity_size
+    cfg.encoder.history_transformer.num_layers = transformer_num_layers
+    cfg.encoder.history_transformer.num_heads = transformer_num_heads
+    cfg.encoder.history_transformer.key_size = entity_size // 2
+    cfg.encoder.history_transformer.value_size = entity_size // 2
+    cfg.encoder.history_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.history_transformer.use_layer_norm = use_layer_norm
+
+    # action transformer
+    cfg.encoder.action_transformer = ConfigDict()
+    cfg.encoder.action_transformer.stream_size = entity_size
+    cfg.encoder.action_transformer.num_layers = transformer_num_layers
+    cfg.encoder.action_transformer.num_heads = transformer_num_heads
+    cfg.encoder.action_transformer.key_size = entity_size // 2
+    cfg.encoder.action_transformer.value_size = entity_size // 2
+    cfg.encoder.action_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.action_transformer.use_layer_norm = use_layer_norm
 
     # to vector
     #

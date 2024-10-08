@@ -6,6 +6,8 @@ from jax import lax
 from jax import numpy as jnp
 from jax import tree_util as tree
 
+from ml.utils import breakpoint_if_nonfinite
+
 
 def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
 
@@ -22,7 +24,9 @@ def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
     return cosine_sim
 
 
-def legal_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Array:
+def legal_policy(
+    logits: chex.Array, legal_actions: chex.Array, temp: chex.Array = 1
+) -> chex.Array:
     """A soft-max policy that respects legal_actions."""
     chex.assert_equal_shape((logits, legal_actions))
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
@@ -31,13 +35,15 @@ def legal_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Array:
     logits -= logits.max(axis=-1, keepdims=True)
     logits *= legal_actions
     exp_logits = jnp.where(
-        legal_actions, jnp.exp(logits), 0
+        legal_actions, jnp.exp(logits / temp), 0
     )  # Illegal actions become 0.
     exp_logits_sum = jnp.sum(exp_logits, axis=-1, keepdims=True)
     return exp_logits / exp_logits_sum
 
 
-def legal_log_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Array:
+def legal_log_policy(
+    logits: chex.Array, legal_actions: chex.Array, temp: chex.Array = 1
+) -> chex.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     chex.assert_equal_shape((logits, legal_actions))
     # logits_masked has illegal actions set to -inf.
@@ -45,7 +51,7 @@ def legal_log_policy(logits: chex.Array, legal_actions: chex.Array) -> chex.Arra
     max_legal_logit = logits_masked.max(axis=-1, keepdims=True)
     logits_masked = logits_masked - max_legal_logit
     # exp_logits_masked is 0 for illegal actions.
-    exp_logits_masked = jnp.exp(logits_masked)
+    exp_logits_masked = jnp.exp(logits_masked / temp)
 
     baseline = jnp.log(jnp.sum(exp_logits_masked, axis=-1, keepdims=True))
     # Subtract baseline from logits. We do not simply return
@@ -198,11 +204,15 @@ def v_trace(
     inv_mu = _policy_ratio(
         jnp.ones_like(merged_policy), acting_policy, actions_oh, valid
     )
+
+    num_actions = (merged_policy > 0).sum(-1)
     eta_reg_entropy = (
         -eta
         * jnp.sum(merged_policy * merged_log_policy, axis=-1)
+        / jnp.log(num_actions).clip(min=1)
         * jnp.squeeze(player_others, axis=-1)
     )
+    eta_reg_entropy = jnp.where(num_actions == 1, 0, eta_reg_entropy)
     eta_log_policy = -eta * merged_log_policy * player_others
 
     @chex.dataclass(frozen=True)
@@ -323,6 +333,9 @@ def v_trace(
         ),
         reverse=True,
     )
+
+    # breakpoint_if_nonfinite(v_target)
+    # breakpoint_if_nonfinite(learning_output)
 
     return v_target, has_played, learning_output
 
@@ -450,15 +463,23 @@ def get_loss_heuristic(
     return renormalize(xentropy, valid)
 
 
+def get_entropy(
+    policy: chex.Array,
+    log_policy: chex.Array,
+    legal: chex.Array,
+) -> chex.Array:
+    loss_entropy = (policy * log_policy).sum(-1)
+    num_legal_actions = legal.sum(-1)
+    denom = jnp.log(num_legal_actions)
+    denom = jnp.where(num_legal_actions <= 1, 1, denom)
+    return loss_entropy / denom
+
+
 def get_loss_entropy(
     policy: chex.Array,
     log_policy: chex.Array,
     legal: chex.Array,
     valid: chex.Array,
 ) -> chex.Array:
-    loss_entropy = (policy * log_policy).sum(-1)
-    num_legal_actions = legal.sum(-1)
-    denom = jnp.log(num_legal_actions)
-    denom = jnp.where(num_legal_actions <= 1, 1, denom)
-    loss_entropy = loss_entropy / denom
+    loss_entropy = get_entropy(policy, log_policy, legal)
     return renormalize(loss_entropy, valid)

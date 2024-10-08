@@ -48,6 +48,7 @@ class FeatureEntity(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_VOLATILES7: _ClassVar[FeatureEntity]
     ENTITY_VOLATILES8: _ClassVar[FeatureEntity]
     ENTITY_SIDE: _ClassVar[FeatureEntity]
+    ENTITY_HP_TOKEN: _ClassVar[FeatureEntity]
 
 class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -149,7 +150,6 @@ class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BOOST_EVASION_VALUE: _ClassVar[FeatureEdge]
     STATUS_TOKEN: _ClassVar[FeatureEdge]
     EDGE_AFFECTING_SIDE: _ClassVar[FeatureEdge]
-
 ENTITY_SPECIES: FeatureEntity
 ENTITY_ITEM: FeatureEntity
 ENTITY_ITEM_EFFECT: FeatureEntity
@@ -192,6 +192,7 @@ ENTITY_VOLATILES6: FeatureEntity
 ENTITY_VOLATILES7: FeatureEntity
 ENTITY_VOLATILES8: FeatureEntity
 ENTITY_SIDE: FeatureEntity
+ENTITY_HP_TOKEN: FeatureEntity
 MOVEID: FeatureMoveset
 PPUSED: FeatureMoveset
 VALID: FeatureTurnContext

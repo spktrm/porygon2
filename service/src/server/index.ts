@@ -92,20 +92,20 @@ function allocateWorker(ws: Socket) {
     return currWorkerIndex;
 }
 
-const server = createServer((ws) => {
-    const workerIndex = allocateWorker(ws);
+const server = createServer((us) => {
+    const workerIndex = allocateWorker(us);
     console.log(`${socketType} client ${workerIndex} has connected`);
 
-    ws.on("data", (data: Buffer) => {
+    us.on("data", (data: Buffer) => {
         const worker = workers[workerIndex];
         worker.postMessage(data, [data.buffer]);
     });
 
-    ws.on("error", (error) => {
+    us.on("error", (error) => {
         // console.error("Socket error:", error);
     });
 
-    ws.on("close", () => {
+    us.on("close", () => {
         console.log(`${socketType} client ${workerIndex} disconnected`);
         // Cleanup worker-client association
         workerClients.delete(workerIndex);
@@ -114,5 +114,5 @@ const server = createServer((ws) => {
 });
 
 server.listen(socketPath, () => {
-    console.log(`WebSocket server is running on ${socketPath}`);
+    console.log(`UNIX Socket server is running on ${socketPath}`);
 });

@@ -35,7 +35,7 @@ class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.logits = Logits(**self.cfg.logits.to_dict(), std_init=0.001)
+        self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(self, x: chex.Array):
         return self.logits(x)

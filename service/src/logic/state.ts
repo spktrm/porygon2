@@ -141,6 +141,7 @@ function getUnkPokemon(n?: number) {
     data[FeatureEntity.ENTITY_MOVEID3] = MovesEnum.MOVES__UNK;
     data[FeatureEntity.ENTITY_HAS_STATUS] = 0;
     data[FeatureEntity.ENTITY_SIDE] = n ?? 0;
+    data[FeatureEntity.ENTITY_HP_TOKEN] = 1023;
     return data;
 }
 
@@ -214,6 +215,9 @@ function getArrayFromPokemon(candidate: Pokemon | null): Int16Array {
     dataArr[FeatureEntity.ENTITY_FAINTED] = pokemon.fainted ? 1 : 0;
     dataArr[FeatureEntity.ENTITY_HP] = pokemon.hp;
     dataArr[FeatureEntity.ENTITY_MAXHP] = pokemon.maxhp;
+    dataArr[FeatureEntity.ENTITY_HP_TOKEN] = Math.floor(
+        (1023 * pokemon.hp) / pokemon.maxhp,
+    );
     dataArr[FeatureEntity.ENTITY_STATUS] = pokemon.status
         ? IndexValueFromEnum<typeof StatusEnum>("Status", pokemon.status)
         : StatusEnum.STATUS__NULL;

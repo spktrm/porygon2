@@ -10,6 +10,7 @@ import { EventHandler as EventHandler, StateHandler, Tracker } from "./state";
 import { State } from "../../protos/state_pb";
 import { Action } from "../../protos/action_pb";
 import { getEvalAction } from "./eval";
+import { OneDBoolean } from "./arr";
 
 const generations = new Generations(Dex);
 
@@ -127,10 +128,12 @@ export class StreamHandler {
         const state = await this.getState();
         const legalActions = state.getLegalactions_asU8();
         const request = this.privateBattle.request;
-        if (request && legalActions) {
-            const numValidMoves = legalActions.reduce(
-                (prev, curr) => prev + curr,
-            );
+        if (request !== undefined) {
+            const oneDBool = new OneDBoolean(10);
+            oneDBool.buffer.set(legalActions);
+            const numValidMoves = oneDBool
+                .toBinaryVector()
+                .reduce((prev, curr) => prev + curr);
             if (numValidMoves <= 1) {
                 const action = new Action();
                 action.setIndex(-1);
