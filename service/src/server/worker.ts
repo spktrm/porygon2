@@ -5,6 +5,7 @@ import { Action } from "../../protos/action_pb";
 import { getEvalAction } from "../logic/eval";
 
 const isTraining = workerData.socketType === "training";
+const isHardMode = workerData.socketType.includes("evaluation1");
 const gameId = workerData.workerCount;
 
 const game = new Game({
@@ -13,13 +14,24 @@ const game = new Game({
 });
 
 if (!isTraining) {
-    game.handlers[1].sendFn = async (state) => {
-        const jobKey = game.queueSystem.createJob();
-        state.setKey(jobKey);
-        const action = await getEvalAction(game.handlers[1], gameId);
-        game.queueSystem.submitResult(jobKey, action);
-        return jobKey;
-    };
+    if (isHardMode) {
+        console.log("hardmode activated");
+        game.handlers[1].sendFn = async (state) => {
+            const jobKey = game.queueSystem.createJob();
+            state.setKey(jobKey);
+            const action = await getEvalAction(game.handlers[1], 11);
+            game.queueSystem.submitResult(jobKey, action);
+            return jobKey;
+        };
+    } else {
+        game.handlers[1].sendFn = async (state) => {
+            const jobKey = game.queueSystem.createJob();
+            state.setKey(jobKey);
+            const action = await getEvalAction(game.handlers[1], gameId);
+            game.queueSystem.submitResult(jobKey, action);
+            return jobKey;
+        };
+    }
 }
 
 async function main() {

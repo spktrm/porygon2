@@ -3,7 +3,6 @@ import pickle
 from typing import Callable, Sequence
 
 import chex
-import jax.numpy as jnp
 import flax.linen as nn
 import jax
 import numpy as np

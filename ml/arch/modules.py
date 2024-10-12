@@ -1,3 +1,4 @@
+import math
 from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
@@ -54,7 +55,7 @@ class VectorResblock(nn.Module):
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
-            x = SNDense(features=output_size)(x)
+            x = nn.Dense(features=output_size)(x)
         return x + shortcut
 
 
@@ -85,7 +86,6 @@ class Logits(nn.Module):
     num_logits: int
     num_linear_layers: int = 2
     use_layer_norm: bool = True
-    std_init: float = 0.1
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -97,7 +97,7 @@ class Logits(nn.Module):
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
-            x = SNDense(features=output_size, std_init=self.std_init)(x)
+            x = nn.Dense(features=output_size)(x)
         return x
 
 
@@ -151,12 +151,18 @@ class MultiHeadAttention(nn.Module):
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, sequence_length, _ = query.shape
-        projection = self._linear_projection
+
+        def _linear_projection(x: jax.Array, head_size: int) -> jax.Array:
+            y = nn.Dense(self.num_heads * head_size)(x)
+            *leading_dims, _ = x.shape
+            return y.reshape((*leading_dims, self.num_heads, head_size))
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = projection(query, self.key_size)  # [T', H, Q=K]
-        key_heads = projection(key, self.key_size)  # [T, H, K]
-        value_heads = projection(value, self.value_size or self.key_size)  # [T, H, V]
+        query_heads = _linear_projection(query, self.key_size)  # [T', H, Q=K]
+        key_heads = _linear_projection(key, self.key_size)  # [T, H, K]
+        value_heads = _linear_projection(
+            value, self.value_size or self.key_size
+        )  # [T, H, V]
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
@@ -181,13 +187,118 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = SNDense(self.model_size or attn.shape[-1])
+        final_projection = nn.Dense(self.model_size or attn.shape[-1])
         return final_projection(attn)  # [T', D']
 
-    def _linear_projection(self, x: jax.Array, head_size: int) -> jax.Array:
-        y = SNDense(self.num_heads * head_size)(x)
-        *leading_dims, _ = x.shape
-        return y.reshape((*leading_dims, self.num_heads, head_size))
+
+class MultiHeadDiffAttention(nn.Module):
+    """
+    Multi-head differential attention module with the core idea of subtracting the softmax.
+    This module is modeled similar to the default Flax MultiHeadDotProductAttention module.
+    """
+
+    num_heads: int
+    key_value_size: int
+    model_size: Optional[int] = None
+
+    @nn.compact
+    def __call__(
+        self,
+        query: jax.Array,
+        key: jax.Array,
+        value: jax.Array,
+        mask: Optional[jax.Array] = None,
+    ) -> jax.Array:
+        """Computes (optionally masked) MHA with queries, keys & values.
+
+        This module broadcasts over zero or more 'batch-like' leading dimensions.
+
+        Args:
+          query: Embeddings sequence used to compute queries; shape [..., T', D_q].
+          key: Embeddings sequence used to compute keys; shape [..., T, D_k].
+          value: Embeddings sequence used to compute values; shape [..., T, D_v].
+          mask: Optional mask applied to attention weights; shape [..., H=1, T', T].
+
+        Returns:
+          A new sequence of embeddings, consisting of a projection of the
+            attention-weighted value projections; shape [..., T', D'].
+        """
+
+        # In shape hints below, we suppress the leading dims [...] for brevity.
+        # Hence e.g. [A, B] should be read in every case as [..., A, B].
+        *leading_dims, sequence_length, _ = query.shape
+
+        def _query_key_projection(x: jax.Array, head_size: int) -> jax.Array:
+            y = nn.Dense(self.num_heads * 2 * head_size)(x)
+            *leading_dims, _ = x.shape
+            return y.reshape((*leading_dims, 2 * self.num_heads, head_size))
+
+        def _value_projection(x: jax.Array, head_size: int) -> jax.Array:
+            y = nn.Dense(self.num_heads * 2 * head_size)(x)
+            *leading_dims, _ = x.shape
+            return y.reshape((*leading_dims, self.num_heads, 2 * head_size))
+
+        # Compute key/query/values (overload K/Q/V to denote the respective sizes).
+        query_heads = _query_key_projection(query, self.key_value_size)  # [T', H, Q=K]
+        key_heads = _query_key_projection(key, self.key_value_size)  # [T, H, K]
+        value_heads = _value_projection(value, self.key_value_size)  # [T, H, V]
+
+        # Compute attention weights.
+        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        # attn_logits = utils._prenorm_softmax(attn_logits, mask)
+        attn_logits = attn_logits / np.sqrt(self.key_value_size).astype(key.dtype)
+
+        if mask is not None:
+            if mask.ndim != attn_logits.ndim:
+                raise ValueError(
+                    f"Mask dimensionality {mask.ndim} must match logits dimensionality "
+                    f"{attn_logits.ndim}."
+                )
+            attn_logits = jnp.where(mask, attn_logits, -1e30)
+
+        attn_weights = jax.nn.softmax(attn_logits)  # [H, T', T]
+
+        if mask is not None:
+            attn_weights = jnp.where(mask, attn_weights, 0)
+
+        lambda_q1 = self.param(
+            "lambda_q1", nn.initializers.normal(stddev=0.1), (self.key_value_size,)
+        )
+        lambda_k1 = self.param(
+            "lambda_k1", nn.initializers.normal(stddev=0.1), (self.key_value_size,)
+        )
+        lambda_q2 = self.param(
+            "lambda_q2", nn.initializers.normal(stddev=0.1), (self.key_value_size,)
+        )
+        lambda_k2 = self.param(
+            "lambda_k2", nn.initializers.normal(stddev=0.1), (self.key_value_size,)
+        )
+
+        attn_weights = attn_weights.reshape(
+            *leading_dims, self.num_heads, 2, sequence_length, -1
+        )
+
+        lambda_1 = jnp.exp(jnp.sum(lambda_q1 * lambda_k1, axis=-1))
+        lambda_2 = jnp.exp(jnp.sum(lambda_q2 * lambda_k2, axis=-1))
+
+        def lambda_init_fn(depth):
+            return 0.8 - 0.6 * math.exp(-0.3 * depth)
+
+        lambda_init = lambda_init_fn(2)
+        lambda_full = lambda_1 - lambda_2 + lambda_init
+        attn_weights = (
+            attn_weights[..., 0, :, :] - lambda_full * attn_weights[..., 1, :, :]
+        )
+
+        # Weight the values by the attention and flatten the head vectors.
+        attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
+        attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
+        attn = nn.LayerNorm()(attn)
+        attn = attn * (1 - lambda_init)
+
+        # Apply another projection to get the final embeddings.
+        final_projection = nn.Dense(self.model_size or attn.shape[-1])
+        return final_projection(attn)  # [T', D']
 
 
 def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray) -> jnp.ndarray:
@@ -210,66 +321,57 @@ def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray) -> jnp.ndarray
 class Transformer(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    stream_size: int
+    hidden_size: int
     num_layers: int
     num_heads: int
-    key_size: int
-    value_size: int
-    resblocks_hidden_size: Optional[int] = None
     use_layer_norm: bool = True
+    diff_attn: bool = False
 
     @nn.compact
-    def __call__(
-        self,
-        q: chex.Array,
-        kv: chex.Array = None,
-        q_mask: chex.Array = None,
-        kv_mask: chex.Array = None,
-    ):
+    def __call__(self, x: chex.Array, mask: chex.Array = None):
 
-        if q_mask is None:
-            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+        if mask is None:
+            mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        if kv_mask is None:
-            kv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-
-        logits_mask = create_attention_mask(q_mask, kv_mask)
-
-        if kv is None:
-            kv = q
-        if self.use_layer_norm:
-            kv = nn.LayerNorm()(kv)
-        kv = activation_fn(kv)
+        logits_mask = create_attention_mask(mask, mask)
 
         for _ in range(self.num_layers):
             # Apply pre-layer normalization before attention
             if self.use_layer_norm:
-                q = nn.LayerNorm()(q)
-            q = activation_fn(q)
-            attn_output = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.stream_size,
-            )(query=q, key=kv, value=kv, mask=logits_mask)
-            # attn_output = jnp.where(q_mask[..., jnp.newaxis], attn_output, 0)
-            q = q + attn_output
+                x = nn.LayerNorm()(x)
+            x = activation_fn(x)
+            if self.diff_attn:
+                attn_output = MultiHeadDiffAttention(
+                    num_heads=self.num_heads,
+                    key_value_size=self.hidden_size // 2,
+                    model_size=self.hidden_size,
+                )(query=x, key=x, value=x, mask=logits_mask)
+            else:
+                attn_output = MultiHeadAttention(
+                    num_heads=self.num_heads,
+                    key_size=self.hidden_size // 2,
+                    value_size=self.hidden_size // 2,
+                    model_size=self.hidden_size,
+                )(query=x, key=x, value=x, mask=logits_mask)
+            attn_output = jnp.where(mask[..., jnp.newaxis], attn_output, 0)
+            x = x + attn_output
             # Apply pre-layer normalization before the residual block
             if self.use_layer_norm:
-                q = nn.LayerNorm()(q)
+                x = nn.LayerNorm()(x)
             dense_output = MLP(
-                (self.resblocks_hidden_size, self.stream_size), use_layer_norm=False
-            )(q)
-            q = q + dense_output
-            q = jnp.where(q_mask[..., jnp.newaxis], q, 0)
+                (self.hidden_size // 2, self.hidden_size), use_layer_norm=False
+            )(x)
+            x = x + dense_output
+            x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
-        return q
+        return x
 
 
 class CrossAttentionLayer(nn.Module):
     hidden_size: int
     num_heads: int
     dtype: Any = jnp.float32
+    diff_attn: bool = False
 
     @nn.compact
     def __call__(
@@ -291,22 +393,35 @@ class CrossAttentionLayer(nn.Module):
             attention_output: Array of shape (query_length, hidden_size)
         """
 
-        # MultiHeadDotProductAttention module
-        attention = nn.MultiHeadDotProductAttention(
-            num_heads=self.num_heads,
-            dtype=self.dtype,
-            qkv_features=self.hidden_size // 2,
-            out_features=self.hidden_size,
-            kernel_init=nn.initializers.xavier_uniform(),
-            bias_init=nn.initializers.zeros,
-        )
-
-        # Apply attention
-        attention_output = attention(
-            inputs_q=query_seq,
-            inputs_kv=key_value_seq,
-            mask=attention_mask,
-        )  # Shape: (1, query_length, hidden_size)
+        if self.diff_attn:
+            attention = MultiHeadDiffAttention(
+                num_heads=self.num_heads,
+                key_value_size=self.hidden_size // 2,
+                model_size=self.hidden_size,
+            )
+            # Apply attention
+            attention_output = attention(
+                query=query_seq,
+                key=key_value_seq,
+                value=key_value_seq,
+                mask=attention_mask,
+            )
+        else:
+            # MultiHeadDotProductAttention module
+            attention = nn.MultiHeadDotProductAttention(
+                num_heads=self.num_heads,
+                dtype=self.dtype,
+                qkv_features=self.hidden_size // 2,
+                out_features=self.hidden_size,
+                kernel_init=nn.initializers.xavier_uniform(),
+                bias_init=nn.initializers.zeros,
+            )
+            # Apply attention
+            attention_output = attention(
+                inputs_q=query_seq,
+                inputs_kv=key_value_seq,
+                mask=attention_mask,
+            )  # Shape: (1, query_length, hidden_size)
 
         return attention_output  # Shape: (query_length, hidden_size)
 
@@ -430,7 +545,7 @@ class MLP(nn.Module):
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
-            x = SNDense(size)(x)
+            x = nn.Dense(size)(x)
         return x
 
 
@@ -454,9 +569,9 @@ class PointerLogits(nn.Module):
                 query = nn.LayerNorm()(query)
             query = activation_fn(query)
             if i == self.num_layers_query - 1:
-                query = SNDense(features=self.key_size)(query)
+                query = nn.Dense(features=self.key_size)(query)
             else:
-                query = SNDense(features=query.shape[-1])(query)
+                query = nn.Dense(features=query.shape[-1])(query)
 
         # Keys.
         for i in range(self.num_layers_keys):
@@ -464,9 +579,9 @@ class PointerLogits(nn.Module):
                 keys = nn.LayerNorm()(keys)
             keys = activation_fn(keys)
             if i == self.num_layers_keys - 1:
-                keys = SNDense(features=self.key_size)(keys)
+                keys = nn.Dense(features=self.key_size)(keys)
             else:
-                keys = SNDense(features=keys.shape[-1])(keys)
+                keys = nn.Dense(features=keys.shape[-1])(keys)
 
         # Pointer
         logits = query @ keys.T  # ij,j->i
@@ -486,7 +601,7 @@ class ToAvgVector(nn.Module):
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
-            x = SNDense(features=size)(x)
+            x = nn.Dense(features=size)(x)
         if mask is None:
             x = x.mean(-2)
         else:
@@ -494,7 +609,7 @@ class ToAvgVector(nn.Module):
         if self.use_layer_norm:
             x = nn.LayerNorm()(x)
         x = activation_fn(x)
-        x = SNDense(features=self.output_stream_size or x.shape[-1])(x)
+        x = nn.Dense(features=self.output_stream_size or x.shape[-1])(x)
         return x
 
 
@@ -524,11 +639,11 @@ class VectorMerge(nn.Module):
             raise ValueError(f"Gating type {self.gating_type} is not supported")
         if len(inputs_to_gate) == 2:
             # more efficient than the general version below
-            gate = [SNDense(gate_size)(y) for y in init_gate]
+            gate = [nn.Dense(gate_size)(y) for y in init_gate]
             gate = jnp.stack(gate).sum(0)
             gate = jax.nn.sigmoid(gate)
         else:
-            gate = [SNDense(len(inputs_to_gate) * gate_size)(y) for y in init_gate]
+            gate = [nn.Dense(len(inputs_to_gate) * gate_size)(y) for y in init_gate]
             gate = jnp.stack(gate).sum(0)
             gate = jnp.reshape(gate, [len(inputs_to_gate), gate_size])
             # gate = _prenorm_softmax(gate, axis=0)
@@ -543,7 +658,7 @@ class VectorMerge(nn.Module):
                 feature = nn.LayerNorm()(feature)
             feature = activation_fn(feature)
             gate.append(feature)
-            outputs.append(SNDense(self.output_size)(feature))
+            outputs.append(nn.Dense(self.output_size)(feature))
         return gate, outputs
 
     @nn.compact
@@ -586,12 +701,12 @@ class GLU(nn.Module):
         if self.use_layer_norm:
             context = nn.LayerNorm()(context)
         context = activation_fn(context)
-        gate = jax.nn.sigmoid(SNDense(input.shape[-1])(context))
+        gate = jax.nn.sigmoid(nn.Dense(input.shape[-1])(context))
         gated_input = gate * input
         if self.use_layer_norm:
             gated_input = nn.LayerNorm()(gated_input)
         gated_input = activation_fn(gated_input)
-        output = SNDense(self.output_size or input.shape[-1])(gated_input)
+        output = nn.Dense(self.output_size or input.shape[-1])(gated_input)
         return output
 
 

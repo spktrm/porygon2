@@ -106,9 +106,9 @@ export class StreamHandler {
         return this.privateBattle.request as requestType;
     }
 
-    async getState(): Promise<State> {
+    async getState(numHistory?: number): Promise<State> {
         const handler = new StateHandler(this);
-        return await handler.getState();
+        return await handler.getState(numHistory);
     }
 
     getPlayerIndex(): number | undefined {

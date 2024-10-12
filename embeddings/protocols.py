@@ -1,15 +1,13 @@
 from enum import Enum, auto
-import numpy as np
-import pandas as pd
-
 from typing import Callable, List, TypedDict
+
+import pandas as pd
 
 from embeddings.encoders import (
     binary_encode,
     multihot_encode,
-    z_score_scale,
     onehot_encode,
-    text_encoding,
+    sqrt_onehot_encode,
 )
 
 
@@ -45,8 +43,8 @@ SPECIES_PROTOCOLS: List[Protocol] = [
     *[
         {
             "feature": stat_feature,
-            "func": z_score_scale,
-            "feature_type": FeatureType.SCALAR,
+            "func": sqrt_onehot_encode,
+            "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
             "baseStats.hp",
@@ -75,8 +73,8 @@ SPECIES_PROTOCOLS: List[Protocol] = [
     },
     {
         "feature": "weightkg",
-        "func": lambda x: z_score_scale(x.map(lambda x: np.log1p(x))),
-        "feature_type": FeatureType.SCALAR,
+        "func": sqrt_onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
     },
     *[
         {
@@ -85,7 +83,7 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "nfe",
             "tier",
             "maxHP",
@@ -124,7 +122,7 @@ MOVES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "category",
             "priority",
             "type",
@@ -214,19 +212,19 @@ MOVES_PROTOCOLS: List[Protocol] = [
     },
     {
         "feature": "basePower",
-        "func": z_score_scale,
-        "feature_type": FeatureType.SCALAR,
+        "func": sqrt_onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
     },
     {
         "feature": "basePower",
         "func": binary_encode,
         "feature_type": FeatureType.CATEGORICAL,
     },
-    {
-        "feature": "desc",
-        "func": text_encoding,
-        "feature_type": FeatureType.SCALAR,
-    },
+    # {
+    #     "feature": "desc",
+    #     "func": text_encoding,
+    #     "feature_type": FeatureType.SCALAR,
+    # },
     {
         "feature": "accuracy",
         "func": lambda x: binary_encode(
@@ -262,7 +260,11 @@ ITEMS_PROTOCOLS: List[Protocol] = [
             "func": onehot_encode,
             "feature_type": FeatureType.CATEGORICAL,
         }
-        for stat_feature in ["id", "affectsFainted", "itemUser"]
+        for stat_feature in [
+            # "id",
+            "affectsFainted",
+            "itemUser",
+        ]
     ],
     {
         "feature_fn": lambda x: x.startswith("condition."),
@@ -302,11 +304,11 @@ ITEMS_PROTOCOLS: List[Protocol] = [
         }
         for stat_feature in []
     ],
-    {
-        "feature": "desc",
-        "func": text_encoding,
-        "feature_type": FeatureType.SCALAR,
-    },
+    # {
+    #     "feature": "desc",
+    #     "func": text_encoding,
+    #     "feature_type": FeatureType.SCALAR,
+    # },
 ]
 
 ABILITIES_PROTOCOLS: List[Protocol] = [
@@ -317,7 +319,7 @@ ABILITIES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "suppressWeather",
             "affectsFainted",
             "rating",
@@ -345,9 +347,9 @@ ABILITIES_PROTOCOLS: List[Protocol] = [
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,
     },
-    {
-        "feature": "desc",
-        "func": text_encoding,
-        "feature_type": FeatureType.SCALAR,
-    },
+    # {
+    #     "feature": "desc",
+    #     "func": text_encoding,
+    #     "feature_type": FeatureType.SCALAR,
+    # },
 ]

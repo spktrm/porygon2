@@ -1,12 +1,11 @@
 import math
-
-import pandas as pd
-import numpy as np
-
 from typing import Any, Callable, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import StandardScaler
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -106,9 +105,7 @@ def log_onehot_encode(series: pd.DataFrame) -> pd.DataFrame:
 
 
 def z_score_scale(series: pd.Series) -> pd.DataFrame:
-    transformed = (
-        StandardScaler().fit_transform(series.values.reshape(-1, 1)).clip(min=-3, max=3)
-    )
+    transformed = StandardScaler().fit_transform(series.values.reshape(-1, 1))
     return pd.DataFrame(data=transformed, columns=[f"{series.name} zscore"])
 
 

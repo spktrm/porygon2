@@ -39,7 +39,20 @@ def get_history(state: State, player_index: int):
     )
     history_nodes[..., FeatureEntity.ENTITY_SIDE] ^= player_index
     history_nodes.flags.writeable = False
-    return (moveset, team, padnstack(history_edges), padnstack(history_nodes))
+    history_side_conditions = np.frombuffer(
+        bytearray(history.sideConditions), dtype=np.uint8
+    ).reshape((history_length, 2, -1))
+    history_field = np.frombuffer(bytearray(history.field), dtype=np.uint8).reshape(
+        (history_length, -1)
+    )
+    return (
+        moveset,
+        team,
+        padnstack(history_edges),
+        padnstack(history_nodes),
+        padnstack(history_side_conditions),
+        padnstack(history_field),
+    )
 
 
 def get_legal_mask(state: State):
@@ -55,6 +68,8 @@ def process_state(state: State) -> EnvStep:
         team,
         history_edges,
         history_nodes,
+        history_side_conditions,
+        history_field,
     ) = get_history(state, player_index)
     return EnvStep(
         valid=~np.array(state.info.done, dtype=bool),
@@ -82,6 +97,8 @@ def process_state(state: State) -> EnvStep:
         moveset=moveset,
         history_edges=history_edges,
         history_nodes=history_nodes,
+        history_side_conditions=history_side_conditions,
+        history_field=history_field,
     )
 
 

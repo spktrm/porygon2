@@ -6,8 +6,6 @@ from jax import lax
 from jax import numpy as jnp
 from jax import tree_util as tree
 
-from ml.utils import breakpoint_if_nonfinite
-
 
 def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
 

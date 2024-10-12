@@ -1,7 +1,8 @@
 import functools
 import os
 import pickle
-from typing import Callable, Sequence, Tuple, Union
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Dict, Sequence, Tuple
 
 import flax.linen as nn
 import jax
@@ -10,10 +11,9 @@ import jax.tree_util as tree
 import numpy as np
 import optax
 
-from ml.config import RNaDConfig, TeacherForceConfig, VtraceConfig
+from ml.config import PPOConfig, RNaDConfig, VtraceConfig
 from ml.func import (
     _player_others,
-    get_entropy,
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v,
@@ -127,11 +127,241 @@ class EntropySchedule:
         return alpha, update_target_net  # pytype: disable=bad-return-type  # jax-types
 
 
-class Learner:
+class Learner(ABC):
+    @abstractmethod
+    def step(self, *args, **kwargs):
+        return
+
+
+class PPOLearner(Learner):
     def __init__(
         self,
         network: nn.Module,
-        config: Union[RNaDConfig, VtraceConfig, TeacherForceConfig],
+        config: PPOConfig,
+    ) -> None:
+        self.config = config
+        self.network = network
+
+        self.learner_steps: int = 0
+        self.actor_steps: int = 0
+
+        ex = get_ex_step()
+        key = jax.random.PRNGKey(42)
+
+        # The machinery related to updating parameters/learner.
+        self._loss_and_grad: Callable = jax.value_and_grad(self.loss, has_aux=True)
+
+        # Params
+        self.params: Params = network.init(key, ex)
+
+        # Parameter optimizer.
+        self.optimizer: optax.GradientTransformation = optax.chain(
+            optax.clip(self.config.clip_gradient),
+            optax.adamw(
+                learning_rate=self.config.learning_rate,
+                eps_root=0.0,
+                b1=self.config.adam.b1,
+                b2=self.config.adam.b2,
+                eps=self.config.adam.eps,
+                weight_decay=self.config.adam.weight_decay,
+            ),
+        )
+        self.optimizer_state: optax.OptState = self.optimizer.init(self.params)
+
+    def compute_gae(
+        self,
+        rewards: jnp.ndarray,
+        values: jnp.ndarray,
+        masks: jnp.ndarray,
+        gamma: float,
+        lam: float,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        def gae_scan(
+            carry: jnp.ndarray, inputs: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
+        ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            adv_next = carry
+            reward, value, mask = inputs
+            delta = reward + gamma * value[1] * mask - value[0]
+            adv = delta + gamma * lam * adv_next * mask
+            return adv, adv
+
+        rewards = rewards[:-1]
+        next_values = values[1:]
+        values = values[:-1]
+        masks = masks[:-1]
+
+        inputs = (rewards, jnp.stack([values, next_values], axis=1), masks)
+        advantages = jax.lax.scan(
+            gae_scan, jnp.zeros_like(rewards[0]), inputs, reverse=True
+        )[1]
+        returns = advantages + values
+
+        return jax.lax.stop_gradient(returns), jax.lax.stop_gradient(advantages)
+
+    def loss(
+        self, params: Params, ts: TimeStep
+    ) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
+        # Apply the network to get current policy and value estimates.
+        reg_rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
+            jax.vmap(self.network.apply, (None, 0), 0), (None, 0), 0
+        )
+        params_output = reg_rollout(params, ts.env)
+
+        # Get current log probabilities of actions taken
+        action_indices = ts.actor.action[..., None]  # Shape [T, B, 1]
+        log_prob = jnp.take_along_axis(
+            params_output.log_pi, action_indices, axis=-1
+        ).squeeze(-1)
+
+        # Get old log probabilities
+        log_prob_old = jnp.take_along_axis(
+            jnp.log(ts.actor.policy + 1e-8), action_indices, axis=-1
+        ).squeeze(-1)
+
+        # Compute ratio
+        ratio = jnp.exp(log_prob - log_prob_old)
+
+        # Compute values
+        values = params_output.v.squeeze(-1)  # Shape [T, B]
+
+        # Entropy loss
+        entropy_per_step = -jnp.sum(
+            params_output.pi * params_output.log_pi, axis=-1
+        ) / jnp.log(ts.env.legal.sum(axis=-1).clip(min=2)).clip(min=1)
+        entropy = jnp.mean(entropy_per_step, where=ts.env.valid)
+
+        # Compute rewards
+        rewards = ts.actor.fainted_rewards[..., 0]
+        rewards = rewards * ts.env.valid
+
+        # Compute returns and advantages
+        returns, advantages = self.compute_gae(
+            rewards,
+            values,
+            ts.env.valid,
+            gamma=self.config.gamma,
+            lam=self.config.gae_lambda,
+        )
+
+        # Normalize advantages
+        advantages = (advantages - advantages.mean(where=ts.env.valid[:-1])) / (
+            advantages.std(where=ts.env.valid[:-1]) + 1e-8
+        )
+
+        # Compute surrogate losses
+        surr1 = ratio[:-1] * advantages
+        surr2 = (
+            jnp.clip(
+                ratio[:-1],
+                1.0 - self.config.clip_epsilon,
+                1.0 + self.config.clip_epsilon,
+            )
+            * advantages
+        )
+
+        policy_loss = -jnp.mean(jnp.minimum(surr1, surr2), where=ts.env.valid[:-1])
+
+        # Value function loss
+        value_loss = jnp.mean(((returns - values[:-1]) ** 2), where=ts.env.valid[:-1])
+
+        # Total loss
+        loss = (
+            policy_loss
+            + self.config.value_loss_coef * value_loss
+            - self.config.entropy_loss_coef * entropy
+        )
+
+        return loss, {
+            "policy_loss": policy_loss,
+            "value_loss": value_loss,
+            "entropy_loss": entropy,
+        }
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def update_parameters(
+        self,
+        params: Params,
+        optimizer_state: optax.OptState,
+        timestep: TimeStep,
+    ) -> Tuple[Params, optax.OptState, Dict[str, Any]]:
+        """A jitted pure-functional part of the `step`."""
+        (loss_val, info), grad = self._loss_and_grad(params, timestep)
+
+        # Update `params` using the computed gradient.
+        updates, optimizer_state = self.optimizer.update(grad, optimizer_state, params)
+        params = optax.apply_updates(params, updates)
+
+        valid = timestep.env.valid
+        lengths = valid.sum(0)
+
+        can_move = timestep.env.legal[..., :4].any(axis=-1)
+        can_switch = timestep.env.legal[..., 4:].any(axis=-1)
+
+        move_ratio = renormalize(timestep.actor.action < 4, can_switch & valid)
+        switch_ratio = renormalize(timestep.actor.action > 4, can_move & valid)
+
+        average_reward = (
+            (timestep.actor.win_rewards[..., 0] * timestep.env.valid).sum(0).mean()
+        )
+
+        logs = {
+            "loss": loss_val,
+            **info,
+            "trajectory_length_mean": lengths.mean(),
+            "trajectory_length_min": lengths.min(),
+            "trajectory_length_max": lengths.max(),
+            "gradient_norm": optax.global_norm(grad),
+            "param_norm": optax.global_norm(params),
+            "param_updates_norm": optax.global_norm(updates),
+            "move_ratio": move_ratio,
+            "switch_ratio": switch_ratio,
+            "average_reward": average_reward,
+        }
+
+        return (
+            params,
+            optimizer_state,
+        ), logs
+
+    def step(self, timestep: TimeStep):
+        (self.params, self.optimizer_state), logs = self.update_parameters(
+            self.params, self.optimizer_state, timestep
+        )
+
+        self.learner_steps += 1
+        self.actor_steps += timestep.env.valid.sum()
+        logs.update(
+            {
+                "actor_steps": self.actor_steps,
+                "learner_steps": self.learner_steps,
+            }
+        )
+        return logs
+
+    def save(self, ckpt_path: str = "ckpts"):
+        """To serialize the agent."""
+        if not os.path.exists(ckpt_path):
+            os.mkdir(ckpt_path)
+        config = dict(
+            # RNaD config.
+            config=self.config,
+            # Learner and actor step counters.
+            learner_steps=self.learner_steps,
+            actor_steps=self.actor_steps,
+            # Network params.
+            params=self.params,
+            # Optimizer state.
+            optimizer_state=self.optimizer_state,
+        )
+        with open(f"{ckpt_path}/ckpt_{self.learner_steps:08}.pt", "wb") as f:
+            pickle.dump(config, f)
+
+
+class RNaDLearner(Learner):
+    def __init__(
+        self,
+        network: nn.Module,
+        config: RNaDConfig | VtraceConfig,
     ):
         self.config = config
         self.network = network
@@ -213,9 +443,9 @@ class Learner:
         action_oh = jax.nn.one_hot(ts.actor.action, ts.actor.policy.shape[-1])
 
         rewards = (
-            ts.actor.win_rewards
+            # ts.actor.win_rewards
             # + ts.actor.switch_rewards
-            # + 0.5 * ts.actor.fainted_rewards / 6
+            ts.actor.fainted_rewards
             # + 0.25 * ts.actor.hp_rewards / 6
             # + 0.214 * ts.actor.switch_rewards
         )

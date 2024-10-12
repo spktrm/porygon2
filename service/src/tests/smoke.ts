@@ -48,6 +48,10 @@ function assertTrajectory(game: Game, trajectory: State[]) {
         }
     }
 
+    if (accum.faintedRewardSum < -1 || 1 < accum.faintedRewardSum) {
+        throw new Error();
+    }
+
     const rtol = 1e-3;
     if (accum.hpRewardSum + rtol < -6 || 6 < accum.hpRewardSum - rtol) {
         throw new Error();

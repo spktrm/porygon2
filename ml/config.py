@@ -213,7 +213,14 @@ class ActorCriticConfig:
 class VtraceConfig(ActorCriticConfig):
     # gamma: float = 0.995
     # entropy_loss_coef: float = 1e-2
-    eta_reward_transform: float = 0.05
+    eta_reward_transform: float = 0.02
+
+
+@chex.dataclass(frozen=True)
+class PPOConfig(ActorCriticConfig):
+    entropy_loss_coef: float = 1e-2
+    gae_lambda: float = 0.999
+    clip_epsilon: float = 0.05
 
 
 @chex.dataclass(frozen=True)

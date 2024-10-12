@@ -1,23 +1,17 @@
-import os
 import json
+import os
 import traceback
-
-from sklearn.discriminant_analysis import StandardScaler
-from sklearn.pipeline import Pipeline
-
-import pandas as pd
-import numpy as np
-import plotly.express as px
-
 from typing import Any, Dict, List, Sequence
-from community import community_louvain
 
-from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+import numpy as np
+import pandas as pd
+import plotly.express as px
+from community import community_louvain
 from pyvis.network import Network
+from sklearn.metrics.pairwise import cosine_similarity
 
-from embeddings.encoders import onehot_encode, z_score_scale
+from embeddings.encoders import onehot_encode
 from embeddings.protocols import (
     ABILITIES_PROTOCOLS,
     ITEMS_PROTOCOLS,
@@ -26,7 +20,6 @@ from embeddings.protocols import (
     FeatureType,
     Protocol,
 )
-
 
 with open("data/data/randombattle_data.json", "r") as f:
     randombattle_data = json.load(f)
@@ -155,7 +148,7 @@ class VectorContainsNanError(Exception):
 
 def to_lookup_table(encodings_df: pd.DataFrame, stoi: Dict[str, int]) -> np.ndarray:
 
-    padding_keys = [s for s in stoi.keys() if s.startswith("!") & s.endswith("!")]
+    padding_keys = [s for s in stoi.keys() if s.startswith("_")]
     num_padding_keys = len(padding_keys)
 
     vector_length = encodings_df.shape[-1] + num_padding_keys
@@ -186,7 +179,7 @@ class GenerationEncodings:
         gen: int,
         format: str,
         stoi: Dict[str, int] = None,
-        onehot_id_only: bool = True,
+        onehot_id_only: bool = False,
     ):
         if stoi is None:
             with open("data/data.json", "r", encoding="utf-8") as f:
@@ -461,11 +454,11 @@ def main(plot: bool = False, onehot_id_only: bool = False):
                     raise e
 
                 mask = abs(encodings_arr).sum(-1) > 0
-                pca = PCA(0.95)
-                encoded = pca.fit_transform(encodings_arr[mask])
+                # pca = PCA(0.95)
+                # encoded = pca.fit_transform(encodings_arr[mask])
+                # encoded = StandardScaler().fit_transform(encoded)
+                # encoded = encoded.clip(min=-3, max=3)
                 encoded = encodings_arr[mask]
-                encoded = StandardScaler().fit_transform(encoded)
-                encoded = encoded.clip(min=-3, max=3)
 
                 print(
                     (

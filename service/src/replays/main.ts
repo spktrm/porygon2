@@ -23,8 +23,18 @@ function getReward(data: {
     return 0;
 }
 
-function processGame(data: any) {
-    const states: Uint8Array[] = [];
+function stringToHash(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = (hash << 5) - hash + char;
+        hash |= 0; // Convert to a 32-bit integer
+    }
+    return hash;
+}
+
+async function processGame(data: any) {
+    const states = [];
 
     const reward = getReward(data);
 
@@ -32,12 +42,6 @@ function processGame(data: any) {
         return new StreamHandler({
             gameId: 0,
             sendFn: async (state) => {
-                const info = state.getInfo();
-                if (info) {
-                    info.setWinreward(reward);
-                    state.setInfo(info);
-                }
-                states.push(state.serializeBinary());
                 return "";
             },
             recvFn: async () => {
@@ -54,7 +58,19 @@ function processGame(data: any) {
         }
     }
 
-    return states;
+    const finalStates = handlers.map(async (handler) => {
+        const state = await handler.getState(512);
+        const info = state.getInfo();
+        if (info) {
+            info.setWinreward(reward);
+            info.setGameid(stringToHash(data["id"]));
+            state.setInfo(info);
+        }
+        states.push(state);
+        return state.serializeBinary();
+    });
+
+    return finalStates;
 }
 
 async function readJsonFilesInFolder(folderPath: string): Promise<any[]> {
@@ -78,65 +94,44 @@ async function readJsonFilesInFolder(folderPath: string): Promise<any[]> {
     }
 }
 
-async function saveStatesInChunks(
-    states: Uint8Array[],
-    chunkSize: number,
-    folderPath: string,
-) {
-    let currentChunkSize = 0;
-    let currentChunk: Uint8Array[] = [];
-    let chunkIndex = 0;
-    let stateLengths: number[] = [];
+function flattenUint8ArrayArray(arrays: Uint8Array[]): Uint8Array {
+    const lengths = arrays.map((arr) => arr.length); // Get the lengths of each Uint8Array
+    const totalLength =
+        lengths.reduce((acc, len) => acc + len, 0) + arrays.length * 4; // For lengths metadata
 
-    for (const state of states) {
-        if (currentChunkSize + state.length > chunkSize) {
-            // Save current chunk to a file with metadata
-            await saveChunk(currentChunk, stateLengths, chunkIndex, folderPath);
-            chunkIndex++;
-            currentChunk = [];
-            stateLengths = [];
-            currentChunkSize = 0;
-        }
+    // Create a buffer large enough to store all the arrays and their lengths
+    const result = new Uint8Array(totalLength);
+    const dataView = new DataView(result.buffer); // Use DataView to store lengths as 32-bit integers
 
-        currentChunk.push(state);
-        stateLengths.push(state.length);
-        currentChunkSize += state.length;
-    }
+    let offset = 0;
+    arrays.forEach((arr, i) => {
+        // Write the length of each Uint8Array (4 bytes)
+        dataView.setUint32(offset, arr.length);
+        offset += 4;
 
-    // Save the last chunk if it has any states
-    if (currentChunk.length > 0) {
-        await saveChunk(currentChunk, stateLengths, chunkIndex, folderPath);
-    }
+        // Write the Uint8Array data
+        result.set(arr, offset);
+        offset += arr.length;
+    });
+
+    return result;
 }
-
-async function saveChunk(
-    chunk: Uint8Array[],
-    stateLengths: number[],
-    index: number,
-    folderPath: string,
-) {
-    const chunkBuffer = Buffer.concat(chunk);
-    const metadataBuffer = Buffer.from(JSON.stringify(stateLengths));
-    const filePath = path.join(folderPath, `states_chunk_${index}.bin`);
-    const metadataPath = path.join(folderPath, `states_chunk_${index}.json`);
-
-    await fs.writeFile(filePath, chunkBuffer);
-    await fs.writeFile(metadataPath, metadataBuffer);
-}
-
-const CHUNK_SIZE = 100 * 1024 * 1024; // 100 MB in bytes
 
 async function main() {
     const folderPath = "../replays/data/gen3randombattle";
     const replays = await readJsonFilesInFolder(folderPath);
 
-    const states: Uint8Array[] = [];
+    const statesPromises: Promise<Uint8Array>[] = [];
     for (const log of replays) {
         console.log(log.id);
-        states.push(...processGame(log));
+        const promises = await processGame(log);
+        statesPromises.push(...promises);
     }
 
-    await saveStatesInChunks(states, CHUNK_SIZE, folderPath);
+    const states = await Promise.all(statesPromises);
+    const binary = flattenUint8ArrayArray(states);
+
+    await fs.writeFile(path.join(folderPath, "states.bin"), binary);
 }
 
 main();

@@ -13,6 +13,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
+from ml.learner import RNaDLearner
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
@@ -108,13 +109,12 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 def test(params: Any):
     from ml.config import VtraceConfig
-    from ml.learner import Learner
     from rlenv.utils import stack_steps
 
     config = get_model_cfg()
     network = get_model(config)
 
-    learner = Learner(network, VtraceConfig())
+    learner = RNaDLearner(network, VtraceConfig())
 
     learner.params = params
     learner.params_target = params
@@ -165,7 +165,7 @@ def main():
     # for i in range(4):
     #     step = jax.tree.map(lambda x: x[i], ex_step)
     #     out = network.apply(params, step)
-    out = network.apply(params, ex_step)
+    network.apply(params, ex_step)
     pprint(get_num_params(params))
 
     test(params)

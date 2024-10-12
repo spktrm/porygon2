@@ -25,6 +25,8 @@ class EnvStep:
     # Public Info
     history_edges: chex.Array = ()
     history_nodes: chex.Array = ()
+    history_side_conditions: chex.Array = ()
+    history_field: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)

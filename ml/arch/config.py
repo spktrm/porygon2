@@ -10,7 +10,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 1
+    width_factor = 0.5
 
     base_entity_size = 256
     base_vector_size = 1024
@@ -48,6 +48,11 @@ def get_model_cfg():
     cfg.encoder.context_transformer.num_heads = transformer_num_heads
     cfg.encoder.context_transformer.use_layer_norm = use_layer_norm
 
+    cfg.encoder.context_merge = ConfigDict()
+    cfg.encoder.context_merge.gating_type = GatingType.NONE
+    cfg.encoder.context_merge.use_layer_norm = use_layer_norm
+    cfg.encoder.context_merge.output_size = entity_size
+
     # public history transformer
     #
     # contextualizes each entity along its previous history
@@ -83,7 +88,7 @@ def get_model_cfg():
     #
     # merges the entity with its relevant action
     cfg.encoder.action_merge = ConfigDict()
-    cfg.encoder.action_merge.gating_type = GatingType.POINTWISE
+    cfg.encoder.action_merge.gating_type = GatingType.NONE
     cfg.encoder.action_merge.use_layer_norm = use_layer_norm
     cfg.encoder.action_merge.output_size = entity_size
 

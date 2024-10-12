@@ -1,21 +1,14 @@
-from functools import partial
 import json
-import pandas as pd
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-
+from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax import random, grad, jit, vmap
-from jax.example_libraries import optimizers
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+from jax import jit, random
+from jax.example_libraries import optimizers
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler
 
 
 class JAXEntityEmbedding(BaseEstimator, TransformerMixin):

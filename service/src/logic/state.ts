@@ -19,9 +19,11 @@ import {
     ItemeffecttypesEnum,
     ItemsEnum,
     MovesEnum,
+    SideconditionEnumMap,
     SpeciesEnum,
     StatusEnum,
     VolatilestatusEnum,
+    WeatherEnum,
 } from "../../protos/enums_pb";
 import {
     EdgeTypes,
@@ -29,6 +31,7 @@ import {
     FeatureEdgeMap,
     FeatureEntity,
     FeatureMoveset,
+    FeatureWeather,
 } from "../../protos/features_pb";
 import {
     MappingLookup,
@@ -43,14 +46,18 @@ import {
     numBattleMajorArgs,
     numVolatiles,
     NUM_HISTORY,
+    numSideConditions,
+    numPseudoweathers,
+    numWeatherFields,
 } from "./data";
-import { NA, Pokemon, Side } from "@pkmn/client";
+import { Field, NA, Pokemon, Side } from "@pkmn/client";
 import { OneDBoolean } from "./arr";
 import { StreamHandler } from "./handler";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
 import { ID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { History } from "../../protos/history_pb";
+import { getEvalAction } from "./eval";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames = RemovePipes<BattleMajorArgName>;
@@ -455,6 +462,8 @@ class Turn {
 
     edgeData: Int16Array;
     nodeData: Int16Array;
+    sideData: Uint8Array;
+    fieldData: Uint8Array;
 
     constructor(
         eventHandler: EventHandler,
@@ -469,6 +478,8 @@ class Turn {
 
         this.edgeData = new Int16Array(flatEdgeDataSize);
         this.nodeData = new Int16Array(flatNodeDataSize);
+        this.sideData = new Uint8Array(2 * numSideConditions);
+        this.fieldData = new Uint8Array(numWeatherFields);
 
         if (init) {
             this.init();
@@ -477,8 +488,10 @@ class Turn {
 
     private init() {
         const battle = this.eventHandler.handler.publicBattle;
+
         let offset = 0;
-        for (const { team, totalPokemon, n } of battle.sides) {
+        for (const side of battle.sides) {
+            const { team, totalPokemon, n } = side;
             for (const member of team) {
                 this.nodeData.set(getArrayFromPokemon(member), offset);
                 offset += numPokemonFields;
@@ -499,7 +512,36 @@ class Turn {
                 this.nodeData.set(nullPokemon, offset);
                 offset += numPokemonFields;
             }
+            this.updateSideConditionData(side);
         }
+    }
+
+    updateSideConditionData(side: Side) {
+        const playerIndex = this.eventHandler.handler.getPlayerIndex()!;
+        const { n, sideConditions } = side;
+        const sideconditionOffset = n === playerIndex ? numSideConditions : 0;
+        for (const [
+            id,
+            { level, maxDuration, minDuration, name },
+        ] of Object.entries(sideConditions)) {
+            const featureIndex = IndexValueFromEnum<SideconditionEnumMap>(
+                "Sidecondition",
+                id,
+            );
+            this.sideData[featureIndex + sideconditionOffset] = level;
+        }
+    }
+
+    updateFieldData(field: Field) {
+        const weatherIndex = IndexValueFromEnum(
+            "Weather",
+            field.weatherState.id,
+        );
+        this.fieldData[FeatureWeather.WEATHER_ID] = weatherIndex;
+        this.fieldData[FeatureWeather.MAX_DURATION] =
+            field.weatherState.maxDuration;
+        this.fieldData[FeatureWeather.MIN_DURATION] =
+            field.weatherState.minDuration;
     }
 
     getNodeDataAtIndex(nodeIndex: number) {
@@ -540,6 +582,9 @@ class Turn {
                     );
                 }
             }
+        }
+        for (const side of battle.sides) {
+            this.updateSideConditionData(side);
         }
     }
 
@@ -715,20 +760,20 @@ export class EventHandler implements Protocol.Handler {
         }
         const poke1Index = latestTurn.getNodeIndex(trueIdent);
 
-        // const opposite = poke1.side.foe.active[0];
-        // const lastPokemon = poke1.side.lastPokemon!;
-        // if (
-        //     argName === "switch" &&
-        //     opposite !== null &&
-        //     !!lastPokemon &&
-        //     !(lastPokemon.fainted ?? false)
-        // ) {
-        //     const lastPokemonTurnsActive = this.getTurnsActive(lastPokemon);
-        //     const oppTurnsActive = this.getTurnsActive(opposite);
-        //     if (0 < oppTurnsActive && oppTurnsActive < lastPokemonTurnsActive) {
-        //         this.rewardQueue.push(opposite.side.n ? -1 : 1);
-        //     }
-        // }
+        const opposite = poke1.side.foe.active[0];
+        const lastPokemon = poke1.side.lastPokemon!;
+        if (
+            argName === "switch" &&
+            opposite !== null &&
+            !!lastPokemon &&
+            !(lastPokemon.fainted ?? false)
+        ) {
+            const lastPokemonTurnsActive = this.getTurnsActive(lastPokemon);
+            const oppTurnsActive = this.getTurnsActive(opposite);
+            if (0 < oppTurnsActive && oppTurnsActive < lastPokemonTurnsActive) {
+                this.rewardQueue.push(opposite.side.n ? -1 : 1);
+            }
+        }
 
         const edge = new Edge();
         edge.addMajorArg(argName);
@@ -1655,6 +1700,10 @@ export class EventHandler implements Protocol.Handler {
         this.turns = [initTurn];
     }
 
+    resetRewardQueue() {
+        this.rewardQueue = [];
+    }
+
     reset() {
         this.currHp = new Map();
         this.actives = new Map();
@@ -1663,8 +1712,37 @@ export class EventHandler implements Protocol.Handler {
             1: [],
         };
         this.turns = [];
-        this.rewardQueue = [];
+        this.resetRewardQueue();
         this.resetTurns();
+    }
+}
+
+class Scaler {
+    readonly steepness: number;
+    readonly denom: number;
+
+    cache: { [k: number]: number };
+
+    constructor(steepness: number = 1, range: number = 6) {
+        this.steepness = steepness;
+        this.denom = 0;
+        for (let i = 1; i <= range; i++) {
+            this.denom += Math.exp(i);
+        }
+        this.cache = {};
+    }
+
+    call(value: number) {
+        if (!value) {
+            return 0;
+        }
+        const cachedResult = this.cache[value];
+        if (cachedResult !== undefined) {
+            return cachedResult;
+        }
+        const result = Math.exp(value * this.steepness) / this.denom;
+        this.cache[value] = result;
+        return result;
     }
 }
 
@@ -1672,18 +1750,21 @@ export class Tracker {
     hp: Map<string, number[]>;
     hpTotal: Map<number, number[]>;
     faintedTotal: Map<number, number[]>;
+    scaler: Scaler;
 
     constructor() {
         this.hp = new Map();
         this.hpTotal = new Map();
         this.faintedTotal = new Map();
+
+        this.scaler = new Scaler();
     }
 
     update(world: Battle) {
         for (const player of [world.p1, world.p2]) {
             if (!this.hpTotal.has(player.n)) {
-                this.hpTotal.set(player.n, [6]);
-                this.faintedTotal.set(player.n, [6]);
+                this.hpTotal.set(player.n, [0]);
+                this.faintedTotal.set(player.n, [0]);
             }
             let hpTotal = 0;
             let faintedTotal = 0;
@@ -1695,7 +1776,7 @@ export class Tracker {
                 }
                 this.hp.get(fullName)!.push(hpRatio);
                 hpTotal += hpRatio;
-                faintedTotal += 1 - +pokemon.fainted;
+                faintedTotal += +pokemon.fainted;
             }
             this.hpTotal.get(player.n)!.push(hpTotal);
             this.faintedTotal.get(player.n)!.push(faintedTotal);
@@ -1712,11 +1793,23 @@ export class Tracker {
     }
 
     getFaintedChangeReward() {
-        const p1HpTotal = this.faintedTotal.get(0)!;
-        const p2HpTotal = this.faintedTotal.get(1)!;
-        const [p1tm1, p2tm1] = [p1HpTotal.at(-2) ?? 6, p2HpTotal.at(-2) ?? 6];
-        const [p1t, p2t] = [p1HpTotal.at(-1) ?? 6, p2HpTotal.at(-1) ?? 6];
-        const score = p1t - p1tm1 - (p2t - p2tm1);
+        const p1FaintedTotal = this.faintedTotal.get(0)!;
+        const p2FaintedTotal = this.faintedTotal.get(1)!;
+        const [p1t, p1tm1] = [
+            this.scaler.call(p1FaintedTotal.at(-1) ?? 0),
+            this.scaler.call(p1FaintedTotal.at(-2) ?? 0),
+        ];
+        const [p2t, p2tm1] = [
+            this.scaler.call(p2FaintedTotal.at(-1) ?? 0),
+            this.scaler.call(p2FaintedTotal.at(-2) ?? 0),
+        ];
+        let score = 0;
+        if (p1t !== p1tm1) {
+            score -= p1t;
+        }
+        if (p2t !== p2tm1) {
+            score += p2t;
+        }
         return score;
     }
 
@@ -1729,16 +1822,16 @@ export class Tracker {
                 return -1;
             }
         }
-        if (earlyFinish) {
-            const [p1TotalHp, p2TotalHp] = world.sides.map(
-                (side) =>
-                    side.pokemon.reduce(
-                        (prev, curr) => prev + curr.hp / curr.maxhp,
-                        0,
-                    ) / side.pokemon.length,
-            );
-            return p1TotalHp - p2TotalHp;
-        }
+        // if (earlyFinish) {
+        //     const [p1TotalHp, p2TotalHp] = world.sides.map(
+        //         (side) =>
+        //             side.pokemon.reduce(
+        //                 (prev, curr) => prev + curr.hp / curr.maxhp,
+        //                 0,
+        //             ) / side.pokemon.length,
+        //     );
+        //     return p1TotalHp - p2TotalHp;
+        // }
         return 0;
     }
 
@@ -1951,20 +2044,28 @@ export class StateHandler {
     getHistory(numHistory: number = NUM_HISTORY) {
         const historyEdges: Int16Array[] = [];
         const historyNodes: Int16Array[] = [];
+        const historySideConditions: Uint8Array[] = [];
+        const historyField: Uint8Array[] = [];
 
         const finalSlice = this.handler.eventHandler.turns.slice(-numHistory);
-        for (const { edgeData, nodeData } of [...finalSlice].reverse()) {
+        for (const { edgeData, nodeData, sideData, fieldData } of [
+            ...finalSlice,
+        ].reverse()) {
             historyEdges.push(edgeData);
             historyNodes.push(nodeData);
+            historySideConditions.push(sideData);
+            historyField.push(fieldData);
         }
         return {
             historyEdges: concatenateArrays(historyEdges),
             historyNodes: concatenateArrays(historyNodes),
+            historySideConditions: concatenateArrays(historySideConditions),
+            historyField: concatenateArrays(historyField),
             trueHistorySize: finalSlice.length,
         };
     }
 
-    async getState(): Promise<State> {
+    async getState(numHistory?: number): Promise<State> {
         const state = new State();
 
         const info = new Info();
@@ -1973,14 +2074,18 @@ export class StateHandler {
         info.setPlayerindex(!!playerIndex);
         info.setTurn(this.handler.privateBattle.turn);
 
-        const switchReward =
-            this.handler.eventHandler.rewardQueue.splice(0, 1)[0] ?? 0;
-        if (!!!playerIndex) {
+        const switchReward = this.handler.eventHandler.rewardQueue.reduce(
+            (a, b) => a + b,
+            0,
+        );
+        this.handler.eventHandler.resetRewardQueue();
+        if (!!!playerIndex && !!switchReward) {
             info.setSwitchreward(switchReward);
         }
 
-        // const heuristicAction = getEvalAction(this.handler, 11);
-        // info.setHeuristicaction(heuristicAction.getIndex());
+        // heuristic
+        const heuristicAction = await getEvalAction(this.handler, 11);
+        info.setHeuristicaction(heuristicAction.getIndex());
 
         // const heuristicDist = await GetSearchDistribution({
         //     handler: this.handler,
@@ -1994,18 +2099,27 @@ export class StateHandler {
 
         state.setInfo(info);
 
-        const privateTeam = this.getPrivateTeam(playerIndex);
-        state.setTeam(new Uint8Array(privateTeam.buffer));
-
-        const { historyEdges, historyNodes, trueHistorySize } =
-            this.getHistory();
+        const {
+            historyEdges,
+            historyNodes,
+            historySideConditions,
+            historyField,
+            trueHistorySize,
+        } = this.getHistory(numHistory);
         const history = new History();
         history.setEdges(new Uint8Array(historyEdges.buffer));
+        history.setNodes(new Uint8Array(historyNodes.buffer));
+        history.setSideconditions(historySideConditions);
+        history.setField(historyField);
         history.setNodes(new Uint8Array(historyNodes.buffer));
         history.setLength(trueHistorySize);
         state.setHistory(history);
 
-        state.setMoveset(this.getMoveset());
+        if (this.handler.getRequest()) {
+            const privateTeam = this.getPrivateTeam(playerIndex);
+            state.setTeam(new Uint8Array(privateTeam.buffer));
+            state.setMoveset(this.getMoveset());
+        }
 
         return state;
     }
