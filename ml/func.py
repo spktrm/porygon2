@@ -4,7 +4,7 @@ import chex
 import jax
 from jax import lax
 from jax import numpy as jnp
-from jax import tree_util as tree
+from jax import tree
 
 
 def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
@@ -133,7 +133,7 @@ def _where(
         p = jnp.reshape(pred, pred.shape + (1,) * (len(t.shape) - len(pred.shape)))
         return jnp.where(p, t, f)
 
-    return tree.tree_map(_where_one, true_data, false_data)
+    return tree.map(_where_one, true_data, false_data)
 
 
 def _has_played(valid: chex.Array, player_id: chex.Array, player: int) -> chex.Array:
@@ -176,7 +176,7 @@ def _has_played(valid: chex.Array, player_id: chex.Array, player: int) -> chex.A
 # out of the box because a trajectory could look like '121211221122'.
 
 
-def v_trace(
+def rnad_v_trace(
     v: chex.Array,
     valid: chex.Array,
     player_id: chex.Array,
@@ -203,14 +203,11 @@ def v_trace(
         jnp.ones_like(merged_policy), acting_policy, actions_oh, valid
     )
 
-    num_actions = (merged_policy > 0).sum(-1)
     eta_reg_entropy = (
         -eta
         * jnp.sum(merged_policy * merged_log_policy, axis=-1)
-        / jnp.log(num_actions).clip(min=1)
         * jnp.squeeze(player_others, axis=-1)
     )
-    eta_reg_entropy = jnp.where(num_actions == 1, 0, eta_reg_entropy)
     eta_log_policy = -eta * merged_log_policy * player_others
 
     @chex.dataclass(frozen=True)
@@ -338,10 +335,121 @@ def v_trace(
     return v_target, has_played, learning_output
 
 
+def reg_v_trace(
+    v: chex.Array,
+    valid: chex.Array,
+    player_id: chex.Array,
+    acting_policy: chex.Array,
+    merged_policy: chex.Array,
+    actions_oh: chex.Array,
+    reward: chex.Array,
+    player: int,
+    # Scalars below.
+    lambda_: float,
+    c: float,
+    rho: float,
+    gamma: float,
+) -> Tuple[Any, Any, Any]:
+    """Custom VTrace for trajectories with a mix of different player steps."""
+
+    has_played = _has_played(valid, player_id, player)
+    policy_ratio = _policy_ratio(merged_policy, acting_policy, actions_oh, valid)
+
+    @chex.dataclass(frozen=True)
+    class LoopVTraceCarry:
+        """The carry of the v-trace scan loop."""
+
+        reward: chex.Array
+        # The cumulated reward until the end of the episode. Uncorrected (v-trace).
+        # Gamma discounted and includes eta_reg_entropy.
+        reward_uncorrected: chex.Array
+        next_value: chex.Array
+        next_v_target: chex.Array
+        importance_sampling: chex.Array
+
+    init_state_v_trace = LoopVTraceCarry(
+        reward=jnp.zeros_like(reward[-1]),
+        reward_uncorrected=jnp.zeros_like(reward[-1]),
+        next_value=jnp.zeros_like(v[-1]),
+        next_v_target=jnp.zeros_like(v[-1]),
+        importance_sampling=jnp.ones_like(policy_ratio[-1]),
+    )
+
+    def _loop_v_trace(carry: LoopVTraceCarry, x) -> Tuple[LoopVTraceCarry, Any]:
+        (cs, player_id, v, reward, valid, actions_oh) = x
+
+        reward_uncorrected = reward + gamma * carry.reward_uncorrected
+        discounted_reward = reward + gamma * carry.reward
+
+        # V-target calculation (standard V-Trace):
+        our_v_target = jnp.expand_dims(
+            jnp.squeeze(v, axis=-1)
+            + jnp.minimum(rho, cs * carry.importance_sampling)
+            * (reward + jnp.squeeze(gamma * carry.next_value - v, axis=-1))
+            + lambda_
+            * jnp.minimum(c, cs * carry.importance_sampling)
+            * gamma
+            * jnp.squeeze(carry.next_v_target - carry.next_value, axis=-1),
+            axis=-1,
+        )
+
+        opp_v_target = jnp.zeros_like(our_v_target)
+        reset_v_target = jnp.zeros_like(our_v_target)
+
+        # Policy target calculation (using advantage for policy gradient):
+        advantage = jnp.expand_dims(reward, axis=-1) + gamma * carry.next_value - v
+        our_learning_output = (
+            actions_oh
+            * jnp.expand_dims(cs * carry.importance_sampling, axis=-1)
+            * advantage
+        )
+
+        opp_learning_output = jnp.zeros_like(our_learning_output)
+        reset_learning_output = jnp.zeros_like(our_learning_output)
+
+        # State carry:
+        our_carry = LoopVTraceCarry(
+            reward=jnp.zeros_like(carry.reward),
+            next_value=v,
+            next_v_target=our_v_target,
+            reward_uncorrected=jnp.zeros_like(carry.reward_uncorrected),
+            importance_sampling=jnp.ones_like(carry.importance_sampling),
+        )
+        opp_carry = LoopVTraceCarry(
+            reward=cs * discounted_reward,
+            reward_uncorrected=reward_uncorrected,
+            next_value=gamma * carry.next_value,
+            next_v_target=gamma * carry.next_v_target,
+            importance_sampling=cs * carry.importance_sampling,
+        )
+        reset_carry = init_state_v_trace
+
+        return _where(
+            valid,  # pytype: disable=bad-return-type  # numpy-scalars
+            _where(
+                (player_id == player),
+                (our_carry, (our_v_target, our_learning_output)),
+                (opp_carry, (opp_v_target, opp_learning_output)),
+            ),
+            (reset_carry, (reset_v_target, reset_learning_output)),
+        )
+
+    # Update scan to output both v_target and policy_target
+    _, (v_target, policy_target) = lax.scan(
+        f=_loop_v_trace,
+        init=init_state_v_trace,
+        xs=(policy_ratio, player_id, v, reward, valid, actions_oh),
+        reverse=True,
+    )
+
+    return v_target, has_played, policy_target
+
+
 def get_loss_v(
     v_list: Sequence[chex.Array],
     v_target_list: Sequence[chex.Array],
     mask_list: Sequence[chex.Array],
+    delta: float = 1,
 ) -> chex.Array:
     """Define the loss function for the critic."""
     chex.assert_trees_all_equal_shapes(v_list, v_target_list)
@@ -352,8 +460,13 @@ def get_loss_v(
     for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
         assert v_n.shape[0] == v_target.shape[0]
 
-        loss_v = (
-            jnp.expand_dims(mask, axis=-1) * (v_n - lax.stop_gradient(v_target)) ** 2
+        error = v_n - lax.stop_gradient(v_target)
+        abs_error = jnp.abs(error)
+
+        loss_v = jnp.expand_dims(mask, axis=-1) * jnp.where(
+            abs_error <= delta,
+            0.5 * jnp.square(error),
+            delta * (abs_error - 0.5 * delta),
         )
         normalization = jnp.sum(mask)
         loss_v = jnp.sum(loss_v) / (normalization + (normalization == 0.0))
@@ -424,10 +537,33 @@ def get_loss_nerd(
             legal_actions
             * apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
             axis=-1,
-        ) / jnp.squeeze(num_valid_actions, axis=-1)
+        )
 
         nerd_loss = -renormalize(nerd_loss, valid * (player_ids == k))
         loss_pi_list.append(nerd_loss)
+    return sum(loss_pi_list)
+
+
+def get_loss_pg(
+    log_pi_list: Sequence[chex.Array],
+    q_vr_list: Sequence[chex.Array],
+    actions_oh: chex.Array,
+    valid: chex.Array,
+    player_ids: Sequence[chex.Array],
+    importance_sampling_correction: Sequence[chex.Array],
+    clip: float = 100,
+) -> chex.Array:
+    """Define the nerd loss."""
+    assert isinstance(importance_sampling_correction, list)
+    loss_pi_list = []
+
+    for k, (log_pi, q_vr) in enumerate(zip(log_pi_list, q_vr_list)):
+        q_vr = lax.stop_gradient(q_vr)
+
+        pg_loss = -(actions_oh * log_pi * q_vr).sum(axis=-1)
+        pg_loss = renormalize(pg_loss, valid * (player_ids == k))
+
+        loss_pi_list.append(pg_loss)
     return sum(loss_pi_list)
 
 

@@ -667,7 +667,6 @@ export class EventHandler implements Protocol.Handler {
         };
         this.turns = [];
         this.rewardQueue = [];
-        this.resetTurns();
     }
 
     getLatestTurn(): Turn {
@@ -1822,16 +1821,16 @@ export class Tracker {
                 return -1;
             }
         }
-        // if (earlyFinish) {
-        //     const [p1TotalHp, p2TotalHp] = world.sides.map(
-        //         (side) =>
-        //             side.pokemon.reduce(
-        //                 (prev, curr) => prev + curr.hp / curr.maxhp,
-        //                 0,
-        //             ) / side.pokemon.length,
-        //     );
-        //     return p1TotalHp - p2TotalHp;
-        // }
+        if (earlyFinish) {
+            const [p1TotalHp, p2TotalHp] = world.sides.map(
+                (side) =>
+                    side.pokemon.reduce(
+                        (prev, curr) => prev + curr.hp / curr.maxhp,
+                        0,
+                    ) / side.pokemon.length,
+            );
+            return p1TotalHp > p2TotalHp ? 1 : p1TotalHp < p2TotalHp ? -1 : 0;
+        }
         return 0;
     }
 
@@ -2084,8 +2083,8 @@ export class StateHandler {
         }
 
         // heuristic
-        const heuristicAction = await getEvalAction(this.handler, 11);
-        info.setHeuristicaction(heuristicAction.getIndex());
+        // const heuristicAction = await getEvalAction(this.handler, 11);
+        // info.setHeuristicaction(heuristicAction.getIndex());
 
         // const heuristicDist = await GetSearchDistribution({
         //     handler: this.handler,

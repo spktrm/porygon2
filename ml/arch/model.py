@@ -1,22 +1,20 @@
 import math
 import pickle
 from pprint import pprint
-from typing import Any, Dict
+from typing import Dict
 
 import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.learner import RNaDLearner
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
+from rlenv.interfaces import EnvStep, ModelOutput
 
 
 class Model(nn.Module):
@@ -36,23 +34,18 @@ class Model(nn.Module):
         and then applies the policy and value heads to generate the output.
         """
         # Get current state and action embeddings from the encoder
-        current_state, my_action_embeddings = self.encoder(env_step)
-
-        # Apply the policy head
-        logit, my_pi, log_pi = self.policy_head(
-            current_state, my_action_embeddings, env_step.legal
-        )
-        # _, opp_pi, _ = self.policy_head(
-        #     current_state,
-        #     my_action_embeddings,
-        #     jnp.ones_like(env_step.legal, dtype=jnp.bool),
-        # )
+        current_state_embedding, action_embeddings, ssl_loss = self.encoder(env_step)
 
         # Apply the value head
-        v = self.value_head(current_state)
+        v = self.value_head(current_state_embedding)
+
+        # Apply action argument heads
+        logit, pi, log_pi = self.policy_head(
+            current_state_embedding, action_embeddings, env_step.legal
+        )
 
         # Return the model output
-        return ModelOutput(pi=my_pi, v=v, log_pi=log_pi, logit=logit)
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v, ssl_loss=ssl_loss)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -107,42 +100,42 @@ def assert_no_nan_or_inf(gradients, path=""):
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
 
 
-def test(params: Any):
-    from ml.config import VtraceConfig
-    from rlenv.utils import stack_steps
+# def test(params: Any):
+#     from ml.config import VtraceConfig
+#     from rlenv.utils import stack_steps
 
-    config = get_model_cfg()
-    network = get_model(config)
+#     config = get_model_cfg()
+#     network = get_model(config)
 
-    learner = RNaDLearner(network, VtraceConfig())
+#     learner = RNaDLearner(network, VtraceConfig())
 
-    learner.params = params
-    learner.params_target = params
-    learner.params_prev = params
-    learner.params_prev_ = params
+#     learner.params = params
+#     learner.params_target = params
+#     learner.params_prev = params
+#     learner.params_prev_ = params
 
-    batch_size = 8
+#     batch_size = 8
 
-    batch = stack_steps(
-        [
-            TimeStep(
-                env=jax.tree.map(
-                    lambda x: x[None].repeat(batch_size, 0),
-                    get_ex_step(),
-                ),
-                actor=ActorStep(
-                    action=np.random.randint(0, 9, (batch_size,)),
-                    policy=np.random.random((batch_size, 10)),
-                    win_rewards=np.zeros((batch_size, 2)),
-                    hp_rewards=np.zeros((batch_size, 2)),
-                    fainted_rewards=np.zeros((batch_size, 2)),
-                ),
-            )
-            for _ in range(64)
-        ]
-    )
-    logs = learner.step(batch)
-    pprint(logs)
+#     batch = stack_steps(
+#         [
+#             TimeStep(
+#                 env=jax.tree.map(
+#                     lambda x: x[None].repeat(batch_size, 0),
+#                     get_ex_step(),
+#                 ),
+#                 actor=ActorStep(
+#                     action=np.random.randint(0, 9, (batch_size,)),
+#                     policy=np.random.random((batch_size, 10)),
+#                     win_rewards=np.zeros((batch_size, 2)),
+#                     hp_rewards=np.zeros((batch_size, 2)),
+#                     fainted_rewards=np.zeros((batch_size, 2)),
+#                 ),
+#             )
+#             for _ in range(64)
+#         ]
+#     )
+#     logs = learner.step(batch)
+#     pprint(logs)
 
 
 def main():
@@ -168,7 +161,7 @@ def main():
     network.apply(params, ex_step)
     pprint(get_num_params(params))
 
-    test(params)
+    # test(params)
 
 
 if __name__ == "__main__":

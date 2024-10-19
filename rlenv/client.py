@@ -1,5 +1,4 @@
 import functools
-import pickle
 from typing import Callable, Sequence
 
 import chex
@@ -32,29 +31,23 @@ class BatchCollector:
             self.network.apply, (None, 0), 0
         )
         output = rollout(params, env_steps)
-        pi = output.pi
+
         return jax.lax.cond(
             self.is_eval,
-            functools.partial(self.finetuning.post_process_policy, pi, env_steps.legal),
-            lambda: pi,
+            functools.partial(
+                self.finetuning.post_process_policy, output.pi, env_steps.legal
+            ),
+            lambda: output.pi,
         )
 
     def actor_step(self, params: Params, env_step: EnvStep):
         pi = self._network_jit_apply(params, env_step)
-        try:
-            action = np.apply_along_axis(
-                lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
-            )
-        except Exception as e:
-            with open("bad_state.pkl", "wb") as f:
-                pickle.dump(env_step, f)
-
-            raise e
-
-        actor_step = ActorStep(
-            policy=pi, win_rewards=(), hp_rewards=(), fainted_rewards=(), action=action
+        action = np.apply_along_axis(
+            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        return action, actor_step
+        return action, ActorStep(
+            action=action, policy=pi, win_rewards=(), hp_rewards=(), fainted_rewards=()
+        )
 
     def collect_batch_trajectory(
         self, params: Params, resolution: int = 32

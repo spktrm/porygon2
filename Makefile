@@ -6,3 +6,8 @@ protos:
 
 lint:
 	sh scripts/lint.sh
+
+clean:
+	find . -type d -name "__pycache__" -print -exec rm -r {} +
+
+

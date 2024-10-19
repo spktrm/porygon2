@@ -35,6 +35,11 @@ class GatingType(Enum):
     POINTWISE = auto()
 
 
+class PoolMethod(Enum):
+    MAX = auto()
+    MEAN = auto()
+
+
 class VectorResblock(nn.Module):
     """Fully connected residual block."""
 
@@ -487,15 +492,12 @@ class CrossTransformer(nn.Module):
             query_seq = query_seq + contextualized_query
             key_value_seq = key_value_seq + contextualized_key_value
 
-            query_seq = MLP(
+            query_seq = query_seq + MLP(
                 (self.hidden_size, self.hidden_size), use_layer_norm=self.use_layer_norm
             )(query_seq)
-            key_value_seq = MLP(
+            key_value_seq = key_value_seq + MLP(
                 (self.hidden_size, self.hidden_size), use_layer_norm=self.use_layer_norm
             )(key_value_seq)
-
-            query_seq = query_seq + contextualized_query
-            key_value_seq = key_value_seq + contextualized_key_value
 
             query_seq = jnp.where(expanded_query_mask, query_seq, 0)
             key_value_seq = jnp.where(expanded_key_value_mask, key_value_seq, 0)
@@ -514,22 +516,9 @@ class CrossTransformer(nn.Module):
         Returns:
             attention_bias: (batch_size, 1, query_length, key_length)
         """
-        # Expand dimensions
-        query_mask = query_mask[..., None]  # Shape: (batch_size, query_length, 1)
-        key_value_mask = key_value_mask[
-            ..., None, :
-        ]  # Shape: (batch_size, 1, key_length)
 
-        # Compute combined mask
-        attention_mask = (
-            query_mask * key_value_mask
-        )  # Shape: (batch_size, query_length, key_length)
-
-        # Expand dimensions to match attention module
-        attention_mask = attention_mask[
-            ..., None, :, :
-        ]  # Shape: (batch_size, 1, query_length, key_length)
-
+        attention_mask = jnp.einsum("...i,...j->...ij", query_mask, key_value_mask)
+        attention_mask = jnp.expand_dims(attention_mask, axis=-3)
         return attention_mask.astype(self.dtype)
 
 
@@ -594,18 +583,23 @@ class ToAvgVector(nn.Module):
     units_hidden_sizes: Sequence[int]
     output_stream_size: int = None
     use_layer_norm: bool = True
+    pool_method: PoolMethod = PoolMethod.MAX
 
     @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array = None):
+    def __call__(self, x: chex.Array, mask: chex.Array):
         for size in self.units_hidden_sizes:
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
             x = activation_fn(x)
             x = nn.Dense(features=size)(x)
-        if mask is None:
-            x = x.mean(-2)
-        else:
+
+        if self.pool_method is PoolMethod.MEAN:
             x = (mask.astype(jnp.float32) @ x) / mask.sum()
+        elif self.pool_method is PoolMethod.MAX:
+            x = jnp.where(jnp.expand_dims(mask, axis=-1), x, -1e9).max(0)
+        else:
+            raise ValueError(f"Pool method {self.pool_method} is not supported")
+
         if self.use_layer_norm:
             x = nn.LayerNorm()(x)
         x = activation_fn(x)
@@ -708,6 +702,17 @@ class GLU(nn.Module):
         gated_input = activation_fn(gated_input)
         output = nn.Dense(self.output_size or input.shape[-1])(gated_input)
         return output
+
+
+class SSLReg(nn.Module):
+    @nn.compact
+    def __call__(self, st: chex.Array, stp1: chex.Array) -> chex.Array:
+
+        latent_action = VectorMerge(st.shape[-1])(st, stp1)
+        latent_action = MLP((st.shape[-1] // 4, st.shape[-1] // 8))(latent_action)
+        pred_stpd1 = VectorMerge(stp1.shape[-1])(st, latent_action)
+
+        return pred_stpd1
 
 
 class AutoEncoder(nn.Module):

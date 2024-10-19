@@ -71,7 +71,6 @@ export class Game {
 
         const isDone = this.done;
         let info = state.getInfo()!;
-        const playerIndex = info.getPlayerindex();
 
         const winReward = this.tracker.getRewardFromFinish(
             this.world!,
@@ -80,12 +79,12 @@ export class Game {
         const hpReward = this.tracker.getHpChangeReward();
         const faintedReward = this.tracker.getFaintedChangeReward();
 
+        info.setWinreward(winReward);
         info.setHpreward(hpReward);
         info.setFaintedreward(faintedReward);
+        info.setDone(isDone);
 
         if (isDone) {
-            info.setWinreward(winReward);
-            info.setDone(isDone);
             state.setLegalactions(AllValidActions.buffer);
         }
 

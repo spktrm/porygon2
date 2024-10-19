@@ -26,10 +26,10 @@ class FineTuning:
     # The learner step after which the policy post processing (aka finetuning)
     # will be enabled when learning. A strictly negative value is equivalent
     # to infinity, ie disables finetuning completely.
-    from_learner_steps: int = 50_000
+    from_learner_steps: int = -1
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
-    policy_threshold: float = 0.03
+    policy_threshold: float = 0.01
     # Rounds the policy probabilities to the "closest"
     # multiple of 1/`self.discretization`.
     # Discretization is disabled for non-positive values.
@@ -174,13 +174,13 @@ class ActorCriticConfig:
     # The batch size to use when learning/improving parameters.
     batch_size: int = 4
     # The learning rate for `params`.
-    learning_rate: float = 0.00005
+    learning_rate: float = 1e-5
     # The config related to the ADAM optimizer used for updating `params`.
     adam: AdamConfig = AdamConfig(b1=0, b2=0.999, eps=1e-8, weight_decay=0)
     # All gradients values are clipped to [-clip_gradient, clip_gradient].
     clip_gradient: float = 10_000
     # The "speed" at which `params_target` is following `params`.
-    target_network_avg: float = 0.01
+    target_network_avg: float = 0.001
 
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
@@ -211,9 +211,8 @@ class ActorCriticConfig:
 
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
-    # gamma: float = 0.995
-    # entropy_loss_coef: float = 1e-2
-    eta_reward_transform: float = 0.02
+    eta_reward_transform: float = 0
+    entropy_loss_coef: float = 1e-3
 
 
 @chex.dataclass(frozen=True)
@@ -225,7 +224,7 @@ class PPOConfig(ActorCriticConfig):
 
 @chex.dataclass(frozen=True)
 class RNaDConfig(ActorCriticConfig):
-    eta_reward_transform: float = 0.2
+    eta_reward_transform: float = 0.1
 
 
 @chex.dataclass(frozen=True)

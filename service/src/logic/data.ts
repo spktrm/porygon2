@@ -116,7 +116,7 @@ export const actionIndexMapping = {
     9: "switch 6",
 };
 
-export const MAX_TS = 100;
+export const MAX_TS = 50;
 
 export const sideIdMapping: {
     [k in "p1" | "p2"]: 0 | 1;

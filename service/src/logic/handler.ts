@@ -70,6 +70,9 @@ export class StreamHandler {
         }
         this.log.push(line);
         this.ingestEvent(line);
+        if (line.startsWith("|start")) {
+            this.eventHandler.reset();
+        }
     }
 
     ingestEvent(line: string) {
@@ -183,8 +186,6 @@ export class StreamHandler {
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
-
-        this.eventHandler.reset();
 
         this.rqid = undefined;
         this.playerIndex = undefined;

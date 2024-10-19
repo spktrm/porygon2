@@ -29,7 +29,7 @@ async function main(verbose: boolean = false) {
         const legalActions = state.getLegalactions_asU8();
 
         if (info && legalActions) {
-            if (turn > 12 && playerIndex === true) {
+            if ((turn > 2 && playerIndex === true) || info.getDone()) {
                 writeFileSync("../rlenv/ex", buffer);
                 exit(0);
             } else {

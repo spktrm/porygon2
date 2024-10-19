@@ -18,7 +18,7 @@ model = InferenceModel()
 
 
 def pprint_nparray(arr: np.ndarray):
-    print(np.array2string(arr, precision=2, suppress_small=True))
+    print(np.array2string(arr, precision=3, suppress_small=True))
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -31,7 +31,6 @@ async def predict(request: Request):
     pprint(state.info)
 
     pprint_nparray(np.array(response.pi))
-    pprint_nparray(np.array(response.logit))
     pprint_nparray(np.array(response.v))
 
     return response

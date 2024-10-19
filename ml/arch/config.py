@@ -10,7 +10,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 0.5
+    width_factor = 1
 
     base_entity_size = 256
     base_vector_size = 1024
@@ -18,6 +18,9 @@ def get_model_cfg():
     entity_size = int(base_entity_size * width_factor)
     vector_size = int(base_vector_size * width_factor)
     use_layer_norm = True
+
+    cfg.entity_size = entity_size
+    cfg.vector_size = vector_size
 
     # Encoder Configuration
     cfg.encoder = ConfigDict()
@@ -51,7 +54,7 @@ def get_model_cfg():
     cfg.encoder.context_merge = ConfigDict()
     cfg.encoder.context_merge.gating_type = GatingType.NONE
     cfg.encoder.context_merge.use_layer_norm = use_layer_norm
-    cfg.encoder.context_merge.output_size = entity_size
+    cfg.encoder.context_merge.output_size = vector_size
 
     # public history transformer
     #

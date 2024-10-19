@@ -44,9 +44,6 @@ class ValueHead(nn.Module):
 class ValueHeadNash(nn.Module):
     cfg: ConfigDict
 
-    # def setup(self):
-    #     self.logits = Logits(**self.cfg.logits.to_dict())
-
     @nn.compact
     def __call__(
         self,

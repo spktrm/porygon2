@@ -9,11 +9,11 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     CrossTransformer,
     PretrainedEmbedding,
     Resnet,
     ToAvgVector,
-    Transformer,
     VectorMerge,
 )
 from rlenv.data import (
@@ -51,7 +51,7 @@ MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/moves.npy")
 
 def get_move_mask(move: chex.Array) -> chex.Array:
     move_id_token = astype(move[FeatureMoveset.MOVEID], jnp.int32)
-    return jnp.logical_or(
+    return jnp.logical_and(
         jnp.not_equal(move_id_token, MovesEnum.MOVES__NULL),
         jnp.not_equal(move_id_token, MovesEnum.MOVES__PAD),
     )
@@ -374,9 +374,9 @@ class Encoder(nn.Module):
         edge_encoder = EdgeEncoder(self.cfg.edge_encoder)
         side_condition_encoder = SideEncoder(self.cfg.edge_encoder)
         field_encoder = FieldEncoder(self.cfg.edge_encoder)
-        Transformer(**self.cfg.context_transformer.to_dict())
-        Transformer(**self.cfg.context_transformer.to_dict())
-        timestep_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        # entity_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        # edge_transformer = Transformer(**self.cfg.context_transformer.to_dict())
+        # timestep_transformer = Transformer(**self.cfg.context_transformer.to_dict())
         node_entity_cross_transformer = CrossTransformer(
             **self.cfg.context_transformer.to_dict()
         )
@@ -407,7 +407,16 @@ class Encoder(nn.Module):
             )
 
             # Aggregate contextualized node and edge embeddings based on their respective masks
-            aggregate = lambda embeddings, mask: jnp.einsum("ij,i->j", embeddings, mask)
+            # aggregate = lambda embeddings, mask: jnp.einsum(
+            #     "ij,i->j", embeddings, mask
+            # ) / mask.sum().clip(min=1)
+            aggregate = (
+                lambda embeddings, mask: jnp.where(
+                    jnp.expand_dims(mask, axis=-1), embeddings, -1e9
+                ).max(axis=0)
+                * mask.any()
+            )
+
             aggregate_nodes = aggregate(contextualized_nodes, entity_mask)
             aggregate_edges = aggregate(contextualized_edges, edge_mask)
 
@@ -443,14 +452,31 @@ class Encoder(nn.Module):
             env_step.history_side_conditions,
             env_step.history_field,
         )
-        positional_embeddings = nn.Embed(NUM_HISTORY, self.cfg.entity_size)(
+
+        ssl_predictor = MLP((self.cfg.entity_size, self.cfg.entity_size))
+        ssl_head = MLP((self.cfg.entity_size,))
+        normalize = lambda x: x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-5)
+
+        ssl_pred_timstep = ssl_predictor(timestep_embeddings)
+        timestep_sim = normalize(ssl_head(ssl_pred_timstep)) @ normalize(
+            jax.lax.stop_gradient(ssl_pred_timstep.T)
+        )
+
+        ssl_loss = -(jnp.eye(timestep_embeddings.shape[0]) * timestep_sim).sum(
+            axis=-1
+        ) + jnp.log(jnp.exp(timestep_sim).sum(axis=-1, where=valid_timestep_mask))
+        ssl_loss = ssl_loss.mean(where=valid_timestep_mask)
+
+        positional_embeddings = nn.Embed(NUM_HISTORY, self.cfg.vector_size)(
             jnp.arange(NUM_HISTORY)
         )
-        timestep_embeddings = timestep_transformer(
-            timestep_embeddings
-            + positional_embeddings,  # Add positional embeddings to timestep embeddings
-            valid_timestep_mask,
+        timestep_embeddings = nn.Dense(features=self.cfg.entity_size)(
+            timestep_embeddings + positional_embeddings
         )
+        # timestep_embeddings = timestep_transformer(
+        #     timestep_embeddings,  # Add positional embeddings to timestep embeddings
+        #     valid_timestep_mask,
+        # )
 
         # Encode private entities (team) and obtain valid masks for each entity
         private_entity_embeddings, valid_private_mask = jax.vmap(entity_encoder)(
@@ -472,10 +498,13 @@ class Encoder(nn.Module):
         # Compute action embeddings by merging private entity embeddings with move embeddings
         move_encoder = MoveEncoder(self.cfg.move_encoder)
         action_merge = VectorMerge(**self.cfg.action_merge)
+        scaling_factor = self.param(
+            "scaling_factor", lambda _, shape: jnp.ones(shape) / 4, (1,)
+        )
 
         # Helper function to compute action embeddings for each set of private entity embeddings and moveset
         def _compute_action_embeddings(
-            current_entity_embeddings: chex.Array,
+            entity_embeddings: chex.Array,
             moveset: chex.Array,
             legal_mask: chex.Array,
         ) -> chex.Array:
@@ -483,12 +512,8 @@ class Encoder(nn.Module):
             Computes action embeddings by merging private entity embeddings with move embeddings.
             """
 
-            scaling_factor = self.param(
-                "scaling_factor", lambda rng, shape: jnp.ones(shape) / 4, (1,)
-            )
-
             # Repeat the first entity embedding and concatenate with the remaining entity embeddings
-            active_embedding = current_entity_embeddings[:1]
+            active_embedding = entity_embeddings[:1]
             scaled_active = active_embedding * scaling_factor
 
             active_embedding = scaled_active + jax.lax.stop_gradient(
@@ -496,31 +521,47 @@ class Encoder(nn.Module):
             )
 
             repeated_embedding = jnp.tile(active_embedding, (4, 1))
-
             entity_embeddings = jnp.concatenate(
-                (repeated_embedding, current_entity_embeddings),
-                axis=0,
+                (repeated_embedding, entity_embeddings), axis=0
             )
 
             # Encode moves and merge them with the entity embeddings
             action_embeddings, action_mask = jax.vmap(move_encoder)(moveset, legal_mask)
+
             action_embeddings = jax.vmap(action_merge)(
                 entity_embeddings, action_embeddings
             )
             return action_embeddings, action_mask
 
         # Compute action embeddings for each moveset
-        action_embeddings, action_mask = _compute_action_embeddings(
+        my_action_embeddings, my_action_mask = _compute_action_embeddings(
             private_entity_embeddings[:6], env_step.moveset[0], env_step.legal
         )
 
-        action_transformer = Transformer(**self.cfg.action_transformer.to_dict())
-        action_embeddings = action_transformer(action_embeddings, action_mask)
+        opp_legal = jnp.concatenate(
+            (
+                jnp.ones_like(env_step.legal[:4]),
+                jnp.zeros_like(env_step.legal[4:5]),
+                jnp.ones_like(env_step.legal[5:]),
+            )
+        )
+        opp_action_embeddings, opp_action_mask = _compute_action_embeddings(
+            private_entity_embeddings[6:], env_step.moveset[1], opp_legal
+        )
+
+        total_action_embeddings = (
+            jnp.expand_dims(my_action_embeddings, axis=1)
+            + jnp.expand_dims(opp_action_embeddings, axis=0)
+        ).reshape(-1, my_action_embeddings.shape[-1])
+
+        total_action_mask = (
+            jnp.expand_dims(my_action_mask * env_step.legal, axis=1)
+            & jnp.expand_dims(opp_action_mask, axis=0)
+        ).reshape(-1)
 
         # Compute the current state by averaging private embeddings, then passing through a ResNet
         average_embedding = ToAvgVector(**self.cfg.to_vector.to_dict())(
-            private_entity_embeddings,
-            valid_private_mask,
+            total_action_embeddings, total_action_mask
         )
 
         def _compute_state_embedding(
@@ -551,4 +592,4 @@ class Encoder(nn.Module):
 
         current_state = _compute_state_embedding(average_embedding, env_step)
 
-        return current_state, action_embeddings
+        return current_state, my_action_embeddings, ssl_loss

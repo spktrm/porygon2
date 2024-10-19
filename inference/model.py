@@ -13,7 +13,7 @@ from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, ModelOutput
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -39,22 +39,20 @@ class InferenceModel:
         print("model initialized!")
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(
-        self, env_step: EnvStep
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
-        output = self.network.apply(self.params, env_step)
-        pi = self.finetuning.post_process_policy(output.pi, env_step.legal)
-        return pi, output.v, output.log_pi, output.logit
+    def _network_jit_apply(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+        output: ModelOutput = self.network.apply(self.params, env_step)
+        return (
+            output.pi,  # self.finetuning.post_process_policy(output.pi, env_step.legal),
+            output.v,
+        )
 
     def predict(self, env_step: EnvStep):
-        pi, v, log_pi, logit = self._network_jit_apply(env_step)
+        pi, v = self._network_jit_apply(env_step)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
         return PredictionResponse(
             pi=pi.flatten().tolist(),
             v=v.item(),
-            log_pi=log_pi.flatten().tolist(),
-            logit=logit.flatten().tolist(),
             action=action.item(),
         )
