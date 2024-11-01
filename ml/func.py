@@ -381,27 +381,29 @@ def reg_v_trace(
         reward_uncorrected = reward + gamma * carry.reward_uncorrected
         discounted_reward = reward + gamma * carry.reward
 
-        # V-target calculation (standard V-Trace):
-        our_v_target = jnp.expand_dims(
-            jnp.squeeze(v, axis=-1)
-            + jnp.minimum(rho, cs * carry.importance_sampling)
-            * (reward + jnp.squeeze(gamma * carry.next_value - v, axis=-1))
+        our_v_target = (
+            v
+            + jnp.expand_dims(jnp.minimum(rho, cs * carry.importance_sampling), axis=-1)
+            * (
+                jnp.expand_dims(reward_uncorrected, axis=-1)
+                + gamma * carry.next_value
+                - v
+            )
             + lambda_
-            * jnp.minimum(c, cs * carry.importance_sampling)
+            * jnp.expand_dims(jnp.minimum(c, cs * carry.importance_sampling), axis=-1)
             * gamma
-            * jnp.squeeze(carry.next_v_target - carry.next_value, axis=-1),
-            axis=-1,
+            * (carry.next_v_target - carry.next_value)
         )
 
         opp_v_target = jnp.zeros_like(our_v_target)
         reset_v_target = jnp.zeros_like(our_v_target)
 
-        # Policy target calculation (using advantage for policy gradient):
-        advantage = jnp.expand_dims(reward, axis=-1) + gamma * carry.next_value - v
-        our_learning_output = (
-            actions_oh
-            * jnp.expand_dims(cs * carry.importance_sampling, axis=-1)
-            * advantage
+        our_learning_output = v + actions_oh * (  # regularisation
+            jnp.expand_dims(discounted_reward, axis=-1)
+            + gamma
+            * jnp.expand_dims(carry.importance_sampling, axis=-1)
+            * carry.next_v_target
+            - v
         )
 
         opp_learning_output = jnp.zeros_like(our_learning_output)
@@ -449,7 +451,6 @@ def get_loss_v(
     v_list: Sequence[chex.Array],
     v_target_list: Sequence[chex.Array],
     mask_list: Sequence[chex.Array],
-    delta: float = 1,
 ) -> chex.Array:
     """Define the loss function for the critic."""
     chex.assert_trees_all_equal_shapes(v_list, v_target_list)
@@ -460,13 +461,8 @@ def get_loss_v(
     for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
         assert v_n.shape[0] == v_target.shape[0]
 
-        error = v_n - lax.stop_gradient(v_target)
-        abs_error = jnp.abs(error)
-
-        loss_v = jnp.expand_dims(mask, axis=-1) * jnp.where(
-            abs_error <= delta,
-            0.5 * jnp.square(error),
-            delta * (abs_error - 0.5 * delta),
+        loss_v = (
+            jnp.expand_dims(mask, axis=-1) * (v_n - lax.stop_gradient(v_target)) ** 2
         )
         normalization = jnp.sum(mask)
         loss_v = jnp.sum(loss_v) / (normalization + (normalization == 0.0))
@@ -550,11 +546,8 @@ def get_loss_pg(
     actions_oh: chex.Array,
     valid: chex.Array,
     player_ids: Sequence[chex.Array],
-    importance_sampling_correction: Sequence[chex.Array],
-    clip: float = 100,
 ) -> chex.Array:
     """Define the nerd loss."""
-    assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
 
     for k, (log_pi, q_vr) in enumerate(zip(log_pi_list, q_vr_list)):

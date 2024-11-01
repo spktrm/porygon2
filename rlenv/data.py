@@ -2,6 +2,7 @@ import os
 
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
+    ActionsEnum,
     BattlemajorargsEnum,
     BattleminorargsEnum,
     BoostsEnum,
@@ -43,6 +44,7 @@ NUM_WEATHER = len(WeatherEnum.keys())
 NUM_TERRAIN = len(TerrainEnum.keys())
 NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
+NUM_ACTIONS = len(ActionsEnum.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())

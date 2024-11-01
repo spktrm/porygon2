@@ -19,6 +19,9 @@ message Info {
     float faintedReward = 11;
     bytes heuristicDist = 12;
     float switchReward = 13;
+    float ts = 14;
+    float longevityReward = 15;
+    float drawRatio = 16;
 }
 
 message State {

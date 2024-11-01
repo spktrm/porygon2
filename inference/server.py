@@ -31,7 +31,9 @@ async def predict(request: Request):
     pprint(state.info)
 
     pprint_nparray(np.array(response.pi))
+    pprint_nparray(np.array(response.logit))
     pprint_nparray(np.array(response.v))
+    pprint_nparray(np.array(response.action))
 
     return response
 

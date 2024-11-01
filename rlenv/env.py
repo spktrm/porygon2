@@ -61,7 +61,7 @@ def get_legal_mask(state: State):
     return mask[:10].astype(bool)
 
 
-def process_state(state: State) -> EnvStep:
+def process_state(state: State, is_eval: bool = False) -> EnvStep:
     player_index = state.info.playerIndex
     (
         moveset,
@@ -72,6 +72,10 @@ def process_state(state: State) -> EnvStep:
         history_field,
     ) = get_history(state, player_index)
     return EnvStep(
+        ts=state.info.ts,
+        draw_ratio=(
+            1 - (1 - state.info.turn / 100) ** 2 if is_eval else state.info.drawRatio
+        ),
         valid=~np.array(state.info.done, dtype=bool),
         player_id=np.array(player_index, dtype=np.int32),
         game_id=np.array(state.info.gameId, dtype=np.int32),
@@ -91,6 +95,9 @@ def process_state(state: State) -> EnvStep:
         ),
         switch_rewards=np.array(
             [state.info.switchReward, -state.info.switchReward], dtype=np.float32
+        ),
+        longevity_rewards=np.array(
+            [state.info.longevityReward, -state.info.longevityReward], dtype=np.float32
         ),
         legal=get_legal_mask(state),
         team=team,

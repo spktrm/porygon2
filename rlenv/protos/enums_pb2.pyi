@@ -5801,6 +5801,2420 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_WEATHER_SANDSTORM: _ClassVar[EffectEnum]
     EFFECT_WEATHER_SNOW: _ClassVar[EffectEnum]
     EFFECT_WEATHER_SUNNYDAY: _ClassVar[EffectEnum]
+
+class ActionsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTIONS__NULL: _ClassVar[ActionsEnum]
+    ACTIONS__PAD: _ClassVar[ActionsEnum]
+    ACTIONS__UNK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE__SWITCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_10000000VOLTTHUNDERBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ABSORB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACCELEROCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACID: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACIDARMOR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACIDDOWNPOUR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACIDSPRAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACROBATICS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ACUPRESSURE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AERIALACE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AEROBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AFTERYOU: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AGILITY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AIRCUTTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AIRSLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ALLOUTPUMMELING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ALLURINGVOICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ALLYSWITCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AMNESIA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ANCHORSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ANCIENTPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_APPLEACID: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AQUACUTTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AQUAJET: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AQUARING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AQUASTEP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AQUATAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ARMORCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ARMTHRUST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AROMATHERAPY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AROMATICMIST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ASSIST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ASSURANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ASTONISH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ASTRALBARRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ATTACKORDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ATTRACT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AURASPHERE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AURAWHEEL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AURORABEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AURORAVEIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AUTOTOMIZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AVALANCHE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_AXEKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BABYDOLLEYES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BADDYBAD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BANEFULBUNKER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BARBBARRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BARRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BARRIER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BATONPASS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BEAKBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BEATUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BEHEMOTHBASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BEHEMOTHBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BELCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BELLYDRUM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BESTOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BIDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BITE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BITTERBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BITTERMALICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLACKHOLEECLIPSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLASTBURN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLAZEKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLAZINGTORQUE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLEAKWINDSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLIZZARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLOODMOON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLOOMDOOM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BLUEFLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BODYPRESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BODYSLAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BOLTBEAK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BOLTSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BONECLUB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BONEMERANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BONERUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BOOMBURST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BOUNCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BOUNCYBUBBLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BRANCHPOKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BRAVEBIRD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BREAKINGSWIPE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BREAKNECKBLITZ: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BRICKBREAK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BRINE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BRUTALSWING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BUBBLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BUBBLEBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BUGBITE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BUGBUZZ: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BULKUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BULLDOZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BULLETPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BULLETSEED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BURNINGBULWARK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BURNINGJEALOUSY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BURNUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_BUZZYBUZZ: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CALMMIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CAMOUFLAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CAPTIVATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CATASTROPIKA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CEASELESSEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CELEBRATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHARGEBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHARM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHATTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHILLINGWATER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHILLYRECEPTION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHIPAWAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CHLOROBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CIRCLETHROW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLAMP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLANGINGSCALES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLANGOROUSSOUL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLANGOROUSSOULBLAZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLEARSMOG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CLOSECOMBAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COACHING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COLLISIONCOURSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COMBATTORQUE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COMETPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COMEUPPANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONFIDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONFUSERAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONFUSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONSTRICT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONTINENTALCRUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONVERSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CONVERSION2: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COPYCAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COREENFORCER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CORKSCREWCRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CORROSIVEGAS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COSMICPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COTTONGUARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COTTONSPORE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COUNTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COURTCHANGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_COVET: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CRABHAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CRAFTYSHIELD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CROSSCHOP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CROSSPOISON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CRUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CRUSHCLAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CRUSHGRIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CURSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_CUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DARKESTLARIAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DARKPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DARKVOID: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DAZZLINGGLEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DECORATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DEFENDORDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DEFENSECURL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DEFOG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DESTINYBOND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DETECT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DEVASTATINGDRAKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DIAMONDSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DIG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DIRECLAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DISABLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DISARMINGVOICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DISCHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DIVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DIZZYPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOODLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOOMDESIRE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLEEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLEHIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLEIRONBASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLEKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLESHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLESLAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DOUBLETEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRACOMETEOR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONASCENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONBREATH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONCHEER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONCLAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONDARTS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONENERGY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONHAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONRUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAGONTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAININGKISS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRAINPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DREAMEATER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRILLPECK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRILLRUN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DRUMBEATING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DUALCHOP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DUALWINGBEAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DYNAMAXCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_DYNAMICPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EARTHPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EARTHQUAKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ECHOEDVOICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EERIEIMPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EERIESPELL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EGGBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTRICTERRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTRIFY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTROBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTRODRIFT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTROSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ELECTROWEB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EMBARGO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EMBER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ENCORE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ENDEAVOR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ENDURE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ENERGYBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ENTRAINMENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ERUPTION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ESPERWING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ETERNABEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EXPANDINGFORCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EXPLOSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EXTRASENSORY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EXTREMEEVOBOOST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_EXTREMESPEED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FACADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FAIRYLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FAIRYWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FAKEOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FAKETEARS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FALSESURRENDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FALSESWIPE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FEATHERDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FEINT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FEINTATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FELLSTINGER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FICKLEBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIERYDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIERYWRATH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FILLETAWAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FINALGAMBIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIREBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIREFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIRELASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIREPLEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIREPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIRESPIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FIRSTIMPRESSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FISHIOUSREND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FISSURE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAMEBURST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAMECHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAMETHROWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAMEWHEEL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLAREBLITZ: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLASHCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLATTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLEURCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLIPTURN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLOATYFALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLORALHEALING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLOWERSHIELD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLOWERTRICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FLYINGPRESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FOCUSBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FOCUSENERGY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FOCUSPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FOLLOWME: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FORCEPALM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FORESIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FORESTSCURSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FOULPLAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FREEZEDRY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FREEZESHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FREEZINGGLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FREEZYFROST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FRENZYPLANT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FROSTBREATH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FRUSTRATION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FURYATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FURYCUTTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FURYSWIPES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FUSIONBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FUSIONFLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_FUTURESIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GASTROACID: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GEARGRIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GEARUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GENESISSUPERNOVA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GEOMANCY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GIGADRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GIGAIMPACT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GIGATONHAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GIGAVOLTHAVOC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GLACIALLANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GLACIATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GLAIVERUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GLITZYGLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXBEFUDDLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXCANNONADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXCENTIFERNO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXCHISTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXCUDDLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXDEPLETION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXDRUMSOLO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXFINALE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXFIREBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXFOAMBURST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXGOLDRUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXGRAVITAS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXHYDROSNIPE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXMALODOR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXMELTDOWN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXONEBLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXRAPIDFLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXREPLENISH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXRESONANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSANDBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSMITE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSNOOZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSTEELSURGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSTONESURGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSTUNSHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXSWEETNESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXTARTNESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXTERROR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXVINELASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXVOLCALITH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXVOLTCRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXWILDFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GMAXWINDRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRASSKNOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRASSPLEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRASSWHISTLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRASSYGLIDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRASSYTERRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRAVAPPLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRAVITY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GROWL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GROWTH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GRUDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUARDIANOFALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUARDSPLIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUARDSWAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUILLOTINE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUNKSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GUST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_GYROBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HAMMERARM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HAPPYHOUR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HARDEN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HARDPRESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HAZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEADBUTT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEADCHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEADLONGRUSH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEADSMASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEALBELL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEALBLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEALINGWISH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEALORDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEALPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEARTSTAMP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEARTSWAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEATCRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEATWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEAVYSLAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HELPINGHAND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HEX: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERBUG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERBUG60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERBUG70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDARK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDARK60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDARK70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDRAGON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDRAGON60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERDRAGON70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERELECTRIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERELECTRIC60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERELECTRIC70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIGHTING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIGHTING60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIGHTING70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIRE60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFIRE70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFLYING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFLYING60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERFLYING70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGHOST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGHOST60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGHOST70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGRASS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGRASS60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGRASS70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGROUND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGROUND60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERGROUND70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERICE60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERICE70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPOISON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPOISON60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPOISON70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPSYCHIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPSYCHIC60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERPSYCHIC70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERROCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERROCK60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERROCK70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERSTEEL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERSTEEL60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERSTEEL70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERWATER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERWATER60: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIDDENPOWERWATER70: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIGHHORSEPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HIGHJUMPKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HOLDBACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HOLDHANDS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HONECLAWS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HORNATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HORNDRILL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HORNLEECH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HOWL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HURRICANE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYDROCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYDROPUMP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYDROSTEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYDROVORTEX: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERDRILL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERSPACEFURY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERSPACEHOLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPERVOICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_HYPNOSIS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEBURN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEHAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICEPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICESHARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICESPINNER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICICLECRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICICLESPEAR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ICYWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IMPRISON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INCINERATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INFERNALPARADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INFERNO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INFERNOOVERDRIVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INFESTATION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INGRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_INSTRUCT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IONDELUGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IRONDEFENSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IRONHEAD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IRONTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_IVYCUDGEL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_JAWLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_JETPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_JUDGMENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_JUMPKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_JUNGLEHEALING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_KARATECHOP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_KINESIS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_KINGSSHIELD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_KNOCKOFF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_KOWTOWCLEAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LANDSWRATH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LASERFOCUS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LASHOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LASTRESORT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LASTRESPECTS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LAVAPLUME: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEAFAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEAFBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEAFSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEAFTORNADO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEECHLIFE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEECHSEED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LEER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LETSSNUGGLEFOREVER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LIFEDEW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LIGHTOFRUIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LIGHTSCREEN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LIGHTTHATBURNSTHESKY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LIQUIDATION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LOCKON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LOVELYKISS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LOWKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LOWSWEEP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUCKYCHANT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUMINACRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUNARBLESSING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUNARDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUNGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_LUSTERPURGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MACHPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGICALLEAF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGICALTORQUE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGICCOAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGICPOWDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGICROOM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGMASTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGNETBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGNETICFLUX: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGNETRISE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAGNITUDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAKEITRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MALICIOUSMOONSAULT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MALIGNANTCHAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MATBLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MATCHAGOTCHA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXAIRSTREAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXDARKNESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXFLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXFLUTTERBY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXGEYSER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXGUARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXHAILSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXKNUCKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXLIGHTNING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXMINDSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXOOZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXOVERGROWTH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXPHANTASM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXQUAKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXROCKFALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXSTARFALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXSTEELSPIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MAXWYRMWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEANLOOK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEDITATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEFIRST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEGADRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEGAHORN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEGAKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEGAPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MEMENTO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MENACINGMOONRAZEMAELSTROM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METALBURST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METALCLAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METALSOUND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METEORASSAULT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METEORBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METEORMASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_METRONOME: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIGHTYCLEAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MILKDRINK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIMIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MINDBLOWN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MINDREADER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MINIMIZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIRACLEEYE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIRRORCOAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIRRORMOVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIRRORSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MIST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MISTBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MISTYEXPLOSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MISTYTERRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MOONBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MOONGEISTBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MOONLIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MORNINGSUN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MORTALSPIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MOUNTAINGALE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MUDBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MUDDYWATER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MUDSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MUDSLAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MUDSPORT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MULTIATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MYSTICALFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_MYSTICALPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NASTYPLOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NATURALGIFT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NATUREPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NATURESMADNESS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NEEDLEARM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NEVERENDINGNIGHTMARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NIGHTDAZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NIGHTMARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NIGHTSHADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NIGHTSLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NOBLEROAR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NORETREAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NOXIOUSTORQUE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_NUZZLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OBLIVIONWING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OBSTRUCT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OCEANICOPERETTA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OCTAZOOKA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OCTOLOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ODORSLEUTH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OMINOUSWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ORDERUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ORIGINPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OUTRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OVERDRIVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_OVERHEAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PAINSPLIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PALEOWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PARABOLICCHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PARTINGSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PAYBACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PAYDAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PECK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PERISHSONG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PETALBLIZZARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PETALDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PHANTOMFORCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PHOTONGEYSER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PIKAPAPOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PINMISSILE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PLASMAFISTS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PLAYNICE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PLAYROUGH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PLUCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONGAS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONJAB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONPOWDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONSTING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POISONTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POLLENPUFF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POLTERGEIST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POPULATIONBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POUNCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POUND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWDERSNOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERGEM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERSHIFT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERSPLIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERSWAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERTRICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERTRIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERUPPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_POWERWHIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PRECIPICEBLADES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PRESENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PRISMATICLASER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PROTECT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHICFANGS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHICNOISE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHICTERRAIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHOBOOST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHOCUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHOSHIFT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYCHUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYSHIELDBASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYSHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PSYWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PULVERIZINGPANCAKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PUNISHMENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PURIFY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PURSUIT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_PYROBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_QUASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_QUICKATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_QUICKGUARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_QUIVERDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAGEFIST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAGEPOWDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAGINGBULL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAGINGFURY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAINDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAPIDSPIN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAZORLEAF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAZORSHELL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RAZORWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RECHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RECOVER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RECYCLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REFLECT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REFLECTTYPE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REFRESH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RELICSONG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RETALIATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RETURN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RETURN102: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REVELATIONDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REVENGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REVERSAL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_REVIVALBLESSING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RISINGVOLTAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROAR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROAROFTIME: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKCLIMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKPOLISH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKSLIDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKSMASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKTHROW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKTOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROCKWRECKER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROLEPLAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROLLINGKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROLLOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROOST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROTOTILLER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ROUND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_RUINATION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SACREDFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SACREDSWORD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SAFEGUARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SALTCURE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SANDATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SANDSEARSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SANDSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SANDTOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SAPPYSEED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SAVAGESPINOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCALD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCALESHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCARYFACE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCORCHINGSANDS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCRATCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SCREECH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SEARINGSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SEARINGSUNRAZESMASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SECRETPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SECRETSWORD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SEEDBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SEEDFLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SEISMICTOSS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SELFDESTRUCT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWBONE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWCLAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWFORCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWSNEAK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHADOWSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHARPEN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHATTEREDPSYCHE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHEDTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHEERCOLD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHELLSIDEARM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHELLSMASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHELLTRAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHELTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHIFTGEAR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHOCKWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SHOREUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SIGNALBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SILKTRAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SILVERWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SIMPLEBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SINISTERARROWRAID: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SIZZLYSLIDE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKETCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKILLSWAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKITTERSMACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKULLBASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKYATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKYDROP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SKYUPPERCUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLACKOFF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLEEPPOWDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLEEPTALK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLUDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLUDGEBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SLUDGEWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SMACKDOWN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SMARTSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SMELLINGSALTS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SMOG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SMOKESCREEN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNAPTRAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNARL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNATCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNIPESHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNORE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SNOWSCAPE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SOAK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SOFTBOILED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SOLARBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SOLARBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SONICBOOM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SOULSTEALING7STARSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPACIALREND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPARK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPARKLINGARIA: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPARKLYSWIRL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPECTRALTHIEF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPEEDSWAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPICYEXTRACT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIDERWEB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIKECANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIKES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIKYSHIELD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPINOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIRITBREAK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPIRITSHACKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPITE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPITUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPLINTEREDSTORMSHARDS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPLISHYSPLASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPORE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPOTLIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SPRINGTIDESTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEALTHROCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEAMERUPTION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEAMROLLER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEELBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEELROLLER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STEELWING: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STICKYWEB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STOCKPILE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STOKEDSPARKSURFER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STOMP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STOMPINGTANTRUM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STONEAXE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STONEEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STOREDPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STORMTHROW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRANGESTEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRENGTH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRENGTHSAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRINGSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRUGGLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STRUGGLEBUG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STUFFCHEEKS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_STUNSPORE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUBMISSION: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUBSTITUTE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUBZEROSLAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUCKERPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUNNYDAY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUNSTEELSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUPERCELLSLAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUPERFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUPERPOWER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUPERSONIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SUPERSONICSKYSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SURF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SURGINGSTRIKES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWAGGER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWALLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWEETKISS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWEETSCENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWIFT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWITCHEROO: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SWORDSDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SYNCHRONOISE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SYNTHESIS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_SYRUPBOMB: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TACHYONCUTTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TACKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAILGLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAILSLAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAILWHIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAILWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAKEDOWN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAKEHEART: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TARSHOT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TAUNT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TEARFULLOOK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TEATIME: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TECHNOBLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TECTONICRAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TEETERDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TELEKINESIS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TELEPORT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TEMPERFLARE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TERABLAST: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TERASTARSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TERRAINPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THIEF: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THOUSANDARROWS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THOUSANDWAVES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THROATCHOP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERCAGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERCLAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERFANG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDEROUSKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERPUNCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERSHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_THUNDERWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TICKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TIDYUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TOPSYTURVY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TORCHSONG: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TORMENT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TOXIC: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TOXICSPIKES: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TOXICTHREAD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRAILBLAZE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRANSFORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRIATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRICKORTREAT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRICKROOM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRIPLEARROWS: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRIPLEAXEL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRIPLEDIVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRIPLEKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TROPKICK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TRUMPCARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TWINBEAM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TWINEEDLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TWINKLETACKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_TWISTER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_UPPERHAND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_UPROAR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_UTURN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VACUUMWAVE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VCREATE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VEEVEEVOLLEY: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VENOMDRENCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VENOSHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VICTORYDANCE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VINEWHIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VISEGRIP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VITALTHROW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VOLTSWITCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_VOLTTACKLE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WAKEUPSLAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERFALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERGUN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERPLEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERPULSE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERSHURIKEN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERSPORT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WATERSPOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WAVECRASH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WEATHERBALL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WHIRLPOOL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WHIRLWIND: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WICKEDBLOW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WICKEDTORQUE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WIDEGUARD: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WILDBOLTSTORM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WILDCHARGE: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WILLOWISP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WINGATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WISH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WITHDRAW: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WONDERROOM: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WOODHAMMER: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WORKUP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WORRYSEED: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WRAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_WRINGOUT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_XSCISSOR: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_YAWN: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ZAPCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ZENHEADBUTT: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ZINGZAP: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE_ZIPPYZAP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABABO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABOMASNOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABOMASNOWMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABSOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ABSOLMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ACCELGOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AEGISLASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AEGISLASHBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AERODACTYL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AERODACTYLMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AGGRON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AGGRONMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AIPOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALAKAZAM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALAKAZAMMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALCREMIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALCREMIEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALOMOMOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALTARIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ALTARIAMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AMAURA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AMBIPOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AMOONGUSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AMPHAROS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AMPHAROSMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ANNIHILAPE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ANORITH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_APPLETUN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_APPLETUNGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_APPLIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARAQUANID: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARAQUANIDTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARBOK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARBOLIVA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCANINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCANINEHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSBUG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSDARK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSDRAGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSELECTRIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSFAIRY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSFIGHTING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSFLYING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSGHOST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSGRASS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSGROUND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSICE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSPOISON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSPSYCHIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSROCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSSTEEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCEUSWATER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCHALUDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCHEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCHEOPS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCTIBAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCTOVISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARCTOZOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARGALIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARGHONAUT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARIADOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARMALDO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARMAROUGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AROMATISSE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARROKUDA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARTICUNO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ARTICUNOGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ASTROLOTL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AUDINO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AUDINOMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AURORUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AURUMOTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AVALUGG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AVALUGGHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AXEW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AZELF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AZUMARILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_AZURILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BAGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BALTOY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BANETTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BANETTEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BARBARACLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BARBOACH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BARRASKEWDA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASCULEGION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASCULEGIONF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASCULIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASCULINBLUESTRIPED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASCULINWHITESTRIPED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BASTIODON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BAXCALIBUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BAYLEEF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEARTIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEAUTIFLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEEDRILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEEDRILLMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEHEEYEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BELDUM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BELLIBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BELLOSSOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BELLSPROUT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BERGMITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BEWEAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BIBAREL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BIDOOF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BINACLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BISHARP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLACEPHALON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLASTOISE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLASTOISEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLASTOISEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLAZIKEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLAZIKENMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLIPBUG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLISSEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BLITZLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BOLDORE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BOLTUND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BOMBIRDIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BONSLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BOUFFALANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BOUNSWEET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRAIXEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRAMBLEGHAST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRAMBLIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRATTLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRAVIARY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRAVIARYHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BREEZI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRELOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRIONNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRONZONG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRONZOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRUTEBONNET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BRUXISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUDEW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUIZEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BULBASAUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUNEARY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUNNELBY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BURMY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUTTERFREE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUTTERFREEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_BUZZWOLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CACNEA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CACTURNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAIMANOE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CALYREX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CALYREXICE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CALYREXSHADOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAMERUPT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAMERUPTMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAPSAKID: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARBINK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARIBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARKOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARNIVINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARRACOSTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CARVANHA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CASCOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CASTFORM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CASTFORMRAINY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CASTFORMSNOWY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CASTFORMSUNNY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CATERPIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAWDET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CAWMODORE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CELEBI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CELESTEELA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CENTISKORCH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CENTISKORCHGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CERULEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CETITAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CETODDLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHANDELURE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHANSEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARCADET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARIZARD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARIZARDGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARIZARDMEGAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARIZARDMEGAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARJABUG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARMANDER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHARMELEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHATOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHERRIM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHERRIMSUNSHINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHERUBI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHESNAUGHT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHESPIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHEWTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHIENPAO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHIKORITA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHIMCHAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHIMECHO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHINCHOU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHINGLING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHIYU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHROMERA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CHUGGALONG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CINCCINO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CINDERACE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CINDERACEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLAMPERL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLAUNCHER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLAWITZER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLAYDOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLEFABLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLEFAIRY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLEFFA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLOBBOPUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLODSIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CLOYSTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COALOSSAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COALOSSALGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COBALION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COFAGRIGUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COLOSSOIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COMBEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COMBUSKEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COMFEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CONKELDURR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COPPERAJAH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COPPERAJAHGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORIBALIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORPHISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORSOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORSOLAGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORVIKNIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORVIKNIGHTGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CORVISQUIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COSMOEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COSMOG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_COTTONEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRABOMINABLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRABRAWLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRADILY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRAMORANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRAMORANTGORGING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRAMORANTGULPING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRANIDOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRAWDAUNT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRESCEIDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRESSELIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CROAGUNK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CROBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CROCALOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CROCONAW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRUCIBELLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRUCIBELLEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRUSTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CRYOGONAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CUBCHOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CUBONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CUFANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CUPRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CURSOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CUTIEFLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CYCLIZAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CYCLOHM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_CYNDAQUIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DACHSBUN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARKRAI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARMANITAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARMANITANGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARMANITANGALARZEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARMANITANZEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARTRIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARUMAKA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DARUMAKAGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DECIDUEYE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DECIDUEYEHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEDENNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEERLING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEINO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DELCATTY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DELIBIRD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DELPHOX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEOXYS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEOXYSATTACK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEOXYSDEFENSE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEOXYSSPEED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEWGONG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEWOTT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DEWPIDER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DHELMISE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIALGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIALGAORIGIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIANCIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIANCIEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIGGERSBY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIGLETT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIGLETTALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DIPPLIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DITTO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DODRIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DODUO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DOLLIV: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DONDOZO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DONPHAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DORSOIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DOTTLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DOUBLADE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRACOVISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRACOZOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAGALGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAGAPULT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAGONAIR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAGONITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAKLOAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAMPA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRAPION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRATINI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DREDNAW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DREDNAWGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DREEPY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRIFBLIM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRIFLOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRILBUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRIZZILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DROWZEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DRUDDIGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUBWOOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUCKLETT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUDUNSPARCE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUDUNSPARCETHREESEGMENT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUGTRIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUGTRIOALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUNSPARCE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUOHM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUOSION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DURALUDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DURALUDONGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DURANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUSCLOPS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUSKNOIR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUSKULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DUSTOX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_DWEBBLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EELEKTRIK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EELEKTROSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EEVEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EEVEEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EEVEESTARTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EISCUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EISCUENOICE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EKANS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELDEGOSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTABUZZ: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTIVIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTRELK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTRODE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELECTRODEHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELEKID: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ELGYEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EMBIRCH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EMBOAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EMOLGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EMPOLEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ENAMORUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ENAMORUSTHERIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ENTEI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EQUILIBRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ESCAVALIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ESPATHRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ESPEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ESPURR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ETERNATUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ETERNATUSETERNAMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EXCADRILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EXEGGCUTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EXEGGUTOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EXEGGUTORALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_EXPLOUD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FALINKS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FARFETCHD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FARFETCHDGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FARIGIRAF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FAWNIFER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FEAROW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FEEBAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FENNEKIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FERALIGATR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FERROSEED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FERROTHORN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FEZANDIPITI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FIDGIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FIDOUGH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FINIZEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FINNEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLAAFFY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLABEBE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLAMIGO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLAPPLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLAPPLEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLARELM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLAREON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLETCHINDER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLETCHLING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLITTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLOATOY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLOATZEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLOETTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLOETTEETERNAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLORAGATO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLORGES: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLUTTERMANE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FLYGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FOMANTIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FOONGUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FORRETRESS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FRAXURE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FRIGIBAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FRILLISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FROAKIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FROGADIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FROSLASS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FROSMOTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FUECOCO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FURFROU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_FURRET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GABITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GALLADE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GALLADEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GALVANTULA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARBODOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARBODORGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARCHOMP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARCHOMPMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARDEVOIR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARDEVOIRMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GARGANACL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GASTLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GASTRODON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENESECT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENESECTBURN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENESECTCHILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENESECTDOUSE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENESECTSHOCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENGAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENGARGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GENGARMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GEODUDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GEODUDEALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GHOLDENGO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIBLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIGALITH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIMMIGHOUL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIMMIGHOULROAMING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIRAFARIG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIRATINA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GIRATINAORIGIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLACEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLALIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLALIEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLAMEOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLASTRIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLIGAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLIMMET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLIMMORA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLISCOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GLOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOGOAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLDEEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLDUCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLEMALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLETT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLISOPOD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOLURK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOODRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOODRAHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOOMY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOREBYSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOSSIFLEUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOTHITA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOTHITELLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOTHORITA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOUGINGFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOURGEIST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOURGEISTLARGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOURGEISTSMALL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GOURGEISTSUPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRAFAIAI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRANBULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRAPPLOCT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRAVELER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRAVELERALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GREATTUSK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GREAVARD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GREEDENT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRENINJA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRENINJAASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRENINJABOND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRIMER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRIMERALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRIMMSNARL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRIMMSNARLGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROOKEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROUDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROUDONPRIMAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROVYLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROWLITHE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GROWLITHEHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRUBBIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GRUMPIG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GULPIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GUMSHOOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GUMSHOOSTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GURDURR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GUZZLORD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GYARADOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_GYARADOSMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HAKAMOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HAPPINY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HARIYAMA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HATENNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HATTERENE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HATTERENEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HATTREM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HAUNTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HAWLUCHA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HAXORUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HEATMOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HEATRAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HELIOLISK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HELIOPTILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HEMOGOBLIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HERACROSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HERACROSSMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HERDIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HIPPOPOTAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HIPPOWDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HITMONCHAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HITMONLEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HITMONTOP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HONCHKROW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HONEDGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOOH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOOPA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOOPAUNBOUND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOOTHOOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOPPIP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HORSEA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOUNDOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOUNDOOMMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOUNDOUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HOUNDSTONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HUNTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HYDRAPPLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HYDREIGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_HYPNO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IGGLYBUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ILLUMISE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IMPIDIMP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INCINEROAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INDEEDEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INDEEDEEF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INFERNAPE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INKAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INTELEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_INTELEONGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONBOULDER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONBUNDLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONCROWN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONHANDS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONJUGULIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONLEAVES: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONMOTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONTHORNS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONTREADS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IRONVALIANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_IVYSAUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JANGMOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JELLICENT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JIGGLYPUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JIRACHI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JOLTEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JOLTIK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JUMBAO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JUMPLUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JUSTYKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_JYNX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KABUTO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KABUTOPS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KADABRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KAKUNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KANGASKHAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KANGASKHANMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KARRABLAST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KARTANA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KECLEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KELDEO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KELDEORESOLUTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KERFLUFFLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KILOWATTREL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KINGAMBIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KINGDRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KINGLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KINGLERGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KIRLIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KITSUNOH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLANG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLAWF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLEAVOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLEFKI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLINK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KLINKLANG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KOFFING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KOMALA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KOMMOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KOMMOOTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KORAIDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KRABBY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KRICKETOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KRICKETUNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KRILOWATT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KROKOROK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KROOKODILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KUBFU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KYOGRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KYOGREPRIMAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KYUREM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KYUREMBLACK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_KYUREMWHITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LAIRON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LAMPENT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LANDORUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LANDORUSTHERIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LANTURN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LAPRAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LAPRASGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LARVESTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LARVITAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LATIAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LATIASMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LATIOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LATIOSMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LEAFEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LEAVANNY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LECHONK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LEDIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LEDYBA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LICKILICKY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LICKITUNG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LIEPARD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LILEEP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LILLIGANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LILLIGANTHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LILLIPUP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LINOONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LINOONEGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LITLEO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LITTEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LITWICK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOKIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOMBRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOPUNNY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOPUNNYMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOTAD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LOUDRED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUCARIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUCARIOMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUDICOLO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUGIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUMINEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUNALA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUNATONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LURANTIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LURANTISTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUVDISC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUXIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LUXRAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LYCANROC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LYCANROCDUSK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_LYCANROCMIDNIGHT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MABOSSTIFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MACHAMP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MACHAMPGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MACHOKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MACHOP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGBY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGCARGO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGEARNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGEARNAORIGINAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGIKARP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGMAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGMORTAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGNEMITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGNETON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAGNEZONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAKUHITA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MALACONDA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MALAMAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAMOSWINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANAPHY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANDIBUZZ: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANECTRIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANECTRICMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANKEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANTINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MANTYKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MARACTUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAREANIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAREEP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MARILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAROWAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAROWAKALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAROWAKALOLATOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MARSHADOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MARSHTOMP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MASCHIFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MASQUERAIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAUSHOLD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAUSHOLDFOUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAWILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MAWILEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEDICHAM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEDICHAMMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEDITITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEGANIUM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MELMETAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MELMETALGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MELOETTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MELOETTAPIROUETTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MELTAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWSCARADA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWSTIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWSTICF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWTHALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWTHGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEOWTHGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MESPRIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_METAGROSS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_METAGROSSMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_METANG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_METAPOD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEWTWO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEWTWOMEGAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MEWTWOMEGAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIASMAW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIASMITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIENFOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIENSHAO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIGHTYENA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MILCERY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MILOTIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MILTANK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIMEJR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIMIKYU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIMIKYUBUSTED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIMIKYUBUSTEDTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIMIKYUTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MINCCINO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MINIOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MINIORMETEOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MINUN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MIRAIDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MISDREAVUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MISMAGIUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MISSINGNO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MOLLUX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MOLTRES: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MOLTRESGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MONFERNO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MONOHM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MORELULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MORGREM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MORPEKO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MORPEKOHANGRY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MOTHIM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MRMIME: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MRMIMEGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MRRIME: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUDBRAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUDKIP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUDSDALE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUKALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUMBAO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUNCHLAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUNKIDORI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUNNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MURKROW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_MUSHARNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NACLI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NACLSTACK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NAGANADEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NATU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NAVIATHAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECROZMA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECROZMADAWNWINGS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECROZMADUSKMANE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECROZMAULTRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECTURINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NECTURNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NICKIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDOKING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDOQUEEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDORANF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDORANM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDORINA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIDORINO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NIHILEGO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NINCADA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NINETALES: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NINETALESALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NINJASK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NOCTOWL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NOHFACE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NOIBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NOIVERN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NOSEPASS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NUMEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NUZLEAF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_NYMBLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OBSTAGOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OCTILLERY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ODDISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONCORNERSTONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONCORNERSTONETERA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONHEARTHFLAME: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONHEARTHFLAMETERA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONTEALTERA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONWELLSPRING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OGERPONWELLSPRINGTERA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OINKOLOGNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OINKOLOGNEF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OKIDOGI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OMANYTE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OMASTAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ONIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORANGURU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORBEETLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORBEETLEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORICORIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORICORIOPAU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORICORIOPOMPOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORICORIOSENSU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ORTHWORM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OSHAWOTT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_OVERQWIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PACHIRISU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PAJANTOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALAFIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALAFINHERO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALKIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALKIAORIGIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALOSSAND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PALPITOAD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PANCHAM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PANGORO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PANPOUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PANSAGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PANSEAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PARAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PARASECT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PASSIMIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PATRAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PAWMI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PAWMO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PAWMOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PAWNIARD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PECHARUNT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PELIPPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PERRSERKER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PERSIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PERSIANALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PETILIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PHANPY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PHANTUMP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PHEROMOSA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PHIONE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PICHU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PICHUSPIKYEARED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIDGEOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIDGEOTMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIDGEOTTO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIDGEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIDOVE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIGNITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUBELLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUCOSPLAY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUHOENN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUKALOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHULIBRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUORIGINAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUPARTNER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUPHD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUPOPSTAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUROCKSTAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUSINNOH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUSTARTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUUNOVA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKACHUWORLD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIKIPEK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PILOSWINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PINCURCHIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PINECO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PINSIR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PINSIRMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PIPLUP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PLASMANTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PLUFFLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PLUSLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POIPOLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARBLACKBELT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARBLACKDOOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARBRYCENMAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARF00: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARF002: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARGIANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARHUMANOID: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARMONSTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARMT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARMT2: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARSMEARGLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARSPIRIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARTRANSPORT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARUFO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARUFO2: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARUFOPROPU2: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POKESTARWHITEDOOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLITOED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLIWAG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLIWHIRL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLIWRATH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLTCHAGEIST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLTCHAGEISTARTISAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLTEAGEIST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POLTEAGEISTANTIQUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PONYTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PONYTAGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POOCHYENA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_POPPLIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PORYGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PORYGON2: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PORYGONZ: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PRIMARINA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PRIMEAPE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PRINPLUP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PRIVATYKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PROBOPASS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PROTOWATT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PSYDUCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PUMPKABOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PUMPKABOOLARGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PUMPKABOOSMALL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PUMPKABOOSUPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PUPITAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PURRLOIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PURUGLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PYROAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PYROAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_PYUKUMUKU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUAGSIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUAQUAVAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUAXLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUAXWELL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUILAVA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QUILLADIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QWILFISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_QWILFISHHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RABOOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RABSCA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAGINGBOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAICHU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAICHUALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAIKOU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RALTS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAMPARDOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAPIDASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAPIDASHGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RATICATE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RATICATEALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RATICATEALOLATOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RATTATA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RATTATAALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAYQUAZA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RAYQUAZAMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REBBLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGICE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGIDRAGO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGIELEKI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGIGIGAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGIROCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REGISTEEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RELICANTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RELLOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REMORAID: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RESHIRAM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REUNICLUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REVAVROOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_REVENANKH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RHYDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RHYHORN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RHYPERIOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RIBOMBEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RIBOMBEETOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RILLABOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RILLABOOMGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RIOLU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROARINGMOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROCKRUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROGGENROLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROLYCOLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROOKIDEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROSELIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROSERADE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOMFAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOMFROST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOMHEAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOMMOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROTOMWASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ROWLET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RUFFLET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_RUNERIGUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SABLEYE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SABLEYEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAHARAJA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAHARASCAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SALAMENCE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SALAMENCEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SALANDIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SALAZZLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SALAZZLETOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAMUROTT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAMUROTTHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDACONDA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDACONDAGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDSHREW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDSHREWALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDSLASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDSLASHALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDYGAST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SANDYSHOCKS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAWK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SAWSBUCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCATTERBUG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCATTERVEIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCEPTILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCEPTILEMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCIZOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCIZORMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCOLIPEDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCORBUNNY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCOVILLAIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCRAFTY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCRAGGY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCRATCHET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCREAMTAIL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SCYTHER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEADRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEAKING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEALEO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEEDOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEISMITOAD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SENTRET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SERPERIOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SERVINE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEVIPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SEWADDLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHARPEDO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHARPEDOMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHAYMIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHAYMINSKY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHEDINJA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHELGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHELLDER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHELLOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHELMET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHIELDON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHIFTRY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHIINOTIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHINX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHROODLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHROOMISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHUCKLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SHUPPET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIGILYPH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILCOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILICOBRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYBUG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYDARK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYDRAGON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYELECTRIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYFAIRY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYFIGHTING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYFIRE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYFLYING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYGHOST: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYGRASS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYGROUND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYICE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYPOISON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYPSYCHIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYROCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYSTEEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SILVALLYWATER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIMIPOUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIMISAGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIMISEAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SINISTCHA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SINISTCHAMASTERPIECE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SINISTEA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SINISTEAANTIQUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIRFETCHD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SIZZLIPEDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKARMORY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKELEDIRGE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKIDDO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKIPLOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKITTY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKORUPI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKRELP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKUNTANK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SKWOVET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLAKING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLAKOTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLIGGOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLIGGOOHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLITHERWING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWBRO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWBROGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWBROMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWKING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWKINGGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWPOKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLOWPOKEGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLUGMA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SLURPUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMEARGLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMOGECKO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMOGUANA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMOKOMODO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMOLIV: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SMOOCHUM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNAELSTROM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNEASEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNEASELHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNEASLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNIVY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNORLAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNORLAXGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNORUNT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNOVER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNUBBULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SNUGGLOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SOBBLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SOLGALEO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SOLOSIS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SOLOTL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SOLROCK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPEAROW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPECTRIER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPEWPA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPHEAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPIDOPS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPINARAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPINDA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPIRITOMB: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPOINK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPRIGATITO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SPRITZEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SQUAWKABILLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SQUAWKABILLYBLUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SQUAWKABILLYWHITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SQUAWKABILLYYELLOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SQUIRTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STAKATAKA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STANTLER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STARAPTOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STARAVIA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STARLY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STARMIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STARYU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STEELIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STEELIXMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STEENEE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STONJOURNER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STOUTLAND: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STRATAGEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STUFFUL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STUNFISK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STUNFISKGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_STUNKY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SUDOWOODO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SUICUNE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SUNFLORA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SUNKERN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SURSKIT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWABLU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWADLOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWALOT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWAMPERT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWAMPERTMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWANNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWELLOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWINUB: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWIRLIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWIRLPOOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SWOOBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SYCLANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SYCLAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_SYLVEON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TACTITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TADBULB: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAILLOW: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TALONFLAME: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TANDEMAUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TANGELA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TANGROWTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAPUBULU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAPUFINI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAPUKOKO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAPULELE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAROUNTULA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TATSUGIRI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAUROS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAUROSPALDEAAQUA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAUROSPALDEABLAZE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TAUROSPALDEACOMBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TEDDIURSA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TENTACOOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TENTACRUEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TEPIG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TERAPAGOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TERAPAGOSSTELLAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TERAPAGOSTERASTAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TERRAKION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_THIEVUL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_THROH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_THUNDURUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_THUNDURUSTHERIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_THWACKEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TIMBURR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TINGLU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TINKATINK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TINKATON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TINKATUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TIRTOUGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOEDSCOOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOEDSCRUEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOGEDEMARU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOGEDEMARUTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOGEKISS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOGEPI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOGETIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOMOHAWK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORCHIC: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORKOAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORNADUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORNADUSTHERIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORRACAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TORTERRA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOTODILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOUCANNON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXAPEX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXICROAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXTRICITY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXTRICITYGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXTRICITYLOWKEY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TOXTRICITYLOWKEYGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TRANQUILL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TRAPINCH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TREECKO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TREVENANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TROPIUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TRUBBISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TRUMBEAK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TSAREENA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TURTONATOR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TURTWIG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYMPOLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYNAMO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYPENULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYPHLOSION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYPHLOSIONHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYRANITAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYRANITARMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYRANTRUM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYROGUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_TYRUNT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_UMBREON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_UNFEZANT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_UNOWN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSALUNA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSALUNABLOODMOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSARING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSHIFU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSHIFUGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSHIFURAPIDSTRIKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_URSHIFURAPIDSTRIKEGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_UXIE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VANILLISH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VANILLITE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VANILLUXE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VAPOREON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VAROOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VELUZA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENIPEDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENOMICON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENOMICONEPILOGUE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENOMOTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENONAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENUSAUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENUSAURGMAX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VENUSAURMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VESPIQUEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIBRAVA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VICTINI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VICTREEBEL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIGOROTH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIKAVOLT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIKAVOLTTOTEM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VILEPLUME: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIRIZION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIVILLON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIVILLONFANCY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VIVILLONPOKEBALL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLBEAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLCANION: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLCARONA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLKRAKEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLKRITTER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLTORB: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOLTORBHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOODOLL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VOODOOM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VULLABY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VULPIX: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_VULPIXALOLA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WAILMER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WAILORD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WALKINGWAKE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WALREIN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WARTORTLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WATCHOG: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WATTREL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WEAVILE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WEEDLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WEEPINBELL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WEEZING: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WEEZINGGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WHIMSICOTT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WHIRLIPEDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WHISCASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WHISMUR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WIGGLYTUFF: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WIGLETT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WIMPOD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WINGULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WISHIWASHI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WISHIWASHISCHOOL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOBBUFFET: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOCHIEN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOOBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOOLOO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOOPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WOOPERPALDEA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WORMADAM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WORMADAMSANDY: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WORMADAMTRASH: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WUGTRIO: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WURMPLE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WYNAUT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_WYRDEER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_XATU: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_XERNEAS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_XERNEASNEUTRAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_XURKITREE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YAMASK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YAMASKGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YAMPER: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YANMA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YANMEGA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YUNGOOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_YVELTAL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZACIAN: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZACIANCROWNED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZAMAZENTA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZAMAZENTACROWNED: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZANGOOSE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZAPDOS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZAPDOSGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZARUDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZARUDEDADA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZEBSTRIKA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZEKROM: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZERAORA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZIGZAGOON: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZIGZAGOONGALAR: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZOROARK: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZOROARKHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZORUA: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZORUAHISUI: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZUBAT: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZWEILOUS: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZYGARDE: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZYGARDE10: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH_ZYGARDECOMPLETE: _ClassVar[ActionsEnum]
 SPECIES__NULL: SpeciesEnum
 SPECIES__PAD: SpeciesEnum
 SPECIES__UNK: SpeciesEnum
@@ -11542,3 +13956,2414 @@ EFFECT_WEATHER_RAINDANCE: EffectEnum
 EFFECT_WEATHER_SANDSTORM: EffectEnum
 EFFECT_WEATHER_SNOW: EffectEnum
 EFFECT_WEATHER_SUNNYDAY: EffectEnum
+ACTIONS__NULL: ActionsEnum
+ACTIONS__PAD: ActionsEnum
+ACTIONS__UNK: ActionsEnum
+ACTIONS_MOVE__SWITCH: ActionsEnum
+ACTIONS_MOVE_10000000VOLTTHUNDERBOLT: ActionsEnum
+ACTIONS_MOVE_ABSORB: ActionsEnum
+ACTIONS_MOVE_ACCELEROCK: ActionsEnum
+ACTIONS_MOVE_ACID: ActionsEnum
+ACTIONS_MOVE_ACIDARMOR: ActionsEnum
+ACTIONS_MOVE_ACIDDOWNPOUR: ActionsEnum
+ACTIONS_MOVE_ACIDSPRAY: ActionsEnum
+ACTIONS_MOVE_ACROBATICS: ActionsEnum
+ACTIONS_MOVE_ACUPRESSURE: ActionsEnum
+ACTIONS_MOVE_AERIALACE: ActionsEnum
+ACTIONS_MOVE_AEROBLAST: ActionsEnum
+ACTIONS_MOVE_AFTERYOU: ActionsEnum
+ACTIONS_MOVE_AGILITY: ActionsEnum
+ACTIONS_MOVE_AIRCUTTER: ActionsEnum
+ACTIONS_MOVE_AIRSLASH: ActionsEnum
+ACTIONS_MOVE_ALLOUTPUMMELING: ActionsEnum
+ACTIONS_MOVE_ALLURINGVOICE: ActionsEnum
+ACTIONS_MOVE_ALLYSWITCH: ActionsEnum
+ACTIONS_MOVE_AMNESIA: ActionsEnum
+ACTIONS_MOVE_ANCHORSHOT: ActionsEnum
+ACTIONS_MOVE_ANCIENTPOWER: ActionsEnum
+ACTIONS_MOVE_APPLEACID: ActionsEnum
+ACTIONS_MOVE_AQUACUTTER: ActionsEnum
+ACTIONS_MOVE_AQUAJET: ActionsEnum
+ACTIONS_MOVE_AQUARING: ActionsEnum
+ACTIONS_MOVE_AQUASTEP: ActionsEnum
+ACTIONS_MOVE_AQUATAIL: ActionsEnum
+ACTIONS_MOVE_ARMORCANNON: ActionsEnum
+ACTIONS_MOVE_ARMTHRUST: ActionsEnum
+ACTIONS_MOVE_AROMATHERAPY: ActionsEnum
+ACTIONS_MOVE_AROMATICMIST: ActionsEnum
+ACTIONS_MOVE_ASSIST: ActionsEnum
+ACTIONS_MOVE_ASSURANCE: ActionsEnum
+ACTIONS_MOVE_ASTONISH: ActionsEnum
+ACTIONS_MOVE_ASTRALBARRAGE: ActionsEnum
+ACTIONS_MOVE_ATTACKORDER: ActionsEnum
+ACTIONS_MOVE_ATTRACT: ActionsEnum
+ACTIONS_MOVE_AURASPHERE: ActionsEnum
+ACTIONS_MOVE_AURAWHEEL: ActionsEnum
+ACTIONS_MOVE_AURORABEAM: ActionsEnum
+ACTIONS_MOVE_AURORAVEIL: ActionsEnum
+ACTIONS_MOVE_AUTOTOMIZE: ActionsEnum
+ACTIONS_MOVE_AVALANCHE: ActionsEnum
+ACTIONS_MOVE_AXEKICK: ActionsEnum
+ACTIONS_MOVE_BABYDOLLEYES: ActionsEnum
+ACTIONS_MOVE_BADDYBAD: ActionsEnum
+ACTIONS_MOVE_BANEFULBUNKER: ActionsEnum
+ACTIONS_MOVE_BARBBARRAGE: ActionsEnum
+ACTIONS_MOVE_BARRAGE: ActionsEnum
+ACTIONS_MOVE_BARRIER: ActionsEnum
+ACTIONS_MOVE_BATONPASS: ActionsEnum
+ACTIONS_MOVE_BEAKBLAST: ActionsEnum
+ACTIONS_MOVE_BEATUP: ActionsEnum
+ACTIONS_MOVE_BEHEMOTHBASH: ActionsEnum
+ACTIONS_MOVE_BEHEMOTHBLADE: ActionsEnum
+ACTIONS_MOVE_BELCH: ActionsEnum
+ACTIONS_MOVE_BELLYDRUM: ActionsEnum
+ACTIONS_MOVE_BESTOW: ActionsEnum
+ACTIONS_MOVE_BIDE: ActionsEnum
+ACTIONS_MOVE_BIND: ActionsEnum
+ACTIONS_MOVE_BITE: ActionsEnum
+ACTIONS_MOVE_BITTERBLADE: ActionsEnum
+ACTIONS_MOVE_BITTERMALICE: ActionsEnum
+ACTIONS_MOVE_BLACKHOLEECLIPSE: ActionsEnum
+ACTIONS_MOVE_BLASTBURN: ActionsEnum
+ACTIONS_MOVE_BLAZEKICK: ActionsEnum
+ACTIONS_MOVE_BLAZINGTORQUE: ActionsEnum
+ACTIONS_MOVE_BLEAKWINDSTORM: ActionsEnum
+ACTIONS_MOVE_BLIZZARD: ActionsEnum
+ACTIONS_MOVE_BLOCK: ActionsEnum
+ACTIONS_MOVE_BLOODMOON: ActionsEnum
+ACTIONS_MOVE_BLOOMDOOM: ActionsEnum
+ACTIONS_MOVE_BLUEFLARE: ActionsEnum
+ACTIONS_MOVE_BODYPRESS: ActionsEnum
+ACTIONS_MOVE_BODYSLAM: ActionsEnum
+ACTIONS_MOVE_BOLTBEAK: ActionsEnum
+ACTIONS_MOVE_BOLTSTRIKE: ActionsEnum
+ACTIONS_MOVE_BONECLUB: ActionsEnum
+ACTIONS_MOVE_BONEMERANG: ActionsEnum
+ACTIONS_MOVE_BONERUSH: ActionsEnum
+ACTIONS_MOVE_BOOMBURST: ActionsEnum
+ACTIONS_MOVE_BOUNCE: ActionsEnum
+ACTIONS_MOVE_BOUNCYBUBBLE: ActionsEnum
+ACTIONS_MOVE_BRANCHPOKE: ActionsEnum
+ACTIONS_MOVE_BRAVEBIRD: ActionsEnum
+ACTIONS_MOVE_BREAKINGSWIPE: ActionsEnum
+ACTIONS_MOVE_BREAKNECKBLITZ: ActionsEnum
+ACTIONS_MOVE_BRICKBREAK: ActionsEnum
+ACTIONS_MOVE_BRINE: ActionsEnum
+ACTIONS_MOVE_BRUTALSWING: ActionsEnum
+ACTIONS_MOVE_BUBBLE: ActionsEnum
+ACTIONS_MOVE_BUBBLEBEAM: ActionsEnum
+ACTIONS_MOVE_BUGBITE: ActionsEnum
+ACTIONS_MOVE_BUGBUZZ: ActionsEnum
+ACTIONS_MOVE_BULKUP: ActionsEnum
+ACTIONS_MOVE_BULLDOZE: ActionsEnum
+ACTIONS_MOVE_BULLETPUNCH: ActionsEnum
+ACTIONS_MOVE_BULLETSEED: ActionsEnum
+ACTIONS_MOVE_BURNINGBULWARK: ActionsEnum
+ACTIONS_MOVE_BURNINGJEALOUSY: ActionsEnum
+ACTIONS_MOVE_BURNUP: ActionsEnum
+ACTIONS_MOVE_BUZZYBUZZ: ActionsEnum
+ACTIONS_MOVE_CALMMIND: ActionsEnum
+ACTIONS_MOVE_CAMOUFLAGE: ActionsEnum
+ACTIONS_MOVE_CAPTIVATE: ActionsEnum
+ACTIONS_MOVE_CATASTROPIKA: ActionsEnum
+ACTIONS_MOVE_CEASELESSEDGE: ActionsEnum
+ACTIONS_MOVE_CELEBRATE: ActionsEnum
+ACTIONS_MOVE_CHARGE: ActionsEnum
+ACTIONS_MOVE_CHARGEBEAM: ActionsEnum
+ACTIONS_MOVE_CHARM: ActionsEnum
+ACTIONS_MOVE_CHATTER: ActionsEnum
+ACTIONS_MOVE_CHILLINGWATER: ActionsEnum
+ACTIONS_MOVE_CHILLYRECEPTION: ActionsEnum
+ACTIONS_MOVE_CHIPAWAY: ActionsEnum
+ACTIONS_MOVE_CHLOROBLAST: ActionsEnum
+ACTIONS_MOVE_CIRCLETHROW: ActionsEnum
+ACTIONS_MOVE_CLAMP: ActionsEnum
+ACTIONS_MOVE_CLANGINGSCALES: ActionsEnum
+ACTIONS_MOVE_CLANGOROUSSOUL: ActionsEnum
+ACTIONS_MOVE_CLANGOROUSSOULBLAZE: ActionsEnum
+ACTIONS_MOVE_CLEARSMOG: ActionsEnum
+ACTIONS_MOVE_CLOSECOMBAT: ActionsEnum
+ACTIONS_MOVE_COACHING: ActionsEnum
+ACTIONS_MOVE_COIL: ActionsEnum
+ACTIONS_MOVE_COLLISIONCOURSE: ActionsEnum
+ACTIONS_MOVE_COMBATTORQUE: ActionsEnum
+ACTIONS_MOVE_COMETPUNCH: ActionsEnum
+ACTIONS_MOVE_COMEUPPANCE: ActionsEnum
+ACTIONS_MOVE_CONFIDE: ActionsEnum
+ACTIONS_MOVE_CONFUSERAY: ActionsEnum
+ACTIONS_MOVE_CONFUSION: ActionsEnum
+ACTIONS_MOVE_CONSTRICT: ActionsEnum
+ACTIONS_MOVE_CONTINENTALCRUSH: ActionsEnum
+ACTIONS_MOVE_CONVERSION: ActionsEnum
+ACTIONS_MOVE_CONVERSION2: ActionsEnum
+ACTIONS_MOVE_COPYCAT: ActionsEnum
+ACTIONS_MOVE_COREENFORCER: ActionsEnum
+ACTIONS_MOVE_CORKSCREWCRASH: ActionsEnum
+ACTIONS_MOVE_CORROSIVEGAS: ActionsEnum
+ACTIONS_MOVE_COSMICPOWER: ActionsEnum
+ACTIONS_MOVE_COTTONGUARD: ActionsEnum
+ACTIONS_MOVE_COTTONSPORE: ActionsEnum
+ACTIONS_MOVE_COUNTER: ActionsEnum
+ACTIONS_MOVE_COURTCHANGE: ActionsEnum
+ACTIONS_MOVE_COVET: ActionsEnum
+ACTIONS_MOVE_CRABHAMMER: ActionsEnum
+ACTIONS_MOVE_CRAFTYSHIELD: ActionsEnum
+ACTIONS_MOVE_CROSSCHOP: ActionsEnum
+ACTIONS_MOVE_CROSSPOISON: ActionsEnum
+ACTIONS_MOVE_CRUNCH: ActionsEnum
+ACTIONS_MOVE_CRUSHCLAW: ActionsEnum
+ACTIONS_MOVE_CRUSHGRIP: ActionsEnum
+ACTIONS_MOVE_CURSE: ActionsEnum
+ACTIONS_MOVE_CUT: ActionsEnum
+ACTIONS_MOVE_DARKESTLARIAT: ActionsEnum
+ACTIONS_MOVE_DARKPULSE: ActionsEnum
+ACTIONS_MOVE_DARKVOID: ActionsEnum
+ACTIONS_MOVE_DAZZLINGGLEAM: ActionsEnum
+ACTIONS_MOVE_DECORATE: ActionsEnum
+ACTIONS_MOVE_DEFENDORDER: ActionsEnum
+ACTIONS_MOVE_DEFENSECURL: ActionsEnum
+ACTIONS_MOVE_DEFOG: ActionsEnum
+ACTIONS_MOVE_DESTINYBOND: ActionsEnum
+ACTIONS_MOVE_DETECT: ActionsEnum
+ACTIONS_MOVE_DEVASTATINGDRAKE: ActionsEnum
+ACTIONS_MOVE_DIAMONDSTORM: ActionsEnum
+ACTIONS_MOVE_DIG: ActionsEnum
+ACTIONS_MOVE_DIRECLAW: ActionsEnum
+ACTIONS_MOVE_DISABLE: ActionsEnum
+ACTIONS_MOVE_DISARMINGVOICE: ActionsEnum
+ACTIONS_MOVE_DISCHARGE: ActionsEnum
+ACTIONS_MOVE_DIVE: ActionsEnum
+ACTIONS_MOVE_DIZZYPUNCH: ActionsEnum
+ACTIONS_MOVE_DOODLE: ActionsEnum
+ACTIONS_MOVE_DOOMDESIRE: ActionsEnum
+ACTIONS_MOVE_DOUBLEEDGE: ActionsEnum
+ACTIONS_MOVE_DOUBLEHIT: ActionsEnum
+ACTIONS_MOVE_DOUBLEIRONBASH: ActionsEnum
+ACTIONS_MOVE_DOUBLEKICK: ActionsEnum
+ACTIONS_MOVE_DOUBLESHOCK: ActionsEnum
+ACTIONS_MOVE_DOUBLESLAP: ActionsEnum
+ACTIONS_MOVE_DOUBLETEAM: ActionsEnum
+ACTIONS_MOVE_DRACOMETEOR: ActionsEnum
+ACTIONS_MOVE_DRAGONASCENT: ActionsEnum
+ACTIONS_MOVE_DRAGONBREATH: ActionsEnum
+ACTIONS_MOVE_DRAGONCHEER: ActionsEnum
+ACTIONS_MOVE_DRAGONCLAW: ActionsEnum
+ACTIONS_MOVE_DRAGONDANCE: ActionsEnum
+ACTIONS_MOVE_DRAGONDARTS: ActionsEnum
+ACTIONS_MOVE_DRAGONENERGY: ActionsEnum
+ACTIONS_MOVE_DRAGONHAMMER: ActionsEnum
+ACTIONS_MOVE_DRAGONPULSE: ActionsEnum
+ACTIONS_MOVE_DRAGONRAGE: ActionsEnum
+ACTIONS_MOVE_DRAGONRUSH: ActionsEnum
+ACTIONS_MOVE_DRAGONTAIL: ActionsEnum
+ACTIONS_MOVE_DRAININGKISS: ActionsEnum
+ACTIONS_MOVE_DRAINPUNCH: ActionsEnum
+ACTIONS_MOVE_DREAMEATER: ActionsEnum
+ACTIONS_MOVE_DRILLPECK: ActionsEnum
+ACTIONS_MOVE_DRILLRUN: ActionsEnum
+ACTIONS_MOVE_DRUMBEATING: ActionsEnum
+ACTIONS_MOVE_DUALCHOP: ActionsEnum
+ACTIONS_MOVE_DUALWINGBEAT: ActionsEnum
+ACTIONS_MOVE_DYNAMAXCANNON: ActionsEnum
+ACTIONS_MOVE_DYNAMICPUNCH: ActionsEnum
+ACTIONS_MOVE_EARTHPOWER: ActionsEnum
+ACTIONS_MOVE_EARTHQUAKE: ActionsEnum
+ACTIONS_MOVE_ECHOEDVOICE: ActionsEnum
+ACTIONS_MOVE_EERIEIMPULSE: ActionsEnum
+ACTIONS_MOVE_EERIESPELL: ActionsEnum
+ACTIONS_MOVE_EGGBOMB: ActionsEnum
+ACTIONS_MOVE_ELECTRICTERRAIN: ActionsEnum
+ACTIONS_MOVE_ELECTRIFY: ActionsEnum
+ACTIONS_MOVE_ELECTROBALL: ActionsEnum
+ACTIONS_MOVE_ELECTRODRIFT: ActionsEnum
+ACTIONS_MOVE_ELECTROSHOT: ActionsEnum
+ACTIONS_MOVE_ELECTROWEB: ActionsEnum
+ACTIONS_MOVE_EMBARGO: ActionsEnum
+ACTIONS_MOVE_EMBER: ActionsEnum
+ACTIONS_MOVE_ENCORE: ActionsEnum
+ACTIONS_MOVE_ENDEAVOR: ActionsEnum
+ACTIONS_MOVE_ENDURE: ActionsEnum
+ACTIONS_MOVE_ENERGYBALL: ActionsEnum
+ACTIONS_MOVE_ENTRAINMENT: ActionsEnum
+ACTIONS_MOVE_ERUPTION: ActionsEnum
+ACTIONS_MOVE_ESPERWING: ActionsEnum
+ACTIONS_MOVE_ETERNABEAM: ActionsEnum
+ACTIONS_MOVE_EXPANDINGFORCE: ActionsEnum
+ACTIONS_MOVE_EXPLOSION: ActionsEnum
+ACTIONS_MOVE_EXTRASENSORY: ActionsEnum
+ACTIONS_MOVE_EXTREMEEVOBOOST: ActionsEnum
+ACTIONS_MOVE_EXTREMESPEED: ActionsEnum
+ACTIONS_MOVE_FACADE: ActionsEnum
+ACTIONS_MOVE_FAIRYLOCK: ActionsEnum
+ACTIONS_MOVE_FAIRYWIND: ActionsEnum
+ACTIONS_MOVE_FAKEOUT: ActionsEnum
+ACTIONS_MOVE_FAKETEARS: ActionsEnum
+ACTIONS_MOVE_FALSESURRENDER: ActionsEnum
+ACTIONS_MOVE_FALSESWIPE: ActionsEnum
+ACTIONS_MOVE_FEATHERDANCE: ActionsEnum
+ACTIONS_MOVE_FEINT: ActionsEnum
+ACTIONS_MOVE_FEINTATTACK: ActionsEnum
+ACTIONS_MOVE_FELLSTINGER: ActionsEnum
+ACTIONS_MOVE_FICKLEBEAM: ActionsEnum
+ACTIONS_MOVE_FIERYDANCE: ActionsEnum
+ACTIONS_MOVE_FIERYWRATH: ActionsEnum
+ACTIONS_MOVE_FILLETAWAY: ActionsEnum
+ACTIONS_MOVE_FINALGAMBIT: ActionsEnum
+ACTIONS_MOVE_FIREBLAST: ActionsEnum
+ACTIONS_MOVE_FIREFANG: ActionsEnum
+ACTIONS_MOVE_FIRELASH: ActionsEnum
+ACTIONS_MOVE_FIREPLEDGE: ActionsEnum
+ACTIONS_MOVE_FIREPUNCH: ActionsEnum
+ACTIONS_MOVE_FIRESPIN: ActionsEnum
+ACTIONS_MOVE_FIRSTIMPRESSION: ActionsEnum
+ACTIONS_MOVE_FISHIOUSREND: ActionsEnum
+ACTIONS_MOVE_FISSURE: ActionsEnum
+ACTIONS_MOVE_FLAIL: ActionsEnum
+ACTIONS_MOVE_FLAMEBURST: ActionsEnum
+ACTIONS_MOVE_FLAMECHARGE: ActionsEnum
+ACTIONS_MOVE_FLAMETHROWER: ActionsEnum
+ACTIONS_MOVE_FLAMEWHEEL: ActionsEnum
+ACTIONS_MOVE_FLAREBLITZ: ActionsEnum
+ACTIONS_MOVE_FLASH: ActionsEnum
+ACTIONS_MOVE_FLASHCANNON: ActionsEnum
+ACTIONS_MOVE_FLATTER: ActionsEnum
+ACTIONS_MOVE_FLEURCANNON: ActionsEnum
+ACTIONS_MOVE_FLING: ActionsEnum
+ACTIONS_MOVE_FLIPTURN: ActionsEnum
+ACTIONS_MOVE_FLOATYFALL: ActionsEnum
+ACTIONS_MOVE_FLORALHEALING: ActionsEnum
+ACTIONS_MOVE_FLOWERSHIELD: ActionsEnum
+ACTIONS_MOVE_FLOWERTRICK: ActionsEnum
+ACTIONS_MOVE_FLY: ActionsEnum
+ACTIONS_MOVE_FLYINGPRESS: ActionsEnum
+ACTIONS_MOVE_FOCUSBLAST: ActionsEnum
+ACTIONS_MOVE_FOCUSENERGY: ActionsEnum
+ACTIONS_MOVE_FOCUSPUNCH: ActionsEnum
+ACTIONS_MOVE_FOLLOWME: ActionsEnum
+ACTIONS_MOVE_FORCEPALM: ActionsEnum
+ACTIONS_MOVE_FORESIGHT: ActionsEnum
+ACTIONS_MOVE_FORESTSCURSE: ActionsEnum
+ACTIONS_MOVE_FOULPLAY: ActionsEnum
+ACTIONS_MOVE_FREEZEDRY: ActionsEnum
+ACTIONS_MOVE_FREEZESHOCK: ActionsEnum
+ACTIONS_MOVE_FREEZINGGLARE: ActionsEnum
+ACTIONS_MOVE_FREEZYFROST: ActionsEnum
+ACTIONS_MOVE_FRENZYPLANT: ActionsEnum
+ACTIONS_MOVE_FROSTBREATH: ActionsEnum
+ACTIONS_MOVE_FRUSTRATION: ActionsEnum
+ACTIONS_MOVE_FURYATTACK: ActionsEnum
+ACTIONS_MOVE_FURYCUTTER: ActionsEnum
+ACTIONS_MOVE_FURYSWIPES: ActionsEnum
+ACTIONS_MOVE_FUSIONBOLT: ActionsEnum
+ACTIONS_MOVE_FUSIONFLARE: ActionsEnum
+ACTIONS_MOVE_FUTURESIGHT: ActionsEnum
+ACTIONS_MOVE_GASTROACID: ActionsEnum
+ACTIONS_MOVE_GEARGRIND: ActionsEnum
+ACTIONS_MOVE_GEARUP: ActionsEnum
+ACTIONS_MOVE_GENESISSUPERNOVA: ActionsEnum
+ACTIONS_MOVE_GEOMANCY: ActionsEnum
+ACTIONS_MOVE_GIGADRAIN: ActionsEnum
+ACTIONS_MOVE_GIGAIMPACT: ActionsEnum
+ACTIONS_MOVE_GIGATONHAMMER: ActionsEnum
+ACTIONS_MOVE_GIGAVOLTHAVOC: ActionsEnum
+ACTIONS_MOVE_GLACIALLANCE: ActionsEnum
+ACTIONS_MOVE_GLACIATE: ActionsEnum
+ACTIONS_MOVE_GLAIVERUSH: ActionsEnum
+ACTIONS_MOVE_GLARE: ActionsEnum
+ACTIONS_MOVE_GLITZYGLOW: ActionsEnum
+ACTIONS_MOVE_GMAXBEFUDDLE: ActionsEnum
+ACTIONS_MOVE_GMAXCANNONADE: ActionsEnum
+ACTIONS_MOVE_GMAXCENTIFERNO: ActionsEnum
+ACTIONS_MOVE_GMAXCHISTRIKE: ActionsEnum
+ACTIONS_MOVE_GMAXCUDDLE: ActionsEnum
+ACTIONS_MOVE_GMAXDEPLETION: ActionsEnum
+ACTIONS_MOVE_GMAXDRUMSOLO: ActionsEnum
+ACTIONS_MOVE_GMAXFINALE: ActionsEnum
+ACTIONS_MOVE_GMAXFIREBALL: ActionsEnum
+ACTIONS_MOVE_GMAXFOAMBURST: ActionsEnum
+ACTIONS_MOVE_GMAXGOLDRUSH: ActionsEnum
+ACTIONS_MOVE_GMAXGRAVITAS: ActionsEnum
+ACTIONS_MOVE_GMAXHYDROSNIPE: ActionsEnum
+ACTIONS_MOVE_GMAXMALODOR: ActionsEnum
+ACTIONS_MOVE_GMAXMELTDOWN: ActionsEnum
+ACTIONS_MOVE_GMAXONEBLOW: ActionsEnum
+ACTIONS_MOVE_GMAXRAPIDFLOW: ActionsEnum
+ACTIONS_MOVE_GMAXREPLENISH: ActionsEnum
+ACTIONS_MOVE_GMAXRESONANCE: ActionsEnum
+ACTIONS_MOVE_GMAXSANDBLAST: ActionsEnum
+ACTIONS_MOVE_GMAXSMITE: ActionsEnum
+ACTIONS_MOVE_GMAXSNOOZE: ActionsEnum
+ACTIONS_MOVE_GMAXSTEELSURGE: ActionsEnum
+ACTIONS_MOVE_GMAXSTONESURGE: ActionsEnum
+ACTIONS_MOVE_GMAXSTUNSHOCK: ActionsEnum
+ACTIONS_MOVE_GMAXSWEETNESS: ActionsEnum
+ACTIONS_MOVE_GMAXTARTNESS: ActionsEnum
+ACTIONS_MOVE_GMAXTERROR: ActionsEnum
+ACTIONS_MOVE_GMAXVINELASH: ActionsEnum
+ACTIONS_MOVE_GMAXVOLCALITH: ActionsEnum
+ACTIONS_MOVE_GMAXVOLTCRASH: ActionsEnum
+ACTIONS_MOVE_GMAXWILDFIRE: ActionsEnum
+ACTIONS_MOVE_GMAXWINDRAGE: ActionsEnum
+ACTIONS_MOVE_GRASSKNOT: ActionsEnum
+ACTIONS_MOVE_GRASSPLEDGE: ActionsEnum
+ACTIONS_MOVE_GRASSWHISTLE: ActionsEnum
+ACTIONS_MOVE_GRASSYGLIDE: ActionsEnum
+ACTIONS_MOVE_GRASSYTERRAIN: ActionsEnum
+ACTIONS_MOVE_GRAVAPPLE: ActionsEnum
+ACTIONS_MOVE_GRAVITY: ActionsEnum
+ACTIONS_MOVE_GROWL: ActionsEnum
+ACTIONS_MOVE_GROWTH: ActionsEnum
+ACTIONS_MOVE_GRUDGE: ActionsEnum
+ACTIONS_MOVE_GUARDIANOFALOLA: ActionsEnum
+ACTIONS_MOVE_GUARDSPLIT: ActionsEnum
+ACTIONS_MOVE_GUARDSWAP: ActionsEnum
+ACTIONS_MOVE_GUILLOTINE: ActionsEnum
+ACTIONS_MOVE_GUNKSHOT: ActionsEnum
+ACTIONS_MOVE_GUST: ActionsEnum
+ACTIONS_MOVE_GYROBALL: ActionsEnum
+ACTIONS_MOVE_HAIL: ActionsEnum
+ACTIONS_MOVE_HAMMERARM: ActionsEnum
+ACTIONS_MOVE_HAPPYHOUR: ActionsEnum
+ACTIONS_MOVE_HARDEN: ActionsEnum
+ACTIONS_MOVE_HARDPRESS: ActionsEnum
+ACTIONS_MOVE_HAZE: ActionsEnum
+ACTIONS_MOVE_HEADBUTT: ActionsEnum
+ACTIONS_MOVE_HEADCHARGE: ActionsEnum
+ACTIONS_MOVE_HEADLONGRUSH: ActionsEnum
+ACTIONS_MOVE_HEADSMASH: ActionsEnum
+ACTIONS_MOVE_HEALBELL: ActionsEnum
+ACTIONS_MOVE_HEALBLOCK: ActionsEnum
+ACTIONS_MOVE_HEALINGWISH: ActionsEnum
+ACTIONS_MOVE_HEALORDER: ActionsEnum
+ACTIONS_MOVE_HEALPULSE: ActionsEnum
+ACTIONS_MOVE_HEARTSTAMP: ActionsEnum
+ACTIONS_MOVE_HEARTSWAP: ActionsEnum
+ACTIONS_MOVE_HEATCRASH: ActionsEnum
+ACTIONS_MOVE_HEATWAVE: ActionsEnum
+ACTIONS_MOVE_HEAVYSLAM: ActionsEnum
+ACTIONS_MOVE_HELPINGHAND: ActionsEnum
+ACTIONS_MOVE_HEX: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWER: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERBUG: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERBUG60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERBUG70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDARK: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDARK60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDARK70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDRAGON: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDRAGON60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERDRAGON70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERELECTRIC: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERELECTRIC60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERELECTRIC70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIGHTING: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIGHTING60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIGHTING70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIRE: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIRE60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFIRE70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFLYING: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFLYING60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERFLYING70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGHOST: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGHOST60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGHOST70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGRASS: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGRASS60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGRASS70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGROUND: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGROUND60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERGROUND70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERICE: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERICE60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERICE70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPOISON: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPOISON60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPOISON70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPSYCHIC: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPSYCHIC60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERPSYCHIC70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERROCK: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERROCK60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERROCK70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERSTEEL: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERSTEEL60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERSTEEL70: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERWATER: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERWATER60: ActionsEnum
+ACTIONS_MOVE_HIDDENPOWERWATER70: ActionsEnum
+ACTIONS_MOVE_HIGHHORSEPOWER: ActionsEnum
+ACTIONS_MOVE_HIGHJUMPKICK: ActionsEnum
+ACTIONS_MOVE_HOLDBACK: ActionsEnum
+ACTIONS_MOVE_HOLDHANDS: ActionsEnum
+ACTIONS_MOVE_HONECLAWS: ActionsEnum
+ACTIONS_MOVE_HORNATTACK: ActionsEnum
+ACTIONS_MOVE_HORNDRILL: ActionsEnum
+ACTIONS_MOVE_HORNLEECH: ActionsEnum
+ACTIONS_MOVE_HOWL: ActionsEnum
+ACTIONS_MOVE_HURRICANE: ActionsEnum
+ACTIONS_MOVE_HYDROCANNON: ActionsEnum
+ACTIONS_MOVE_HYDROPUMP: ActionsEnum
+ACTIONS_MOVE_HYDROSTEAM: ActionsEnum
+ACTIONS_MOVE_HYDROVORTEX: ActionsEnum
+ACTIONS_MOVE_HYPERBEAM: ActionsEnum
+ACTIONS_MOVE_HYPERDRILL: ActionsEnum
+ACTIONS_MOVE_HYPERFANG: ActionsEnum
+ACTIONS_MOVE_HYPERSPACEFURY: ActionsEnum
+ACTIONS_MOVE_HYPERSPACEHOLE: ActionsEnum
+ACTIONS_MOVE_HYPERVOICE: ActionsEnum
+ACTIONS_MOVE_HYPNOSIS: ActionsEnum
+ACTIONS_MOVE_ICEBALL: ActionsEnum
+ACTIONS_MOVE_ICEBEAM: ActionsEnum
+ACTIONS_MOVE_ICEBURN: ActionsEnum
+ACTIONS_MOVE_ICEFANG: ActionsEnum
+ACTIONS_MOVE_ICEHAMMER: ActionsEnum
+ACTIONS_MOVE_ICEPUNCH: ActionsEnum
+ACTIONS_MOVE_ICESHARD: ActionsEnum
+ACTIONS_MOVE_ICESPINNER: ActionsEnum
+ACTIONS_MOVE_ICICLECRASH: ActionsEnum
+ACTIONS_MOVE_ICICLESPEAR: ActionsEnum
+ACTIONS_MOVE_ICYWIND: ActionsEnum
+ACTIONS_MOVE_IMPRISON: ActionsEnum
+ACTIONS_MOVE_INCINERATE: ActionsEnum
+ACTIONS_MOVE_INFERNALPARADE: ActionsEnum
+ACTIONS_MOVE_INFERNO: ActionsEnum
+ACTIONS_MOVE_INFERNOOVERDRIVE: ActionsEnum
+ACTIONS_MOVE_INFESTATION: ActionsEnum
+ACTIONS_MOVE_INGRAIN: ActionsEnum
+ACTIONS_MOVE_INSTRUCT: ActionsEnum
+ACTIONS_MOVE_IONDELUGE: ActionsEnum
+ACTIONS_MOVE_IRONDEFENSE: ActionsEnum
+ACTIONS_MOVE_IRONHEAD: ActionsEnum
+ACTIONS_MOVE_IRONTAIL: ActionsEnum
+ACTIONS_MOVE_IVYCUDGEL: ActionsEnum
+ACTIONS_MOVE_JAWLOCK: ActionsEnum
+ACTIONS_MOVE_JETPUNCH: ActionsEnum
+ACTIONS_MOVE_JUDGMENT: ActionsEnum
+ACTIONS_MOVE_JUMPKICK: ActionsEnum
+ACTIONS_MOVE_JUNGLEHEALING: ActionsEnum
+ACTIONS_MOVE_KARATECHOP: ActionsEnum
+ACTIONS_MOVE_KINESIS: ActionsEnum
+ACTIONS_MOVE_KINGSSHIELD: ActionsEnum
+ACTIONS_MOVE_KNOCKOFF: ActionsEnum
+ACTIONS_MOVE_KOWTOWCLEAVE: ActionsEnum
+ACTIONS_MOVE_LANDSWRATH: ActionsEnum
+ACTIONS_MOVE_LASERFOCUS: ActionsEnum
+ACTIONS_MOVE_LASHOUT: ActionsEnum
+ACTIONS_MOVE_LASTRESORT: ActionsEnum
+ACTIONS_MOVE_LASTRESPECTS: ActionsEnum
+ACTIONS_MOVE_LAVAPLUME: ActionsEnum
+ACTIONS_MOVE_LEAFAGE: ActionsEnum
+ACTIONS_MOVE_LEAFBLADE: ActionsEnum
+ACTIONS_MOVE_LEAFSTORM: ActionsEnum
+ACTIONS_MOVE_LEAFTORNADO: ActionsEnum
+ACTIONS_MOVE_LEECHLIFE: ActionsEnum
+ACTIONS_MOVE_LEECHSEED: ActionsEnum
+ACTIONS_MOVE_LEER: ActionsEnum
+ACTIONS_MOVE_LETSSNUGGLEFOREVER: ActionsEnum
+ACTIONS_MOVE_LICK: ActionsEnum
+ACTIONS_MOVE_LIFEDEW: ActionsEnum
+ACTIONS_MOVE_LIGHTOFRUIN: ActionsEnum
+ACTIONS_MOVE_LIGHTSCREEN: ActionsEnum
+ACTIONS_MOVE_LIGHTTHATBURNSTHESKY: ActionsEnum
+ACTIONS_MOVE_LIQUIDATION: ActionsEnum
+ACTIONS_MOVE_LOCKON: ActionsEnum
+ACTIONS_MOVE_LOVELYKISS: ActionsEnum
+ACTIONS_MOVE_LOWKICK: ActionsEnum
+ACTIONS_MOVE_LOWSWEEP: ActionsEnum
+ACTIONS_MOVE_LUCKYCHANT: ActionsEnum
+ACTIONS_MOVE_LUMINACRASH: ActionsEnum
+ACTIONS_MOVE_LUNARBLESSING: ActionsEnum
+ACTIONS_MOVE_LUNARDANCE: ActionsEnum
+ACTIONS_MOVE_LUNGE: ActionsEnum
+ACTIONS_MOVE_LUSTERPURGE: ActionsEnum
+ACTIONS_MOVE_MACHPUNCH: ActionsEnum
+ACTIONS_MOVE_MAGICALLEAF: ActionsEnum
+ACTIONS_MOVE_MAGICALTORQUE: ActionsEnum
+ACTIONS_MOVE_MAGICCOAT: ActionsEnum
+ACTIONS_MOVE_MAGICPOWDER: ActionsEnum
+ACTIONS_MOVE_MAGICROOM: ActionsEnum
+ACTIONS_MOVE_MAGMASTORM: ActionsEnum
+ACTIONS_MOVE_MAGNETBOMB: ActionsEnum
+ACTIONS_MOVE_MAGNETICFLUX: ActionsEnum
+ACTIONS_MOVE_MAGNETRISE: ActionsEnum
+ACTIONS_MOVE_MAGNITUDE: ActionsEnum
+ACTIONS_MOVE_MAKEITRAIN: ActionsEnum
+ACTIONS_MOVE_MALICIOUSMOONSAULT: ActionsEnum
+ACTIONS_MOVE_MALIGNANTCHAIN: ActionsEnum
+ACTIONS_MOVE_MATBLOCK: ActionsEnum
+ACTIONS_MOVE_MATCHAGOTCHA: ActionsEnum
+ACTIONS_MOVE_MAXAIRSTREAM: ActionsEnum
+ACTIONS_MOVE_MAXDARKNESS: ActionsEnum
+ACTIONS_MOVE_MAXFLARE: ActionsEnum
+ACTIONS_MOVE_MAXFLUTTERBY: ActionsEnum
+ACTIONS_MOVE_MAXGEYSER: ActionsEnum
+ACTIONS_MOVE_MAXGUARD: ActionsEnum
+ACTIONS_MOVE_MAXHAILSTORM: ActionsEnum
+ACTIONS_MOVE_MAXKNUCKLE: ActionsEnum
+ACTIONS_MOVE_MAXLIGHTNING: ActionsEnum
+ACTIONS_MOVE_MAXMINDSTORM: ActionsEnum
+ACTIONS_MOVE_MAXOOZE: ActionsEnum
+ACTIONS_MOVE_MAXOVERGROWTH: ActionsEnum
+ACTIONS_MOVE_MAXPHANTASM: ActionsEnum
+ACTIONS_MOVE_MAXQUAKE: ActionsEnum
+ACTIONS_MOVE_MAXROCKFALL: ActionsEnum
+ACTIONS_MOVE_MAXSTARFALL: ActionsEnum
+ACTIONS_MOVE_MAXSTEELSPIKE: ActionsEnum
+ACTIONS_MOVE_MAXSTRIKE: ActionsEnum
+ACTIONS_MOVE_MAXWYRMWIND: ActionsEnum
+ACTIONS_MOVE_MEANLOOK: ActionsEnum
+ACTIONS_MOVE_MEDITATE: ActionsEnum
+ACTIONS_MOVE_MEFIRST: ActionsEnum
+ACTIONS_MOVE_MEGADRAIN: ActionsEnum
+ACTIONS_MOVE_MEGAHORN: ActionsEnum
+ACTIONS_MOVE_MEGAKICK: ActionsEnum
+ACTIONS_MOVE_MEGAPUNCH: ActionsEnum
+ACTIONS_MOVE_MEMENTO: ActionsEnum
+ACTIONS_MOVE_MENACINGMOONRAZEMAELSTROM: ActionsEnum
+ACTIONS_MOVE_METALBURST: ActionsEnum
+ACTIONS_MOVE_METALCLAW: ActionsEnum
+ACTIONS_MOVE_METALSOUND: ActionsEnum
+ACTIONS_MOVE_METEORASSAULT: ActionsEnum
+ACTIONS_MOVE_METEORBEAM: ActionsEnum
+ACTIONS_MOVE_METEORMASH: ActionsEnum
+ACTIONS_MOVE_METRONOME: ActionsEnum
+ACTIONS_MOVE_MIGHTYCLEAVE: ActionsEnum
+ACTIONS_MOVE_MILKDRINK: ActionsEnum
+ACTIONS_MOVE_MIMIC: ActionsEnum
+ACTIONS_MOVE_MINDBLOWN: ActionsEnum
+ACTIONS_MOVE_MINDREADER: ActionsEnum
+ACTIONS_MOVE_MINIMIZE: ActionsEnum
+ACTIONS_MOVE_MIRACLEEYE: ActionsEnum
+ACTIONS_MOVE_MIRRORCOAT: ActionsEnum
+ACTIONS_MOVE_MIRRORMOVE: ActionsEnum
+ACTIONS_MOVE_MIRRORSHOT: ActionsEnum
+ACTIONS_MOVE_MIST: ActionsEnum
+ACTIONS_MOVE_MISTBALL: ActionsEnum
+ACTIONS_MOVE_MISTYEXPLOSION: ActionsEnum
+ACTIONS_MOVE_MISTYTERRAIN: ActionsEnum
+ACTIONS_MOVE_MOONBLAST: ActionsEnum
+ACTIONS_MOVE_MOONGEISTBEAM: ActionsEnum
+ACTIONS_MOVE_MOONLIGHT: ActionsEnum
+ACTIONS_MOVE_MORNINGSUN: ActionsEnum
+ACTIONS_MOVE_MORTALSPIN: ActionsEnum
+ACTIONS_MOVE_MOUNTAINGALE: ActionsEnum
+ACTIONS_MOVE_MUDBOMB: ActionsEnum
+ACTIONS_MOVE_MUDDYWATER: ActionsEnum
+ACTIONS_MOVE_MUDSHOT: ActionsEnum
+ACTIONS_MOVE_MUDSLAP: ActionsEnum
+ACTIONS_MOVE_MUDSPORT: ActionsEnum
+ACTIONS_MOVE_MULTIATTACK: ActionsEnum
+ACTIONS_MOVE_MYSTICALFIRE: ActionsEnum
+ACTIONS_MOVE_MYSTICALPOWER: ActionsEnum
+ACTIONS_MOVE_NASTYPLOT: ActionsEnum
+ACTIONS_MOVE_NATURALGIFT: ActionsEnum
+ACTIONS_MOVE_NATUREPOWER: ActionsEnum
+ACTIONS_MOVE_NATURESMADNESS: ActionsEnum
+ACTIONS_MOVE_NEEDLEARM: ActionsEnum
+ACTIONS_MOVE_NEVERENDINGNIGHTMARE: ActionsEnum
+ACTIONS_MOVE_NIGHTDAZE: ActionsEnum
+ACTIONS_MOVE_NIGHTMARE: ActionsEnum
+ACTIONS_MOVE_NIGHTSHADE: ActionsEnum
+ACTIONS_MOVE_NIGHTSLASH: ActionsEnum
+ACTIONS_MOVE_NOBLEROAR: ActionsEnum
+ACTIONS_MOVE_NORETREAT: ActionsEnum
+ACTIONS_MOVE_NOXIOUSTORQUE: ActionsEnum
+ACTIONS_MOVE_NUZZLE: ActionsEnum
+ACTIONS_MOVE_OBLIVIONWING: ActionsEnum
+ACTIONS_MOVE_OBSTRUCT: ActionsEnum
+ACTIONS_MOVE_OCEANICOPERETTA: ActionsEnum
+ACTIONS_MOVE_OCTAZOOKA: ActionsEnum
+ACTIONS_MOVE_OCTOLOCK: ActionsEnum
+ACTIONS_MOVE_ODORSLEUTH: ActionsEnum
+ACTIONS_MOVE_OMINOUSWIND: ActionsEnum
+ACTIONS_MOVE_ORDERUP: ActionsEnum
+ACTIONS_MOVE_ORIGINPULSE: ActionsEnum
+ACTIONS_MOVE_OUTRAGE: ActionsEnum
+ACTIONS_MOVE_OVERDRIVE: ActionsEnum
+ACTIONS_MOVE_OVERHEAT: ActionsEnum
+ACTIONS_MOVE_PAINSPLIT: ActionsEnum
+ACTIONS_MOVE_PALEOWAVE: ActionsEnum
+ACTIONS_MOVE_PARABOLICCHARGE: ActionsEnum
+ACTIONS_MOVE_PARTINGSHOT: ActionsEnum
+ACTIONS_MOVE_PAYBACK: ActionsEnum
+ACTIONS_MOVE_PAYDAY: ActionsEnum
+ACTIONS_MOVE_PECK: ActionsEnum
+ACTIONS_MOVE_PERISHSONG: ActionsEnum
+ACTIONS_MOVE_PETALBLIZZARD: ActionsEnum
+ACTIONS_MOVE_PETALDANCE: ActionsEnum
+ACTIONS_MOVE_PHANTOMFORCE: ActionsEnum
+ACTIONS_MOVE_PHOTONGEYSER: ActionsEnum
+ACTIONS_MOVE_PIKAPAPOW: ActionsEnum
+ACTIONS_MOVE_PINMISSILE: ActionsEnum
+ACTIONS_MOVE_PLASMAFISTS: ActionsEnum
+ACTIONS_MOVE_PLAYNICE: ActionsEnum
+ACTIONS_MOVE_PLAYROUGH: ActionsEnum
+ACTIONS_MOVE_PLUCK: ActionsEnum
+ACTIONS_MOVE_POISONFANG: ActionsEnum
+ACTIONS_MOVE_POISONGAS: ActionsEnum
+ACTIONS_MOVE_POISONJAB: ActionsEnum
+ACTIONS_MOVE_POISONPOWDER: ActionsEnum
+ACTIONS_MOVE_POISONSTING: ActionsEnum
+ACTIONS_MOVE_POISONTAIL: ActionsEnum
+ACTIONS_MOVE_POLLENPUFF: ActionsEnum
+ACTIONS_MOVE_POLTERGEIST: ActionsEnum
+ACTIONS_MOVE_POPULATIONBOMB: ActionsEnum
+ACTIONS_MOVE_POUNCE: ActionsEnum
+ACTIONS_MOVE_POUND: ActionsEnum
+ACTIONS_MOVE_POWDER: ActionsEnum
+ACTIONS_MOVE_POWDERSNOW: ActionsEnum
+ACTIONS_MOVE_POWERGEM: ActionsEnum
+ACTIONS_MOVE_POWERSHIFT: ActionsEnum
+ACTIONS_MOVE_POWERSPLIT: ActionsEnum
+ACTIONS_MOVE_POWERSWAP: ActionsEnum
+ACTIONS_MOVE_POWERTRICK: ActionsEnum
+ACTIONS_MOVE_POWERTRIP: ActionsEnum
+ACTIONS_MOVE_POWERUPPUNCH: ActionsEnum
+ACTIONS_MOVE_POWERWHIP: ActionsEnum
+ACTIONS_MOVE_PRECIPICEBLADES: ActionsEnum
+ACTIONS_MOVE_PRESENT: ActionsEnum
+ACTIONS_MOVE_PRISMATICLASER: ActionsEnum
+ACTIONS_MOVE_PROTECT: ActionsEnum
+ACTIONS_MOVE_PSYBEAM: ActionsEnum
+ACTIONS_MOVE_PSYBLADE: ActionsEnum
+ACTIONS_MOVE_PSYCHIC: ActionsEnum
+ACTIONS_MOVE_PSYCHICFANGS: ActionsEnum
+ACTIONS_MOVE_PSYCHICNOISE: ActionsEnum
+ACTIONS_MOVE_PSYCHICTERRAIN: ActionsEnum
+ACTIONS_MOVE_PSYCHOBOOST: ActionsEnum
+ACTIONS_MOVE_PSYCHOCUT: ActionsEnum
+ACTIONS_MOVE_PSYCHOSHIFT: ActionsEnum
+ACTIONS_MOVE_PSYCHUP: ActionsEnum
+ACTIONS_MOVE_PSYSHIELDBASH: ActionsEnum
+ACTIONS_MOVE_PSYSHOCK: ActionsEnum
+ACTIONS_MOVE_PSYSTRIKE: ActionsEnum
+ACTIONS_MOVE_PSYWAVE: ActionsEnum
+ACTIONS_MOVE_PULVERIZINGPANCAKE: ActionsEnum
+ACTIONS_MOVE_PUNISHMENT: ActionsEnum
+ACTIONS_MOVE_PURIFY: ActionsEnum
+ACTIONS_MOVE_PURSUIT: ActionsEnum
+ACTIONS_MOVE_PYROBALL: ActionsEnum
+ACTIONS_MOVE_QUASH: ActionsEnum
+ACTIONS_MOVE_QUICKATTACK: ActionsEnum
+ACTIONS_MOVE_QUICKGUARD: ActionsEnum
+ACTIONS_MOVE_QUIVERDANCE: ActionsEnum
+ACTIONS_MOVE_RAGE: ActionsEnum
+ACTIONS_MOVE_RAGEFIST: ActionsEnum
+ACTIONS_MOVE_RAGEPOWDER: ActionsEnum
+ACTIONS_MOVE_RAGINGBULL: ActionsEnum
+ACTIONS_MOVE_RAGINGFURY: ActionsEnum
+ACTIONS_MOVE_RAINDANCE: ActionsEnum
+ACTIONS_MOVE_RAPIDSPIN: ActionsEnum
+ACTIONS_MOVE_RAZORLEAF: ActionsEnum
+ACTIONS_MOVE_RAZORSHELL: ActionsEnum
+ACTIONS_MOVE_RAZORWIND: ActionsEnum
+ACTIONS_MOVE_RECHARGE: ActionsEnum
+ACTIONS_MOVE_RECOVER: ActionsEnum
+ACTIONS_MOVE_RECYCLE: ActionsEnum
+ACTIONS_MOVE_REFLECT: ActionsEnum
+ACTIONS_MOVE_REFLECTTYPE: ActionsEnum
+ACTIONS_MOVE_REFRESH: ActionsEnum
+ACTIONS_MOVE_RELICSONG: ActionsEnum
+ACTIONS_MOVE_REST: ActionsEnum
+ACTIONS_MOVE_RETALIATE: ActionsEnum
+ACTIONS_MOVE_RETURN: ActionsEnum
+ACTIONS_MOVE_RETURN102: ActionsEnum
+ACTIONS_MOVE_REVELATIONDANCE: ActionsEnum
+ACTIONS_MOVE_REVENGE: ActionsEnum
+ACTIONS_MOVE_REVERSAL: ActionsEnum
+ACTIONS_MOVE_REVIVALBLESSING: ActionsEnum
+ACTIONS_MOVE_RISINGVOLTAGE: ActionsEnum
+ACTIONS_MOVE_ROAR: ActionsEnum
+ACTIONS_MOVE_ROAROFTIME: ActionsEnum
+ACTIONS_MOVE_ROCKBLAST: ActionsEnum
+ACTIONS_MOVE_ROCKCLIMB: ActionsEnum
+ACTIONS_MOVE_ROCKPOLISH: ActionsEnum
+ACTIONS_MOVE_ROCKSLIDE: ActionsEnum
+ACTIONS_MOVE_ROCKSMASH: ActionsEnum
+ACTIONS_MOVE_ROCKTHROW: ActionsEnum
+ACTIONS_MOVE_ROCKTOMB: ActionsEnum
+ACTIONS_MOVE_ROCKWRECKER: ActionsEnum
+ACTIONS_MOVE_ROLEPLAY: ActionsEnum
+ACTIONS_MOVE_ROLLINGKICK: ActionsEnum
+ACTIONS_MOVE_ROLLOUT: ActionsEnum
+ACTIONS_MOVE_ROOST: ActionsEnum
+ACTIONS_MOVE_ROTOTILLER: ActionsEnum
+ACTIONS_MOVE_ROUND: ActionsEnum
+ACTIONS_MOVE_RUINATION: ActionsEnum
+ACTIONS_MOVE_SACREDFIRE: ActionsEnum
+ACTIONS_MOVE_SACREDSWORD: ActionsEnum
+ACTIONS_MOVE_SAFEGUARD: ActionsEnum
+ACTIONS_MOVE_SALTCURE: ActionsEnum
+ACTIONS_MOVE_SANDATTACK: ActionsEnum
+ACTIONS_MOVE_SANDSEARSTORM: ActionsEnum
+ACTIONS_MOVE_SANDSTORM: ActionsEnum
+ACTIONS_MOVE_SANDTOMB: ActionsEnum
+ACTIONS_MOVE_SAPPYSEED: ActionsEnum
+ACTIONS_MOVE_SAVAGESPINOUT: ActionsEnum
+ACTIONS_MOVE_SCALD: ActionsEnum
+ACTIONS_MOVE_SCALESHOT: ActionsEnum
+ACTIONS_MOVE_SCARYFACE: ActionsEnum
+ACTIONS_MOVE_SCORCHINGSANDS: ActionsEnum
+ACTIONS_MOVE_SCRATCH: ActionsEnum
+ACTIONS_MOVE_SCREECH: ActionsEnum
+ACTIONS_MOVE_SEARINGSHOT: ActionsEnum
+ACTIONS_MOVE_SEARINGSUNRAZESMASH: ActionsEnum
+ACTIONS_MOVE_SECRETPOWER: ActionsEnum
+ACTIONS_MOVE_SECRETSWORD: ActionsEnum
+ACTIONS_MOVE_SEEDBOMB: ActionsEnum
+ACTIONS_MOVE_SEEDFLARE: ActionsEnum
+ACTIONS_MOVE_SEISMICTOSS: ActionsEnum
+ACTIONS_MOVE_SELFDESTRUCT: ActionsEnum
+ACTIONS_MOVE_SHADOWBALL: ActionsEnum
+ACTIONS_MOVE_SHADOWBONE: ActionsEnum
+ACTIONS_MOVE_SHADOWCLAW: ActionsEnum
+ACTIONS_MOVE_SHADOWFORCE: ActionsEnum
+ACTIONS_MOVE_SHADOWPUNCH: ActionsEnum
+ACTIONS_MOVE_SHADOWSNEAK: ActionsEnum
+ACTIONS_MOVE_SHADOWSTRIKE: ActionsEnum
+ACTIONS_MOVE_SHARPEN: ActionsEnum
+ACTIONS_MOVE_SHATTEREDPSYCHE: ActionsEnum
+ACTIONS_MOVE_SHEDTAIL: ActionsEnum
+ACTIONS_MOVE_SHEERCOLD: ActionsEnum
+ACTIONS_MOVE_SHELLSIDEARM: ActionsEnum
+ACTIONS_MOVE_SHELLSMASH: ActionsEnum
+ACTIONS_MOVE_SHELLTRAP: ActionsEnum
+ACTIONS_MOVE_SHELTER: ActionsEnum
+ACTIONS_MOVE_SHIFTGEAR: ActionsEnum
+ACTIONS_MOVE_SHOCKWAVE: ActionsEnum
+ACTIONS_MOVE_SHOREUP: ActionsEnum
+ACTIONS_MOVE_SIGNALBEAM: ActionsEnum
+ACTIONS_MOVE_SILKTRAP: ActionsEnum
+ACTIONS_MOVE_SILVERWIND: ActionsEnum
+ACTIONS_MOVE_SIMPLEBEAM: ActionsEnum
+ACTIONS_MOVE_SING: ActionsEnum
+ACTIONS_MOVE_SINISTERARROWRAID: ActionsEnum
+ACTIONS_MOVE_SIZZLYSLIDE: ActionsEnum
+ACTIONS_MOVE_SKETCH: ActionsEnum
+ACTIONS_MOVE_SKILLSWAP: ActionsEnum
+ACTIONS_MOVE_SKITTERSMACK: ActionsEnum
+ACTIONS_MOVE_SKULLBASH: ActionsEnum
+ACTIONS_MOVE_SKYATTACK: ActionsEnum
+ACTIONS_MOVE_SKYDROP: ActionsEnum
+ACTIONS_MOVE_SKYUPPERCUT: ActionsEnum
+ACTIONS_MOVE_SLACKOFF: ActionsEnum
+ACTIONS_MOVE_SLAM: ActionsEnum
+ACTIONS_MOVE_SLASH: ActionsEnum
+ACTIONS_MOVE_SLEEPPOWDER: ActionsEnum
+ACTIONS_MOVE_SLEEPTALK: ActionsEnum
+ACTIONS_MOVE_SLUDGE: ActionsEnum
+ACTIONS_MOVE_SLUDGEBOMB: ActionsEnum
+ACTIONS_MOVE_SLUDGEWAVE: ActionsEnum
+ACTIONS_MOVE_SMACKDOWN: ActionsEnum
+ACTIONS_MOVE_SMARTSTRIKE: ActionsEnum
+ACTIONS_MOVE_SMELLINGSALTS: ActionsEnum
+ACTIONS_MOVE_SMOG: ActionsEnum
+ACTIONS_MOVE_SMOKESCREEN: ActionsEnum
+ACTIONS_MOVE_SNAPTRAP: ActionsEnum
+ACTIONS_MOVE_SNARL: ActionsEnum
+ACTIONS_MOVE_SNATCH: ActionsEnum
+ACTIONS_MOVE_SNIPESHOT: ActionsEnum
+ACTIONS_MOVE_SNORE: ActionsEnum
+ACTIONS_MOVE_SNOWSCAPE: ActionsEnum
+ACTIONS_MOVE_SOAK: ActionsEnum
+ACTIONS_MOVE_SOFTBOILED: ActionsEnum
+ACTIONS_MOVE_SOLARBEAM: ActionsEnum
+ACTIONS_MOVE_SOLARBLADE: ActionsEnum
+ACTIONS_MOVE_SONICBOOM: ActionsEnum
+ACTIONS_MOVE_SOULSTEALING7STARSTRIKE: ActionsEnum
+ACTIONS_MOVE_SPACIALREND: ActionsEnum
+ACTIONS_MOVE_SPARK: ActionsEnum
+ACTIONS_MOVE_SPARKLINGARIA: ActionsEnum
+ACTIONS_MOVE_SPARKLYSWIRL: ActionsEnum
+ACTIONS_MOVE_SPECTRALTHIEF: ActionsEnum
+ACTIONS_MOVE_SPEEDSWAP: ActionsEnum
+ACTIONS_MOVE_SPICYEXTRACT: ActionsEnum
+ACTIONS_MOVE_SPIDERWEB: ActionsEnum
+ACTIONS_MOVE_SPIKECANNON: ActionsEnum
+ACTIONS_MOVE_SPIKES: ActionsEnum
+ACTIONS_MOVE_SPIKYSHIELD: ActionsEnum
+ACTIONS_MOVE_SPINOUT: ActionsEnum
+ACTIONS_MOVE_SPIRITBREAK: ActionsEnum
+ACTIONS_MOVE_SPIRITSHACKLE: ActionsEnum
+ACTIONS_MOVE_SPITE: ActionsEnum
+ACTIONS_MOVE_SPITUP: ActionsEnum
+ACTIONS_MOVE_SPLASH: ActionsEnum
+ACTIONS_MOVE_SPLINTEREDSTORMSHARDS: ActionsEnum
+ACTIONS_MOVE_SPLISHYSPLASH: ActionsEnum
+ACTIONS_MOVE_SPORE: ActionsEnum
+ACTIONS_MOVE_SPOTLIGHT: ActionsEnum
+ACTIONS_MOVE_SPRINGTIDESTORM: ActionsEnum
+ACTIONS_MOVE_STEALTHROCK: ActionsEnum
+ACTIONS_MOVE_STEAMERUPTION: ActionsEnum
+ACTIONS_MOVE_STEAMROLLER: ActionsEnum
+ACTIONS_MOVE_STEELBEAM: ActionsEnum
+ACTIONS_MOVE_STEELROLLER: ActionsEnum
+ACTIONS_MOVE_STEELWING: ActionsEnum
+ACTIONS_MOVE_STICKYWEB: ActionsEnum
+ACTIONS_MOVE_STOCKPILE: ActionsEnum
+ACTIONS_MOVE_STOKEDSPARKSURFER: ActionsEnum
+ACTIONS_MOVE_STOMP: ActionsEnum
+ACTIONS_MOVE_STOMPINGTANTRUM: ActionsEnum
+ACTIONS_MOVE_STONEAXE: ActionsEnum
+ACTIONS_MOVE_STONEEDGE: ActionsEnum
+ACTIONS_MOVE_STOREDPOWER: ActionsEnum
+ACTIONS_MOVE_STORMTHROW: ActionsEnum
+ACTIONS_MOVE_STRANGESTEAM: ActionsEnum
+ACTIONS_MOVE_STRENGTH: ActionsEnum
+ACTIONS_MOVE_STRENGTHSAP: ActionsEnum
+ACTIONS_MOVE_STRINGSHOT: ActionsEnum
+ACTIONS_MOVE_STRUGGLE: ActionsEnum
+ACTIONS_MOVE_STRUGGLEBUG: ActionsEnum
+ACTIONS_MOVE_STUFFCHEEKS: ActionsEnum
+ACTIONS_MOVE_STUNSPORE: ActionsEnum
+ACTIONS_MOVE_SUBMISSION: ActionsEnum
+ACTIONS_MOVE_SUBSTITUTE: ActionsEnum
+ACTIONS_MOVE_SUBZEROSLAMMER: ActionsEnum
+ACTIONS_MOVE_SUCKERPUNCH: ActionsEnum
+ACTIONS_MOVE_SUNNYDAY: ActionsEnum
+ACTIONS_MOVE_SUNSTEELSTRIKE: ActionsEnum
+ACTIONS_MOVE_SUPERCELLSLAM: ActionsEnum
+ACTIONS_MOVE_SUPERFANG: ActionsEnum
+ACTIONS_MOVE_SUPERPOWER: ActionsEnum
+ACTIONS_MOVE_SUPERSONIC: ActionsEnum
+ACTIONS_MOVE_SUPERSONICSKYSTRIKE: ActionsEnum
+ACTIONS_MOVE_SURF: ActionsEnum
+ACTIONS_MOVE_SURGINGSTRIKES: ActionsEnum
+ACTIONS_MOVE_SWAGGER: ActionsEnum
+ACTIONS_MOVE_SWALLOW: ActionsEnum
+ACTIONS_MOVE_SWEETKISS: ActionsEnum
+ACTIONS_MOVE_SWEETSCENT: ActionsEnum
+ACTIONS_MOVE_SWIFT: ActionsEnum
+ACTIONS_MOVE_SWITCHEROO: ActionsEnum
+ACTIONS_MOVE_SWORDSDANCE: ActionsEnum
+ACTIONS_MOVE_SYNCHRONOISE: ActionsEnum
+ACTIONS_MOVE_SYNTHESIS: ActionsEnum
+ACTIONS_MOVE_SYRUPBOMB: ActionsEnum
+ACTIONS_MOVE_TACHYONCUTTER: ActionsEnum
+ACTIONS_MOVE_TACKLE: ActionsEnum
+ACTIONS_MOVE_TAILGLOW: ActionsEnum
+ACTIONS_MOVE_TAILSLAP: ActionsEnum
+ACTIONS_MOVE_TAILWHIP: ActionsEnum
+ACTIONS_MOVE_TAILWIND: ActionsEnum
+ACTIONS_MOVE_TAKEDOWN: ActionsEnum
+ACTIONS_MOVE_TAKEHEART: ActionsEnum
+ACTIONS_MOVE_TARSHOT: ActionsEnum
+ACTIONS_MOVE_TAUNT: ActionsEnum
+ACTIONS_MOVE_TEARFULLOOK: ActionsEnum
+ACTIONS_MOVE_TEATIME: ActionsEnum
+ACTIONS_MOVE_TECHNOBLAST: ActionsEnum
+ACTIONS_MOVE_TECTONICRAGE: ActionsEnum
+ACTIONS_MOVE_TEETERDANCE: ActionsEnum
+ACTIONS_MOVE_TELEKINESIS: ActionsEnum
+ACTIONS_MOVE_TELEPORT: ActionsEnum
+ACTIONS_MOVE_TEMPERFLARE: ActionsEnum
+ACTIONS_MOVE_TERABLAST: ActionsEnum
+ACTIONS_MOVE_TERASTARSTORM: ActionsEnum
+ACTIONS_MOVE_TERRAINPULSE: ActionsEnum
+ACTIONS_MOVE_THIEF: ActionsEnum
+ACTIONS_MOVE_THOUSANDARROWS: ActionsEnum
+ACTIONS_MOVE_THOUSANDWAVES: ActionsEnum
+ACTIONS_MOVE_THRASH: ActionsEnum
+ACTIONS_MOVE_THROATCHOP: ActionsEnum
+ACTIONS_MOVE_THUNDER: ActionsEnum
+ACTIONS_MOVE_THUNDERBOLT: ActionsEnum
+ACTIONS_MOVE_THUNDERCAGE: ActionsEnum
+ACTIONS_MOVE_THUNDERCLAP: ActionsEnum
+ACTIONS_MOVE_THUNDERFANG: ActionsEnum
+ACTIONS_MOVE_THUNDEROUSKICK: ActionsEnum
+ACTIONS_MOVE_THUNDERPUNCH: ActionsEnum
+ACTIONS_MOVE_THUNDERSHOCK: ActionsEnum
+ACTIONS_MOVE_THUNDERWAVE: ActionsEnum
+ACTIONS_MOVE_TICKLE: ActionsEnum
+ACTIONS_MOVE_TIDYUP: ActionsEnum
+ACTIONS_MOVE_TOPSYTURVY: ActionsEnum
+ACTIONS_MOVE_TORCHSONG: ActionsEnum
+ACTIONS_MOVE_TORMENT: ActionsEnum
+ACTIONS_MOVE_TOXIC: ActionsEnum
+ACTIONS_MOVE_TOXICSPIKES: ActionsEnum
+ACTIONS_MOVE_TOXICTHREAD: ActionsEnum
+ACTIONS_MOVE_TRAILBLAZE: ActionsEnum
+ACTIONS_MOVE_TRANSFORM: ActionsEnum
+ACTIONS_MOVE_TRIATTACK: ActionsEnum
+ACTIONS_MOVE_TRICK: ActionsEnum
+ACTIONS_MOVE_TRICKORTREAT: ActionsEnum
+ACTIONS_MOVE_TRICKROOM: ActionsEnum
+ACTIONS_MOVE_TRIPLEARROWS: ActionsEnum
+ACTIONS_MOVE_TRIPLEAXEL: ActionsEnum
+ACTIONS_MOVE_TRIPLEDIVE: ActionsEnum
+ACTIONS_MOVE_TRIPLEKICK: ActionsEnum
+ACTIONS_MOVE_TROPKICK: ActionsEnum
+ACTIONS_MOVE_TRUMPCARD: ActionsEnum
+ACTIONS_MOVE_TWINBEAM: ActionsEnum
+ACTIONS_MOVE_TWINEEDLE: ActionsEnum
+ACTIONS_MOVE_TWINKLETACKLE: ActionsEnum
+ACTIONS_MOVE_TWISTER: ActionsEnum
+ACTIONS_MOVE_UPPERHAND: ActionsEnum
+ACTIONS_MOVE_UPROAR: ActionsEnum
+ACTIONS_MOVE_UTURN: ActionsEnum
+ACTIONS_MOVE_VACUUMWAVE: ActionsEnum
+ACTIONS_MOVE_VCREATE: ActionsEnum
+ACTIONS_MOVE_VEEVEEVOLLEY: ActionsEnum
+ACTIONS_MOVE_VENOMDRENCH: ActionsEnum
+ACTIONS_MOVE_VENOSHOCK: ActionsEnum
+ACTIONS_MOVE_VICTORYDANCE: ActionsEnum
+ACTIONS_MOVE_VINEWHIP: ActionsEnum
+ACTIONS_MOVE_VISEGRIP: ActionsEnum
+ACTIONS_MOVE_VITALTHROW: ActionsEnum
+ACTIONS_MOVE_VOLTSWITCH: ActionsEnum
+ACTIONS_MOVE_VOLTTACKLE: ActionsEnum
+ACTIONS_MOVE_WAKEUPSLAP: ActionsEnum
+ACTIONS_MOVE_WATERFALL: ActionsEnum
+ACTIONS_MOVE_WATERGUN: ActionsEnum
+ACTIONS_MOVE_WATERPLEDGE: ActionsEnum
+ACTIONS_MOVE_WATERPULSE: ActionsEnum
+ACTIONS_MOVE_WATERSHURIKEN: ActionsEnum
+ACTIONS_MOVE_WATERSPORT: ActionsEnum
+ACTIONS_MOVE_WATERSPOUT: ActionsEnum
+ACTIONS_MOVE_WAVECRASH: ActionsEnum
+ACTIONS_MOVE_WEATHERBALL: ActionsEnum
+ACTIONS_MOVE_WHIRLPOOL: ActionsEnum
+ACTIONS_MOVE_WHIRLWIND: ActionsEnum
+ACTIONS_MOVE_WICKEDBLOW: ActionsEnum
+ACTIONS_MOVE_WICKEDTORQUE: ActionsEnum
+ACTIONS_MOVE_WIDEGUARD: ActionsEnum
+ACTIONS_MOVE_WILDBOLTSTORM: ActionsEnum
+ACTIONS_MOVE_WILDCHARGE: ActionsEnum
+ACTIONS_MOVE_WILLOWISP: ActionsEnum
+ACTIONS_MOVE_WINGATTACK: ActionsEnum
+ACTIONS_MOVE_WISH: ActionsEnum
+ACTIONS_MOVE_WITHDRAW: ActionsEnum
+ACTIONS_MOVE_WONDERROOM: ActionsEnum
+ACTIONS_MOVE_WOODHAMMER: ActionsEnum
+ACTIONS_MOVE_WORKUP: ActionsEnum
+ACTIONS_MOVE_WORRYSEED: ActionsEnum
+ACTIONS_MOVE_WRAP: ActionsEnum
+ACTIONS_MOVE_WRINGOUT: ActionsEnum
+ACTIONS_MOVE_XSCISSOR: ActionsEnum
+ACTIONS_MOVE_YAWN: ActionsEnum
+ACTIONS_MOVE_ZAPCANNON: ActionsEnum
+ACTIONS_MOVE_ZENHEADBUTT: ActionsEnum
+ACTIONS_MOVE_ZINGZAP: ActionsEnum
+ACTIONS_MOVE_ZIPPYZAP: ActionsEnum
+ACTIONS_SWITCH_ABABO: ActionsEnum
+ACTIONS_SWITCH_ABOMASNOW: ActionsEnum
+ACTIONS_SWITCH_ABOMASNOWMEGA: ActionsEnum
+ACTIONS_SWITCH_ABRA: ActionsEnum
+ACTIONS_SWITCH_ABSOL: ActionsEnum
+ACTIONS_SWITCH_ABSOLMEGA: ActionsEnum
+ACTIONS_SWITCH_ACCELGOR: ActionsEnum
+ACTIONS_SWITCH_AEGISLASH: ActionsEnum
+ACTIONS_SWITCH_AEGISLASHBLADE: ActionsEnum
+ACTIONS_SWITCH_AERODACTYL: ActionsEnum
+ACTIONS_SWITCH_AERODACTYLMEGA: ActionsEnum
+ACTIONS_SWITCH_AGGRON: ActionsEnum
+ACTIONS_SWITCH_AGGRONMEGA: ActionsEnum
+ACTIONS_SWITCH_AIPOM: ActionsEnum
+ACTIONS_SWITCH_ALAKAZAM: ActionsEnum
+ACTIONS_SWITCH_ALAKAZAMMEGA: ActionsEnum
+ACTIONS_SWITCH_ALCREMIE: ActionsEnum
+ACTIONS_SWITCH_ALCREMIEGMAX: ActionsEnum
+ACTIONS_SWITCH_ALOMOMOLA: ActionsEnum
+ACTIONS_SWITCH_ALTARIA: ActionsEnum
+ACTIONS_SWITCH_ALTARIAMEGA: ActionsEnum
+ACTIONS_SWITCH_AMAURA: ActionsEnum
+ACTIONS_SWITCH_AMBIPOM: ActionsEnum
+ACTIONS_SWITCH_AMOONGUSS: ActionsEnum
+ACTIONS_SWITCH_AMPHAROS: ActionsEnum
+ACTIONS_SWITCH_AMPHAROSMEGA: ActionsEnum
+ACTIONS_SWITCH_ANNIHILAPE: ActionsEnum
+ACTIONS_SWITCH_ANORITH: ActionsEnum
+ACTIONS_SWITCH_APPLETUN: ActionsEnum
+ACTIONS_SWITCH_APPLETUNGMAX: ActionsEnum
+ACTIONS_SWITCH_APPLIN: ActionsEnum
+ACTIONS_SWITCH_ARAQUANID: ActionsEnum
+ACTIONS_SWITCH_ARAQUANIDTOTEM: ActionsEnum
+ACTIONS_SWITCH_ARBOK: ActionsEnum
+ACTIONS_SWITCH_ARBOLIVA: ActionsEnum
+ACTIONS_SWITCH_ARCANINE: ActionsEnum
+ACTIONS_SWITCH_ARCANINEHISUI: ActionsEnum
+ACTIONS_SWITCH_ARCEUS: ActionsEnum
+ACTIONS_SWITCH_ARCEUSBUG: ActionsEnum
+ACTIONS_SWITCH_ARCEUSDARK: ActionsEnum
+ACTIONS_SWITCH_ARCEUSDRAGON: ActionsEnum
+ACTIONS_SWITCH_ARCEUSELECTRIC: ActionsEnum
+ACTIONS_SWITCH_ARCEUSFAIRY: ActionsEnum
+ACTIONS_SWITCH_ARCEUSFIGHTING: ActionsEnum
+ACTIONS_SWITCH_ARCEUSFIRE: ActionsEnum
+ACTIONS_SWITCH_ARCEUSFLYING: ActionsEnum
+ACTIONS_SWITCH_ARCEUSGHOST: ActionsEnum
+ACTIONS_SWITCH_ARCEUSGRASS: ActionsEnum
+ACTIONS_SWITCH_ARCEUSGROUND: ActionsEnum
+ACTIONS_SWITCH_ARCEUSICE: ActionsEnum
+ACTIONS_SWITCH_ARCEUSPOISON: ActionsEnum
+ACTIONS_SWITCH_ARCEUSPSYCHIC: ActionsEnum
+ACTIONS_SWITCH_ARCEUSROCK: ActionsEnum
+ACTIONS_SWITCH_ARCEUSSTEEL: ActionsEnum
+ACTIONS_SWITCH_ARCEUSWATER: ActionsEnum
+ACTIONS_SWITCH_ARCHALUDON: ActionsEnum
+ACTIONS_SWITCH_ARCHEN: ActionsEnum
+ACTIONS_SWITCH_ARCHEOPS: ActionsEnum
+ACTIONS_SWITCH_ARCTIBAX: ActionsEnum
+ACTIONS_SWITCH_ARCTOVISH: ActionsEnum
+ACTIONS_SWITCH_ARCTOZOLT: ActionsEnum
+ACTIONS_SWITCH_ARGALIS: ActionsEnum
+ACTIONS_SWITCH_ARGHONAUT: ActionsEnum
+ACTIONS_SWITCH_ARIADOS: ActionsEnum
+ACTIONS_SWITCH_ARMALDO: ActionsEnum
+ACTIONS_SWITCH_ARMAROUGE: ActionsEnum
+ACTIONS_SWITCH_AROMATISSE: ActionsEnum
+ACTIONS_SWITCH_ARON: ActionsEnum
+ACTIONS_SWITCH_ARROKUDA: ActionsEnum
+ACTIONS_SWITCH_ARTICUNO: ActionsEnum
+ACTIONS_SWITCH_ARTICUNOGALAR: ActionsEnum
+ACTIONS_SWITCH_ASTROLOTL: ActionsEnum
+ACTIONS_SWITCH_AUDINO: ActionsEnum
+ACTIONS_SWITCH_AUDINOMEGA: ActionsEnum
+ACTIONS_SWITCH_AURORUS: ActionsEnum
+ACTIONS_SWITCH_AURUMOTH: ActionsEnum
+ACTIONS_SWITCH_AVALUGG: ActionsEnum
+ACTIONS_SWITCH_AVALUGGHISUI: ActionsEnum
+ACTIONS_SWITCH_AXEW: ActionsEnum
+ACTIONS_SWITCH_AZELF: ActionsEnum
+ACTIONS_SWITCH_AZUMARILL: ActionsEnum
+ACTIONS_SWITCH_AZURILL: ActionsEnum
+ACTIONS_SWITCH_BAGON: ActionsEnum
+ACTIONS_SWITCH_BALTOY: ActionsEnum
+ACTIONS_SWITCH_BANETTE: ActionsEnum
+ACTIONS_SWITCH_BANETTEMEGA: ActionsEnum
+ACTIONS_SWITCH_BARBARACLE: ActionsEnum
+ACTIONS_SWITCH_BARBOACH: ActionsEnum
+ACTIONS_SWITCH_BARRASKEWDA: ActionsEnum
+ACTIONS_SWITCH_BASCULEGION: ActionsEnum
+ACTIONS_SWITCH_BASCULEGIONF: ActionsEnum
+ACTIONS_SWITCH_BASCULIN: ActionsEnum
+ACTIONS_SWITCH_BASCULINBLUESTRIPED: ActionsEnum
+ACTIONS_SWITCH_BASCULINWHITESTRIPED: ActionsEnum
+ACTIONS_SWITCH_BASTIODON: ActionsEnum
+ACTIONS_SWITCH_BAXCALIBUR: ActionsEnum
+ACTIONS_SWITCH_BAYLEEF: ActionsEnum
+ACTIONS_SWITCH_BEARTIC: ActionsEnum
+ACTIONS_SWITCH_BEAUTIFLY: ActionsEnum
+ACTIONS_SWITCH_BEEDRILL: ActionsEnum
+ACTIONS_SWITCH_BEEDRILLMEGA: ActionsEnum
+ACTIONS_SWITCH_BEHEEYEM: ActionsEnum
+ACTIONS_SWITCH_BELDUM: ActionsEnum
+ACTIONS_SWITCH_BELLIBOLT: ActionsEnum
+ACTIONS_SWITCH_BELLOSSOM: ActionsEnum
+ACTIONS_SWITCH_BELLSPROUT: ActionsEnum
+ACTIONS_SWITCH_BERGMITE: ActionsEnum
+ACTIONS_SWITCH_BEWEAR: ActionsEnum
+ACTIONS_SWITCH_BIBAREL: ActionsEnum
+ACTIONS_SWITCH_BIDOOF: ActionsEnum
+ACTIONS_SWITCH_BINACLE: ActionsEnum
+ACTIONS_SWITCH_BISHARP: ActionsEnum
+ACTIONS_SWITCH_BLACEPHALON: ActionsEnum
+ACTIONS_SWITCH_BLASTOISE: ActionsEnum
+ACTIONS_SWITCH_BLASTOISEGMAX: ActionsEnum
+ACTIONS_SWITCH_BLASTOISEMEGA: ActionsEnum
+ACTIONS_SWITCH_BLAZIKEN: ActionsEnum
+ACTIONS_SWITCH_BLAZIKENMEGA: ActionsEnum
+ACTIONS_SWITCH_BLIPBUG: ActionsEnum
+ACTIONS_SWITCH_BLISSEY: ActionsEnum
+ACTIONS_SWITCH_BLITZLE: ActionsEnum
+ACTIONS_SWITCH_BOLDORE: ActionsEnum
+ACTIONS_SWITCH_BOLTUND: ActionsEnum
+ACTIONS_SWITCH_BOMBIRDIER: ActionsEnum
+ACTIONS_SWITCH_BONSLY: ActionsEnum
+ACTIONS_SWITCH_BOUFFALANT: ActionsEnum
+ACTIONS_SWITCH_BOUNSWEET: ActionsEnum
+ACTIONS_SWITCH_BRAIXEN: ActionsEnum
+ACTIONS_SWITCH_BRAMBLEGHAST: ActionsEnum
+ACTIONS_SWITCH_BRAMBLIN: ActionsEnum
+ACTIONS_SWITCH_BRATTLER: ActionsEnum
+ACTIONS_SWITCH_BRAVIARY: ActionsEnum
+ACTIONS_SWITCH_BRAVIARYHISUI: ActionsEnum
+ACTIONS_SWITCH_BREEZI: ActionsEnum
+ACTIONS_SWITCH_BRELOOM: ActionsEnum
+ACTIONS_SWITCH_BRIONNE: ActionsEnum
+ACTIONS_SWITCH_BRONZONG: ActionsEnum
+ACTIONS_SWITCH_BRONZOR: ActionsEnum
+ACTIONS_SWITCH_BRUTEBONNET: ActionsEnum
+ACTIONS_SWITCH_BRUXISH: ActionsEnum
+ACTIONS_SWITCH_BUDEW: ActionsEnum
+ACTIONS_SWITCH_BUIZEL: ActionsEnum
+ACTIONS_SWITCH_BULBASAUR: ActionsEnum
+ACTIONS_SWITCH_BUNEARY: ActionsEnum
+ACTIONS_SWITCH_BUNNELBY: ActionsEnum
+ACTIONS_SWITCH_BURMY: ActionsEnum
+ACTIONS_SWITCH_BUTTERFREE: ActionsEnum
+ACTIONS_SWITCH_BUTTERFREEGMAX: ActionsEnum
+ACTIONS_SWITCH_BUZZWOLE: ActionsEnum
+ACTIONS_SWITCH_CACNEA: ActionsEnum
+ACTIONS_SWITCH_CACTURNE: ActionsEnum
+ACTIONS_SWITCH_CAIMANOE: ActionsEnum
+ACTIONS_SWITCH_CALYREX: ActionsEnum
+ACTIONS_SWITCH_CALYREXICE: ActionsEnum
+ACTIONS_SWITCH_CALYREXSHADOW: ActionsEnum
+ACTIONS_SWITCH_CAMERUPT: ActionsEnum
+ACTIONS_SWITCH_CAMERUPTMEGA: ActionsEnum
+ACTIONS_SWITCH_CAPSAKID: ActionsEnum
+ACTIONS_SWITCH_CARBINK: ActionsEnum
+ACTIONS_SWITCH_CARIBOLT: ActionsEnum
+ACTIONS_SWITCH_CARKOL: ActionsEnum
+ACTIONS_SWITCH_CARNIVINE: ActionsEnum
+ACTIONS_SWITCH_CARRACOSTA: ActionsEnum
+ACTIONS_SWITCH_CARVANHA: ActionsEnum
+ACTIONS_SWITCH_CASCOON: ActionsEnum
+ACTIONS_SWITCH_CASTFORM: ActionsEnum
+ACTIONS_SWITCH_CASTFORMRAINY: ActionsEnum
+ACTIONS_SWITCH_CASTFORMSNOWY: ActionsEnum
+ACTIONS_SWITCH_CASTFORMSUNNY: ActionsEnum
+ACTIONS_SWITCH_CATERPIE: ActionsEnum
+ACTIONS_SWITCH_CAWDET: ActionsEnum
+ACTIONS_SWITCH_CAWMODORE: ActionsEnum
+ACTIONS_SWITCH_CELEBI: ActionsEnum
+ACTIONS_SWITCH_CELESTEELA: ActionsEnum
+ACTIONS_SWITCH_CENTISKORCH: ActionsEnum
+ACTIONS_SWITCH_CENTISKORCHGMAX: ActionsEnum
+ACTIONS_SWITCH_CERULEDGE: ActionsEnum
+ACTIONS_SWITCH_CETITAN: ActionsEnum
+ACTIONS_SWITCH_CETODDLE: ActionsEnum
+ACTIONS_SWITCH_CHANDELURE: ActionsEnum
+ACTIONS_SWITCH_CHANSEY: ActionsEnum
+ACTIONS_SWITCH_CHARCADET: ActionsEnum
+ACTIONS_SWITCH_CHARIZARD: ActionsEnum
+ACTIONS_SWITCH_CHARIZARDGMAX: ActionsEnum
+ACTIONS_SWITCH_CHARIZARDMEGAX: ActionsEnum
+ACTIONS_SWITCH_CHARIZARDMEGAY: ActionsEnum
+ACTIONS_SWITCH_CHARJABUG: ActionsEnum
+ACTIONS_SWITCH_CHARMANDER: ActionsEnum
+ACTIONS_SWITCH_CHARMELEON: ActionsEnum
+ACTIONS_SWITCH_CHATOT: ActionsEnum
+ACTIONS_SWITCH_CHERRIM: ActionsEnum
+ACTIONS_SWITCH_CHERRIMSUNSHINE: ActionsEnum
+ACTIONS_SWITCH_CHERUBI: ActionsEnum
+ACTIONS_SWITCH_CHESNAUGHT: ActionsEnum
+ACTIONS_SWITCH_CHESPIN: ActionsEnum
+ACTIONS_SWITCH_CHEWTLE: ActionsEnum
+ACTIONS_SWITCH_CHIENPAO: ActionsEnum
+ACTIONS_SWITCH_CHIKORITA: ActionsEnum
+ACTIONS_SWITCH_CHIMCHAR: ActionsEnum
+ACTIONS_SWITCH_CHIMECHO: ActionsEnum
+ACTIONS_SWITCH_CHINCHOU: ActionsEnum
+ACTIONS_SWITCH_CHINGLING: ActionsEnum
+ACTIONS_SWITCH_CHIYU: ActionsEnum
+ACTIONS_SWITCH_CHROMERA: ActionsEnum
+ACTIONS_SWITCH_CHUGGALONG: ActionsEnum
+ACTIONS_SWITCH_CINCCINO: ActionsEnum
+ACTIONS_SWITCH_CINDERACE: ActionsEnum
+ACTIONS_SWITCH_CINDERACEGMAX: ActionsEnum
+ACTIONS_SWITCH_CLAMPERL: ActionsEnum
+ACTIONS_SWITCH_CLAUNCHER: ActionsEnum
+ACTIONS_SWITCH_CLAWITZER: ActionsEnum
+ACTIONS_SWITCH_CLAYDOL: ActionsEnum
+ACTIONS_SWITCH_CLEFABLE: ActionsEnum
+ACTIONS_SWITCH_CLEFAIRY: ActionsEnum
+ACTIONS_SWITCH_CLEFFA: ActionsEnum
+ACTIONS_SWITCH_CLOBBOPUS: ActionsEnum
+ACTIONS_SWITCH_CLODSIRE: ActionsEnum
+ACTIONS_SWITCH_CLOYSTER: ActionsEnum
+ACTIONS_SWITCH_COALOSSAL: ActionsEnum
+ACTIONS_SWITCH_COALOSSALGMAX: ActionsEnum
+ACTIONS_SWITCH_COBALION: ActionsEnum
+ACTIONS_SWITCH_COFAGRIGUS: ActionsEnum
+ACTIONS_SWITCH_COLOSSOIL: ActionsEnum
+ACTIONS_SWITCH_COMBEE: ActionsEnum
+ACTIONS_SWITCH_COMBUSKEN: ActionsEnum
+ACTIONS_SWITCH_COMFEY: ActionsEnum
+ACTIONS_SWITCH_CONKELDURR: ActionsEnum
+ACTIONS_SWITCH_COPPERAJAH: ActionsEnum
+ACTIONS_SWITCH_COPPERAJAHGMAX: ActionsEnum
+ACTIONS_SWITCH_CORIBALIS: ActionsEnum
+ACTIONS_SWITCH_CORPHISH: ActionsEnum
+ACTIONS_SWITCH_CORSOLA: ActionsEnum
+ACTIONS_SWITCH_CORSOLAGALAR: ActionsEnum
+ACTIONS_SWITCH_CORVIKNIGHT: ActionsEnum
+ACTIONS_SWITCH_CORVIKNIGHTGMAX: ActionsEnum
+ACTIONS_SWITCH_CORVISQUIRE: ActionsEnum
+ACTIONS_SWITCH_COSMOEM: ActionsEnum
+ACTIONS_SWITCH_COSMOG: ActionsEnum
+ACTIONS_SWITCH_COTTONEE: ActionsEnum
+ACTIONS_SWITCH_CRABOMINABLE: ActionsEnum
+ACTIONS_SWITCH_CRABRAWLER: ActionsEnum
+ACTIONS_SWITCH_CRADILY: ActionsEnum
+ACTIONS_SWITCH_CRAMORANT: ActionsEnum
+ACTIONS_SWITCH_CRAMORANTGORGING: ActionsEnum
+ACTIONS_SWITCH_CRAMORANTGULPING: ActionsEnum
+ACTIONS_SWITCH_CRANIDOS: ActionsEnum
+ACTIONS_SWITCH_CRAWDAUNT: ActionsEnum
+ACTIONS_SWITCH_CRESCEIDON: ActionsEnum
+ACTIONS_SWITCH_CRESSELIA: ActionsEnum
+ACTIONS_SWITCH_CROAGUNK: ActionsEnum
+ACTIONS_SWITCH_CROBAT: ActionsEnum
+ACTIONS_SWITCH_CROCALOR: ActionsEnum
+ACTIONS_SWITCH_CROCONAW: ActionsEnum
+ACTIONS_SWITCH_CRUCIBELLE: ActionsEnum
+ACTIONS_SWITCH_CRUCIBELLEMEGA: ActionsEnum
+ACTIONS_SWITCH_CRUSTLE: ActionsEnum
+ACTIONS_SWITCH_CRYOGONAL: ActionsEnum
+ACTIONS_SWITCH_CUBCHOO: ActionsEnum
+ACTIONS_SWITCH_CUBONE: ActionsEnum
+ACTIONS_SWITCH_CUFANT: ActionsEnum
+ACTIONS_SWITCH_CUPRA: ActionsEnum
+ACTIONS_SWITCH_CURSOLA: ActionsEnum
+ACTIONS_SWITCH_CUTIEFLY: ActionsEnum
+ACTIONS_SWITCH_CYCLIZAR: ActionsEnum
+ACTIONS_SWITCH_CYCLOHM: ActionsEnum
+ACTIONS_SWITCH_CYNDAQUIL: ActionsEnum
+ACTIONS_SWITCH_DACHSBUN: ActionsEnum
+ACTIONS_SWITCH_DARKRAI: ActionsEnum
+ACTIONS_SWITCH_DARMANITAN: ActionsEnum
+ACTIONS_SWITCH_DARMANITANGALAR: ActionsEnum
+ACTIONS_SWITCH_DARMANITANGALARZEN: ActionsEnum
+ACTIONS_SWITCH_DARMANITANZEN: ActionsEnum
+ACTIONS_SWITCH_DARTRIX: ActionsEnum
+ACTIONS_SWITCH_DARUMAKA: ActionsEnum
+ACTIONS_SWITCH_DARUMAKAGALAR: ActionsEnum
+ACTIONS_SWITCH_DECIDUEYE: ActionsEnum
+ACTIONS_SWITCH_DECIDUEYEHISUI: ActionsEnum
+ACTIONS_SWITCH_DEDENNE: ActionsEnum
+ACTIONS_SWITCH_DEERLING: ActionsEnum
+ACTIONS_SWITCH_DEINO: ActionsEnum
+ACTIONS_SWITCH_DELCATTY: ActionsEnum
+ACTIONS_SWITCH_DELIBIRD: ActionsEnum
+ACTIONS_SWITCH_DELPHOX: ActionsEnum
+ACTIONS_SWITCH_DEOXYS: ActionsEnum
+ACTIONS_SWITCH_DEOXYSATTACK: ActionsEnum
+ACTIONS_SWITCH_DEOXYSDEFENSE: ActionsEnum
+ACTIONS_SWITCH_DEOXYSSPEED: ActionsEnum
+ACTIONS_SWITCH_DEWGONG: ActionsEnum
+ACTIONS_SWITCH_DEWOTT: ActionsEnum
+ACTIONS_SWITCH_DEWPIDER: ActionsEnum
+ACTIONS_SWITCH_DHELMISE: ActionsEnum
+ACTIONS_SWITCH_DIALGA: ActionsEnum
+ACTIONS_SWITCH_DIALGAORIGIN: ActionsEnum
+ACTIONS_SWITCH_DIANCIE: ActionsEnum
+ACTIONS_SWITCH_DIANCIEMEGA: ActionsEnum
+ACTIONS_SWITCH_DIGGERSBY: ActionsEnum
+ACTIONS_SWITCH_DIGLETT: ActionsEnum
+ACTIONS_SWITCH_DIGLETTALOLA: ActionsEnum
+ACTIONS_SWITCH_DIPPLIN: ActionsEnum
+ACTIONS_SWITCH_DITTO: ActionsEnum
+ACTIONS_SWITCH_DODRIO: ActionsEnum
+ACTIONS_SWITCH_DODUO: ActionsEnum
+ACTIONS_SWITCH_DOLLIV: ActionsEnum
+ACTIONS_SWITCH_DONDOZO: ActionsEnum
+ACTIONS_SWITCH_DONPHAN: ActionsEnum
+ACTIONS_SWITCH_DORSOIL: ActionsEnum
+ACTIONS_SWITCH_DOTTLER: ActionsEnum
+ACTIONS_SWITCH_DOUBLADE: ActionsEnum
+ACTIONS_SWITCH_DRACOVISH: ActionsEnum
+ACTIONS_SWITCH_DRACOZOLT: ActionsEnum
+ACTIONS_SWITCH_DRAGALGE: ActionsEnum
+ACTIONS_SWITCH_DRAGAPULT: ActionsEnum
+ACTIONS_SWITCH_DRAGONAIR: ActionsEnum
+ACTIONS_SWITCH_DRAGONITE: ActionsEnum
+ACTIONS_SWITCH_DRAKLOAK: ActionsEnum
+ACTIONS_SWITCH_DRAMPA: ActionsEnum
+ACTIONS_SWITCH_DRAPION: ActionsEnum
+ACTIONS_SWITCH_DRATINI: ActionsEnum
+ACTIONS_SWITCH_DREDNAW: ActionsEnum
+ACTIONS_SWITCH_DREDNAWGMAX: ActionsEnum
+ACTIONS_SWITCH_DREEPY: ActionsEnum
+ACTIONS_SWITCH_DRIFBLIM: ActionsEnum
+ACTIONS_SWITCH_DRIFLOON: ActionsEnum
+ACTIONS_SWITCH_DRILBUR: ActionsEnum
+ACTIONS_SWITCH_DRIZZILE: ActionsEnum
+ACTIONS_SWITCH_DROWZEE: ActionsEnum
+ACTIONS_SWITCH_DRUDDIGON: ActionsEnum
+ACTIONS_SWITCH_DUBWOOL: ActionsEnum
+ACTIONS_SWITCH_DUCKLETT: ActionsEnum
+ACTIONS_SWITCH_DUDUNSPARCE: ActionsEnum
+ACTIONS_SWITCH_DUDUNSPARCETHREESEGMENT: ActionsEnum
+ACTIONS_SWITCH_DUGTRIO: ActionsEnum
+ACTIONS_SWITCH_DUGTRIOALOLA: ActionsEnum
+ACTIONS_SWITCH_DUNSPARCE: ActionsEnum
+ACTIONS_SWITCH_DUOHM: ActionsEnum
+ACTIONS_SWITCH_DUOSION: ActionsEnum
+ACTIONS_SWITCH_DURALUDON: ActionsEnum
+ACTIONS_SWITCH_DURALUDONGMAX: ActionsEnum
+ACTIONS_SWITCH_DURANT: ActionsEnum
+ACTIONS_SWITCH_DUSCLOPS: ActionsEnum
+ACTIONS_SWITCH_DUSKNOIR: ActionsEnum
+ACTIONS_SWITCH_DUSKULL: ActionsEnum
+ACTIONS_SWITCH_DUSTOX: ActionsEnum
+ACTIONS_SWITCH_DWEBBLE: ActionsEnum
+ACTIONS_SWITCH_EELEKTRIK: ActionsEnum
+ACTIONS_SWITCH_EELEKTROSS: ActionsEnum
+ACTIONS_SWITCH_EEVEE: ActionsEnum
+ACTIONS_SWITCH_EEVEEGMAX: ActionsEnum
+ACTIONS_SWITCH_EEVEESTARTER: ActionsEnum
+ACTIONS_SWITCH_EISCUE: ActionsEnum
+ACTIONS_SWITCH_EISCUENOICE: ActionsEnum
+ACTIONS_SWITCH_EKANS: ActionsEnum
+ACTIONS_SWITCH_ELDEGOSS: ActionsEnum
+ACTIONS_SWITCH_ELECTABUZZ: ActionsEnum
+ACTIONS_SWITCH_ELECTIVIRE: ActionsEnum
+ACTIONS_SWITCH_ELECTRELK: ActionsEnum
+ACTIONS_SWITCH_ELECTRIKE: ActionsEnum
+ACTIONS_SWITCH_ELECTRODE: ActionsEnum
+ACTIONS_SWITCH_ELECTRODEHISUI: ActionsEnum
+ACTIONS_SWITCH_ELEKID: ActionsEnum
+ACTIONS_SWITCH_ELGYEM: ActionsEnum
+ACTIONS_SWITCH_EMBIRCH: ActionsEnum
+ACTIONS_SWITCH_EMBOAR: ActionsEnum
+ACTIONS_SWITCH_EMOLGA: ActionsEnum
+ACTIONS_SWITCH_EMPOLEON: ActionsEnum
+ACTIONS_SWITCH_ENAMORUS: ActionsEnum
+ACTIONS_SWITCH_ENAMORUSTHERIAN: ActionsEnum
+ACTIONS_SWITCH_ENTEI: ActionsEnum
+ACTIONS_SWITCH_EQUILIBRA: ActionsEnum
+ACTIONS_SWITCH_ESCAVALIER: ActionsEnum
+ACTIONS_SWITCH_ESPATHRA: ActionsEnum
+ACTIONS_SWITCH_ESPEON: ActionsEnum
+ACTIONS_SWITCH_ESPURR: ActionsEnum
+ACTIONS_SWITCH_ETERNATUS: ActionsEnum
+ACTIONS_SWITCH_ETERNATUSETERNAMAX: ActionsEnum
+ACTIONS_SWITCH_EXCADRILL: ActionsEnum
+ACTIONS_SWITCH_EXEGGCUTE: ActionsEnum
+ACTIONS_SWITCH_EXEGGUTOR: ActionsEnum
+ACTIONS_SWITCH_EXEGGUTORALOLA: ActionsEnum
+ACTIONS_SWITCH_EXPLOUD: ActionsEnum
+ACTIONS_SWITCH_FALINKS: ActionsEnum
+ACTIONS_SWITCH_FARFETCHD: ActionsEnum
+ACTIONS_SWITCH_FARFETCHDGALAR: ActionsEnum
+ACTIONS_SWITCH_FARIGIRAF: ActionsEnum
+ACTIONS_SWITCH_FAWNIFER: ActionsEnum
+ACTIONS_SWITCH_FEAROW: ActionsEnum
+ACTIONS_SWITCH_FEEBAS: ActionsEnum
+ACTIONS_SWITCH_FENNEKIN: ActionsEnum
+ACTIONS_SWITCH_FERALIGATR: ActionsEnum
+ACTIONS_SWITCH_FERROSEED: ActionsEnum
+ACTIONS_SWITCH_FERROTHORN: ActionsEnum
+ACTIONS_SWITCH_FEZANDIPITI: ActionsEnum
+ACTIONS_SWITCH_FIDGIT: ActionsEnum
+ACTIONS_SWITCH_FIDOUGH: ActionsEnum
+ACTIONS_SWITCH_FINIZEN: ActionsEnum
+ACTIONS_SWITCH_FINNEON: ActionsEnum
+ACTIONS_SWITCH_FLAAFFY: ActionsEnum
+ACTIONS_SWITCH_FLABEBE: ActionsEnum
+ACTIONS_SWITCH_FLAMIGO: ActionsEnum
+ACTIONS_SWITCH_FLAPPLE: ActionsEnum
+ACTIONS_SWITCH_FLAPPLEGMAX: ActionsEnum
+ACTIONS_SWITCH_FLARELM: ActionsEnum
+ACTIONS_SWITCH_FLAREON: ActionsEnum
+ACTIONS_SWITCH_FLETCHINDER: ActionsEnum
+ACTIONS_SWITCH_FLETCHLING: ActionsEnum
+ACTIONS_SWITCH_FLITTLE: ActionsEnum
+ACTIONS_SWITCH_FLOATOY: ActionsEnum
+ACTIONS_SWITCH_FLOATZEL: ActionsEnum
+ACTIONS_SWITCH_FLOETTE: ActionsEnum
+ACTIONS_SWITCH_FLOETTEETERNAL: ActionsEnum
+ACTIONS_SWITCH_FLORAGATO: ActionsEnum
+ACTIONS_SWITCH_FLORGES: ActionsEnum
+ACTIONS_SWITCH_FLUTTERMANE: ActionsEnum
+ACTIONS_SWITCH_FLYGON: ActionsEnum
+ACTIONS_SWITCH_FOMANTIS: ActionsEnum
+ACTIONS_SWITCH_FOONGUS: ActionsEnum
+ACTIONS_SWITCH_FORRETRESS: ActionsEnum
+ACTIONS_SWITCH_FRAXURE: ActionsEnum
+ACTIONS_SWITCH_FRIGIBAX: ActionsEnum
+ACTIONS_SWITCH_FRILLISH: ActionsEnum
+ACTIONS_SWITCH_FROAKIE: ActionsEnum
+ACTIONS_SWITCH_FROGADIER: ActionsEnum
+ACTIONS_SWITCH_FROSLASS: ActionsEnum
+ACTIONS_SWITCH_FROSMOTH: ActionsEnum
+ACTIONS_SWITCH_FUECOCO: ActionsEnum
+ACTIONS_SWITCH_FURFROU: ActionsEnum
+ACTIONS_SWITCH_FURRET: ActionsEnum
+ACTIONS_SWITCH_GABITE: ActionsEnum
+ACTIONS_SWITCH_GALLADE: ActionsEnum
+ACTIONS_SWITCH_GALLADEMEGA: ActionsEnum
+ACTIONS_SWITCH_GALVANTULA: ActionsEnum
+ACTIONS_SWITCH_GARBODOR: ActionsEnum
+ACTIONS_SWITCH_GARBODORGMAX: ActionsEnum
+ACTIONS_SWITCH_GARCHOMP: ActionsEnum
+ACTIONS_SWITCH_GARCHOMPMEGA: ActionsEnum
+ACTIONS_SWITCH_GARDEVOIR: ActionsEnum
+ACTIONS_SWITCH_GARDEVOIRMEGA: ActionsEnum
+ACTIONS_SWITCH_GARGANACL: ActionsEnum
+ACTIONS_SWITCH_GASTLY: ActionsEnum
+ACTIONS_SWITCH_GASTRODON: ActionsEnum
+ACTIONS_SWITCH_GENESECT: ActionsEnum
+ACTIONS_SWITCH_GENESECTBURN: ActionsEnum
+ACTIONS_SWITCH_GENESECTCHILL: ActionsEnum
+ACTIONS_SWITCH_GENESECTDOUSE: ActionsEnum
+ACTIONS_SWITCH_GENESECTSHOCK: ActionsEnum
+ACTIONS_SWITCH_GENGAR: ActionsEnum
+ACTIONS_SWITCH_GENGARGMAX: ActionsEnum
+ACTIONS_SWITCH_GENGARMEGA: ActionsEnum
+ACTIONS_SWITCH_GEODUDE: ActionsEnum
+ACTIONS_SWITCH_GEODUDEALOLA: ActionsEnum
+ACTIONS_SWITCH_GHOLDENGO: ActionsEnum
+ACTIONS_SWITCH_GIBLE: ActionsEnum
+ACTIONS_SWITCH_GIGALITH: ActionsEnum
+ACTIONS_SWITCH_GIMMIGHOUL: ActionsEnum
+ACTIONS_SWITCH_GIMMIGHOULROAMING: ActionsEnum
+ACTIONS_SWITCH_GIRAFARIG: ActionsEnum
+ACTIONS_SWITCH_GIRATINA: ActionsEnum
+ACTIONS_SWITCH_GIRATINAORIGIN: ActionsEnum
+ACTIONS_SWITCH_GLACEON: ActionsEnum
+ACTIONS_SWITCH_GLALIE: ActionsEnum
+ACTIONS_SWITCH_GLALIEMEGA: ActionsEnum
+ACTIONS_SWITCH_GLAMEOW: ActionsEnum
+ACTIONS_SWITCH_GLASTRIER: ActionsEnum
+ACTIONS_SWITCH_GLIGAR: ActionsEnum
+ACTIONS_SWITCH_GLIMMET: ActionsEnum
+ACTIONS_SWITCH_GLIMMORA: ActionsEnum
+ACTIONS_SWITCH_GLISCOR: ActionsEnum
+ACTIONS_SWITCH_GLOOM: ActionsEnum
+ACTIONS_SWITCH_GOGOAT: ActionsEnum
+ACTIONS_SWITCH_GOLBAT: ActionsEnum
+ACTIONS_SWITCH_GOLDEEN: ActionsEnum
+ACTIONS_SWITCH_GOLDUCK: ActionsEnum
+ACTIONS_SWITCH_GOLEM: ActionsEnum
+ACTIONS_SWITCH_GOLEMALOLA: ActionsEnum
+ACTIONS_SWITCH_GOLETT: ActionsEnum
+ACTIONS_SWITCH_GOLISOPOD: ActionsEnum
+ACTIONS_SWITCH_GOLURK: ActionsEnum
+ACTIONS_SWITCH_GOODRA: ActionsEnum
+ACTIONS_SWITCH_GOODRAHISUI: ActionsEnum
+ACTIONS_SWITCH_GOOMY: ActionsEnum
+ACTIONS_SWITCH_GOREBYSS: ActionsEnum
+ACTIONS_SWITCH_GOSSIFLEUR: ActionsEnum
+ACTIONS_SWITCH_GOTHITA: ActionsEnum
+ACTIONS_SWITCH_GOTHITELLE: ActionsEnum
+ACTIONS_SWITCH_GOTHORITA: ActionsEnum
+ACTIONS_SWITCH_GOUGINGFIRE: ActionsEnum
+ACTIONS_SWITCH_GOURGEIST: ActionsEnum
+ACTIONS_SWITCH_GOURGEISTLARGE: ActionsEnum
+ACTIONS_SWITCH_GOURGEISTSMALL: ActionsEnum
+ACTIONS_SWITCH_GOURGEISTSUPER: ActionsEnum
+ACTIONS_SWITCH_GRAFAIAI: ActionsEnum
+ACTIONS_SWITCH_GRANBULL: ActionsEnum
+ACTIONS_SWITCH_GRAPPLOCT: ActionsEnum
+ACTIONS_SWITCH_GRAVELER: ActionsEnum
+ACTIONS_SWITCH_GRAVELERALOLA: ActionsEnum
+ACTIONS_SWITCH_GREATTUSK: ActionsEnum
+ACTIONS_SWITCH_GREAVARD: ActionsEnum
+ACTIONS_SWITCH_GREEDENT: ActionsEnum
+ACTIONS_SWITCH_GRENINJA: ActionsEnum
+ACTIONS_SWITCH_GRENINJAASH: ActionsEnum
+ACTIONS_SWITCH_GRENINJABOND: ActionsEnum
+ACTIONS_SWITCH_GRIMER: ActionsEnum
+ACTIONS_SWITCH_GRIMERALOLA: ActionsEnum
+ACTIONS_SWITCH_GRIMMSNARL: ActionsEnum
+ACTIONS_SWITCH_GRIMMSNARLGMAX: ActionsEnum
+ACTIONS_SWITCH_GROOKEY: ActionsEnum
+ACTIONS_SWITCH_GROTLE: ActionsEnum
+ACTIONS_SWITCH_GROUDON: ActionsEnum
+ACTIONS_SWITCH_GROUDONPRIMAL: ActionsEnum
+ACTIONS_SWITCH_GROVYLE: ActionsEnum
+ACTIONS_SWITCH_GROWLITHE: ActionsEnum
+ACTIONS_SWITCH_GROWLITHEHISUI: ActionsEnum
+ACTIONS_SWITCH_GRUBBIN: ActionsEnum
+ACTIONS_SWITCH_GRUMPIG: ActionsEnum
+ACTIONS_SWITCH_GULPIN: ActionsEnum
+ACTIONS_SWITCH_GUMSHOOS: ActionsEnum
+ACTIONS_SWITCH_GUMSHOOSTOTEM: ActionsEnum
+ACTIONS_SWITCH_GURDURR: ActionsEnum
+ACTIONS_SWITCH_GUZZLORD: ActionsEnum
+ACTIONS_SWITCH_GYARADOS: ActionsEnum
+ACTIONS_SWITCH_GYARADOSMEGA: ActionsEnum
+ACTIONS_SWITCH_HAKAMOO: ActionsEnum
+ACTIONS_SWITCH_HAPPINY: ActionsEnum
+ACTIONS_SWITCH_HARIYAMA: ActionsEnum
+ACTIONS_SWITCH_HATENNA: ActionsEnum
+ACTIONS_SWITCH_HATTERENE: ActionsEnum
+ACTIONS_SWITCH_HATTERENEGMAX: ActionsEnum
+ACTIONS_SWITCH_HATTREM: ActionsEnum
+ACTIONS_SWITCH_HAUNTER: ActionsEnum
+ACTIONS_SWITCH_HAWLUCHA: ActionsEnum
+ACTIONS_SWITCH_HAXORUS: ActionsEnum
+ACTIONS_SWITCH_HEATMOR: ActionsEnum
+ACTIONS_SWITCH_HEATRAN: ActionsEnum
+ACTIONS_SWITCH_HELIOLISK: ActionsEnum
+ACTIONS_SWITCH_HELIOPTILE: ActionsEnum
+ACTIONS_SWITCH_HEMOGOBLIN: ActionsEnum
+ACTIONS_SWITCH_HERACROSS: ActionsEnum
+ACTIONS_SWITCH_HERACROSSMEGA: ActionsEnum
+ACTIONS_SWITCH_HERDIER: ActionsEnum
+ACTIONS_SWITCH_HIPPOPOTAS: ActionsEnum
+ACTIONS_SWITCH_HIPPOWDON: ActionsEnum
+ACTIONS_SWITCH_HITMONCHAN: ActionsEnum
+ACTIONS_SWITCH_HITMONLEE: ActionsEnum
+ACTIONS_SWITCH_HITMONTOP: ActionsEnum
+ACTIONS_SWITCH_HONCHKROW: ActionsEnum
+ACTIONS_SWITCH_HONEDGE: ActionsEnum
+ACTIONS_SWITCH_HOOH: ActionsEnum
+ACTIONS_SWITCH_HOOPA: ActionsEnum
+ACTIONS_SWITCH_HOOPAUNBOUND: ActionsEnum
+ACTIONS_SWITCH_HOOTHOOT: ActionsEnum
+ACTIONS_SWITCH_HOPPIP: ActionsEnum
+ACTIONS_SWITCH_HORSEA: ActionsEnum
+ACTIONS_SWITCH_HOUNDOOM: ActionsEnum
+ACTIONS_SWITCH_HOUNDOOMMEGA: ActionsEnum
+ACTIONS_SWITCH_HOUNDOUR: ActionsEnum
+ACTIONS_SWITCH_HOUNDSTONE: ActionsEnum
+ACTIONS_SWITCH_HUNTAIL: ActionsEnum
+ACTIONS_SWITCH_HYDRAPPLE: ActionsEnum
+ACTIONS_SWITCH_HYDREIGON: ActionsEnum
+ACTIONS_SWITCH_HYPNO: ActionsEnum
+ACTIONS_SWITCH_IGGLYBUFF: ActionsEnum
+ACTIONS_SWITCH_ILLUMISE: ActionsEnum
+ACTIONS_SWITCH_IMPIDIMP: ActionsEnum
+ACTIONS_SWITCH_INCINEROAR: ActionsEnum
+ACTIONS_SWITCH_INDEEDEE: ActionsEnum
+ACTIONS_SWITCH_INDEEDEEF: ActionsEnum
+ACTIONS_SWITCH_INFERNAPE: ActionsEnum
+ACTIONS_SWITCH_INKAY: ActionsEnum
+ACTIONS_SWITCH_INTELEON: ActionsEnum
+ACTIONS_SWITCH_INTELEONGMAX: ActionsEnum
+ACTIONS_SWITCH_IRONBOULDER: ActionsEnum
+ACTIONS_SWITCH_IRONBUNDLE: ActionsEnum
+ACTIONS_SWITCH_IRONCROWN: ActionsEnum
+ACTIONS_SWITCH_IRONHANDS: ActionsEnum
+ACTIONS_SWITCH_IRONJUGULIS: ActionsEnum
+ACTIONS_SWITCH_IRONLEAVES: ActionsEnum
+ACTIONS_SWITCH_IRONMOTH: ActionsEnum
+ACTIONS_SWITCH_IRONTHORNS: ActionsEnum
+ACTIONS_SWITCH_IRONTREADS: ActionsEnum
+ACTIONS_SWITCH_IRONVALIANT: ActionsEnum
+ACTIONS_SWITCH_IVYSAUR: ActionsEnum
+ACTIONS_SWITCH_JANGMOO: ActionsEnum
+ACTIONS_SWITCH_JELLICENT: ActionsEnum
+ACTIONS_SWITCH_JIGGLYPUFF: ActionsEnum
+ACTIONS_SWITCH_JIRACHI: ActionsEnum
+ACTIONS_SWITCH_JOLTEON: ActionsEnum
+ACTIONS_SWITCH_JOLTIK: ActionsEnum
+ACTIONS_SWITCH_JUMBAO: ActionsEnum
+ACTIONS_SWITCH_JUMPLUFF: ActionsEnum
+ACTIONS_SWITCH_JUSTYKE: ActionsEnum
+ACTIONS_SWITCH_JYNX: ActionsEnum
+ACTIONS_SWITCH_KABUTO: ActionsEnum
+ACTIONS_SWITCH_KABUTOPS: ActionsEnum
+ACTIONS_SWITCH_KADABRA: ActionsEnum
+ACTIONS_SWITCH_KAKUNA: ActionsEnum
+ACTIONS_SWITCH_KANGASKHAN: ActionsEnum
+ACTIONS_SWITCH_KANGASKHANMEGA: ActionsEnum
+ACTIONS_SWITCH_KARRABLAST: ActionsEnum
+ACTIONS_SWITCH_KARTANA: ActionsEnum
+ACTIONS_SWITCH_KECLEON: ActionsEnum
+ACTIONS_SWITCH_KELDEO: ActionsEnum
+ACTIONS_SWITCH_KELDEORESOLUTE: ActionsEnum
+ACTIONS_SWITCH_KERFLUFFLE: ActionsEnum
+ACTIONS_SWITCH_KILOWATTREL: ActionsEnum
+ACTIONS_SWITCH_KINGAMBIT: ActionsEnum
+ACTIONS_SWITCH_KINGDRA: ActionsEnum
+ACTIONS_SWITCH_KINGLER: ActionsEnum
+ACTIONS_SWITCH_KINGLERGMAX: ActionsEnum
+ACTIONS_SWITCH_KIRLIA: ActionsEnum
+ACTIONS_SWITCH_KITSUNOH: ActionsEnum
+ACTIONS_SWITCH_KLANG: ActionsEnum
+ACTIONS_SWITCH_KLAWF: ActionsEnum
+ACTIONS_SWITCH_KLEAVOR: ActionsEnum
+ACTIONS_SWITCH_KLEFKI: ActionsEnum
+ACTIONS_SWITCH_KLINK: ActionsEnum
+ACTIONS_SWITCH_KLINKLANG: ActionsEnum
+ACTIONS_SWITCH_KOFFING: ActionsEnum
+ACTIONS_SWITCH_KOMALA: ActionsEnum
+ACTIONS_SWITCH_KOMMOO: ActionsEnum
+ACTIONS_SWITCH_KOMMOOTOTEM: ActionsEnum
+ACTIONS_SWITCH_KORAIDON: ActionsEnum
+ACTIONS_SWITCH_KRABBY: ActionsEnum
+ACTIONS_SWITCH_KRICKETOT: ActionsEnum
+ACTIONS_SWITCH_KRICKETUNE: ActionsEnum
+ACTIONS_SWITCH_KRILOWATT: ActionsEnum
+ACTIONS_SWITCH_KROKOROK: ActionsEnum
+ACTIONS_SWITCH_KROOKODILE: ActionsEnum
+ACTIONS_SWITCH_KUBFU: ActionsEnum
+ACTIONS_SWITCH_KYOGRE: ActionsEnum
+ACTIONS_SWITCH_KYOGREPRIMAL: ActionsEnum
+ACTIONS_SWITCH_KYUREM: ActionsEnum
+ACTIONS_SWITCH_KYUREMBLACK: ActionsEnum
+ACTIONS_SWITCH_KYUREMWHITE: ActionsEnum
+ACTIONS_SWITCH_LAIRON: ActionsEnum
+ACTIONS_SWITCH_LAMPENT: ActionsEnum
+ACTIONS_SWITCH_LANDORUS: ActionsEnum
+ACTIONS_SWITCH_LANDORUSTHERIAN: ActionsEnum
+ACTIONS_SWITCH_LANTURN: ActionsEnum
+ACTIONS_SWITCH_LAPRAS: ActionsEnum
+ACTIONS_SWITCH_LAPRASGMAX: ActionsEnum
+ACTIONS_SWITCH_LARVESTA: ActionsEnum
+ACTIONS_SWITCH_LARVITAR: ActionsEnum
+ACTIONS_SWITCH_LATIAS: ActionsEnum
+ACTIONS_SWITCH_LATIASMEGA: ActionsEnum
+ACTIONS_SWITCH_LATIOS: ActionsEnum
+ACTIONS_SWITCH_LATIOSMEGA: ActionsEnum
+ACTIONS_SWITCH_LEAFEON: ActionsEnum
+ACTIONS_SWITCH_LEAVANNY: ActionsEnum
+ACTIONS_SWITCH_LECHONK: ActionsEnum
+ACTIONS_SWITCH_LEDIAN: ActionsEnum
+ACTIONS_SWITCH_LEDYBA: ActionsEnum
+ACTIONS_SWITCH_LICKILICKY: ActionsEnum
+ACTIONS_SWITCH_LICKITUNG: ActionsEnum
+ACTIONS_SWITCH_LIEPARD: ActionsEnum
+ACTIONS_SWITCH_LILEEP: ActionsEnum
+ACTIONS_SWITCH_LILLIGANT: ActionsEnum
+ACTIONS_SWITCH_LILLIGANTHISUI: ActionsEnum
+ACTIONS_SWITCH_LILLIPUP: ActionsEnum
+ACTIONS_SWITCH_LINOONE: ActionsEnum
+ACTIONS_SWITCH_LINOONEGALAR: ActionsEnum
+ACTIONS_SWITCH_LITLEO: ActionsEnum
+ACTIONS_SWITCH_LITTEN: ActionsEnum
+ACTIONS_SWITCH_LITWICK: ActionsEnum
+ACTIONS_SWITCH_LOKIX: ActionsEnum
+ACTIONS_SWITCH_LOMBRE: ActionsEnum
+ACTIONS_SWITCH_LOPUNNY: ActionsEnum
+ACTIONS_SWITCH_LOPUNNYMEGA: ActionsEnum
+ACTIONS_SWITCH_LOTAD: ActionsEnum
+ACTIONS_SWITCH_LOUDRED: ActionsEnum
+ACTIONS_SWITCH_LUCARIO: ActionsEnum
+ACTIONS_SWITCH_LUCARIOMEGA: ActionsEnum
+ACTIONS_SWITCH_LUDICOLO: ActionsEnum
+ACTIONS_SWITCH_LUGIA: ActionsEnum
+ACTIONS_SWITCH_LUMINEON: ActionsEnum
+ACTIONS_SWITCH_LUNALA: ActionsEnum
+ACTIONS_SWITCH_LUNATONE: ActionsEnum
+ACTIONS_SWITCH_LURANTIS: ActionsEnum
+ACTIONS_SWITCH_LURANTISTOTEM: ActionsEnum
+ACTIONS_SWITCH_LUVDISC: ActionsEnum
+ACTIONS_SWITCH_LUXIO: ActionsEnum
+ACTIONS_SWITCH_LUXRAY: ActionsEnum
+ACTIONS_SWITCH_LYCANROC: ActionsEnum
+ACTIONS_SWITCH_LYCANROCDUSK: ActionsEnum
+ACTIONS_SWITCH_LYCANROCMIDNIGHT: ActionsEnum
+ACTIONS_SWITCH_MABOSSTIFF: ActionsEnum
+ACTIONS_SWITCH_MACHAMP: ActionsEnum
+ACTIONS_SWITCH_MACHAMPGMAX: ActionsEnum
+ACTIONS_SWITCH_MACHOKE: ActionsEnum
+ACTIONS_SWITCH_MACHOP: ActionsEnum
+ACTIONS_SWITCH_MAGBY: ActionsEnum
+ACTIONS_SWITCH_MAGCARGO: ActionsEnum
+ACTIONS_SWITCH_MAGEARNA: ActionsEnum
+ACTIONS_SWITCH_MAGEARNAORIGINAL: ActionsEnum
+ACTIONS_SWITCH_MAGIKARP: ActionsEnum
+ACTIONS_SWITCH_MAGMAR: ActionsEnum
+ACTIONS_SWITCH_MAGMORTAR: ActionsEnum
+ACTIONS_SWITCH_MAGNEMITE: ActionsEnum
+ACTIONS_SWITCH_MAGNETON: ActionsEnum
+ACTIONS_SWITCH_MAGNEZONE: ActionsEnum
+ACTIONS_SWITCH_MAKUHITA: ActionsEnum
+ACTIONS_SWITCH_MALACONDA: ActionsEnum
+ACTIONS_SWITCH_MALAMAR: ActionsEnum
+ACTIONS_SWITCH_MAMOSWINE: ActionsEnum
+ACTIONS_SWITCH_MANAPHY: ActionsEnum
+ACTIONS_SWITCH_MANDIBUZZ: ActionsEnum
+ACTIONS_SWITCH_MANECTRIC: ActionsEnum
+ACTIONS_SWITCH_MANECTRICMEGA: ActionsEnum
+ACTIONS_SWITCH_MANKEY: ActionsEnum
+ACTIONS_SWITCH_MANTINE: ActionsEnum
+ACTIONS_SWITCH_MANTYKE: ActionsEnum
+ACTIONS_SWITCH_MARACTUS: ActionsEnum
+ACTIONS_SWITCH_MAREANIE: ActionsEnum
+ACTIONS_SWITCH_MAREEP: ActionsEnum
+ACTIONS_SWITCH_MARILL: ActionsEnum
+ACTIONS_SWITCH_MAROWAK: ActionsEnum
+ACTIONS_SWITCH_MAROWAKALOLA: ActionsEnum
+ACTIONS_SWITCH_MAROWAKALOLATOTEM: ActionsEnum
+ACTIONS_SWITCH_MARSHADOW: ActionsEnum
+ACTIONS_SWITCH_MARSHTOMP: ActionsEnum
+ACTIONS_SWITCH_MASCHIFF: ActionsEnum
+ACTIONS_SWITCH_MASQUERAIN: ActionsEnum
+ACTIONS_SWITCH_MAUSHOLD: ActionsEnum
+ACTIONS_SWITCH_MAUSHOLDFOUR: ActionsEnum
+ACTIONS_SWITCH_MAWILE: ActionsEnum
+ACTIONS_SWITCH_MAWILEMEGA: ActionsEnum
+ACTIONS_SWITCH_MEDICHAM: ActionsEnum
+ACTIONS_SWITCH_MEDICHAMMEGA: ActionsEnum
+ACTIONS_SWITCH_MEDITITE: ActionsEnum
+ACTIONS_SWITCH_MEGANIUM: ActionsEnum
+ACTIONS_SWITCH_MELMETAL: ActionsEnum
+ACTIONS_SWITCH_MELMETALGMAX: ActionsEnum
+ACTIONS_SWITCH_MELOETTA: ActionsEnum
+ACTIONS_SWITCH_MELOETTAPIROUETTE: ActionsEnum
+ACTIONS_SWITCH_MELTAN: ActionsEnum
+ACTIONS_SWITCH_MEOWSCARADA: ActionsEnum
+ACTIONS_SWITCH_MEOWSTIC: ActionsEnum
+ACTIONS_SWITCH_MEOWSTICF: ActionsEnum
+ACTIONS_SWITCH_MEOWTH: ActionsEnum
+ACTIONS_SWITCH_MEOWTHALOLA: ActionsEnum
+ACTIONS_SWITCH_MEOWTHGALAR: ActionsEnum
+ACTIONS_SWITCH_MEOWTHGMAX: ActionsEnum
+ACTIONS_SWITCH_MESPRIT: ActionsEnum
+ACTIONS_SWITCH_METAGROSS: ActionsEnum
+ACTIONS_SWITCH_METAGROSSMEGA: ActionsEnum
+ACTIONS_SWITCH_METANG: ActionsEnum
+ACTIONS_SWITCH_METAPOD: ActionsEnum
+ACTIONS_SWITCH_MEW: ActionsEnum
+ACTIONS_SWITCH_MEWTWO: ActionsEnum
+ACTIONS_SWITCH_MEWTWOMEGAX: ActionsEnum
+ACTIONS_SWITCH_MEWTWOMEGAY: ActionsEnum
+ACTIONS_SWITCH_MIASMAW: ActionsEnum
+ACTIONS_SWITCH_MIASMITE: ActionsEnum
+ACTIONS_SWITCH_MIENFOO: ActionsEnum
+ACTIONS_SWITCH_MIENSHAO: ActionsEnum
+ACTIONS_SWITCH_MIGHTYENA: ActionsEnum
+ACTIONS_SWITCH_MILCERY: ActionsEnum
+ACTIONS_SWITCH_MILOTIC: ActionsEnum
+ACTIONS_SWITCH_MILTANK: ActionsEnum
+ACTIONS_SWITCH_MIMEJR: ActionsEnum
+ACTIONS_SWITCH_MIMIKYU: ActionsEnum
+ACTIONS_SWITCH_MIMIKYUBUSTED: ActionsEnum
+ACTIONS_SWITCH_MIMIKYUBUSTEDTOTEM: ActionsEnum
+ACTIONS_SWITCH_MIMIKYUTOTEM: ActionsEnum
+ACTIONS_SWITCH_MINCCINO: ActionsEnum
+ACTIONS_SWITCH_MINIOR: ActionsEnum
+ACTIONS_SWITCH_MINIORMETEOR: ActionsEnum
+ACTIONS_SWITCH_MINUN: ActionsEnum
+ACTIONS_SWITCH_MIRAIDON: ActionsEnum
+ACTIONS_SWITCH_MISDREAVUS: ActionsEnum
+ACTIONS_SWITCH_MISMAGIUS: ActionsEnum
+ACTIONS_SWITCH_MISSINGNO: ActionsEnum
+ACTIONS_SWITCH_MOLLUX: ActionsEnum
+ACTIONS_SWITCH_MOLTRES: ActionsEnum
+ACTIONS_SWITCH_MOLTRESGALAR: ActionsEnum
+ACTIONS_SWITCH_MONFERNO: ActionsEnum
+ACTIONS_SWITCH_MONOHM: ActionsEnum
+ACTIONS_SWITCH_MORELULL: ActionsEnum
+ACTIONS_SWITCH_MORGREM: ActionsEnum
+ACTIONS_SWITCH_MORPEKO: ActionsEnum
+ACTIONS_SWITCH_MORPEKOHANGRY: ActionsEnum
+ACTIONS_SWITCH_MOTHIM: ActionsEnum
+ACTIONS_SWITCH_MRMIME: ActionsEnum
+ACTIONS_SWITCH_MRMIMEGALAR: ActionsEnum
+ACTIONS_SWITCH_MRRIME: ActionsEnum
+ACTIONS_SWITCH_MUDBRAY: ActionsEnum
+ACTIONS_SWITCH_MUDKIP: ActionsEnum
+ACTIONS_SWITCH_MUDSDALE: ActionsEnum
+ACTIONS_SWITCH_MUK: ActionsEnum
+ACTIONS_SWITCH_MUKALOLA: ActionsEnum
+ACTIONS_SWITCH_MUMBAO: ActionsEnum
+ACTIONS_SWITCH_MUNCHLAX: ActionsEnum
+ACTIONS_SWITCH_MUNKIDORI: ActionsEnum
+ACTIONS_SWITCH_MUNNA: ActionsEnum
+ACTIONS_SWITCH_MURKROW: ActionsEnum
+ACTIONS_SWITCH_MUSHARNA: ActionsEnum
+ACTIONS_SWITCH_NACLI: ActionsEnum
+ACTIONS_SWITCH_NACLSTACK: ActionsEnum
+ACTIONS_SWITCH_NAGANADEL: ActionsEnum
+ACTIONS_SWITCH_NATU: ActionsEnum
+ACTIONS_SWITCH_NAVIATHAN: ActionsEnum
+ACTIONS_SWITCH_NECROZMA: ActionsEnum
+ACTIONS_SWITCH_NECROZMADAWNWINGS: ActionsEnum
+ACTIONS_SWITCH_NECROZMADUSKMANE: ActionsEnum
+ACTIONS_SWITCH_NECROZMAULTRA: ActionsEnum
+ACTIONS_SWITCH_NECTURINE: ActionsEnum
+ACTIONS_SWITCH_NECTURNA: ActionsEnum
+ACTIONS_SWITCH_NICKIT: ActionsEnum
+ACTIONS_SWITCH_NIDOKING: ActionsEnum
+ACTIONS_SWITCH_NIDOQUEEN: ActionsEnum
+ACTIONS_SWITCH_NIDORANF: ActionsEnum
+ACTIONS_SWITCH_NIDORANM: ActionsEnum
+ACTIONS_SWITCH_NIDORINA: ActionsEnum
+ACTIONS_SWITCH_NIDORINO: ActionsEnum
+ACTIONS_SWITCH_NIHILEGO: ActionsEnum
+ACTIONS_SWITCH_NINCADA: ActionsEnum
+ACTIONS_SWITCH_NINETALES: ActionsEnum
+ACTIONS_SWITCH_NINETALESALOLA: ActionsEnum
+ACTIONS_SWITCH_NINJASK: ActionsEnum
+ACTIONS_SWITCH_NOCTOWL: ActionsEnum
+ACTIONS_SWITCH_NOHFACE: ActionsEnum
+ACTIONS_SWITCH_NOIBAT: ActionsEnum
+ACTIONS_SWITCH_NOIVERN: ActionsEnum
+ACTIONS_SWITCH_NOSEPASS: ActionsEnum
+ACTIONS_SWITCH_NUMEL: ActionsEnum
+ACTIONS_SWITCH_NUZLEAF: ActionsEnum
+ACTIONS_SWITCH_NYMBLE: ActionsEnum
+ACTIONS_SWITCH_OBSTAGOON: ActionsEnum
+ACTIONS_SWITCH_OCTILLERY: ActionsEnum
+ACTIONS_SWITCH_ODDISH: ActionsEnum
+ACTIONS_SWITCH_OGERPON: ActionsEnum
+ACTIONS_SWITCH_OGERPONCORNERSTONE: ActionsEnum
+ACTIONS_SWITCH_OGERPONCORNERSTONETERA: ActionsEnum
+ACTIONS_SWITCH_OGERPONHEARTHFLAME: ActionsEnum
+ACTIONS_SWITCH_OGERPONHEARTHFLAMETERA: ActionsEnum
+ACTIONS_SWITCH_OGERPONTEALTERA: ActionsEnum
+ACTIONS_SWITCH_OGERPONWELLSPRING: ActionsEnum
+ACTIONS_SWITCH_OGERPONWELLSPRINGTERA: ActionsEnum
+ACTIONS_SWITCH_OINKOLOGNE: ActionsEnum
+ACTIONS_SWITCH_OINKOLOGNEF: ActionsEnum
+ACTIONS_SWITCH_OKIDOGI: ActionsEnum
+ACTIONS_SWITCH_OMANYTE: ActionsEnum
+ACTIONS_SWITCH_OMASTAR: ActionsEnum
+ACTIONS_SWITCH_ONIX: ActionsEnum
+ACTIONS_SWITCH_ORANGURU: ActionsEnum
+ACTIONS_SWITCH_ORBEETLE: ActionsEnum
+ACTIONS_SWITCH_ORBEETLEGMAX: ActionsEnum
+ACTIONS_SWITCH_ORICORIO: ActionsEnum
+ACTIONS_SWITCH_ORICORIOPAU: ActionsEnum
+ACTIONS_SWITCH_ORICORIOPOMPOM: ActionsEnum
+ACTIONS_SWITCH_ORICORIOSENSU: ActionsEnum
+ACTIONS_SWITCH_ORTHWORM: ActionsEnum
+ACTIONS_SWITCH_OSHAWOTT: ActionsEnum
+ACTIONS_SWITCH_OVERQWIL: ActionsEnum
+ACTIONS_SWITCH_PACHIRISU: ActionsEnum
+ACTIONS_SWITCH_PAJANTOM: ActionsEnum
+ACTIONS_SWITCH_PALAFIN: ActionsEnum
+ACTIONS_SWITCH_PALAFINHERO: ActionsEnum
+ACTIONS_SWITCH_PALKIA: ActionsEnum
+ACTIONS_SWITCH_PALKIAORIGIN: ActionsEnum
+ACTIONS_SWITCH_PALOSSAND: ActionsEnum
+ACTIONS_SWITCH_PALPITOAD: ActionsEnum
+ACTIONS_SWITCH_PANCHAM: ActionsEnum
+ACTIONS_SWITCH_PANGORO: ActionsEnum
+ACTIONS_SWITCH_PANPOUR: ActionsEnum
+ACTIONS_SWITCH_PANSAGE: ActionsEnum
+ACTIONS_SWITCH_PANSEAR: ActionsEnum
+ACTIONS_SWITCH_PARAS: ActionsEnum
+ACTIONS_SWITCH_PARASECT: ActionsEnum
+ACTIONS_SWITCH_PASSIMIAN: ActionsEnum
+ACTIONS_SWITCH_PATRAT: ActionsEnum
+ACTIONS_SWITCH_PAWMI: ActionsEnum
+ACTIONS_SWITCH_PAWMO: ActionsEnum
+ACTIONS_SWITCH_PAWMOT: ActionsEnum
+ACTIONS_SWITCH_PAWNIARD: ActionsEnum
+ACTIONS_SWITCH_PECHARUNT: ActionsEnum
+ACTIONS_SWITCH_PELIPPER: ActionsEnum
+ACTIONS_SWITCH_PERRSERKER: ActionsEnum
+ACTIONS_SWITCH_PERSIAN: ActionsEnum
+ACTIONS_SWITCH_PERSIANALOLA: ActionsEnum
+ACTIONS_SWITCH_PETILIL: ActionsEnum
+ACTIONS_SWITCH_PHANPY: ActionsEnum
+ACTIONS_SWITCH_PHANTUMP: ActionsEnum
+ACTIONS_SWITCH_PHEROMOSA: ActionsEnum
+ACTIONS_SWITCH_PHIONE: ActionsEnum
+ACTIONS_SWITCH_PICHU: ActionsEnum
+ACTIONS_SWITCH_PICHUSPIKYEARED: ActionsEnum
+ACTIONS_SWITCH_PIDGEOT: ActionsEnum
+ACTIONS_SWITCH_PIDGEOTMEGA: ActionsEnum
+ACTIONS_SWITCH_PIDGEOTTO: ActionsEnum
+ACTIONS_SWITCH_PIDGEY: ActionsEnum
+ACTIONS_SWITCH_PIDOVE: ActionsEnum
+ACTIONS_SWITCH_PIGNITE: ActionsEnum
+ACTIONS_SWITCH_PIKACHU: ActionsEnum
+ACTIONS_SWITCH_PIKACHUALOLA: ActionsEnum
+ACTIONS_SWITCH_PIKACHUBELLE: ActionsEnum
+ACTIONS_SWITCH_PIKACHUCOSPLAY: ActionsEnum
+ACTIONS_SWITCH_PIKACHUGMAX: ActionsEnum
+ACTIONS_SWITCH_PIKACHUHOENN: ActionsEnum
+ACTIONS_SWITCH_PIKACHUKALOS: ActionsEnum
+ACTIONS_SWITCH_PIKACHULIBRE: ActionsEnum
+ACTIONS_SWITCH_PIKACHUORIGINAL: ActionsEnum
+ACTIONS_SWITCH_PIKACHUPARTNER: ActionsEnum
+ACTIONS_SWITCH_PIKACHUPHD: ActionsEnum
+ACTIONS_SWITCH_PIKACHUPOPSTAR: ActionsEnum
+ACTIONS_SWITCH_PIKACHUROCKSTAR: ActionsEnum
+ACTIONS_SWITCH_PIKACHUSINNOH: ActionsEnum
+ACTIONS_SWITCH_PIKACHUSTARTER: ActionsEnum
+ACTIONS_SWITCH_PIKACHUUNOVA: ActionsEnum
+ACTIONS_SWITCH_PIKACHUWORLD: ActionsEnum
+ACTIONS_SWITCH_PIKIPEK: ActionsEnum
+ACTIONS_SWITCH_PILOSWINE: ActionsEnum
+ACTIONS_SWITCH_PINCURCHIN: ActionsEnum
+ACTIONS_SWITCH_PINECO: ActionsEnum
+ACTIONS_SWITCH_PINSIR: ActionsEnum
+ACTIONS_SWITCH_PINSIRMEGA: ActionsEnum
+ACTIONS_SWITCH_PIPLUP: ActionsEnum
+ACTIONS_SWITCH_PLASMANTA: ActionsEnum
+ACTIONS_SWITCH_PLUFFLE: ActionsEnum
+ACTIONS_SWITCH_PLUSLE: ActionsEnum
+ACTIONS_SWITCH_POIPOLE: ActionsEnum
+ACTIONS_SWITCH_POKESTARBLACKBELT: ActionsEnum
+ACTIONS_SWITCH_POKESTARBLACKDOOR: ActionsEnum
+ACTIONS_SWITCH_POKESTARBRYCENMAN: ActionsEnum
+ACTIONS_SWITCH_POKESTARF00: ActionsEnum
+ACTIONS_SWITCH_POKESTARF002: ActionsEnum
+ACTIONS_SWITCH_POKESTARGIANT: ActionsEnum
+ACTIONS_SWITCH_POKESTARHUMANOID: ActionsEnum
+ACTIONS_SWITCH_POKESTARMONSTER: ActionsEnum
+ACTIONS_SWITCH_POKESTARMT: ActionsEnum
+ACTIONS_SWITCH_POKESTARMT2: ActionsEnum
+ACTIONS_SWITCH_POKESTARSMEARGLE: ActionsEnum
+ACTIONS_SWITCH_POKESTARSPIRIT: ActionsEnum
+ACTIONS_SWITCH_POKESTARTRANSPORT: ActionsEnum
+ACTIONS_SWITCH_POKESTARUFO: ActionsEnum
+ACTIONS_SWITCH_POKESTARUFO2: ActionsEnum
+ACTIONS_SWITCH_POKESTARUFOPROPU2: ActionsEnum
+ACTIONS_SWITCH_POKESTARWHITEDOOR: ActionsEnum
+ACTIONS_SWITCH_POLITOED: ActionsEnum
+ACTIONS_SWITCH_POLIWAG: ActionsEnum
+ACTIONS_SWITCH_POLIWHIRL: ActionsEnum
+ACTIONS_SWITCH_POLIWRATH: ActionsEnum
+ACTIONS_SWITCH_POLTCHAGEIST: ActionsEnum
+ACTIONS_SWITCH_POLTCHAGEISTARTISAN: ActionsEnum
+ACTIONS_SWITCH_POLTEAGEIST: ActionsEnum
+ACTIONS_SWITCH_POLTEAGEISTANTIQUE: ActionsEnum
+ACTIONS_SWITCH_PONYTA: ActionsEnum
+ACTIONS_SWITCH_PONYTAGALAR: ActionsEnum
+ACTIONS_SWITCH_POOCHYENA: ActionsEnum
+ACTIONS_SWITCH_POPPLIO: ActionsEnum
+ACTIONS_SWITCH_PORYGON: ActionsEnum
+ACTIONS_SWITCH_PORYGON2: ActionsEnum
+ACTIONS_SWITCH_PORYGONZ: ActionsEnum
+ACTIONS_SWITCH_PRIMARINA: ActionsEnum
+ACTIONS_SWITCH_PRIMEAPE: ActionsEnum
+ACTIONS_SWITCH_PRINPLUP: ActionsEnum
+ACTIONS_SWITCH_PRIVATYKE: ActionsEnum
+ACTIONS_SWITCH_PROBOPASS: ActionsEnum
+ACTIONS_SWITCH_PROTOWATT: ActionsEnum
+ACTIONS_SWITCH_PSYDUCK: ActionsEnum
+ACTIONS_SWITCH_PUMPKABOO: ActionsEnum
+ACTIONS_SWITCH_PUMPKABOOLARGE: ActionsEnum
+ACTIONS_SWITCH_PUMPKABOOSMALL: ActionsEnum
+ACTIONS_SWITCH_PUMPKABOOSUPER: ActionsEnum
+ACTIONS_SWITCH_PUPITAR: ActionsEnum
+ACTIONS_SWITCH_PURRLOIN: ActionsEnum
+ACTIONS_SWITCH_PURUGLY: ActionsEnum
+ACTIONS_SWITCH_PYROAK: ActionsEnum
+ACTIONS_SWITCH_PYROAR: ActionsEnum
+ACTIONS_SWITCH_PYUKUMUKU: ActionsEnum
+ACTIONS_SWITCH_QUAGSIRE: ActionsEnum
+ACTIONS_SWITCH_QUAQUAVAL: ActionsEnum
+ACTIONS_SWITCH_QUAXLY: ActionsEnum
+ACTIONS_SWITCH_QUAXWELL: ActionsEnum
+ACTIONS_SWITCH_QUILAVA: ActionsEnum
+ACTIONS_SWITCH_QUILLADIN: ActionsEnum
+ACTIONS_SWITCH_QWILFISH: ActionsEnum
+ACTIONS_SWITCH_QWILFISHHISUI: ActionsEnum
+ACTIONS_SWITCH_RABOOT: ActionsEnum
+ACTIONS_SWITCH_RABSCA: ActionsEnum
+ACTIONS_SWITCH_RAGINGBOLT: ActionsEnum
+ACTIONS_SWITCH_RAICHU: ActionsEnum
+ACTIONS_SWITCH_RAICHUALOLA: ActionsEnum
+ACTIONS_SWITCH_RAIKOU: ActionsEnum
+ACTIONS_SWITCH_RALTS: ActionsEnum
+ACTIONS_SWITCH_RAMPARDOS: ActionsEnum
+ACTIONS_SWITCH_RAPIDASH: ActionsEnum
+ACTIONS_SWITCH_RAPIDASHGALAR: ActionsEnum
+ACTIONS_SWITCH_RATICATE: ActionsEnum
+ACTIONS_SWITCH_RATICATEALOLA: ActionsEnum
+ACTIONS_SWITCH_RATICATEALOLATOTEM: ActionsEnum
+ACTIONS_SWITCH_RATTATA: ActionsEnum
+ACTIONS_SWITCH_RATTATAALOLA: ActionsEnum
+ACTIONS_SWITCH_RAYQUAZA: ActionsEnum
+ACTIONS_SWITCH_RAYQUAZAMEGA: ActionsEnum
+ACTIONS_SWITCH_REBBLE: ActionsEnum
+ACTIONS_SWITCH_REGICE: ActionsEnum
+ACTIONS_SWITCH_REGIDRAGO: ActionsEnum
+ACTIONS_SWITCH_REGIELEKI: ActionsEnum
+ACTIONS_SWITCH_REGIGIGAS: ActionsEnum
+ACTIONS_SWITCH_REGIROCK: ActionsEnum
+ACTIONS_SWITCH_REGISTEEL: ActionsEnum
+ACTIONS_SWITCH_RELICANTH: ActionsEnum
+ACTIONS_SWITCH_RELLOR: ActionsEnum
+ACTIONS_SWITCH_REMORAID: ActionsEnum
+ACTIONS_SWITCH_RESHIRAM: ActionsEnum
+ACTIONS_SWITCH_REUNICLUS: ActionsEnum
+ACTIONS_SWITCH_REVAVROOM: ActionsEnum
+ACTIONS_SWITCH_REVENANKH: ActionsEnum
+ACTIONS_SWITCH_RHYDON: ActionsEnum
+ACTIONS_SWITCH_RHYHORN: ActionsEnum
+ACTIONS_SWITCH_RHYPERIOR: ActionsEnum
+ACTIONS_SWITCH_RIBOMBEE: ActionsEnum
+ACTIONS_SWITCH_RIBOMBEETOTEM: ActionsEnum
+ACTIONS_SWITCH_RILLABOOM: ActionsEnum
+ACTIONS_SWITCH_RILLABOOMGMAX: ActionsEnum
+ACTIONS_SWITCH_RIOLU: ActionsEnum
+ACTIONS_SWITCH_ROARINGMOON: ActionsEnum
+ACTIONS_SWITCH_ROCKRUFF: ActionsEnum
+ACTIONS_SWITCH_ROGGENROLA: ActionsEnum
+ACTIONS_SWITCH_ROLYCOLY: ActionsEnum
+ACTIONS_SWITCH_ROOKIDEE: ActionsEnum
+ACTIONS_SWITCH_ROSELIA: ActionsEnum
+ACTIONS_SWITCH_ROSERADE: ActionsEnum
+ACTIONS_SWITCH_ROTOM: ActionsEnum
+ACTIONS_SWITCH_ROTOMFAN: ActionsEnum
+ACTIONS_SWITCH_ROTOMFROST: ActionsEnum
+ACTIONS_SWITCH_ROTOMHEAT: ActionsEnum
+ACTIONS_SWITCH_ROTOMMOW: ActionsEnum
+ACTIONS_SWITCH_ROTOMWASH: ActionsEnum
+ACTIONS_SWITCH_ROWLET: ActionsEnum
+ACTIONS_SWITCH_RUFFLET: ActionsEnum
+ACTIONS_SWITCH_RUNERIGUS: ActionsEnum
+ACTIONS_SWITCH_SABLEYE: ActionsEnum
+ACTIONS_SWITCH_SABLEYEMEGA: ActionsEnum
+ACTIONS_SWITCH_SAHARAJA: ActionsEnum
+ACTIONS_SWITCH_SAHARASCAL: ActionsEnum
+ACTIONS_SWITCH_SALAMENCE: ActionsEnum
+ACTIONS_SWITCH_SALAMENCEMEGA: ActionsEnum
+ACTIONS_SWITCH_SALANDIT: ActionsEnum
+ACTIONS_SWITCH_SALAZZLE: ActionsEnum
+ACTIONS_SWITCH_SALAZZLETOTEM: ActionsEnum
+ACTIONS_SWITCH_SAMUROTT: ActionsEnum
+ACTIONS_SWITCH_SAMUROTTHISUI: ActionsEnum
+ACTIONS_SWITCH_SANDACONDA: ActionsEnum
+ACTIONS_SWITCH_SANDACONDAGMAX: ActionsEnum
+ACTIONS_SWITCH_SANDILE: ActionsEnum
+ACTIONS_SWITCH_SANDSHREW: ActionsEnum
+ACTIONS_SWITCH_SANDSHREWALOLA: ActionsEnum
+ACTIONS_SWITCH_SANDSLASH: ActionsEnum
+ACTIONS_SWITCH_SANDSLASHALOLA: ActionsEnum
+ACTIONS_SWITCH_SANDYGAST: ActionsEnum
+ACTIONS_SWITCH_SANDYSHOCKS: ActionsEnum
+ACTIONS_SWITCH_SAWK: ActionsEnum
+ACTIONS_SWITCH_SAWSBUCK: ActionsEnum
+ACTIONS_SWITCH_SCATTERBUG: ActionsEnum
+ACTIONS_SWITCH_SCATTERVEIN: ActionsEnum
+ACTIONS_SWITCH_SCEPTILE: ActionsEnum
+ACTIONS_SWITCH_SCEPTILEMEGA: ActionsEnum
+ACTIONS_SWITCH_SCIZOR: ActionsEnum
+ACTIONS_SWITCH_SCIZORMEGA: ActionsEnum
+ACTIONS_SWITCH_SCOLIPEDE: ActionsEnum
+ACTIONS_SWITCH_SCORBUNNY: ActionsEnum
+ACTIONS_SWITCH_SCOVILLAIN: ActionsEnum
+ACTIONS_SWITCH_SCRAFTY: ActionsEnum
+ACTIONS_SWITCH_SCRAGGY: ActionsEnum
+ACTIONS_SWITCH_SCRATCHET: ActionsEnum
+ACTIONS_SWITCH_SCREAMTAIL: ActionsEnum
+ACTIONS_SWITCH_SCYTHER: ActionsEnum
+ACTIONS_SWITCH_SEADRA: ActionsEnum
+ACTIONS_SWITCH_SEAKING: ActionsEnum
+ACTIONS_SWITCH_SEALEO: ActionsEnum
+ACTIONS_SWITCH_SEEDOT: ActionsEnum
+ACTIONS_SWITCH_SEEL: ActionsEnum
+ACTIONS_SWITCH_SEISMITOAD: ActionsEnum
+ACTIONS_SWITCH_SENTRET: ActionsEnum
+ACTIONS_SWITCH_SERPERIOR: ActionsEnum
+ACTIONS_SWITCH_SERVINE: ActionsEnum
+ACTIONS_SWITCH_SEVIPER: ActionsEnum
+ACTIONS_SWITCH_SEWADDLE: ActionsEnum
+ACTIONS_SWITCH_SHARPEDO: ActionsEnum
+ACTIONS_SWITCH_SHARPEDOMEGA: ActionsEnum
+ACTIONS_SWITCH_SHAYMIN: ActionsEnum
+ACTIONS_SWITCH_SHAYMINSKY: ActionsEnum
+ACTIONS_SWITCH_SHEDINJA: ActionsEnum
+ACTIONS_SWITCH_SHELGON: ActionsEnum
+ACTIONS_SWITCH_SHELLDER: ActionsEnum
+ACTIONS_SWITCH_SHELLOS: ActionsEnum
+ACTIONS_SWITCH_SHELMET: ActionsEnum
+ACTIONS_SWITCH_SHIELDON: ActionsEnum
+ACTIONS_SWITCH_SHIFTRY: ActionsEnum
+ACTIONS_SWITCH_SHIINOTIC: ActionsEnum
+ACTIONS_SWITCH_SHINX: ActionsEnum
+ACTIONS_SWITCH_SHROODLE: ActionsEnum
+ACTIONS_SWITCH_SHROOMISH: ActionsEnum
+ACTIONS_SWITCH_SHUCKLE: ActionsEnum
+ACTIONS_SWITCH_SHUPPET: ActionsEnum
+ACTIONS_SWITCH_SIGILYPH: ActionsEnum
+ACTIONS_SWITCH_SILCOON: ActionsEnum
+ACTIONS_SWITCH_SILICOBRA: ActionsEnum
+ACTIONS_SWITCH_SILVALLY: ActionsEnum
+ACTIONS_SWITCH_SILVALLYBUG: ActionsEnum
+ACTIONS_SWITCH_SILVALLYDARK: ActionsEnum
+ACTIONS_SWITCH_SILVALLYDRAGON: ActionsEnum
+ACTIONS_SWITCH_SILVALLYELECTRIC: ActionsEnum
+ACTIONS_SWITCH_SILVALLYFAIRY: ActionsEnum
+ACTIONS_SWITCH_SILVALLYFIGHTING: ActionsEnum
+ACTIONS_SWITCH_SILVALLYFIRE: ActionsEnum
+ACTIONS_SWITCH_SILVALLYFLYING: ActionsEnum
+ACTIONS_SWITCH_SILVALLYGHOST: ActionsEnum
+ACTIONS_SWITCH_SILVALLYGRASS: ActionsEnum
+ACTIONS_SWITCH_SILVALLYGROUND: ActionsEnum
+ACTIONS_SWITCH_SILVALLYICE: ActionsEnum
+ACTIONS_SWITCH_SILVALLYPOISON: ActionsEnum
+ACTIONS_SWITCH_SILVALLYPSYCHIC: ActionsEnum
+ACTIONS_SWITCH_SILVALLYROCK: ActionsEnum
+ACTIONS_SWITCH_SILVALLYSTEEL: ActionsEnum
+ACTIONS_SWITCH_SILVALLYWATER: ActionsEnum
+ACTIONS_SWITCH_SIMIPOUR: ActionsEnum
+ACTIONS_SWITCH_SIMISAGE: ActionsEnum
+ACTIONS_SWITCH_SIMISEAR: ActionsEnum
+ACTIONS_SWITCH_SINISTCHA: ActionsEnum
+ACTIONS_SWITCH_SINISTCHAMASTERPIECE: ActionsEnum
+ACTIONS_SWITCH_SINISTEA: ActionsEnum
+ACTIONS_SWITCH_SINISTEAANTIQUE: ActionsEnum
+ACTIONS_SWITCH_SIRFETCHD: ActionsEnum
+ACTIONS_SWITCH_SIZZLIPEDE: ActionsEnum
+ACTIONS_SWITCH_SKARMORY: ActionsEnum
+ACTIONS_SWITCH_SKELEDIRGE: ActionsEnum
+ACTIONS_SWITCH_SKIDDO: ActionsEnum
+ACTIONS_SWITCH_SKIPLOOM: ActionsEnum
+ACTIONS_SWITCH_SKITTY: ActionsEnum
+ACTIONS_SWITCH_SKORUPI: ActionsEnum
+ACTIONS_SWITCH_SKRELP: ActionsEnum
+ACTIONS_SWITCH_SKUNTANK: ActionsEnum
+ACTIONS_SWITCH_SKWOVET: ActionsEnum
+ACTIONS_SWITCH_SLAKING: ActionsEnum
+ACTIONS_SWITCH_SLAKOTH: ActionsEnum
+ACTIONS_SWITCH_SLIGGOO: ActionsEnum
+ACTIONS_SWITCH_SLIGGOOHISUI: ActionsEnum
+ACTIONS_SWITCH_SLITHERWING: ActionsEnum
+ACTIONS_SWITCH_SLOWBRO: ActionsEnum
+ACTIONS_SWITCH_SLOWBROGALAR: ActionsEnum
+ACTIONS_SWITCH_SLOWBROMEGA: ActionsEnum
+ACTIONS_SWITCH_SLOWKING: ActionsEnum
+ACTIONS_SWITCH_SLOWKINGGALAR: ActionsEnum
+ACTIONS_SWITCH_SLOWPOKE: ActionsEnum
+ACTIONS_SWITCH_SLOWPOKEGALAR: ActionsEnum
+ACTIONS_SWITCH_SLUGMA: ActionsEnum
+ACTIONS_SWITCH_SLURPUFF: ActionsEnum
+ACTIONS_SWITCH_SMEARGLE: ActionsEnum
+ACTIONS_SWITCH_SMOGECKO: ActionsEnum
+ACTIONS_SWITCH_SMOGUANA: ActionsEnum
+ACTIONS_SWITCH_SMOKOMODO: ActionsEnum
+ACTIONS_SWITCH_SMOLIV: ActionsEnum
+ACTIONS_SWITCH_SMOOCHUM: ActionsEnum
+ACTIONS_SWITCH_SNAELSTROM: ActionsEnum
+ACTIONS_SWITCH_SNEASEL: ActionsEnum
+ACTIONS_SWITCH_SNEASELHISUI: ActionsEnum
+ACTIONS_SWITCH_SNEASLER: ActionsEnum
+ACTIONS_SWITCH_SNIVY: ActionsEnum
+ACTIONS_SWITCH_SNOM: ActionsEnum
+ACTIONS_SWITCH_SNORLAX: ActionsEnum
+ACTIONS_SWITCH_SNORLAXGMAX: ActionsEnum
+ACTIONS_SWITCH_SNORUNT: ActionsEnum
+ACTIONS_SWITCH_SNOVER: ActionsEnum
+ACTIONS_SWITCH_SNUBBULL: ActionsEnum
+ACTIONS_SWITCH_SNUGGLOW: ActionsEnum
+ACTIONS_SWITCH_SOBBLE: ActionsEnum
+ACTIONS_SWITCH_SOLGALEO: ActionsEnum
+ACTIONS_SWITCH_SOLOSIS: ActionsEnum
+ACTIONS_SWITCH_SOLOTL: ActionsEnum
+ACTIONS_SWITCH_SOLROCK: ActionsEnum
+ACTIONS_SWITCH_SPEAROW: ActionsEnum
+ACTIONS_SWITCH_SPECTRIER: ActionsEnum
+ACTIONS_SWITCH_SPEWPA: ActionsEnum
+ACTIONS_SWITCH_SPHEAL: ActionsEnum
+ACTIONS_SWITCH_SPIDOPS: ActionsEnum
+ACTIONS_SWITCH_SPINARAK: ActionsEnum
+ACTIONS_SWITCH_SPINDA: ActionsEnum
+ACTIONS_SWITCH_SPIRITOMB: ActionsEnum
+ACTIONS_SWITCH_SPOINK: ActionsEnum
+ACTIONS_SWITCH_SPRIGATITO: ActionsEnum
+ACTIONS_SWITCH_SPRITZEE: ActionsEnum
+ACTIONS_SWITCH_SQUAWKABILLY: ActionsEnum
+ACTIONS_SWITCH_SQUAWKABILLYBLUE: ActionsEnum
+ACTIONS_SWITCH_SQUAWKABILLYWHITE: ActionsEnum
+ACTIONS_SWITCH_SQUAWKABILLYYELLOW: ActionsEnum
+ACTIONS_SWITCH_SQUIRTLE: ActionsEnum
+ACTIONS_SWITCH_STAKATAKA: ActionsEnum
+ACTIONS_SWITCH_STANTLER: ActionsEnum
+ACTIONS_SWITCH_STARAPTOR: ActionsEnum
+ACTIONS_SWITCH_STARAVIA: ActionsEnum
+ACTIONS_SWITCH_STARLY: ActionsEnum
+ACTIONS_SWITCH_STARMIE: ActionsEnum
+ACTIONS_SWITCH_STARYU: ActionsEnum
+ACTIONS_SWITCH_STEELIX: ActionsEnum
+ACTIONS_SWITCH_STEELIXMEGA: ActionsEnum
+ACTIONS_SWITCH_STEENEE: ActionsEnum
+ACTIONS_SWITCH_STONJOURNER: ActionsEnum
+ACTIONS_SWITCH_STOUTLAND: ActionsEnum
+ACTIONS_SWITCH_STRATAGEM: ActionsEnum
+ACTIONS_SWITCH_STUFFUL: ActionsEnum
+ACTIONS_SWITCH_STUNFISK: ActionsEnum
+ACTIONS_SWITCH_STUNFISKGALAR: ActionsEnum
+ACTIONS_SWITCH_STUNKY: ActionsEnum
+ACTIONS_SWITCH_SUDOWOODO: ActionsEnum
+ACTIONS_SWITCH_SUICUNE: ActionsEnum
+ACTIONS_SWITCH_SUNFLORA: ActionsEnum
+ACTIONS_SWITCH_SUNKERN: ActionsEnum
+ACTIONS_SWITCH_SURSKIT: ActionsEnum
+ACTIONS_SWITCH_SWABLU: ActionsEnum
+ACTIONS_SWITCH_SWADLOON: ActionsEnum
+ACTIONS_SWITCH_SWALOT: ActionsEnum
+ACTIONS_SWITCH_SWAMPERT: ActionsEnum
+ACTIONS_SWITCH_SWAMPERTMEGA: ActionsEnum
+ACTIONS_SWITCH_SWANNA: ActionsEnum
+ACTIONS_SWITCH_SWELLOW: ActionsEnum
+ACTIONS_SWITCH_SWINUB: ActionsEnum
+ACTIONS_SWITCH_SWIRLIX: ActionsEnum
+ACTIONS_SWITCH_SWIRLPOOL: ActionsEnum
+ACTIONS_SWITCH_SWOOBAT: ActionsEnum
+ACTIONS_SWITCH_SYCLANT: ActionsEnum
+ACTIONS_SWITCH_SYCLAR: ActionsEnum
+ACTIONS_SWITCH_SYLVEON: ActionsEnum
+ACTIONS_SWITCH_TACTITE: ActionsEnum
+ACTIONS_SWITCH_TADBULB: ActionsEnum
+ACTIONS_SWITCH_TAILLOW: ActionsEnum
+ACTIONS_SWITCH_TALONFLAME: ActionsEnum
+ACTIONS_SWITCH_TANDEMAUS: ActionsEnum
+ACTIONS_SWITCH_TANGELA: ActionsEnum
+ACTIONS_SWITCH_TANGROWTH: ActionsEnum
+ACTIONS_SWITCH_TAPUBULU: ActionsEnum
+ACTIONS_SWITCH_TAPUFINI: ActionsEnum
+ACTIONS_SWITCH_TAPUKOKO: ActionsEnum
+ACTIONS_SWITCH_TAPULELE: ActionsEnum
+ACTIONS_SWITCH_TAROUNTULA: ActionsEnum
+ACTIONS_SWITCH_TATSUGIRI: ActionsEnum
+ACTIONS_SWITCH_TAUROS: ActionsEnum
+ACTIONS_SWITCH_TAUROSPALDEAAQUA: ActionsEnum
+ACTIONS_SWITCH_TAUROSPALDEABLAZE: ActionsEnum
+ACTIONS_SWITCH_TAUROSPALDEACOMBAT: ActionsEnum
+ACTIONS_SWITCH_TEDDIURSA: ActionsEnum
+ACTIONS_SWITCH_TENTACOOL: ActionsEnum
+ACTIONS_SWITCH_TENTACRUEL: ActionsEnum
+ACTIONS_SWITCH_TEPIG: ActionsEnum
+ACTIONS_SWITCH_TERAPAGOS: ActionsEnum
+ACTIONS_SWITCH_TERAPAGOSSTELLAR: ActionsEnum
+ACTIONS_SWITCH_TERAPAGOSTERASTAL: ActionsEnum
+ACTIONS_SWITCH_TERRAKION: ActionsEnum
+ACTIONS_SWITCH_THIEVUL: ActionsEnum
+ACTIONS_SWITCH_THROH: ActionsEnum
+ACTIONS_SWITCH_THUNDURUS: ActionsEnum
+ACTIONS_SWITCH_THUNDURUSTHERIAN: ActionsEnum
+ACTIONS_SWITCH_THWACKEY: ActionsEnum
+ACTIONS_SWITCH_TIMBURR: ActionsEnum
+ACTIONS_SWITCH_TINGLU: ActionsEnum
+ACTIONS_SWITCH_TINKATINK: ActionsEnum
+ACTIONS_SWITCH_TINKATON: ActionsEnum
+ACTIONS_SWITCH_TINKATUFF: ActionsEnum
+ACTIONS_SWITCH_TIRTOUGA: ActionsEnum
+ACTIONS_SWITCH_TOEDSCOOL: ActionsEnum
+ACTIONS_SWITCH_TOEDSCRUEL: ActionsEnum
+ACTIONS_SWITCH_TOGEDEMARU: ActionsEnum
+ACTIONS_SWITCH_TOGEDEMARUTOTEM: ActionsEnum
+ACTIONS_SWITCH_TOGEKISS: ActionsEnum
+ACTIONS_SWITCH_TOGEPI: ActionsEnum
+ACTIONS_SWITCH_TOGETIC: ActionsEnum
+ACTIONS_SWITCH_TOMOHAWK: ActionsEnum
+ACTIONS_SWITCH_TORCHIC: ActionsEnum
+ACTIONS_SWITCH_TORKOAL: ActionsEnum
+ACTIONS_SWITCH_TORNADUS: ActionsEnum
+ACTIONS_SWITCH_TORNADUSTHERIAN: ActionsEnum
+ACTIONS_SWITCH_TORRACAT: ActionsEnum
+ACTIONS_SWITCH_TORTERRA: ActionsEnum
+ACTIONS_SWITCH_TOTODILE: ActionsEnum
+ACTIONS_SWITCH_TOUCANNON: ActionsEnum
+ACTIONS_SWITCH_TOXAPEX: ActionsEnum
+ACTIONS_SWITCH_TOXEL: ActionsEnum
+ACTIONS_SWITCH_TOXICROAK: ActionsEnum
+ACTIONS_SWITCH_TOXTRICITY: ActionsEnum
+ACTIONS_SWITCH_TOXTRICITYGMAX: ActionsEnum
+ACTIONS_SWITCH_TOXTRICITYLOWKEY: ActionsEnum
+ACTIONS_SWITCH_TOXTRICITYLOWKEYGMAX: ActionsEnum
+ACTIONS_SWITCH_TRANQUILL: ActionsEnum
+ACTIONS_SWITCH_TRAPINCH: ActionsEnum
+ACTIONS_SWITCH_TREECKO: ActionsEnum
+ACTIONS_SWITCH_TREVENANT: ActionsEnum
+ACTIONS_SWITCH_TROPIUS: ActionsEnum
+ACTIONS_SWITCH_TRUBBISH: ActionsEnum
+ACTIONS_SWITCH_TRUMBEAK: ActionsEnum
+ACTIONS_SWITCH_TSAREENA: ActionsEnum
+ACTIONS_SWITCH_TURTONATOR: ActionsEnum
+ACTIONS_SWITCH_TURTWIG: ActionsEnum
+ACTIONS_SWITCH_TYMPOLE: ActionsEnum
+ACTIONS_SWITCH_TYNAMO: ActionsEnum
+ACTIONS_SWITCH_TYPENULL: ActionsEnum
+ACTIONS_SWITCH_TYPHLOSION: ActionsEnum
+ACTIONS_SWITCH_TYPHLOSIONHISUI: ActionsEnum
+ACTIONS_SWITCH_TYRANITAR: ActionsEnum
+ACTIONS_SWITCH_TYRANITARMEGA: ActionsEnum
+ACTIONS_SWITCH_TYRANTRUM: ActionsEnum
+ACTIONS_SWITCH_TYROGUE: ActionsEnum
+ACTIONS_SWITCH_TYRUNT: ActionsEnum
+ACTIONS_SWITCH_UMBREON: ActionsEnum
+ACTIONS_SWITCH_UNFEZANT: ActionsEnum
+ACTIONS_SWITCH_UNOWN: ActionsEnum
+ACTIONS_SWITCH_URSALUNA: ActionsEnum
+ACTIONS_SWITCH_URSALUNABLOODMOON: ActionsEnum
+ACTIONS_SWITCH_URSARING: ActionsEnum
+ACTIONS_SWITCH_URSHIFU: ActionsEnum
+ACTIONS_SWITCH_URSHIFUGMAX: ActionsEnum
+ACTIONS_SWITCH_URSHIFURAPIDSTRIKE: ActionsEnum
+ACTIONS_SWITCH_URSHIFURAPIDSTRIKEGMAX: ActionsEnum
+ACTIONS_SWITCH_UXIE: ActionsEnum
+ACTIONS_SWITCH_VANILLISH: ActionsEnum
+ACTIONS_SWITCH_VANILLITE: ActionsEnum
+ACTIONS_SWITCH_VANILLUXE: ActionsEnum
+ACTIONS_SWITCH_VAPOREON: ActionsEnum
+ACTIONS_SWITCH_VAROOM: ActionsEnum
+ACTIONS_SWITCH_VELUZA: ActionsEnum
+ACTIONS_SWITCH_VENIPEDE: ActionsEnum
+ACTIONS_SWITCH_VENOMICON: ActionsEnum
+ACTIONS_SWITCH_VENOMICONEPILOGUE: ActionsEnum
+ACTIONS_SWITCH_VENOMOTH: ActionsEnum
+ACTIONS_SWITCH_VENONAT: ActionsEnum
+ACTIONS_SWITCH_VENUSAUR: ActionsEnum
+ACTIONS_SWITCH_VENUSAURGMAX: ActionsEnum
+ACTIONS_SWITCH_VENUSAURMEGA: ActionsEnum
+ACTIONS_SWITCH_VESPIQUEN: ActionsEnum
+ACTIONS_SWITCH_VIBRAVA: ActionsEnum
+ACTIONS_SWITCH_VICTINI: ActionsEnum
+ACTIONS_SWITCH_VICTREEBEL: ActionsEnum
+ACTIONS_SWITCH_VIGOROTH: ActionsEnum
+ACTIONS_SWITCH_VIKAVOLT: ActionsEnum
+ACTIONS_SWITCH_VIKAVOLTTOTEM: ActionsEnum
+ACTIONS_SWITCH_VILEPLUME: ActionsEnum
+ACTIONS_SWITCH_VIRIZION: ActionsEnum
+ACTIONS_SWITCH_VIVILLON: ActionsEnum
+ACTIONS_SWITCH_VIVILLONFANCY: ActionsEnum
+ACTIONS_SWITCH_VIVILLONPOKEBALL: ActionsEnum
+ACTIONS_SWITCH_VOLBEAT: ActionsEnum
+ACTIONS_SWITCH_VOLCANION: ActionsEnum
+ACTIONS_SWITCH_VOLCARONA: ActionsEnum
+ACTIONS_SWITCH_VOLKRAKEN: ActionsEnum
+ACTIONS_SWITCH_VOLKRITTER: ActionsEnum
+ACTIONS_SWITCH_VOLTORB: ActionsEnum
+ACTIONS_SWITCH_VOLTORBHISUI: ActionsEnum
+ACTIONS_SWITCH_VOODOLL: ActionsEnum
+ACTIONS_SWITCH_VOODOOM: ActionsEnum
+ACTIONS_SWITCH_VULLABY: ActionsEnum
+ACTIONS_SWITCH_VULPIX: ActionsEnum
+ACTIONS_SWITCH_VULPIXALOLA: ActionsEnum
+ACTIONS_SWITCH_WAILMER: ActionsEnum
+ACTIONS_SWITCH_WAILORD: ActionsEnum
+ACTIONS_SWITCH_WALKINGWAKE: ActionsEnum
+ACTIONS_SWITCH_WALREIN: ActionsEnum
+ACTIONS_SWITCH_WARTORTLE: ActionsEnum
+ACTIONS_SWITCH_WATCHOG: ActionsEnum
+ACTIONS_SWITCH_WATTREL: ActionsEnum
+ACTIONS_SWITCH_WEAVILE: ActionsEnum
+ACTIONS_SWITCH_WEEDLE: ActionsEnum
+ACTIONS_SWITCH_WEEPINBELL: ActionsEnum
+ACTIONS_SWITCH_WEEZING: ActionsEnum
+ACTIONS_SWITCH_WEEZINGGALAR: ActionsEnum
+ACTIONS_SWITCH_WHIMSICOTT: ActionsEnum
+ACTIONS_SWITCH_WHIRLIPEDE: ActionsEnum
+ACTIONS_SWITCH_WHISCASH: ActionsEnum
+ACTIONS_SWITCH_WHISMUR: ActionsEnum
+ACTIONS_SWITCH_WIGGLYTUFF: ActionsEnum
+ACTIONS_SWITCH_WIGLETT: ActionsEnum
+ACTIONS_SWITCH_WIMPOD: ActionsEnum
+ACTIONS_SWITCH_WINGULL: ActionsEnum
+ACTIONS_SWITCH_WISHIWASHI: ActionsEnum
+ACTIONS_SWITCH_WISHIWASHISCHOOL: ActionsEnum
+ACTIONS_SWITCH_WOBBUFFET: ActionsEnum
+ACTIONS_SWITCH_WOCHIEN: ActionsEnum
+ACTIONS_SWITCH_WOOBAT: ActionsEnum
+ACTIONS_SWITCH_WOOLOO: ActionsEnum
+ACTIONS_SWITCH_WOOPER: ActionsEnum
+ACTIONS_SWITCH_WOOPERPALDEA: ActionsEnum
+ACTIONS_SWITCH_WORMADAM: ActionsEnum
+ACTIONS_SWITCH_WORMADAMSANDY: ActionsEnum
+ACTIONS_SWITCH_WORMADAMTRASH: ActionsEnum
+ACTIONS_SWITCH_WUGTRIO: ActionsEnum
+ACTIONS_SWITCH_WURMPLE: ActionsEnum
+ACTIONS_SWITCH_WYNAUT: ActionsEnum
+ACTIONS_SWITCH_WYRDEER: ActionsEnum
+ACTIONS_SWITCH_XATU: ActionsEnum
+ACTIONS_SWITCH_XERNEAS: ActionsEnum
+ACTIONS_SWITCH_XERNEASNEUTRAL: ActionsEnum
+ACTIONS_SWITCH_XURKITREE: ActionsEnum
+ACTIONS_SWITCH_YAMASK: ActionsEnum
+ACTIONS_SWITCH_YAMASKGALAR: ActionsEnum
+ACTIONS_SWITCH_YAMPER: ActionsEnum
+ACTIONS_SWITCH_YANMA: ActionsEnum
+ACTIONS_SWITCH_YANMEGA: ActionsEnum
+ACTIONS_SWITCH_YUNGOOS: ActionsEnum
+ACTIONS_SWITCH_YVELTAL: ActionsEnum
+ACTIONS_SWITCH_ZACIAN: ActionsEnum
+ACTIONS_SWITCH_ZACIANCROWNED: ActionsEnum
+ACTIONS_SWITCH_ZAMAZENTA: ActionsEnum
+ACTIONS_SWITCH_ZAMAZENTACROWNED: ActionsEnum
+ACTIONS_SWITCH_ZANGOOSE: ActionsEnum
+ACTIONS_SWITCH_ZAPDOS: ActionsEnum
+ACTIONS_SWITCH_ZAPDOSGALAR: ActionsEnum
+ACTIONS_SWITCH_ZARUDE: ActionsEnum
+ACTIONS_SWITCH_ZARUDEDADA: ActionsEnum
+ACTIONS_SWITCH_ZEBSTRIKA: ActionsEnum
+ACTIONS_SWITCH_ZEKROM: ActionsEnum
+ACTIONS_SWITCH_ZERAORA: ActionsEnum
+ACTIONS_SWITCH_ZIGZAGOON: ActionsEnum
+ACTIONS_SWITCH_ZIGZAGOONGALAR: ActionsEnum
+ACTIONS_SWITCH_ZOROARK: ActionsEnum
+ACTIONS_SWITCH_ZOROARKHISUI: ActionsEnum
+ACTIONS_SWITCH_ZORUA: ActionsEnum
+ACTIONS_SWITCH_ZORUAHISUI: ActionsEnum
+ACTIONS_SWITCH_ZUBAT: ActionsEnum
+ACTIONS_SWITCH_ZWEILOUS: ActionsEnum
+ACTIONS_SWITCH_ZYGARDE: ActionsEnum
+ACTIONS_SWITCH_ZYGARDE10: ActionsEnum
+ACTIONS_SWITCH_ZYGARDECOMPLETE: ActionsEnum

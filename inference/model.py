@@ -1,8 +1,6 @@
 import functools
 import pickle
-from typing import Tuple
 
-import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,7 +11,7 @@ from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep, ModelOutput
+from rlenv.interfaces import EnvStep
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -39,20 +37,19 @@ class InferenceModel:
         print("model initialized!")
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
-        output: ModelOutput = self.network.apply(self.params, env_step)
-        return (
-            output.pi,  # self.finetuning.post_process_policy(output.pi, env_step.legal),
-            output.v,
-        )
+    def _network_jit_apply(self, env_step: EnvStep):
+        return self.network.apply(self.params, env_step)
 
     def predict(self, env_step: EnvStep):
-        pi, v = self._network_jit_apply(env_step)
+        output = self._network_jit_apply(env_step)
         action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
+            lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
+            axis=-1,
+            arr=output.pi,
         )
         return PredictionResponse(
-            pi=pi.flatten().tolist(),
-            v=v.item(),
+            pi=output.pi.flatten().tolist(),
+            logit=output.logit.flatten().tolist(),
+            v=output.v.item(),
             action=action.item(),
         )

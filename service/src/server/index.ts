@@ -102,7 +102,7 @@ const server = createServer((us) => {
     });
 
     us.on("error", (error) => {
-        // console.error("Socket error:", error);
+        console.error("Socket error:", error);
     });
 
     us.on("close", () => {

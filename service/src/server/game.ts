@@ -80,11 +80,19 @@ export class Game {
         const faintedReward = this.tracker.getFaintedChangeReward();
 
         info.setWinreward(winReward);
-        info.setHpreward(hpReward);
         info.setFaintedreward(faintedReward);
+        info.setHpreward(hpReward);
         info.setDone(isDone);
+        info.setDrawratio(Math.min(1, this.ts / MAX_TS));
 
         if (isDone) {
+            // Object.values(this.handlers).map(
+            //     ({ actionLog }) =>
+            //         actionLog.reduce(
+            //             (a, b) => a + +(b.getIndex() < 4 && b.getIndex() >= 0),
+            //             0,
+            //         ) / actionLog.length,
+            // );
             state.setLegalactions(AllValidActions.buffer);
         }
 
@@ -117,7 +125,7 @@ export class Game {
         let handler = this.handlers[{ p1: 0, p2: 1 }[id]];
         handler.world = this.world;
         for await (const chunk of stream) {
-            const action = await handler.ingestChunk(chunk);
+            const action = await handler.ingestChunk(chunk, stream);
             if (action !== undefined) {
                 this.handleAction(stream, action);
             }

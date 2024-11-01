@@ -1,6 +1,9 @@
 import functools
+import os
+import pickle
 from typing import Any, Sequence, Tuple
 
+import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -22,6 +25,32 @@ from ml.func import (
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
+
+
+@chex.dataclass(frozen=True)
+class NerdConfig:
+    """Nerd related params."""
+
+    beta: float = 3
+    clip: float = 10_000
+
+
+@chex.dataclass(frozen=True)
+class RNaDConfig(ActorCriticConfig):
+
+    # RNaD algorithm configuration.
+    # Entropy schedule configuration. See EntropySchedule class documentation.
+    entropy_schedule_repeats: Sequence[int] = (1,)
+    entropy_schedule_size: Sequence[int] = (5_000,)
+
+    nerd: NerdConfig = NerdConfig()
+
+    learning_rate: float = 3e-5
+    eta_reward_transform: float = 0.001
+
+
+def get_config():
+    return RNaDConfig()
 
 
 class EntropySchedule:
@@ -149,7 +178,7 @@ class TrainState(train_state.TrainState):
             update_target_net=update_target_net,
         )
 
-    def apply_gradients(self, *, grads, config: ActorCriticConfig, **kwargs):
+    def apply_gradients(self, *, grads, config: RNaDConfig, **kwargs):
         """Applies gradients to parameters and updates EMA parameters."""
         # Apply gradients to update params and opt_state
 
@@ -176,7 +205,7 @@ class TrainState(train_state.TrainState):
         )
 
 
-def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfig):
+def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
     """Creates an initial `TrainState`."""
     ex = get_ex_step()
 
@@ -210,8 +239,38 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
     )
 
 
+def save(state: TrainState):
+    with open(os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb") as f:
+        pickle.dump(
+            dict(
+                params=state.params,
+                params_target=state.params_target,
+                params_prev=state.params_prev,
+                params_prev_=state.params_prev_,
+                opt_state=state.opt_state,
+                step=state.step,
+            ),
+            f,
+        )
+
+
+def load(state: TrainState, path: str):
+    print(f"loading checkpoint from {path}")
+    with open(path, "rb") as f:
+        step = pickle.load(f)
+
+    state = state.replace(
+        params=step["params"],
+        params_target=step["params"],
+        params_prev=step["params"],
+        params_prev_=step["params"],
+    )
+
+    return state
+
+
 @functools.partial(jax.jit, static_argnums=(2,))
-def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
+def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     """Train for a single step."""
 
     def loss_fn(
@@ -297,17 +356,28 @@ def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
             threshold=config.nerd.beta,
         )
 
+        loss_norm = renormalize(jnp.square(pred.logit).sum(axis=-1), valid)
+
         loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
 
-        loss = (
-            config.value_loss_coef * loss_v
-            + config.policy_loss_coef * loss_nerd
-            + config.entropy_loss_coef * loss_entropy
+        loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
+
+        move_entropy = get_loss_entropy(
+            pred.pi[..., :4], pred.log_pi[..., :4], batch.env.legal[..., :4], valid
+        )
+        switch_entropy = get_loss_entropy(
+            pred.pi[..., 4:], pred.log_pi[..., 4:], batch.env.legal[..., 4:], valid
         )
 
         logs["loss_v"] = loss_v
         logs["loss_nerd"] = loss_nerd
         logs["loss_entropy"] = loss_entropy
+        logs["move_entropy"] = move_entropy
+        logs["switch_entropy"] = switch_entropy
+        logs["log_prob_diff"] = renormalize(
+            (pred.log_pi - pred_targ.log_pi).mean(axis=-1), valid
+        )
+        logs["loss_norm"] = loss_norm
 
         return loss, logs
 
@@ -333,10 +403,15 @@ def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
     can_move = batch.env.legal[..., :4].any(axis=-1)
     can_switch = batch.env.legal[..., 4:].any(axis=-1)
 
-    move_ratio = renormalize(batch.actor.action < 4, can_switch & valid)
-    switch_ratio = renormalize(batch.actor.action >= 4, can_move & valid)
+    move_ratio = (
+        (batch.actor.action < 4).mean(axis=0, where=(can_switch & valid)).mean()
+    )
+    switch_ratio = (
+        (batch.actor.action >= 4).mean(axis=0, where=(can_move & valid)).mean()
+    )
 
     extra_logs = dict(
+        actor_steps=valid.sum(),
         loss=loss_val,
         trajectory_length_mean=lengths.mean(),
         trajectory_length_min=lengths.min(),

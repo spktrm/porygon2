@@ -72,6 +72,7 @@ class BatchCollector:
                     hp_rewards=env_step.hp_rewards,
                     fainted_rewards=env_step.fainted_rewards,
                     switch_rewards=env_step.switch_rewards,
+                    longevity_rewards=env_step.longevity_rewards,
                 ),
             )
             timesteps.append(timestep)
@@ -82,4 +83,10 @@ class BatchCollector:
             state_index += 1
 
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
-        return stack_steps(timesteps)
+        batch: TimeStep = stack_steps(timesteps)
+        if (not (batch.env.ts[1:] >= batch.env.ts[:-1]).all()) & (
+            not (batch.env.turn[1:] >= batch.env.turn[:-1]).all()
+        ):
+            raise ValueError
+
+        return batch

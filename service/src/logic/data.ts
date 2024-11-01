@@ -1,6 +1,7 @@
 import { toID } from "@pkmn/data";
 import {
     AbilitiesEnum,
+    ActionsEnum,
     BattlemajorargsEnum,
     BattleminorargsEnum,
     BoostsEnum,
@@ -32,6 +33,7 @@ export type EnumMappings =
     | typeof SpeciesEnum
     | typeof ItemsEnum
     | typeof StatusEnum
+    | typeof ActionsEnum
     | typeof ItemeffecttypesEnum
     | typeof LastitemeffecttypesEnum
     | typeof MovesEnum
@@ -78,6 +80,7 @@ export const MappingLookup = {
     PseudoWeather: PseudoweatherEnum,
     BattleMinorArg: BattleminorargsEnum,
     BattleMajorArg: BattlemajorargsEnum,
+    Actions: ActionsEnum,
     Effect: EffectEnum,
 };
 
@@ -116,7 +119,7 @@ export const actionIndexMapping = {
     9: "switch 6",
 };
 
-export const MAX_TS = 50;
+export const MAX_TS = 65;
 
 export const sideIdMapping: {
     [k in "p1" | "p2"]: 0 | 1;

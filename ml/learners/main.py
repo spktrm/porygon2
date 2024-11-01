@@ -1,6 +1,4 @@
 import json
-import os
-import pickle
 from pprint import pprint
 
 import jax
@@ -9,7 +7,6 @@ from tqdm import trange
 import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.config import VtraceConfig
 from ml.learners import vtrace as learner
 from ml.utils import Params, get_most_recent_file
 from rlenv.client import BatchCollector
@@ -41,7 +38,7 @@ def evaluate(params: Params, collector: BatchCollector, num_eval_games: int = 20
 
 
 def main():
-    learner_config = VtraceConfig()
+    learner_config = learner.get_config()
     model_config = get_model_cfg()
     pprint(learner_config)
 
@@ -53,28 +50,12 @@ def main():
     evaluation_collector = BatchCollector(
         network, EVALUATION_SOCKET_PATH, batch_size=13
     )
+
     state = learner.create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
-        print(f"loading checkpoint from {latest_ckpt}")
-        with open(latest_ckpt, "rb") as f:
-            step = pickle.load(f)
-
-        state = state.replace(
-            params=step["params"],
-            params_target=step["params"],
-        )
-
-        if getattr(state, "params_prev", None):
-            state = state.replace(
-                params_prev=step["params"],
-            )
-
-        if getattr(state, "params_prev_", None):
-            state = state.replace(
-                params_prev_=step["params"],
-            )
+        state = learner.load(state, latest_ckpt)
 
     wandb.init(
         project="pokemon-rl",
@@ -90,16 +71,7 @@ def main():
 
     for _ in trange(0, learner_config.num_steps):
         if state.learner_steps % save_freq == 0 and state.learner_steps > 0:
-            with open(
-                os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb"
-            ) as f:
-                pickle.dump(
-                    dict(
-                        params=state.params,
-                        params_target=state.params_target,
-                    ),
-                    f,
-                )
+            learner.save(state)
 
         if state.learner_steps % eval_freq == 0 and learner_config.do_eval:
             evaluate(state.params, evaluation_collector)

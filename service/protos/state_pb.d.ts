@@ -47,6 +47,15 @@ export class Info extends jspb.Message {
   getSwitchreward(): number;
   setSwitchreward(value: number): void;
 
+  getTs(): number;
+  setTs(value: number): void;
+
+  getLongevityreward(): number;
+  setLongevityreward(value: number): void;
+
+  getDrawratio(): number;
+  setDrawratio(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -72,6 +81,9 @@ export namespace Info {
     faintedreward: number,
     heuristicdist: Uint8Array | string,
     switchreward: number,
+    ts: number,
+    longevityreward: number,
+    drawratio: number,
   }
 }
 

@@ -4,6 +4,7 @@ import { GetMaxDamageAction } from "./baselines/max_dmg";
 import { GetBestSwitchAction } from "./baselines/switcher";
 import { Battle as World } from "@pkmn/sim";
 import { GetRandomAction } from "./baselines/random";
+import { GetSearchAction } from "./baselines/search";
 
 export type evalFuncArgs = {
     handler: StreamHandler;

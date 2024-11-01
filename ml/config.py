@@ -1,5 +1,3 @@
-from typing import Sequence
-
 import chex
 import haiku as hk
 import jax
@@ -154,14 +152,6 @@ class AdamConfig:
 
 
 @chex.dataclass(frozen=True)
-class NerdConfig:
-    """Nerd related params."""
-
-    beta: float = 2.0
-    clip: float = 10_000
-
-
-@chex.dataclass(frozen=True)
 class ActorCriticConfig:
     """Configuration parameters for the RNaDSolver."""
 
@@ -172,9 +162,9 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 4
+    batch_size: int = 8
     # The learning rate for `params`.
-    learning_rate: float = 1e-5
+    learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.
     adam: AdamConfig = AdamConfig(b1=0, b2=0.999, eps=1e-8, weight_decay=0)
     # All gradients values are clipped to [-clip_gradient, clip_gradient].
@@ -182,15 +172,7 @@ class ActorCriticConfig:
     # The "speed" at which `params_target` is following `params`.
     target_network_avg: float = 0.001
 
-    # RNaD algorithm configuration.
-    # Entropy schedule configuration. See EntropySchedule class documentation.
-    entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (10_000,)
-
-    # The weight of the reward regularisation term in RNaD.
-    eta_reward_transform: float = 0.0
     gamma: float = 1.0
-    nerd: NerdConfig = NerdConfig()
     c_vtrace: float = 1.0
 
     # Options related to fine tuning of the agent.
@@ -207,31 +189,3 @@ class ActorCriticConfig:
     do_eval: bool = False
     num_eval_games: int = 200
     generation: int = 3
-
-
-@chex.dataclass(frozen=True)
-class VtraceConfig(ActorCriticConfig):
-    eta_reward_transform: float = 0
-    entropy_loss_coef: float = 1e-3
-
-
-@chex.dataclass(frozen=True)
-class PPOConfig(ActorCriticConfig):
-    entropy_loss_coef: float = 1e-2
-    gae_lambda: float = 0.999
-    clip_epsilon: float = 0.05
-
-
-@chex.dataclass(frozen=True)
-class RNaDConfig(ActorCriticConfig):
-    eta_reward_transform: float = 0.1
-
-
-@chex.dataclass(frozen=True)
-class TeacherForceConfig(ActorCriticConfig):
-    adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-5)
-
-    heuristic_loss_coef: float = 1.0
-    value_loss_coef: float = 0.0
-    policy_loss_coef: float = 0.0
-    entropy_loss_coef: float = 0.0

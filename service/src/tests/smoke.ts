@@ -21,6 +21,7 @@ function assertTrajectory(game: Game, trajectory: State[]) {
         hpRewardSum: 0,
         faintedRewardSum: 0,
         switchRewardSum: 0,
+        longevityRewardSum: 0,
     };
     trajectory.map((state) => {
         const info = state.toObject().info!;
@@ -28,6 +29,14 @@ function assertTrajectory(game: Game, trajectory: State[]) {
         accum.hpRewardSum += info.hpreward;
         accum.faintedRewardSum += info.faintedreward;
         accum.switchRewardSum += info.switchreward;
+        accum.longevityRewardSum += info.longevityreward;
+    });
+
+    trajectory.reduce((prev, curr) => {
+        if (prev.toObject().info!.ts > curr.toObject().info!.ts) {
+            throw new Error();
+        }
+        return curr;
     });
 
     const winner = game.getWinner();
@@ -42,13 +51,13 @@ function assertTrajectory(game: Game, trajectory: State[]) {
         }
     } else {
         if (game.earlyFinish) {
-            // if (accum.winRewardSum !== 0) {
-            //     throw new Error();
-            // }
+            if (accum.winRewardSum === 0) {
+                throw new Error();
+            }
         }
     }
 
-    if (accum.faintedRewardSum < -1 || 1 < accum.faintedRewardSum) {
+    if (accum.faintedRewardSum < -6 || 6 < accum.faintedRewardSum) {
         throw new Error();
     }
 
@@ -93,9 +102,10 @@ async function main(verbose: boolean = false) {
             const done = info.getDone();
 
             if (!done) {
+                const evalIndex = Math.floor(Math.random() * 2);
                 const action = await getEvalAction(
                     game.handlers[+playerIndex],
-                    Math.floor(Math.random() * numEvals),
+                    evalIndex,
                 );
 
                 game.queueSystem.submitResult(key, action);

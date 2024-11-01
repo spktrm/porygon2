@@ -7,7 +7,7 @@ from typing import ClassVar as _ClassVar, Mapping as _Mapping, Optional as _Opti
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Info(_message.Message):
-    __slots__ = ("gameId", "done", "winReward", "hpReward", "playerIndex", "turn", "turnsSinceSwitch", "heuristicAction", "lastAction", "lastMove", "faintedReward", "heuristicDist", "switchReward")
+    __slots__ = ("gameId", "done", "winReward", "hpReward", "playerIndex", "turn", "turnsSinceSwitch", "heuristicAction", "lastAction", "lastMove", "faintedReward", "heuristicDist", "switchReward", "ts", "longevityReward", "drawRatio")
     GAMEID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
     WINREWARD_FIELD_NUMBER: _ClassVar[int]
@@ -21,6 +21,9 @@ class Info(_message.Message):
     FAINTEDREWARD_FIELD_NUMBER: _ClassVar[int]
     HEURISTICDIST_FIELD_NUMBER: _ClassVar[int]
     SWITCHREWARD_FIELD_NUMBER: _ClassVar[int]
+    TS_FIELD_NUMBER: _ClassVar[int]
+    LONGEVITYREWARD_FIELD_NUMBER: _ClassVar[int]
+    DRAWRATIO_FIELD_NUMBER: _ClassVar[int]
     gameId: int
     done: bool
     winReward: float
@@ -34,7 +37,10 @@ class Info(_message.Message):
     faintedReward: float
     heuristicDist: bytes
     switchReward: float
-    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., winReward: _Optional[float] = ..., hpReward: _Optional[float] = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., turnsSinceSwitch: _Optional[int] = ..., heuristicAction: _Optional[int] = ..., lastAction: _Optional[int] = ..., lastMove: _Optional[int] = ..., faintedReward: _Optional[float] = ..., heuristicDist: _Optional[bytes] = ..., switchReward: _Optional[float] = ...) -> None: ...
+    ts: float
+    longevityReward: float
+    drawRatio: float
+    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., winReward: _Optional[float] = ..., hpReward: _Optional[float] = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., turnsSinceSwitch: _Optional[int] = ..., heuristicAction: _Optional[int] = ..., lastAction: _Optional[int] = ..., lastMove: _Optional[int] = ..., faintedReward: _Optional[float] = ..., heuristicDist: _Optional[bytes] = ..., switchReward: _Optional[float] = ..., ts: _Optional[float] = ..., longevityReward: _Optional[float] = ..., drawRatio: _Optional[float] = ...) -> None: ...
 
 class State(_message.Message):
     __slots__ = ("info", "legalActions", "history", "moveset", "team", "key")

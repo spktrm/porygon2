@@ -602,6 +602,14 @@ async function scrapeRepo() {
         EXTRA_TOKENS,
     );
 
+    data["Actions"] = standardize(
+        [
+            ...genFormatData.species.map((x) => `switch_${x}`),
+            ...genFormatData.moves.map((x) => `move_${x}`),
+        ],
+        EXTRA_TOKENS,
+    );
+
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,
         JSON.stringify(data, null, 2),

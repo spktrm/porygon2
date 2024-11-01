@@ -1,4 +1,3 @@
-import json
 import pprint
 
 from ml_collections import ConfigDict
@@ -10,7 +9,7 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     depth_factor = 0.2
-    width_factor = 1
+    width_factor = 0.5
 
     base_entity_size = 256
     base_vector_size = 1024
@@ -18,9 +17,6 @@ def get_model_cfg():
     entity_size = int(base_entity_size * width_factor)
     vector_size = int(base_vector_size * width_factor)
     use_layer_norm = True
-
-    cfg.entity_size = entity_size
-    cfg.vector_size = vector_size
 
     # Encoder Configuration
     cfg.encoder = ConfigDict()
@@ -30,14 +26,17 @@ def get_model_cfg():
     # move encoder
     cfg.encoder.move_encoder = ConfigDict()
     cfg.encoder.move_encoder.entity_size = entity_size
+    cfg.encoder.move_encoder.vector_size = vector_size
 
     # public entity encoder
     cfg.encoder.entity_encoder = ConfigDict()
     cfg.encoder.entity_encoder.entity_size = entity_size
+    cfg.encoder.entity_encoder.vector_size = vector_size
 
     # public edge encoder
     cfg.encoder.edge_encoder = ConfigDict()
     cfg.encoder.edge_encoder.entity_size = entity_size
+    cfg.encoder.edge_encoder.vector_size = vector_size
 
     transformer_num_layers = 1  # max(int(depth_factor * 3), 1)
     transformer_num_heads = 2
@@ -106,8 +105,10 @@ def get_model_cfg():
     cfg.policy_head.pointer_logits = ConfigDict()
     cfg.policy_head.pointer_logits.num_layers_query = max(int(depth_factor * 1), 1)
     cfg.policy_head.pointer_logits.num_layers_keys = max(int(depth_factor * 3), 1)
-    cfg.policy_head.pointer_logits.key_size = entity_size
+    cfg.policy_head.pointer_logits.key_size = 64
     cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
+    cfg.policy_head.entity_size = entity_size
+    cfg.policy_head.vector_size = vector_size
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
@@ -123,7 +124,7 @@ def get_model_cfg():
 
 def main():
     cfg = get_model_cfg()
-    pprint.pprint(json.loads(cfg.to_json_best_effort()))
+    pprint.pprint(cfg)
 
 
 if __name__ == "__main__":

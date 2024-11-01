@@ -4,14 +4,12 @@ import chex
 @chex.dataclass(frozen=True)
 class EnvStep:
     # Standard Info
+    ts: chex.Array = ()
+    draw_ratio: chex.Array = ()
     valid: chex.Array = ()
     turn: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()
-    win_rewards: chex.Array = ()
-    fainted_rewards: chex.Array = ()
-    switch_rewards: chex.Array = ()
-    hp_rewards: chex.Array = ()
     heuristic_action: chex.Array = ()
     heuristic_dist: chex.Array = ()
     prev_action: chex.Array = ()
@@ -21,6 +19,13 @@ class EnvStep:
     moveset: chex.Array = ()
     legal: chex.Array = ()
     team: chex.Array = ()
+
+    # Reward
+    win_rewards: chex.Array = ()
+    fainted_rewards: chex.Array = ()
+    switch_rewards: chex.Array = ()
+    longevity_rewards: chex.Array = ()
+    hp_rewards: chex.Array = ()
 
     # Public Info
     history_edges: chex.Array = ()
@@ -33,10 +38,13 @@ class EnvStep:
 class ActorStep:
     action: chex.Array = ()
     policy: chex.Array = ()
+
+    # rewards
     win_rewards: chex.Array = ()
-    hp_rewards: chex.Array = ()
-    switch_rewards: chex.Array = ()
     fainted_rewards: chex.Array = ()
+    switch_rewards: chex.Array = ()
+    longevity_rewards: chex.Array = ()
+    hp_rewards: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -51,4 +59,3 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
-    ssl_loss: chex.Array = ()

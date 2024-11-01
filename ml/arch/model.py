@@ -34,18 +34,18 @@ class Model(nn.Module):
         and then applies the policy and value heads to generate the output.
         """
         # Get current state and action embeddings from the encoder
-        current_state_embedding, action_embeddings, ssl_loss = self.encoder(env_step)
-
-        # Apply the value head
-        v = self.value_head(current_state_embedding)
+        current_state_embedding, action_embeddings = self.encoder(env_step)
 
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(
             current_state_embedding, action_embeddings, env_step.legal
         )
 
+        # Apply the value head
+        v = self.value_head(current_state_embedding)
+
         # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v, ssl_loss=ssl_loss)
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:

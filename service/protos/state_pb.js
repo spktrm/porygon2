@@ -107,7 +107,10 @@ proto.rlenv.Info.toObject = function(includeInstance, msg) {
     lastmove: jspb.Message.getFieldWithDefault(msg, 10, 0),
     faintedreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 11, 0.0),
     heuristicdist: msg.getHeuristicdist_asB64(),
-    switchreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 13, 0.0)
+    switchreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 13, 0.0),
+    ts: jspb.Message.getFloatingPointFieldWithDefault(msg, 14, 0.0),
+    longevityreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 15, 0.0),
+    drawratio: jspb.Message.getFloatingPointFieldWithDefault(msg, 16, 0.0)
   };
 
   if (includeInstance) {
@@ -195,6 +198,18 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
     case 13:
       var value = /** @type {number} */ (reader.readFloat());
       msg.setSwitchreward(value);
+      break;
+    case 14:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setTs(value);
+      break;
+    case 15:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setLongevityreward(value);
+      break;
+    case 16:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setDrawratio(value);
       break;
     default:
       reader.skipField();
@@ -313,6 +328,27 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeFloat(
       13,
+      f
+    );
+  }
+  f = message.getTs();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      14,
+      f
+    );
+  }
+  f = message.getLongevityreward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      15,
+      f
+    );
+  }
+  f = message.getDrawratio();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      16,
       f
     );
   }
@@ -574,6 +610,60 @@ proto.rlenv.Info.prototype.getSwitchreward = function() {
  */
 proto.rlenv.Info.prototype.setSwitchreward = function(value) {
   return jspb.Message.setProto3FloatField(this, 13, value);
+};
+
+
+/**
+ * optional float ts = 14;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getTs = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 14, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setTs = function(value) {
+  return jspb.Message.setProto3FloatField(this, 14, value);
+};
+
+
+/**
+ * optional float longevityReward = 15;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getLongevityreward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 15, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setLongevityreward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 15, value);
+};
+
+
+/**
+ * optional float drawRatio = 16;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getDrawratio = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 16, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setDrawratio = function(value) {
+  return jspb.Message.setProto3FloatField(this, 16, value);
 };
 
 

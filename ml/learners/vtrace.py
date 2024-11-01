@@ -1,6 +1,9 @@
 import functools
+import os
+import pickle
 from typing import Any
 
+import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -10,10 +13,29 @@ from flax import core, struct
 from flax.training import train_state
 
 from ml.config import ActorCriticConfig
-from ml.func import get_loss_entropy, get_loss_pg, get_loss_v, reg_v_trace, renormalize
+from ml.func import (
+    get_loss_entropy,
+    get_loss_nerd,
+    get_loss_v,
+    reg_v_trace,
+    renormalize,
+)
+from ml.learners.rnad import NerdConfig
 from ml.utils import Params
 from rlenv.env import get_ex_step
-from rlenv.interfaces import ModelOutput, TimeStep
+from rlenv.interfaces import TimeStep
+
+
+@chex.dataclass(frozen=True)
+class VtraceConfig(ActorCriticConfig):
+    entropy_loss_coef: float = 1e-3
+    target_network_avg: float = 1
+
+    nerd: NerdConfig = NerdConfig()
+
+
+def get_config():
+    return VtraceConfig()
 
 
 class TrainState(train_state.TrainState):
@@ -48,7 +70,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
     params_target = module.init(rng, ex)
 
     tx = optax.chain(
-        optax.clip(config.clip_gradient),
+        optax.clip_by_global_norm(config.clip_gradient),
         optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
@@ -59,15 +81,40 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
         ),
     )
     return TrainState.create(
-        apply_fn=module.apply,
-        params=params,
-        params_target=params_target,
-        tx=tx,
+        apply_fn=module.apply, params=params, params_target=params_target, tx=tx
     )
 
 
+def save(state: TrainState):
+    with open(os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb") as f:
+        pickle.dump(
+            dict(
+                params=state.params,
+                params_target=state.params_target,
+                opt_state=state.opt_state,
+                step=state.step,
+            ),
+            f,
+        )
+
+
+def load(state: TrainState, path: str):
+    print(f"loading checkpoint from {path}")
+    with open(path, "rb") as f:
+        step = pickle.load(f)
+
+    state = state.replace(
+        params=step["params"],
+        params_target=step["params_target"],
+        opt_state=step["opt_state"],
+        step=step["step"],
+    )
+
+    return state
+
+
 @functools.partial(jax.jit, static_argnums=(2,))
-def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
+def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     """Train for a single step."""
 
     def loss_fn(
@@ -77,29 +124,32 @@ def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
     ):
         rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
 
-        pred: ModelOutput = rollout(params, batch.env)
-        pred_targ: ModelOutput = rollout(params_target, batch.env)
+        pred = rollout(params, batch.env)
+        if config.target_network_avg < 1:
+            pred_targ = rollout(params_target, batch.env)
+            vtrace_v = pred_targ.v
+        else:
+            vtrace_v = pred.v
 
         logs = {}
 
         policy_pprocessed = config.finetune(pred.pi, batch.env.legal, learner_steps)
-
-        # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
-        # For the stability reasons, reward changes smoothly between iterations.
-        # The mixing between old and new reward transform is a convex combination
-        # parametrised by alpha.
 
         valid = batch.env.valid * (batch.env.legal.sum(axis=-1) > 1)
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.win_rewards
+        rewards = (
+            batch.actor.win_rewards
+            + 1e-1 * batch.actor.fainted_rewards / 6
+            + 1e-2 * batch.actor.hp_rewards / 6
+        )
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = reg_v_trace(
-                pred_targ.v,
+                vtrace_v,
                 valid,
                 batch.env.player_id,
                 batch.actor.policy,
@@ -122,36 +172,60 @@ def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
             has_played_list,
         )
 
-        # is_vector = jnp.expand_dims(
-        #     _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
-        #     axis=-1,
-        # )
-        is_vector = jnp.expand_dims(jnp.ones_like(batch.env.valid), axis=-1)
+        is_vector = jnp.expand_dims(jnp.ones_like(valid), axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
-        loss_nerd = get_loss_pg(
-            [pred.log_pi] * config.num_players,
+        loss_nerd = get_loss_nerd(
+            [pred.logit] * config.num_players,
+            [pred.pi] * config.num_players,
             v_trace_policy_target_list,
-            action_oh,
             valid,
             batch.env.player_id,
+            batch.env.legal,
             importance_sampling_correction,
+            clip=config.nerd.clip,
+            threshold=config.nerd.beta,
+        )
+        # loss_nerd = get_loss_pg(
+        #     [pred.log_pi] * config.num_players,
+        #     v_trace_policy_target_list,
+        #     action_oh,
+        #     valid,
+        #     batch.env.player_id,
+        # )
+
+        loss_norm = renormalize(
+            jnp.square(pred.logit).mean(axis=-1, where=batch.env.legal), valid
         )
 
         loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
 
-        ssl_loss = renormalize(pred.ssl_loss, batch.env.valid)
         loss = (
             config.value_loss_coef * loss_v
             + config.policy_loss_coef * loss_nerd
             + config.entropy_loss_coef * loss_entropy
-            + ssl_loss
+            # + 1e-5 * loss_norm
+        )
+
+        move_entropy = get_loss_entropy(
+            pred.pi[..., :4],
+            pred.log_pi[..., :4],
+            batch.env.legal[..., :4],
+            valid & batch.env.legal[..., :4].any(axis=-1),
+        )
+        switch_entropy = get_loss_entropy(
+            pred.pi[..., 4:],
+            pred.log_pi[..., 4:],
+            batch.env.legal[..., 4:],
+            valid & batch.env.legal[..., 4:].any(axis=-1),
         )
 
         logs["loss_v"] = loss_v
         logs["loss_nerd"] = loss_nerd
         logs["loss_entropy"] = loss_entropy
-        logs["ssl_loss"] = ssl_loss
+        logs["move_entropy"] = move_entropy
+        logs["switch_entropy"] = switch_entropy
+        logs["loss_norm"] = loss_norm
 
         return loss, logs
 
@@ -177,10 +251,12 @@ def train_step(state: TrainState, batch: TimeStep, config: ActorCriticConfig):
     switch_ratio = renormalize(batch.actor.action >= 4, can_move & valid)
 
     extra_logs = dict(
+        actor_steps=valid.sum(),
         loss=loss_val,
         trajectory_length_mean=lengths.mean(),
         trajectory_length_min=lengths.min(),
         trajectory_length_max=lengths.max(),
+        early_finish_ratio=batch.actor.win_rewards[..., 0].any(axis=0).mean(),
         gradient_norm=optax.global_norm(grads),
         param_norm=optax.global_norm(state.params),
         move_ratio=move_ratio,
