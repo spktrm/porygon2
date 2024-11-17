@@ -12,10 +12,27 @@ if [ $? -ne 0 ]; then
   echo "TypeScript Protobuf compilation failed!"
   exit 1
 fi
-cd ../rlenv
+
+# Navigate to the server directory and run the TypeScript compilation script
+echo "Compiling Protobuf files for TypeScript..."
+cd ../servicev2
+./scripts/compile_proto.sh
+if [ $? -ne 0 ]; then
+  echo "TypeScript Protobuf compilation failed!"
+  exit 1
+fi
 
 # Run the Python Protobuf compilation command
 echo "Compiling Protobuf files for Python..."
+cd ../rlenv
+./scripts/compile_proto.sh
+if [ $? -ne 0 ]; then
+  echo "Python Protobuf compilation failed!"
+  exit 1
+fi
+
+echo "Compiling Protobuf files for Python..."
+cd ../rlenvv2
 ./scripts/compile_proto.sh
 if [ $? -ne 0 ]; then
   echo "Python Protobuf compilation failed!"
@@ -24,5 +41,6 @@ fi
 
 cd ../
 fix-protobuf-imports rlenv/protos/
+fix-protobuf-imports rlenvv2/protos/
 
 echo "Protobuf compilation completed successfully!"

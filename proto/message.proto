@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package rlenv;
+
+import "action.proto";
+
+
+enum WorkerMessageType {
+    START = 0;
+    ACTION = 1;
+}
+
+message WorkerMessage {
+  int32 workerIndex = 1;
+  WorkerMessageType messageType = 2;
+  Action action = 3;
+  int32 gameId = 4;
+}

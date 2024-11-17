@@ -23,8 +23,6 @@ import {
     SideconditionEnumMap,
     SpeciesEnum,
     StatusEnum,
-    VolatilestatusEnum,
-    WeatherEnum,
 } from "../../protos/enums_pb";
 import {
     EdgeTypes,
@@ -43,12 +41,9 @@ import {
     numPokemonFields,
     numMovesetFields,
     numMoveFields,
-    numBattleMinorArgs,
-    numBattleMajorArgs,
     numVolatiles,
     NUM_HISTORY,
     numSideConditions,
-    numPseudoweathers,
     numWeatherFields,
 } from "./data";
 import { Field, NA, Pokemon, Side } from "@pkmn/client";
@@ -58,8 +53,6 @@ import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
 import { ID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { History } from "../../protos/history_pb";
-import { getEvalAction } from "./eval";
-import { GetSearchDistribution } from "./baselines/search";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames = RemovePipes<BattleMajorArgName>;
@@ -1829,28 +1822,17 @@ export class Tracker {
                         ),
                 );
 
-                if (p1TotalHpRatio === p2TotalHpRatio) {
-                    const [p1TotalHp, p2TotalHp] = world.sides.map((side) =>
-                        side.pokemon.reduce((prev, curr) => prev + curr.hp, 0),
-                    );
-                    return p1TotalHp > p2TotalHp
-                        ? 1
-                        : p1TotalHp < p2TotalHp
-                        ? -1
-                        : 0;
-                }
-
                 return p1TotalHpRatio > p2TotalHpRatio
-                    ? 1
+                    ? 1 - p2TotalHpRatio / 6
                     : p1TotalHpRatio < p2TotalHpRatio
-                    ? -1
+                    ? p1TotalHpRatio / 6 - 1
                     : 0;
             }
 
             return p1TotalFainted > p2TotalFainted
-                ? -1
+                ? -p1TotalFainted / 6
                 : p1TotalFainted < p2TotalFainted
-                ? 1
+                ? p2TotalFainted / 6
                 : 0;
         }
         return 0;

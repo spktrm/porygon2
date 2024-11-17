@@ -8,7 +8,7 @@ const isTraining = workerData.socketType === "training";
 const isHardMode = workerData.socketType.includes("evaluation1");
 const gameId = workerData.workerCount;
 
-const game = new Game({
+let game = new Game({
     gameId,
     port: parentPort as unknown as MessagePort,
 });
@@ -38,6 +38,13 @@ async function main() {
     while (true) {
         await game.run();
         game.reset();
+        if (!game.queueSystem.allDone()) {
+            console.log("resetting game");
+            game = new Game({
+                gameId,
+                port: parentPort as unknown as MessagePort,
+            });
+        }
     }
 }
 

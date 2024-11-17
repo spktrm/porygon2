@@ -22,6 +22,7 @@ message Info {
     float ts = 14;
     float longevityReward = 15;
     float drawRatio = 16;
+    int32 workerIndex = 17;
 }
 
 message State {

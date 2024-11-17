@@ -31,6 +31,7 @@ async function main(verbose: boolean = false) {
         if (info && legalActions) {
             if ((turn > 2 && playerIndex === true) || info.getDone()) {
                 writeFileSync("../rlenv/ex", buffer);
+                writeFileSync("../rlenvv2/ex", buffer);
                 exit(0);
             } else {
                 const action = new Action();
