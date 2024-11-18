@@ -159,7 +159,7 @@ class EntropySchedule:
 class TrainState(train_state.TrainState):
     entropy_schedule: np.ndarray
 
-    # params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     params_prev: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     params_prev_: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
@@ -185,22 +185,21 @@ class TrainState(train_state.TrainState):
         state = super().apply_gradients(grads=grads, **kwargs)
 
         # Update EMA parameters
-        # params_target = optax.incremental_update(
-        #     new_tensors=state.params,
-        #     old_tensors=state.params_target,
-        #     step_size=config.target_network_avg,
-        # )
+        params_target = optax.incremental_update(
+            new_tensors=state.params,
+            old_tensors=state.params_target,
+            step_size=config.target_network_avg,
+        )
 
         params_prev, params_prev_ = jax.lax.cond(
             self.update_target_net,
-            lambda: (self.params, self.params_prev),
-            # lambda: (self.params_target, self.params_prev),
+            lambda: (self.params_target, self.params_prev),
             lambda: (self.params_prev, self.params_prev_),
         )
 
         # Return new state with updated EMA params
         return state.replace(
-            # params_target=params_target,
+            params_target=params_target,
             params_prev=params_prev,
             params_prev_=params_prev_,
         )
@@ -211,7 +210,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
     ex = get_ex_step()
 
     params = module.init(rng, ex)
-    # params_target = module.init(rng, ex)
+    params_target = module.init(rng, ex)
     params_prev = module.init(rng, ex)
     params_prev_ = module.init(rng, ex)
 
@@ -229,7 +228,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
     return TrainState.create(
         apply_fn=module.apply,
         params=params,
-        # params_target=params_target,
+        params_target=params_target,
         params_prev=params_prev,
         params_prev_=params_prev_,
         entropy_schedule=EntropySchedule.init(
@@ -245,7 +244,7 @@ def save(state: TrainState):
         pickle.dump(
             dict(
                 params=state.params,
-                # params_target=state.params_target,
+                params_target=state.params_target,
                 params_prev=state.params_prev,
                 params_prev_=state.params_prev_,
                 opt_state=state.opt_state,
@@ -262,11 +261,11 @@ def load(state: TrainState, path: str):
 
     state = state.replace(
         params=step["params"],
-        # params_target=step["params_target"],
+        params_target=step["params"],
         params_prev=step["params"],
         params_prev_=step["params"],
-        # opt_state=step["opt_state"],
-        # step=step["step"],
+        opt_state=step["opt_state"],
+        step=step["step"],
     )
 
     return state
@@ -276,6 +275,8 @@ def load(state: TrainState, path: str):
 def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     """Train for a single step."""
     rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
+
+    pred_targ: ModelOutput = rollout(state.params_target, batch.env)
     pred_prev: ModelOutput = rollout(state.params_prev, batch.env)
     pred_prev_: ModelOutput = rollout(state.params_prev_, batch.env)
 
@@ -283,7 +284,6 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
         rollout_w_grad = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
 
         pred: ModelOutput = rollout_w_grad(params, batch.env)
-        # pred_targ: ModelOutput = rollout(params_target, batch.env)
 
         logs = {}
 
@@ -309,8 +309,7 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = rnad_v_trace(
-                # pred_targ.v,
-                pred.v,
+                pred_targ.v,
                 valid,
                 batch.env.player_id,
                 batch.actor.policy,
