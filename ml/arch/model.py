@@ -14,7 +14,7 @@ from ml.arch.encoder import Encoder, SimpleEncoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
 from rlenv.interfaces import EnvStep, ModelOutput
-from rlenv.env import get_ex_step
+from rlenvv2.env import get_ex_step
 
 
 class Model(nn.Module):

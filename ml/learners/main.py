@@ -8,7 +8,7 @@ from tqdm import trange
 import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.learners import vtrace as learner
+from ml.learners import rnad as learner
 from ml.utils import get_most_recent_file
 from rlenvv2.main import BatchCollectorV2, BatchSinglePlayerEnvironment
 
@@ -39,7 +39,7 @@ def main():
     )
 
     eval_freq = 5000
-    save_freq = 1000
+    save_freq = 10000
     tau = 0.1
 
     # initialise average returns
@@ -48,7 +48,9 @@ def main():
         num_inits = 50
         for _ in trange(0, num_inits, desc="init winrates..."):
             batch = evaluation_collector.collect_batch_trajectory(state.params)
-            avg_reward += (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
+            avg_reward += np.sign(
+                batch.actor.win_rewards[..., 0] * batch.env.valid
+            ).sum(0)
         avg_reward /= num_inits
 
     for step_idx in trange(0, learner_config.num_steps, desc="training"):
@@ -61,7 +63,9 @@ def main():
             and learner_config.do_eval
         ):
             batch = evaluation_collector.collect_batch_trajectory(state.params)
-            win_rewards = (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
+            win_rewards = np.sign(
+                batch.actor.win_rewards[..., 0] * batch.env.valid
+            ).sum(0)
             avg_reward = avg_reward * (1 - tau) + win_rewards * tau
             winrates = {f"wr{i}": wr for i, wr in enumerate(avg_reward)}
 

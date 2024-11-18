@@ -1,8 +1,10 @@
 import chex
 import flax.linen as nn
+import jax
+import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import MLP, Logits, PointerLogits, Resnet
+from ml.arch.modules import Logits, NormalizeAttention, PointerLogits, Resnet
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -12,7 +14,6 @@ class PolicyHead(nn.Module):
     def setup(self):
         self.resnet = Resnet(**self.cfg.query.to_dict())
         self.logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
-        # self.logits = MLP((self.cfg.entity_size, self.cfg.entity_size, 1))
 
     def __call__(
         self,
@@ -22,11 +23,6 @@ class PolicyHead(nn.Module):
     ):
         query = self.resnet(state_embedding)
         logits = self.logits(query, action_embeddings)
-        # logits = self.logits(action_embeddings).reshape(-1)
-
-        # key_size = jnp.array(self.cfg.key_size, dtype=jnp.float32)
-        # norm_coeff = jax.lax.rsqrt(key_size)
-        # logits = norm_coeff * logits
 
         policy = legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)

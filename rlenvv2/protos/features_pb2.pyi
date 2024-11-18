@@ -112,6 +112,7 @@ class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SWITCH_EDGE: _ClassVar[EdgeTypes]
     EFFECT_EDGE: _ClassVar[EdgeTypes]
     CANT_EDGE: _ClassVar[EdgeTypes]
+    EDGE_TYPE_START: _ClassVar[EdgeTypes]
 
 class EdgeFromTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -241,6 +242,7 @@ MOVE_EDGE: EdgeTypes
 SWITCH_EDGE: EdgeTypes
 EFFECT_EDGE: EdgeTypes
 CANT_EDGE: EdgeTypes
+EDGE_TYPE_START: EdgeTypes
 EDGE_FROM_NONE: EdgeFromTypes
 EDGE_FROM_ITEM: EdgeFromTypes
 EDGE_FROM_EFFECT: EdgeFromTypes

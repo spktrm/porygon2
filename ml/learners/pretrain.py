@@ -12,7 +12,7 @@ from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
 
-from ml.config import ActorCriticConfig
+from ml.config import ActorCriticConfig, AdamConfig
 from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
@@ -28,6 +28,10 @@ from rlenv.interfaces import TimeStep
 
 @chex.dataclass(frozen=True)
 class PretrainConfig(ActorCriticConfig):
+    adam: AdamConfig = AdamConfig(b1=0.99, b2=0.999, eps=1e-8, weight_decay=1e-5)
+
+    learning_rate: float = 1e-3
+
     entropy_loss_coef: float = 1e-3
     target_network_avg: float = 1e-2
 
@@ -54,13 +58,13 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
     params_target = module.init(rng, ex)
 
     tx = optax.chain(
-        optax.adam(
+        optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
             b1=config.adam.b1,
             b2=config.adam.b2,
             eps=config.adam.eps,
-            # weight_decay=config.adam.weight_decay,
+            weight_decay=config.adam.weight_decay,
         ),
         optax.clip(config.clip_gradient),
     )
@@ -181,11 +185,8 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
         heuristic_target = jax.nn.one_hot(
             batch.env.heuristic_action.clip(min=0), pred.logit.shape[-1]
         )
-        heuristic_target = jnp.where(heuristic_target, 2, -2)
-        loss_heuristic = renormalize(
-            jnp.square(pred.logit - heuristic_target).mean(
-                axis=-1, where=batch.env.legal
-            ),
+        loss_heuristic = -renormalize(
+            (pred.log_pi * heuristic_target).sum(axis=-1),
             valid & (batch.env.heuristic_action >= 0),
         )
 

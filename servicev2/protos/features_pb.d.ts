@@ -120,6 +120,7 @@ export interface EdgeTypesMap {
   SWITCH_EDGE: 2;
   EFFECT_EDGE: 3;
   CANT_EDGE: 4;
+  EDGE_TYPE_START: 5;
 }
 
 export const EdgeTypes: EdgeTypesMap;

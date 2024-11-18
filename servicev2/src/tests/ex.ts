@@ -4,6 +4,7 @@ import { Action, GameState } from "../../protos/servicev2_pb";
 import { AsyncQueue } from "../server/utils";
 import { writeFileSync } from "fs";
 import { exit } from "process";
+import { State } from "../../protos/state_pb";
 
 async function worker(gameId: number, playerIds: number[]) {
     const queue = new AsyncQueue<GameState>();

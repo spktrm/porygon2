@@ -509,7 +509,6 @@ def get_loss_nerd(
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
-    num_valid_actions = jnp.sum(legal_actions, axis=-1, keepdims=True)
 
     for k, (logit_pi, pi, q_vr, is_c) in enumerate(
         zip(logit_list, policy_list, q_vr_list, importance_sampling_correction)
@@ -521,18 +520,17 @@ def get_loss_nerd(
         adv_pi = jnp.clip(adv_pi, a_min=-clip, a_max=clip)
         adv_pi = lax.stop_gradient(adv_pi)
 
-        valid_logit_sum = jnp.sum(logit_pi * legal_actions, axis=-1, keepdims=True)
-        mean_logit = valid_logit_sum / num_valid_actions
-
         # Subtract only the mean of the valid logits
-        logits = logit_pi - mean_logit
+        logits = logit_pi - jnp.mean(
+            logit_pi, axis=-1, keepdims=True, where=legal_actions
+        )
 
         threshold_center = jnp.zeros_like(logits)
 
-        nerd_loss = jnp.sum(
-            legal_actions
-            * apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
+        nerd_loss = jnp.mean(
+            apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
             axis=-1,
+            where=legal_actions,
         )
 
         nerd_loss = -renormalize(nerd_loss, valid * (player_ids == k))

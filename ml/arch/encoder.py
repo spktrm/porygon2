@@ -48,10 +48,10 @@ from rlenv.protos.features_pb2 import (
     FeatureWeather,
 )
 
-# SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/species.npy")
-# ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/abilities.npy")
-# ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/items.npy")
-# MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/moves.npy")
+SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/species.npy")
+ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/abilities.npy")
+ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/items.npy")
+MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/moves.npy")
 
 
 def get_move_mask(move: chex.Array) -> chex.Array:
@@ -217,9 +217,9 @@ class EntityEncoder(nn.Module):
             _encode_one_hot(entity, FeatureEntity.ENTITY_SPECIES, NUM_SPECIES),
             _encode_one_hot(entity, FeatureEntity.ENTITY_ABILITY, NUM_ABILITIES),
             _encode_one_hot(entity, FeatureEntity.ENTITY_ITEM, NUM_ITEMS),
-            # SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
-            # ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY]),
-            # ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM]),
+            SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
+            ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY]),
+            ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM]),
             _encode_moveset_onehot(entity),
             _binary_scale_embedding(entity[FeatureEntity.ENTITY_LEVEL], 100),
             _binary_scale_embedding(entity[FeatureEntity.ENTITY_HP_TOKEN], 1023),
@@ -290,9 +290,9 @@ class EdgeEncoder(nn.Module):
             _encode_one_hot(edge, FeatureEdge.MOVE_TOKEN, NUM_MOVES),
             _encode_one_hot(edge, FeatureEdge.ITEM_TOKEN, NUM_ITEMS),
             _encode_one_hot(edge, FeatureEdge.ABILITY_TOKEN, NUM_ABILITIES),
-            # MOVE_ONEHOT(edge[FeatureEdge.MOVE_TOKEN]),
-            # ITEM_ONEHOT(edge[FeatureEdge.ITEM_TOKEN]),
-            # ABILITY_ONEHOT(edge[FeatureEdge.ABILITY_TOKEN]),
+            MOVE_ONEHOT(edge[FeatureEdge.MOVE_TOKEN]),
+            ITEM_ONEHOT(edge[FeatureEdge.ITEM_TOKEN]),
+            ABILITY_ONEHOT(edge[FeatureEdge.ABILITY_TOKEN]),
             _encode_one_hot(edge, FeatureEdge.MAJOR_ARG, NUM_MAJOR_ARGS),
             _encode_one_hot(edge, FeatureEdge.MINOR_ARG, NUM_MINOR_ARGS),
             _encode_one_hot(edge, FeatureEdge.FROM_SOURCE_TOKEN, NUM_EFFECTS),

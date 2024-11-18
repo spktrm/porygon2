@@ -91,10 +91,10 @@ export class Player extends BattleStreams.BattlePlayer {
         this.privateBattle.add(line);
         this.publicBattle.add(line);
         this.getPlayerIndex();
-        this.ingestEvent(line);
         if (line.startsWith("|start")) {
             this.eventHandler.reset();
         }
+        this.ingestEvent(line);
     }
 
     ingestEvent(line: string) {

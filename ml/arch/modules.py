@@ -1,4 +1,3 @@
-import math
 from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
@@ -265,6 +264,23 @@ def get_freqs(seq_len: int, dim: int, base: int = 10000):
     return freqs_cos, freqs_sin
 
 
+def normalize_masked(tensor: chex.Array, mask: chex.Array):
+    mask = mask + (1 - mask.any(axis=-1, keepdims=True))
+    return nn.LayerNorm()(tensor, mask=mask)
+
+
+class NormalizeAttention(nn.Module):
+    @nn.compact
+    def __call__(self, logits: chex.Array, mask: chex.Array):
+        gain = self.param(
+            "gain", lambda rng, shape: jnp.ones(shape), logits.shape[:1] + (1, 1)
+        )
+        bias = self.param(
+            "bias", lambda rng, shape: jnp.zeros(shape), logits.shape[:1] + (1, 1)
+        )
+        return (gain * normalize_masked(logits, mask) + bias) * mask
+
+
 def get_rope_embedding(x: chex.Array):
     def negate_half(x: chex.Array):
         d_2 = x.shape[-1] // 2
@@ -352,10 +368,12 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+
+        # attn_weights = NormalizeAttention()(attn_logits, mask)
+
         attn_logits = attn_logits * jax.lax.rsqrt(
             jnp.array(key_size, dtype=jnp.float32)
         )
-
         if mask is not None:
             if mask.ndim != attn_logits.ndim:
                 raise ValueError(
@@ -651,7 +669,7 @@ class PointerLogits(nn.Module):
 
         # Pointer
         logits = query @ keys.T  # ij,j->i
-        return logits  # * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
+        return logits * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
 
 
 class ToAvgVector(nn.Module):

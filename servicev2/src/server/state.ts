@@ -53,11 +53,10 @@ import { Condition, Effect } from "@pkmn/data";
 import { History } from "../../protos/history_pb";
 import { OneDBoolean, TypedArray } from "./utils";
 import { Player } from "./player";
-import { evalActionMapping, getEvalAction } from "./eval";
 import { GetMaxDamageAction } from "./baselines/max_dmg";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
-type MajorArgNames = RemovePipes<BattleMajorArgName>;
+type MajorArgNames = RemovePipes<BattleMajorArgName> | "turn";
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const featureEdgeSize = Object.keys(FeatureEdge).length;
@@ -449,6 +448,8 @@ class Turn {
     sideData: Uint8Array;
     fieldData: Uint8Array;
 
+    locked: boolean;
+
     constructor(
         eventHandler: EventHandler,
         turn: number,
@@ -464,6 +465,8 @@ class Turn {
         this.nodeData = new Int16Array(flatNodeDataSize);
         this.sideData = new Uint8Array(2 * numSideConditions);
         this.fieldData = new Uint8Array(numWeatherFields);
+
+        this.locked = false;
 
         if (init) {
             this.init();
@@ -619,6 +622,7 @@ class Turn {
 
     lockTurn() {
         this.lockEdges();
+        this.locked = true;
     }
 }
 
@@ -1671,10 +1675,29 @@ export class EventHandler implements Protocol.Handler {
 
     "|done|"() {}
 
+    "|start|"(args: Args["|start|"]) {
+        const latestTurn = this.getLatestTurn();
+
+        const edge = new Edge();
+        edge.addMajorArg("turn");
+        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
+
+        latestTurn.appendEdge(edge);
+    }
+
     "|turn|"(args: Args["|turn|"]) {
+        const [argName, value] = args;
+
         const currentTurn = this.getLatestTurn();
         currentTurn.lockTurn();
         const nextTurn = currentTurn.newTurn();
+
+        const edge = new Edge();
+        edge.addMajorArg(argName);
+        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
+
+        nextTurn.appendEdge(edge);
+
         this.turns.push(nextTurn);
     }
 
@@ -1925,9 +1948,9 @@ export class StateHandler {
         const historyField: Uint8Array[] = [];
 
         const finalSlice = this.player.eventHandler.turns.slice(-numHistory);
-        for (const { edgeData, nodeData, sideData, fieldData } of [
-            ...finalSlice,
-        ].reverse()) {
+        for (const turn of [...finalSlice].reverse()) {
+            if (!turn.locked) turn.lockTurn();
+            const { edgeData, nodeData, sideData, fieldData } = turn;
             historyEdges.push(edgeData);
             historyNodes.push(nodeData);
             historySideConditions.push(sideData);
@@ -1968,24 +1991,26 @@ export class StateHandler {
         );
         if (this.player.done) {
             if (aliveTotal1 === aliveTotal2) {
-                info.setWinreward(
+                const reward =
                     hpTotal1 > hpTotal2
                         ? 1 - hpTotal2 / 6
                         : hpTotal1 < hpTotal2
                         ? hpTotal1 / 6 - 1
-                        : 0,
-                );
+                        : 0;
+                info.setWinreward(reward);
             } else {
-                info.setWinreward(
+                const reward =
                     aliveTotal1 > aliveTotal2
                         ? 1 - aliveTotal2 / 6
                         : aliveTotal1 < aliveTotal2
                         ? aliveTotal1 / 6 - 1
-                        : 0,
-                );
+                        : 0;
+                info.setWinreward(reward);
             }
         }
-        info.setHeuristicaction(GetMaxDamageAction({player:this. player }).getValue())
+        // info.setHeuristicaction(
+        //     GetMaxDamageAction({ player: this.player }).getValue(),
+        // );
         info.setHpreward(hpTotal1 - hpTotal2);
         info.setFaintedreward(aliveTotal1 - aliveTotal2);
         state.setInfo(info);

@@ -3558,6 +3558,7 @@ class BattlemajorargsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BATTLEMAJORARGS_REPLACE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_SWAP: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_SWITCH: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_TURN: _ClassVar[BattlemajorargsEnum]
 
 class BattleminorargsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -11731,6 +11732,7 @@ BATTLEMAJORARGS_MOVE: BattlemajorargsEnum
 BATTLEMAJORARGS_REPLACE: BattlemajorargsEnum
 BATTLEMAJORARGS_SWAP: BattlemajorargsEnum
 BATTLEMAJORARGS_SWITCH: BattlemajorargsEnum
+BATTLEMAJORARGS_TURN: BattlemajorargsEnum
 BATTLEMINORARGS__NULL: BattleminorargsEnum
 BATTLEMINORARGS__PAD: BattleminorargsEnum
 BATTLEMINORARGS__UNK: BattleminorargsEnum

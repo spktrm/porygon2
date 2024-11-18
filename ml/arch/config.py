@@ -90,11 +90,11 @@ def get_model_cfg():
     cfg.encoder.entity_edge_cross_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_edge_cross_transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.encoder.entity_aggregator.units_hidden_sizes = (entity_size,)
+    cfg.encoder.entity_aggregator.units_hidden_sizes = (entity_size, entity_size)
     cfg.encoder.entity_aggregator.use_layer_norm = use_layer_norm
     cfg.encoder.entity_aggregator.pool_method = PoolMethod.MEAN
 
-    cfg.encoder.edge_aggregator.units_hidden_sizes = (entity_size,)
+    cfg.encoder.edge_aggregator.units_hidden_sizes = (entity_size, entity_size)
     cfg.encoder.edge_aggregator.use_layer_norm = use_layer_norm
     cfg.encoder.edge_aggregator.pool_method = PoolMethod.MEAN
 
@@ -108,7 +108,7 @@ def get_model_cfg():
     cfg.encoder.side_field_resnet.use_layer_norm = use_layer_norm
 
     cfg.encoder.timestep_merge.output_size = entity_size
-    cfg.encoder.timestep_merge.gating_type = GatingType.NONE
+    cfg.encoder.timestep_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.timestep_merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.timestep_resnet.num_resblocks = 2
@@ -196,7 +196,7 @@ def get_model_cfg():
     cfg.encoder.average_contextual_timestep_resnet.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_merge.output_size = vector_size
-    cfg.encoder.state_merge.gating_type = GatingType.NONE
+    cfg.encoder.state_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.state_merge.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_resnet.num_resblocks = 2
@@ -212,8 +212,8 @@ def get_model_cfg():
 
     cfg.policy_head.pointer_logits = ConfigDict()
     cfg.policy_head.pointer_logits.num_layers_query = 1
-    cfg.policy_head.pointer_logits.num_layers_keys = 3
-    cfg.policy_head.pointer_logits.key_size = 64
+    cfg.policy_head.pointer_logits.num_layers_keys = 2
+    cfg.policy_head.pointer_logits.key_size = entity_size
     cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
     cfg.policy_head.entity_size = entity_size
     cfg.policy_head.vector_size = vector_size

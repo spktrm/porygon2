@@ -227,9 +227,14 @@ const customScrapingFunctions: {
                 const interfaceContent = interfaceMatch[0];
                 const argMatches =
                     interfaceContent.match(/['"]?\|(\w+)\|['"]?:/g) || [];
-                return argMatches.map((match) =>
-                    match.replace(/['"]?\|(\w+)\|['"]?:/, "$1").toLowerCase(),
-                );
+                return [
+                    "turn",
+                    ...argMatches.map((match) =>
+                        match
+                            .replace(/['"]?\|(\w+)\|['"]?:/, "$1")
+                            .toLowerCase(),
+                    ),
+                ];
             }
         }
         return [];

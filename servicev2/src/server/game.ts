@@ -83,11 +83,11 @@ export class Game {
 `);
 
         const p1spec = {
-            name: `Bot${this.gameId}1`,
+            name: `${this.workerIndex}-${this.gameId}-1`,
             team: Teams.pack(generator.getTeam()),
         };
         const p2spec = {
-            name: `Bot${this.gameId}2`,
+            name: `${this.workerIndex}-${this.gameId}-2`,
             team: Teams.pack(generator.getTeam()),
         };
 

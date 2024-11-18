@@ -3580,6 +3580,7 @@ export interface BattlemajorargsEnumMap {
   BATTLEMAJORARGS_REPLACE: 10;
   BATTLEMAJORARGS_SWAP: 11;
   BATTLEMAJORARGS_SWITCH: 12;
+  BATTLEMAJORARGS_TURN: 13;
 }
 
 export const BattlemajorargsEnum: BattlemajorargsEnumMap;

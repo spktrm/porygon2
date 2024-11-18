@@ -178,24 +178,10 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
         loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
 
-        heuristic_target = jax.nn.one_hot(
-            batch.env.heuristic_action.clip(min=0), pred.logit.shape[-1]
-        )
-        heuristic_target = jnp.where(heuristic_target, 2, -2)
-        loss_heuristic = renormalize(
-            jnp.square(pred.logit - heuristic_target).mean(
-                axis=-1, where=batch.env.legal
-            ),
-            valid & (batch.env.heuristic_action >= 0),
-        )
-
-        heurisitc_coeff = jnp.array(1 - (state.step / 10_000)).clip(min=0)
-
         loss = (
             config.value_loss_coef * loss_v
             + config.policy_loss_coef * loss_nerd
             + config.entropy_loss_coef * loss_entropy
-            + heurisitc_coeff * loss_heuristic
             # + 1e-5 * loss_norm
         )
 
