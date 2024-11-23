@@ -1,77 +1,76 @@
 import { MessagePort, parentPort, workerData } from "worker_threads";
-
 import { Game } from "./game";
-import { Action } from "../../protos/action_pb";
-import { getEvalAction } from "../logic/eval";
+import { ClientMessage, Action } from "../../protos/servicev2_pb";
 
-const isTraining = workerData.socketType === "training";
-const isHardMode = workerData.socketType.includes("evaluation1");
-const gameId = workerData.workerCount;
+export class GameWorker {
+    private port: MessagePort;
+    private games: Map<number, Game>;
+    private workerIndex: number;
 
-let game = new Game({
-    gameId,
-    port: parentPort as unknown as MessagePort,
-});
+    constructor(workerIndex: number, port: MessagePort) {
+        this.port = port;
+        this.games = new Map();
+        this.workerIndex = workerIndex;
 
-if (!isTraining) {
-    if (isHardMode) {
-        console.log("hardmode activated");
-        game.handlers[1].sendFn = async (state) => {
-            const jobKey = game.queueSystem.createJob();
-            state.setKey(jobKey);
-            const action = await getEvalAction(game.handlers[1], 11);
-            game.queueSystem.submitResult(jobKey, action);
-            return jobKey;
-        };
-    } else {
-        game.handlers[1].sendFn = async (state) => {
-            const jobKey = game.queueSystem.createJob();
-            state.setKey(jobKey);
-            const action = await getEvalAction(game.handlers[1], gameId);
-            game.queueSystem.submitResult(jobKey, action);
-            return jobKey;
-        };
+        // Setup message listener for incoming client messages
+        this.port.on("message", async (clientMessageData: Buffer) => {
+            this.handleMessage(clientMessageData);
+        });
+    }
+
+    async handleMessage(clientMessageData: Buffer) {
+        const clientMessage =
+            ClientMessage.deserializeBinary(clientMessageData);
+        const messageType = clientMessage.getMessageTypeCase();
+        const gameId = clientMessage.getGameId();
+
+        switch (messageType) {
+            case ClientMessage.MessageTypeCase.CONNECT:
+                // Handle CONNECT case if needed
+                break;
+
+            case ClientMessage.MessageTypeCase.STEP:
+                const stepMessage = clientMessage.getStep()!;
+                this.handleStep(gameId, stepMessage.getAction()!);
+                break;
+
+            case ClientMessage.MessageTypeCase.RESET:
+                const playerId = clientMessage.getPlayerId();
+                this.handleReset(gameId, playerId);
+                break;
+        }
+    }
+
+    private handleReset(gameId: number, playerId: number) {
+        if (!this.games.has(gameId)) {
+            const game = new Game(gameId, this.workerIndex, this.port);
+            this.games.set(gameId, game);
+            game.addPlayerId(playerId);
+            game.reset();
+        } else {
+            const game = this.games.get(gameId)!;
+            game.addPlayerId(playerId);
+            if (game === undefined) {
+                console.error(`GameId: ${gameId} does not exist`);
+            } else {
+                game.reset();
+            }
+        }
+    }
+
+    private handleStep(gameId: number, action: Action) {
+        const game = this.games.get(gameId);
+        if (!game) {
+            console.error(`GameId: ${gameId} does not exist`);
+            return;
+        }
+        game.step(action);
     }
 }
 
-async function main() {
-    while (true) {
-        await game.run();
-        game.reset();
-        if (!game.queueSystem.allDone()) {
-            console.log("resetting game");
-            game = new Game({
-                gameId,
-                port: parentPort as unknown as MessagePort,
-            });
-        }
-    }
+// Instantiate GameWorker to initialize and listen for messages
+try {
+    new GameWorker(workerData.workerIndex, parentPort!);
+} catch (err) {
+    console.log(err);
 }
-
-main();
-
-// Allocate a rolling buffer to store incoming messages
-let buffer = Buffer.alloc(0);
-
-parentPort?.on("message", (data: Buffer) => {
-    // Update rolling buffer with incoming information
-    buffer = Buffer.concat([buffer, data]);
-
-    while (buffer.length >= 4) {
-        // Read the message length
-        const messageLength = buffer.readUInt32BE(0);
-
-        // Check if the full message has been received
-        if (buffer.length < 4 + messageLength) {
-            break;
-        }
-
-        // Extract the full message
-        const message = buffer.subarray(4, 4 + messageLength);
-        buffer = buffer.subarray(4 + messageLength); // Remove the processed message from the buffer
-
-        const action = Action.deserializeBinary(new Uint8Array(message));
-        const jobKey = action.getKey();
-        game.queueSystem.submitResult(jobKey, action);
-    }
-});

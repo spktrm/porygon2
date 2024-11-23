@@ -14,7 +14,7 @@ from ml.arch.encoder import Encoder, SimpleEncoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
 from rlenv.interfaces import EnvStep, ModelOutput
-from rlenvv2.env import get_ex_step
+from rlenv.env import get_ex_step
 
 
 class Model(nn.Module):
@@ -128,7 +128,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
 
 
 def get_model(config: ConfigDict) -> nn.Module:
-    return Model(config)
+    return SimpleModel(config)
 
 
 def get_dummy_model() -> nn.Module:

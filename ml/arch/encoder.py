@@ -9,6 +9,7 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     CrossTransformer,
     PretrainedEmbedding,
     Resnet,
@@ -48,10 +49,10 @@ from rlenv.protos.features_pb2 import (
     FeatureWeather,
 )
 
-SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/species.npy")
-ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/abilities.npy")
-ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/items.npy")
-MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/randombattle/moves.npy")
+SPECIES_ONEHOT = PretrainedEmbedding("data/data/gen3/species.npy")
+ABILITY_ONEHOT = PretrainedEmbedding("data/data/gen3/abilities.npy")
+ITEM_ONEHOT = PretrainedEmbedding("data/data/gen3/items.npy")
+MOVE_ONEHOT = PretrainedEmbedding("data/data/gen3/moves.npy")
 
 
 def get_move_mask(move: chex.Array) -> chex.Array:
@@ -551,13 +552,31 @@ class SimpleEncoder(nn.Module):
         the current state and action embeddings.
         """
 
-        # Initialize the entity and edge encoders using configurations.
-        entity_encoder = EntityEncoder(**self.cfg.entity_encoder.to_dict())
+        side_condition_encoder = SideEncoder(
+            **self.cfg.side_condition_encoder.to_dict()
+        )
+        field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
+        side_condition_embeddings = jax.vmap(side_condition_encoder)(
+            env_step.history_side_conditions[0]
+        )
+        field_embedding = field_encoder(env_step.history_field[0])
 
-        # Encode private entities (team) and obtain valid masks for each entity
+        entity_encoder = EntityEncoder(**self.cfg.entity_encoder.to_dict())
         contextual_entity_embeddings, valid_entity_mask = jax.vmap(entity_encoder)(
             env_step.team.reshape(-1, env_step.team.shape[-1])
         )
+
+        timestep_merge = VectorMerge(**self.cfg.timestep_merge.to_dict())
+        contextual_entity_embeddings = jax.vmap(timestep_merge, in_axes=(0, None))(
+            contextual_entity_embeddings,
+            jnp.concatenate(
+                (side_condition_embeddings.reshape(-1), field_embedding), axis=-1
+            ),
+        )
+
+        contextual_entity_embeddings = Transformer(
+            **self.cfg.entity_transformer.to_dict()
+        )(contextual_entity_embeddings, valid_entity_mask)
 
         # Compute action embeddings by merging private entity embeddings with move embeddings
         move_encoder = MoveEncoder(**self.cfg.move_encoder.to_dict())

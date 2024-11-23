@@ -48,6 +48,8 @@ def get_model_cfg():
     use_spectral_linear = False
 
     cfg.encoder = ConfigDict()
+    cfg.encoder.entity_size = entity_size
+    cfg.encoder.vector_size = vector_size
     cfg.encoder.entity_encoder = ConfigDict()
     cfg.encoder.move_encoder = ConfigDict()
     cfg.encoder.edge_encoder = ConfigDict()
@@ -213,7 +215,7 @@ def get_model_cfg():
     cfg.policy_head.pointer_logits = ConfigDict()
     cfg.policy_head.pointer_logits.num_layers_query = 1
     cfg.policy_head.pointer_logits.num_layers_keys = 2
-    cfg.policy_head.pointer_logits.key_size = entity_size
+    cfg.policy_head.pointer_logits.key_size = 64
     cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
     cfg.policy_head.entity_size = entity_size
     cfg.policy_head.vector_size = vector_size

@@ -527,7 +527,7 @@ def get_loss_nerd(
 
         threshold_center = jnp.zeros_like(logits)
 
-        nerd_loss = jnp.mean(
+        nerd_loss = jnp.sum(
             apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
             axis=-1,
             where=legal_actions,
@@ -540,18 +540,24 @@ def get_loss_nerd(
 
 def get_loss_pg(
     log_pi_list: Sequence[chex.Array],
+    policy_list: Sequence[chex.Array],
     q_vr_list: Sequence[chex.Array],
-    actions_oh: chex.Array,
     valid: chex.Array,
     player_ids: Sequence[chex.Array],
+    legal_actions: Sequence[chex.Array],
+    actions_oh: chex.Array,
 ) -> chex.Array:
     """Define the nerd loss."""
     loss_pi_list = []
 
-    for k, (log_pi, q_vr) in enumerate(zip(log_pi_list, q_vr_list)):
-        q_vr = lax.stop_gradient(q_vr)
+    for k, (log_pi, pi, q_vr) in enumerate(zip(log_pi_list, policy_list, q_vr_list)):
 
-        pg_loss = -(actions_oh * log_pi * q_vr).sum(axis=-1)
+        adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
+        adv_pi = adv_pi  # importance sampling correction
+        adv_pi = jnp.clip(adv_pi, a_min=-100, a_max=100)
+        adv_pi = lax.stop_gradient(adv_pi)
+
+        pg_loss = -(actions_oh * log_pi * adv_pi).mean(axis=-1, where=legal_actions)
         pg_loss = renormalize(pg_loss, valid * (player_ids == k))
 
         loss_pi_list.append(pg_loss)

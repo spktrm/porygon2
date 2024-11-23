@@ -16,6 +16,7 @@ from ml.config import ActorCriticConfig
 from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
+    get_loss_pg,
     get_loss_v,
     reg_v_trace,
     renormalize,
@@ -171,6 +172,16 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             clip=config.nerd.clip,
             threshold=config.nerd.beta,
         )
+
+        # loss_nerd = get_loss_pg(
+        #     [pred.log_pi] * config.num_players,
+        #     [pred.pi] * config.num_players,
+        #     v_trace_policy_target_list,
+        #     valid,
+        #     batch.env.player_id,
+        #     batch.env.legal,
+        #     action_oh,
+        # )
 
         loss_norm = renormalize(
             jnp.square(pred.logit).mean(axis=-1, where=batch.env.legal), valid

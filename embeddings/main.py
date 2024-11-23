@@ -9,6 +9,8 @@ import pandas as pd
 import plotly.express as px
 from community import community_louvain
 from pyvis.network import Network
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
 
 from embeddings.encoders import onehot_encode
@@ -20,9 +22,6 @@ from embeddings.protocols import (
     FeatureType,
     Protocol,
 )
-
-with open("data/data/randombattle_data.json", "r") as f:
-    randombattle_data = json.load(f)
 
 
 def to_id(string: str) -> str:
@@ -174,23 +173,16 @@ def to_lookup_table(encodings_df: pd.DataFrame, stoi: Dict[str, int]) -> np.ndar
 class GenerationEncodings:
     NAMES = ["abilities", "items", "move", "species", "typechart"]
 
-    def __init__(
-        self,
-        gen: int,
-        format: str,
-        stoi: Dict[str, int] = None,
-        onehot_id_only: bool = False,
-    ):
+    def __init__(self, gen: int, stoi: Dict[str, int] = None):
         if stoi is None:
             with open("data/data.json", "r", encoding="utf-8") as f:
                 stoi = json.load(f)
 
-        self.onehot_id_only = onehot_id_only
         self.gen = gen
         self.stoi = stoi
 
         self.gendata = {}
-        gen_dir = f"data/data/gen{gen}/{format}/"
+        gen_dir = f"data/data/gen{gen}/"
         for fname in os.listdir(gen_dir):
             if not fname.endswith(".json"):
                 continue
@@ -199,7 +191,6 @@ class GenerationEncodings:
             with open(fpath, "r") as f:
                 self.gendata[fname_head] = json.load(f)
 
-        self.format = format
         self.typechart_df = get_df(self.gendata["typechart"])
 
     def get_species_df(self):
@@ -240,122 +231,22 @@ class GenerationEncodings:
                 axis=1,
             )
 
-        weakness_data = {k: [] for k in damage_taken_df.columns}
-        for _, row in df.iterrows():
-            types = row["types"]
-            damage_multipliers = np.prod(
-                damage_taken_df.loc[[t.lower() for t in types]].values, axis=0
-            )
-            for tidx, col in enumerate(damage_taken_df.columns):
-                weakness_data[col].append(damage_multipliers[tidx])
-
-        weakness_df = pd.DataFrame(weakness_data, index=df.index)
-        # weakness_df = get_encodings(
-        #     concat_encodings([df, weakness_df]),
-        #     [
-        #         {
-        #             "feature": "id",
-        #             "func": onehot_encode,
-        #         },
-        #         {
-        #             "feature_fn": lambda x: x.startswith("damageTaken."),
-        #             "func": z_score_scale,
-        #         },
-        #     ],
-        # )
-        encodings = get_encodings(
-            # concat_encodings([df, weakness_df]),
-            df,
-            (
-                [
-                    {
-                        "feature": "id",
-                        "func": onehot_encode,
-                        "feature_type": FeatureType.CATEGORICAL,
-                    }
-                ]
-                if self.onehot_id_only
-                else SPECIES_PROTOCOLS
-            ),
-        )
-        if self.format == "randombattle":
-            encodings = encodings[
-                df["name"].isin(
-                    randombattle_data[f"gen{self.gen}randombattle"]["species"]
-                )
-            ]
+        encodings = get_encodings(df, SPECIES_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["species"])
 
     def get_moves_df(self):
         df = get_df(self.gendata["moves"])
-        encodings = get_encodings(
-            df,
-            (
-                [
-                    {
-                        "feature": "id",
-                        "func": onehot_encode,
-                        "feature_type": FeatureType.CATEGORICAL,
-                    }
-                ]
-                if self.onehot_id_only
-                else MOVES_PROTOCOLS
-            ),
-        )
-        if self.format == "randombattle":
-            encodings = encodings[
-                df["id"]
-                .isin(randombattle_data[f"gen{self.gen}randombattle"]["moves"])
-                .values
-            ]
+        encodings = get_encodings(df, MOVES_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["moves"])
 
     def get_abilities_df(self):
         df = get_df(self.gendata["abilities"])
-        encodings = get_encodings(
-            df,
-            (
-                [
-                    {
-                        "feature": "id",
-                        "func": onehot_encode,
-                        "feature_type": FeatureType.CATEGORICAL,
-                    }
-                ]
-                if self.onehot_id_only
-                else ABILITIES_PROTOCOLS
-            ),
-        )
-        if self.format == "randombattle":
-            encodings = encodings[
-                df["name"].isin(
-                    randombattle_data[f"gen{self.gen}randombattle"]["abilities"]
-                )
-            ]
+        encodings = get_encodings(df, ABILITIES_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["abilities"])
 
     def get_items_df(self):
         df = get_df(self.gendata["items"])
-        encodings = get_encodings(
-            df,
-            (
-                [
-                    {
-                        "feature": "id",
-                        "func": onehot_encode,
-                        "feature_type": FeatureType.CATEGORICAL,
-                    }
-                ]
-                if self.onehot_id_only
-                else ITEMS_PROTOCOLS
-            ),
-        )
-        if self.format == "randombattle":
-            encodings = encodings[
-                df["name"].isin(
-                    randombattle_data[f"gen{self.gen}randombattle"]["items"]
-                )
-            ]
+        encodings = get_encodings(df, ITEMS_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["items"])
 
 
@@ -426,88 +317,81 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     return net
 
 
-def main(plot: bool = False, onehot_id_only: bool = False):
+def main():
     with open("data/data/data.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     name: str
-    for gen in range(3, 5):
+    for gen in range(3, 10):
         print(gen)
-        for format in os.listdir(f"data/data/gen{gen}/"):
-            if not os.path.isdir(f"data/data/gen{gen}/{format}"):
+        enc = GenerationEncodings(gen, data)
+        for name, func in [
+            ("species", enc.get_species_df),
+            ("moves", enc.get_moves_df),
+            ("abilities", enc.get_abilities_df),
+            ("items", enc.get_items_df),
+        ]:
+            try:
+                encodings_arr = func()
+            except NoDataFramesError:
+                traceback.print_exc()
                 continue
-            enc = GenerationEncodings(gen, format, data, onehot_id_only)
-            for name, func in [
-                ("species", enc.get_species_df),
-                ("moves", enc.get_moves_df),
-                ("abilities", enc.get_abilities_df),
-                ("items", enc.get_items_df),
-            ]:
-                try:
-                    encodings_arr = func()
-                except NoDataFramesError:
-                    traceback.print_exc()
-                    continue
-                except VectorContainsNanError as e:
-                    raise e
-                except Exception as e:
-                    raise e
+            except VectorContainsNanError as e:
+                raise e
+            except Exception as e:
+                raise e
 
-                mask = abs(encodings_arr).sum(-1) > 0
-                # pca = PCA(0.95)
-                # encoded = pca.fit_transform(encodings_arr[mask])
-                # encoded = StandardScaler().fit_transform(encoded)
-                # encoded = encoded.clip(min=-3, max=3)
-                encoded = encodings_arr[mask]
+            mask = abs(encodings_arr).sum(-1) > 0
 
-                print(
-                    (
-                        name,
-                        # repr(encodings_arr.shape),
-                        repr(encoded.shape),
-                        encoded.min(),
-                        encoded.max(),
-                        # pca.explained_variance_ratio_[: pca.n_components_].sum(),
-                    )
+            encoded = encodings_arr[mask]
+
+            print(
+                (
+                    name,
+                    # repr(encodings_arr.shape),
+                    repr(encoded.shape),
+                    encoded.min(),
+                    encoded.max(),
+                    # pca.explained_variance_ratio_[: pca.n_components_].sum(),
                 )
+            )
+            pca = PCA(0.95)
+            encoded = pca.fit_transform(encodings_arr[mask])
+            encoded = StandardScaler().fit_transform(encoded)
+            encoded = encoded.clip(min=-3, max=3)
 
-                new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
-                new[mask] = encoded
-                with open(f"data/data/gen{gen}/{format}/{name}.npy", "wb") as f:
-                    np.save(f, new)
+            new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
+            new[mask] = encoded
+            with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
+                np.save(f, new)
 
-                cosine_sim = cosine_similarity(encoded)
-                cosine_sim_flat = cosine_sim.flatten()
-                threshold_mask = (
-                    (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
-                )
-                threshold = np.mean(cosine_sim_flat, where=threshold_mask) + 3 * np.std(
-                    cosine_sim_flat, where=threshold_mask
-                )
+            cosine_sim = cosine_similarity(encoded)
+            cosine_sim_flat = cosine_sim.flatten()
+            threshold_mask = (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
+            cosine_sim_flat = cosine_sim_flat[threshold_mask]
+            threshold = np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
 
-                names = np.array(list(enc.stoi[name]))[mask.flatten()]
-                graph = cosine_matrix_to_pyvis(
-                    cosine_matrix=cosine_sim,
-                    labels=names,
-                    threshold=threshold,
-                )
-                graph.write_html(f"data/data/gen{gen}/{format}/{name}_graph.html")
+            names = np.array(list(enc.stoi[name]))[mask.flatten()]
+            graph = cosine_matrix_to_pyvis(
+                cosine_matrix=cosine_sim, labels=names, threshold=threshold
+            )
+            graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
 
-                df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
+            df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
 
-                fig = px.imshow(
-                    df_cosine_sim,
-                    text_auto=True,
-                    aspect="auto",
-                    labels=dict(
-                        x="Sample Index",
-                        y="Sample Index",
-                        color="Cosine Similarity",
-                    ),
-                    title=f"Gen{gen} {name.capitalize()} Cosine Similarity Heatmap",
-                )
-                fig.write_html(f"data/data/gen{gen}/{format}/{name}_cosine_sim.html")
+            fig = px.imshow(
+                df_cosine_sim,
+                text_auto=True,
+                aspect="auto",
+                labels=dict(
+                    x="Sample Index",
+                    y="Sample Index",
+                    color="Cosine Similarity",
+                ),
+                title=f"Gen{gen} {name.capitalize()} Cosine Similarity Heatmap",
+            )
+            fig.write_html(f"data/data/gen{gen}/{name}_cosine_sim.html")
 
 
 if __name__ == "__main__":
-    main(False)
+    main()

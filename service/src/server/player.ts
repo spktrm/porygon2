@@ -50,11 +50,16 @@ export class Player extends BattleStreams.BattlePlayer {
         send: sendFnType,
         recv: recvFnType,
         worldStream: ObjectReadWriteStream<string> | null,
+        choose?: (action: string) => void,
     ) {
         super(playerStream);
 
         this.send = send;
         this.recv = recv;
+
+        if (choose !== undefined) {
+            this.choose = choose;
+        }
 
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
@@ -144,7 +149,11 @@ export class Player extends BattleStreams.BattlePlayer {
                 break;
             }
 
-            this.receive(chunk);
+            try {
+                this.receive(chunk);
+            } catch (err) {
+                console.log(err);
+            }
 
             for (const line of chunk.split("\n")) {
                 this.addLine(line);

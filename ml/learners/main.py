@@ -8,9 +8,9 @@ from tqdm import trange
 import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.learners import rnad as learner
+from ml.learners import vtrace as learner
 from ml.utils import get_most_recent_file
-from rlenvv2.main import BatchCollectorV2, BatchSinglePlayerEnvironment
+from rlenv.main import BatchCollectorV2, BatchSinglePlayerEnvironment
 
 
 def main():
@@ -39,7 +39,7 @@ def main():
     )
 
     eval_freq = 5000
-    save_freq = 10000
+    save_freq = 1000
     tau = 0.1
 
     # initialise average returns

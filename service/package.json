@@ -6,41 +6,42 @@
         "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts",
         "compile-proto": "./scripts/compile_proto.sh",
         "kill": "killall python && killall node ",
-        "start": "npm run compile-base && node dist/start.js",
+        "start": "npm run compile-base && node dist/server/index.js",
         "start-ppo": "npm run compile-base && node dist/start-ppo.js",
         "start-training-server": "node dist/server/index.js --type training",
         "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "start-evaluation1-server": "node dist/server/index.js --type evaluation1",
         "start-evaluation2-server": "node dist/server/index.js --type evaluation2",
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
-        "test": "npm run compile-base && node dist/tests/smoke.js",
+        "test": "npm run compile-base && node dist/tests/main.js",
         "matchup": "npm run compile-base && node dist/tests/matchup.js",
         "preprocess-replays": "ts-node src/replays/main.ts"
     },
     "dependencies": {
-        "@pkmn/client": "^0.6.26",
+        "@pkmn/client": "^0.6.28",
         "@pkmn/data": "^0.9.15",
         "@pkmn/dex": "^0.9.15",
         "@pkmn/protocol": "^0.6.26",
         "@pkmn/randoms": "^0.9.15",
         "@pkmn/sim": "^0.8.9",
+        "@pkmn/streams": "^1.1.0",
         "@pkmn/types": "^4.0.0",
         "@smogon/calc": "^0.10.0",
         "@types/node": "^20.11.20",
+        "@types/pino": "^7.0.4",
         "@types/progress": "^2.0.7",
-        "@types/ws": "^8.5.10",
-        "commander": "^12.1.0",
-        "glpk.js": "^4.0.2",
+        "@types/ws": "^8.5.13",
         "google-protobuf": "^3.19.1",
-        "javascript-lp-solver": "^0.4.24",
-        "jstat": "^1.9.6",
-        "progress": "^2.0.3",
-        "random-js": "^2.1.0",
+        "pino": "^9.5.0",
         "ts-protoc-gen": "^0.15.0",
-        "ws": "^8.17.1"
+        "ws": "^8.18.0"
     },
     "devDependencies": {
-        "ts-node": "^10.4.0",
-        "typescript": "^4.5.4"
+        "ts-node": "^10.9.2",
+        "typescript": "^4.9.5",
+        "vitest": "^2.1.4"
+    },
+    "optionalDependencies": {
+        "bufferutil": "^4.0.8"
     }
 }

@@ -25,7 +25,7 @@ run_in_dir_or_file() {
 }
 
 # List of directories and file patterns in the parent directory (space-separated)
-DIRS="$PARENT_DIR/heuristics $PARENT_DIR/inference $PARENT_DIR/ml $PARENT_DIR/replays $PARENT_DIR/rlenv/*.py $PARENT_DIR/rlenvv2/*.py $PARENT_DIR/viz $PARENT_DIR/embeddings"
+DIRS="$PARENT_DIR/heuristics $PARENT_DIR/inference $PARENT_DIR/ml $PARENT_DIR/replays $PARENT_DIR/rlenv/*.py $PARENT_DIR/viz $PARENT_DIR/embeddings"
 
 # Iterate over each item and process it
 for path in $DIRS; do

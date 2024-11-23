@@ -192,9 +192,9 @@ class TrainState(train_state.TrainState):
         )
 
         params_prev, params_prev_ = jax.lax.cond(
-            self.update_target_net,
-            lambda: (self.params_target, self.params_prev),
-            lambda: (self.params_prev, self.params_prev_),
+            state.update_target_net,
+            lambda: (state.params_target, state.params_prev),
+            lambda: (state.params_prev, state.params_prev_),
         )
 
         # Return new state with updated EMA params

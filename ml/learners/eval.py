@@ -8,7 +8,7 @@ from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model
 from ml.learners import vtrace as learner
 from ml.utils import get_most_recent_file
-from rlenvv2.main import BatchCollectorV2, BatchSinglePlayerEnvironment
+from rlenv.main import BatchCollectorV2, BatchSinglePlayerEnvironment
 
 
 def main():

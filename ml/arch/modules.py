@@ -669,7 +669,7 @@ class PointerLogits(nn.Module):
 
         # Pointer
         logits = query @ keys.T  # ij,j->i
-        return logits * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
+        return logits  # * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
 
 
 class ToAvgVector(nn.Module):

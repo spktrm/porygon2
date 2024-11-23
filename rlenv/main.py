@@ -15,17 +15,17 @@ from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
 from ml.utils import Params
 from rlenv.protos.servicev2_pb2 import ConnectMessage
-from rlenvv2.env import get_ex_step, process_state
-from rlenvv2.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
-from rlenvv2.protos.servicev2_pb2 import (
+from rlenv.env import get_ex_step, process_state
+from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
+from rlenv.protos.servicev2_pb2 import (
     Action,
     ClientMessage,
     ResetMessage,
     ServerMessage,
     StepMessage,
 )
-from rlenvv2.protos.state_pb2 import State
-from rlenvv2.utils import stack_steps
+from rlenv.protos.state_pb2 import State
+from rlenv.utils import stack_steps
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -329,13 +329,17 @@ class BatchCollectorV2:
 
 
 def main():
-    batch_progress = tqdm(desc="Batch: ")
-    game_progress = tqdm(desc="Games: ")
-    state_progress = tqdm(desc="States: ")
+    # batch_progress = tqdm(desc="Batch: ")
+    # game_progress = tqdm(desc="Games: ")
+    # state_progress = tqdm(desc="States: ")
 
-    num_envs = 3
+    training_progress = tqdm(desc="training: ")
+    evaluation_progress = tqdm(desc="evaluation: ")
+
+    num_envs = 16
     network = get_dummy_model()
-    env = BatchCollectorV2(network, num_envs, BatchSinglePlayerEnvironment)
+    training_env = BatchCollectorV2(network, num_envs)
+    evaluation_env = BatchCollectorV2(network, 4, BatchSinglePlayerEnvironment)
 
     ex = get_ex_step()
     params = network.init(jax.random.PRNGKey(42), ex)
@@ -344,15 +348,18 @@ def main():
     tau = 1e-2
 
     while True:
-        batch = env.collect_batch_trajectory(params)
-        win_rewards = np.sign(
-            (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
-        )
-        avg_reward = avg_reward * (1 - tau) + win_rewards.astype(float) * tau
-        state_progress.update(batch.env.valid.sum())
-        game_progress.update(num_envs)
-        batch_progress.update(1)
-        batch_progress.set_description(np.array2string(avg_reward))
+        batch = training_env.collect_batch_trajectory(params)
+        training_progress.update(batch.env.valid.sum())
+        # batch = evaluation_env.collect_batch_trajectory(params)
+        # evaluation_progress.update(batch.env.valid.sum())
+        # win_rewards = np.sign(
+        #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
+        # )
+        # avg_reward = avg_reward * (1 - tau) + win_rewards.astype(float) * tau
+        # state_progress.update(batch.env.valid.sum())
+        # game_progress.update(num_envs)
+        # batch_progress.update(1)
+        # batch_progress.set_description(np.array2string(avg_reward))
 
 
 if __name__ == "__main__":
