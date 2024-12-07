@@ -1,11 +1,10 @@
 import chex
 import flax.linen as nn
-import jax
-import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, NormalizeAttention, PointerLogits, Resnet
+from ml.arch.modules import Logits, PointerLogits, Resnet
 from ml.func import legal_log_policy, legal_policy
+from rlenv.interfaces import EnvStep
 
 
 class PolicyHead(nn.Module):
@@ -19,10 +18,13 @@ class PolicyHead(nn.Module):
         self,
         state_embedding: chex.Array,
         action_embeddings: chex.Array,
-        legal: chex.Array,
+        env_step: EnvStep,
     ):
+        legal = env_step.legal
         query = self.resnet(state_embedding)
+
         logits = self.logits(query, action_embeddings)
+        logits = logits - logits.mean(where=legal)
 
         policy = legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)

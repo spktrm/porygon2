@@ -1,5 +1,6 @@
 import { Battle } from "@pkmn/client";
-import { Battle as World, AnyObject } from "@pkmn/sim";
+import { Battle as World } from "@pkmn/sim";
+import { AnyObject } from "@pkmn/sim";
 import { Generations } from "@pkmn/data";
 import { Dex } from "@pkmn/dex";
 import { ObjectReadWriteStream } from "@pkmn/streams";
@@ -24,10 +25,93 @@ const actionStrings = [
     "switch 6",
 ];
 
+export class Tracker {
+    hpDiffs: number[];
+    faintedDiffs: number[];
+    turnsWithoutChange: number;
+
+    constructor() {
+        this.hpDiffs = [0];
+        this.faintedDiffs = [0];
+        this.turnsWithoutChange = 0;
+    }
+
+    update1(battle: Battle) {
+        const [aliveTotal1, aliveTotal2] = battle.sides.map((side) => {
+            const aliveInTeam = side.team.reduce(
+                (count, pokemon) => count + (pokemon.fainted ? 0 : 1),
+                0,
+            );
+            const remainingPokemon = side.totalPokemon - side.team.length;
+            return aliveInTeam + remainingPokemon;
+        });
+        const aliveDiff = aliveTotal1 - aliveTotal2;
+        const faintedReward = aliveDiff - (this.faintedDiffs.at(-1) ?? 0);
+        this.faintedDiffs.push(aliveDiff);
+
+        // Calculate HP totals for both sides
+        const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
+            const hpInTeam = side.team.reduce(
+                (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
+                0,
+            );
+            const remainingPokemon = side.totalPokemon - side.team.length;
+            return hpInTeam + remainingPokemon;
+        });
+
+        const hpDiff = hpTotal1 - hpTotal2;
+        const hpReward = hpDiff - (this.hpDiffs.at(-1) ?? 0);
+        this.hpDiffs.push(hpDiff);
+
+        return { faintedReward, hpReward };
+    }
+
+    update2(battle: World) {
+        const [aliveTotal1, aliveTotal2] = battle.sides.map((side) => {
+            const aliveInTeam = side.pokemon.reduce(
+                (count, pokemon) => count + (pokemon.fainted ? 0 : 1),
+                0,
+            );
+            return aliveInTeam;
+        });
+        const aliveDiff = aliveTotal1 - aliveTotal2;
+        const faintedReward = aliveDiff - (this.faintedDiffs.at(-1) ?? 0);
+        this.faintedDiffs.push(aliveDiff);
+
+        // Calculate HP totals for both sides
+        const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
+            const hpInTeam = side.pokemon.reduce(
+                (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
+                0,
+            );
+            return hpInTeam;
+        });
+
+        const hpDiff = hpTotal1 - hpTotal2;
+        const hpReward = hpDiff - (this.hpDiffs.at(-1) ?? 0);
+        if (hpReward === 0) {
+            this.turnsWithoutChange += 1;
+        } else {
+            this.turnsWithoutChange = 0;
+        }
+        this.hpDiffs.push(hpDiff);
+
+        return { faintedReward, hpReward };
+    }
+
+    reset() {
+        this.hpDiffs = [0];
+        this.faintedDiffs = [0];
+        this.turnsWithoutChange = 0;
+    }
+}
+
 export class Player extends BattleStreams.BattlePlayer {
     publicBattle: Battle;
     privateBattle: Battle;
     eventHandler: EventHandler;
+    tracker: Tracker;
+
     actionLog: Action[];
 
     send: sendFnType;
@@ -38,9 +122,11 @@ export class Player extends BattleStreams.BattlePlayer {
     playerId: number | undefined;
     playerIndex: number | undefined;
     rqid: string | undefined;
-    done: boolean;
 
-    worldStream: ObjectReadWriteStream<string> | null;
+    done: boolean;
+    draw: boolean;
+
+    worldStream: BattleStreams.BattleStream | null;
 
     constructor(
         workerIndex: number,
@@ -49,7 +135,7 @@ export class Player extends BattleStreams.BattlePlayer {
         playerId: number,
         send: sendFnType,
         recv: recvFnType,
-        worldStream: ObjectReadWriteStream<string> | null,
+        worldStream: BattleStreams.BattleStream | null,
         choose?: (action: string) => void,
     ) {
         super(playerStream);
@@ -64,6 +150,9 @@ export class Player extends BattleStreams.BattlePlayer {
         this.publicBattle = new Battle(generations);
         this.privateBattle = new Battle(generations);
         this.eventHandler = new EventHandler(this);
+
+        this.tracker = new Tracker();
+
         this.actionLog = [];
 
         this.workerIndex = workerIndex;
@@ -71,7 +160,10 @@ export class Player extends BattleStreams.BattlePlayer {
         this.playerId = playerId;
         this.playerIndex = undefined;
         this.rqid = undefined;
+
         this.done = false;
+        this.draw = false;
+
         this.worldStream = worldStream;
     }
 
@@ -80,7 +172,7 @@ export class Player extends BattleStreams.BattlePlayer {
             return this.playerIndex;
         }
         const request = this.privateBattle.request;
-        if (!!request) {
+        if (request) {
             this.playerIndex = (parseInt(
                 request.side?.id.toString().slice(1) ?? "",
             ) - 1) as 0 | 1;
@@ -107,20 +199,21 @@ export class Player extends BattleStreams.BattlePlayer {
         const key = Protocol.key(args);
         if (!key) return;
         if (key in this.eventHandler) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (this.eventHandler as any)[key](args, kwArgs);
         }
     }
 
     isActionRequired(chunk: string): boolean {
         const request = this.getRequest()! as AnyObject;
-        if (!!!request) {
+        if (!request) {
             return false;
         }
         this.rqid = request.rqid;
         if (request.teamPreview) {
             return true;
         }
-        if (!!request.wait) {
+        if (request.wait) {
             return false;
         }
         if (this.worldStream === null) {
@@ -132,6 +225,7 @@ export class Player extends BattleStreams.BattlePlayer {
             }
             return false;
         } else {
+            /* empty */
         }
         return true;
     }
@@ -145,7 +239,8 @@ export class Player extends BattleStreams.BattlePlayer {
 
     async start() {
         for await (const chunk of this.stream) {
-            if (this.done) {
+            if (this.done || this.draw) {
+                // Early finish
                 break;
             }
 
@@ -180,6 +275,7 @@ export class Player extends BattleStreams.BattlePlayer {
         await this.send(this);
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     receiveRequest(request: AnyObject): void {}
 
     createState() {

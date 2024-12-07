@@ -3,7 +3,6 @@ import { Pokemon } from "@pkmn/client";
 import { Action } from "../../../protos/servicev2_pb";
 import { EvalActionFnType } from "../eval";
 import { GetMoveDamange } from "./max_dmg";
-import { Generations } from "@smogon/calc";
 
 function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
     if (!poke1 || poke1.fainted) {
@@ -45,7 +44,9 @@ function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
                         p1.types[i],
                         p2.types[j],
                     );
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 } catch (err) {
+                    /* empty */
                 } finally {
                     if (val !== undefined) out.push(val);
                 }
@@ -72,7 +73,6 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
         return action;
     }
     const battle = player.privateBattle;
-    const generation = Generations.get(battle.gen.num);
     const request = player.getRequest() as AnyObject;
     const active = request.active ?? [];
     const moves = active[0]?.moves;
@@ -102,8 +102,8 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
             defender !== null &&
             scorePokemon(defender, attacker) >
                 scorePokemon(attacker, defender) &&
-            !!!attacker.trapped &&
-            !!!attacker.maybeTrapped)
+            !attacker.trapped &&
+            !attacker.maybeTrapped)
     ) {
         const scores = mySide.team.map((member) =>
             !!member.isActive() ||
@@ -133,17 +133,13 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
         const moveData: number[] = moves.map(
             ({ id, disabled }: { id: string; disabled: boolean }) => {
                 let damage = 0;
-                try {
-                    damage = GetMoveDamange({
-                        battle,
-                        generation,
-                        attacker,
-                        defender,
-                        moveId: id,
-                    });
-                } catch (err) {
-                    throw err;
-                }
+                damage = GetMoveDamange({
+                    battle,
+                    attacker,
+                    defender,
+                    moveId: id,
+                });
+
                 return disabled ? -Infinity : damage;
             },
         );

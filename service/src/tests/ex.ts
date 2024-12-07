@@ -4,7 +4,6 @@ import { Action, GameState } from "../../protos/servicev2_pb";
 import { AsyncQueue } from "../server/utils";
 import { writeFileSync } from "fs";
 import { exit } from "process";
-import { State } from "../../protos/state_pb";
 
 async function worker(gameId: number, playerIds: number[]) {
     const queue = new AsyncQueue<GameState>();
@@ -36,7 +35,7 @@ async function worker(gameId: number, playerIds: number[]) {
                 game.tasks.submitResult(rqid, action);
 
                 if (i >= 5) {
-                    writeFileSync("../rlenvv2/ex", gameState.getState_asU8());
+                    writeFileSync("../rlenv/ex", gameState.getState_asU8());
                     exit(0);
                 } else {
                     i += 1;

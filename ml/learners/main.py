@@ -9,8 +9,9 @@ import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
 from ml.learners import vtrace as learner
+from ml.learners.func import collect_batch_telemetry_data, collect_nn_telemetry_data
 from ml.utils import get_most_recent_file
-from rlenv.main import BatchCollectorV2, BatchSinglePlayerEnvironment
+from rlenv.main import EvalBatchCollector, SingleTrajectoryTrainingBatchCollector
 
 
 def main():
@@ -20,8 +21,10 @@ def main():
 
     network = get_model(model_config)
 
-    training_collector = BatchCollectorV2(network, learner_config.batch_size)
-    evaluation_collector = BatchCollectorV2(network, 4, BatchSinglePlayerEnvironment)
+    training_collector = SingleTrajectoryTrainingBatchCollector(
+        network, learner_config.batch_size
+    )
+    evaluation_collector = EvalBatchCollector(network, 4)
 
     state = learner.create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
@@ -40,18 +43,6 @@ def main():
 
     eval_freq = 5000
     save_freq = 1000
-    tau = 0.1
-
-    # initialise average returns
-    avg_reward = np.zeros(evaluation_collector.game.num_envs)
-    if learner_config.do_eval:
-        num_inits = 50
-        for _ in trange(0, num_inits, desc="init winrates..."):
-            batch = evaluation_collector.collect_batch_trajectory(state.params)
-            avg_reward += np.sign(
-                batch.actor.win_rewards[..., 0] * batch.env.valid
-            ).sum(0)
-        avg_reward /= num_inits
 
     for step_idx in trange(0, learner_config.num_steps, desc="training"):
         if state.learner_steps % save_freq == 0 and state.learner_steps > 0:
@@ -64,14 +55,16 @@ def main():
         ):
             batch = evaluation_collector.collect_batch_trajectory(state.params)
             win_rewards = np.sign(
-                batch.actor.win_rewards[..., 0] * batch.env.valid
+                batch.actor.win_rewards[..., 0] * batch.env.valid.squeeze()
             ).sum(0)
-            avg_reward = avg_reward * (1 - tau) + win_rewards * tau
-            winrates = {f"wr{i}": wr for i, wr in enumerate(avg_reward)}
+            winrates = {f"wr{i}": wr for i, wr in enumerate(win_rewards)}
 
         batch = training_collector.collect_batch_trajectory(state.params)
 
+        logs: dict
         state, logs = learner.train_step(state, batch, learner_config)
+        logs.update(collect_nn_telemetry_data(state))
+        logs.update(collect_batch_telemetry_data(batch))
 
         logs["step_idx"] = step_idx
         wandb.log({**logs, **winrates})

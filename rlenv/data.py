@@ -24,7 +24,9 @@ from rlenv.protos.features_pb2 import (
     EdgeFromTypes,
     EdgeTypes,
     FeatureEdge,
+    FeatureEntity,
     FeatureMoveset,
+    MovesetActionType,
 )
 from rlenv.protos.state_pb2 import State
 
@@ -45,6 +47,7 @@ NUM_TERRAIN = len(TerrainEnum.keys())
 NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
 NUM_ACTIONS = len(ActionsEnum.keys())
+NUM_ACTION_TYPES = len(MovesetActionType.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
@@ -54,16 +57,11 @@ NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
 NUM_EDGE_FROM_TYPES = len(EdgeFromTypes.keys())
 NUM_EDGE_TYPES = len(EdgeTypes.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
+NUM_MOVE_FIELDS = len(FeatureMoveset.keys())
+NUM_EDGE_FIELDS = len(FeatureEdge.keys())
+NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
 
-NUM_MOVE_FIELDS = len(FeatureMoveset.DESCRIPTOR.values)
-NUM_EDGE_FIELDS = len(FeatureEdge.DESCRIPTOR.values)
-
-NUM_HISTORY = 8
-NUM_PLAYERS = 2
-
-TRAINING_SOCKET_PATH = "/tmp/pokemon-training.sock"
-EVALUATION_SOCKET_PATH = "/tmp/pokemon-evaluation.sock"
-SocketPath = str
+NUM_HISTORY = 32
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES

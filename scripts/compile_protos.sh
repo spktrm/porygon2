@@ -7,7 +7,21 @@ python proto/scripts/make_enums.py
 # Navigate to the server directory and run the TypeScript compilation script
 echo "Compiling Protobuf files for TypeScript..."
 cd service
-./scripts/compile_proto.sh
+
+rm -rf protos/
+mkdir protos/
+
+PROTO_DIR=../proto
+OUT_DIR=../service/protos
+
+mkdir -p $OUT_DIR
+
+npx protoc \
+    --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts \
+    --js_out=import_style=commonjs,binary:$OUT_DIR \
+    --ts_out=service=grpc-web:$OUT_DIR \
+    -I $PROTO_DIR $PROTO_DIR/*.proto
+
 if [ $? -ne 0 ]; then
   echo "TypeScript Protobuf compilation failed!"
   exit 1
@@ -16,7 +30,12 @@ fi
 # Run the Python Protobuf compilation command
 echo "Compiling Protobuf files for Python..."
 cd ../rlenv
-./scripts/compile_proto.sh
+
+rm -rf protos/
+mkdir protos/
+
+python -m grpc_tools.protoc -I../proto --python_out=protos/ --pyi_out=protos/ --grpc_python_out=protos/ ../proto/*.proto
+
 if [ $? -ne 0 ]; then
   echo "Python Protobuf compilation failed!"
   exit 1

@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import WebSocket from "ws";
 import { inspect } from "util";
 import { Player } from "../server/player";
@@ -68,9 +71,13 @@ class ClientStream extends ObjectReadWriteStream<string> {
             return rqid >= 0 ? this.tasks.getResult(rqid) : undefined;
         };
 
+        if (!options.roomId) {
+            throw new Error("Options must have roomId");
+        }
+
         this.player = new Player(
             0,
-            stringToUniqueInt(options?.roomId!),
+            stringToUniqueInt(options?.roomId),
             this,
             0,
             sendFn,
@@ -203,7 +210,10 @@ class PokemonShowdownBot {
                     try {
                         const data = JSON.parse(lines[1].split("|")[2]);
                         console.log(inspect(data, false, null, true));
-                    } catch (err) {}
+                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    } catch (err) {
+                        /* empty */
+                    }
                 }
                 return;
             } else if (line.startsWith("|win|") || line.startsWith("|tie|")) {

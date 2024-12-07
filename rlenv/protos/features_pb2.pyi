@@ -50,10 +50,21 @@ class FeatureEntity(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_SIDE: _ClassVar[FeatureEntity]
     ENTITY_HP_TOKEN: _ClassVar[FeatureEntity]
 
+class MovesetActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MOVESET_ACTION_TYPE_MOVE: _ClassVar[MovesetActionType]
+    MOVESET_ACTION_TYPE_SWITCH: _ClassVar[MovesetActionType]
+
 class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    MOVEID: _ClassVar[FeatureMoveset]
-    PPUSED: _ClassVar[FeatureMoveset]
+    MOVESET_ACTION_ID: _ClassVar[FeatureMoveset]
+    MOVESET_PPUSED: _ClassVar[FeatureMoveset]
+    MOVESET_LEGAL: _ClassVar[FeatureMoveset]
+    MOVESET_SIDE: _ClassVar[FeatureMoveset]
+    MOVESET_ACTION_TYPE: _ClassVar[FeatureMoveset]
+    MOVESET_EST_DAMAGE: _ClassVar[FeatureMoveset]
+    MOVESET_MOVE_ID: _ClassVar[FeatureMoveset]
+    MOVESET_SPECIES_ID: _ClassVar[FeatureMoveset]
 
 class FeatureTurnContext(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -129,13 +140,11 @@ class EdgeFromTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 
 class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    POKE1_INDEX: _ClassVar[FeatureEdge]
-    POKE2_INDEX: _ClassVar[FeatureEdge]
     TURN_ORDER_VALUE: _ClassVar[FeatureEdge]
     EDGE_TYPE_TOKEN: _ClassVar[FeatureEdge]
     MAJOR_ARG: _ClassVar[FeatureEdge]
     MINOR_ARG: _ClassVar[FeatureEdge]
-    MOVE_TOKEN: _ClassVar[FeatureEdge]
+    ACTION_TOKEN: _ClassVar[FeatureEdge]
     ITEM_TOKEN: _ClassVar[FeatureEdge]
     ABILITY_TOKEN: _ClassVar[FeatureEdge]
     FROM_TYPE_TOKEN: _ClassVar[FeatureEdge]
@@ -194,8 +203,16 @@ ENTITY_VOLATILES7: FeatureEntity
 ENTITY_VOLATILES8: FeatureEntity
 ENTITY_SIDE: FeatureEntity
 ENTITY_HP_TOKEN: FeatureEntity
-MOVEID: FeatureMoveset
-PPUSED: FeatureMoveset
+MOVESET_ACTION_TYPE_MOVE: MovesetActionType
+MOVESET_ACTION_TYPE_SWITCH: MovesetActionType
+MOVESET_ACTION_ID: FeatureMoveset
+MOVESET_PPUSED: FeatureMoveset
+MOVESET_LEGAL: FeatureMoveset
+MOVESET_SIDE: FeatureMoveset
+MOVESET_ACTION_TYPE: FeatureMoveset
+MOVESET_EST_DAMAGE: FeatureMoveset
+MOVESET_MOVE_ID: FeatureMoveset
+MOVESET_SPECIES_ID: FeatureMoveset
 VALID: FeatureTurnContext
 IS_MY_TURN: FeatureTurnContext
 ACTION: FeatureTurnContext
@@ -253,13 +270,11 @@ EDGE_FROM_STATUS: EdgeFromTypes
 EDGE_FROM_WEATHER: EdgeFromTypes
 EDGE_FROM_TERRAIN: EdgeFromTypes
 EDGE_FROM_PSEUDOWEATHER: EdgeFromTypes
-POKE1_INDEX: FeatureEdge
-POKE2_INDEX: FeatureEdge
 TURN_ORDER_VALUE: FeatureEdge
 EDGE_TYPE_TOKEN: FeatureEdge
 MAJOR_ARG: FeatureEdge
 MINOR_ARG: FeatureEdge
-MOVE_TOKEN: FeatureEdge
+ACTION_TOKEN: FeatureEdge
 ITEM_TOKEN: FeatureEdge
 ABILITY_TOKEN: FeatureEdge
 FROM_TYPE_TOKEN: FeatureEdge

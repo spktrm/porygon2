@@ -1,6 +1,5 @@
 import { AnyObject } from "@pkmn/sim";
 import { calculateADV } from "@smogon/calc/dist/mechanics/gen3";
-import { Generation } from "@smogon/calc/dist/data/interface";
 import {
     Generations,
     Pokemon as SmogonPoke,
@@ -24,11 +23,10 @@ function fixMoveId(moveId: string) {
 
 export const GetMoveDamange: (args: {
     battle: Battle;
-    generation?: Generation;
     attacker: Pokemon;
     defender: Pokemon;
     moveId: string;
-}) => number = ({ battle, attacker, defender, generation, moveId }) => {
+}) => number = ({ battle, attacker, defender, moveId }) => {
     if (moveId === "recharge") {
         return 0;
     }
@@ -49,9 +47,7 @@ export const GetMoveDamange: (args: {
             : defender.ability;
 
     const Calc = (isCrit: boolean) => {
-        if (!generation) {
-            generation = Generations.get(3);
-        }
+        const generation = Generations.get(battle.gen.num);
         const result = calculateADV(
             generation,
             new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
@@ -151,7 +147,6 @@ export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
     }
 
     const battle = player.privateBattle;
-    const generation = Generations.get(battle.gen.num);
     const request = battle.request as AnyObject;
     const active = request.active ?? [];
     const moves = active[0]?.moves;
@@ -173,17 +168,12 @@ export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
         const moveData: number[] = moves.map(
             ({ id, disabled }: { id: string; disabled: boolean }) => {
                 let damage = 0;
-                try {
-                    damage = GetMoveDamange({
-                        battle,
-                        generation,
-                        attacker,
-                        defender,
-                        moveId: id,
-                    });
-                } catch (err) {
-                    throw err;
-                }
+                damage = GetMoveDamange({
+                    battle,
+                    attacker,
+                    defender,
+                    moveId: id,
+                });
                 return disabled ? -100 : damage;
             },
         );

@@ -497,10 +497,10 @@ function formatData(data: GenData) {
     };
 }
 
-function standardize(values: string[], extraTokens: string[]) {
+function standardize(values: string[], extraTokens?: string[]) {
     return Object.fromEntries(
         [
-            ...extraTokens,
+            ...(extraTokens ?? []),
             ...Array.from(values).sort((a, b) => a.localeCompare(b)),
         ].map((value, index) => [value, index]),
     );
@@ -573,13 +573,12 @@ async function scrapeRepo() {
         EXTRA_TOKENS,
     );
 
-    data["Actions"] = standardize(
-        [
-            ...genFormatData.species.map((x) => `switch_${x}`),
-            ...genFormatData.moves.map((x) => `move_${x}`),
-        ],
-        EXTRA_TOKENS,
-    );
+    data["Actions"] = standardize([
+        ...[...genFormatData.species, ...EXTRA_TOKENS].map(
+            (x) => `switch_${x}`,
+        ),
+        ...[...genFormatData.moves, ...EXTRA_TOKENS].map((x) => `move_${x}`),
+    ]);
 
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,

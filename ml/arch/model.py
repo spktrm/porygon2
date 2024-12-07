@@ -10,11 +10,11 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
-from ml.arch.encoder import Encoder, SimpleEncoder
+from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
-from rlenv.interfaces import EnvStep, ModelOutput
 from rlenv.env import get_ex_step
+from rlenv.interfaces import EnvStep, ModelOutput
 
 
 class Model(nn.Module):
@@ -38,38 +38,7 @@ class Model(nn.Module):
 
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(
-            current_state_embedding, action_embeddings, env_step.legal
-        )
-
-        # Apply the value head
-        v = self.value_head(current_state_embedding)
-
-        # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
-
-
-class SimpleModel(nn.Module):
-    cfg: ConfigDict
-
-    def setup(self):
-        """
-        Initializes the encoder, policy head, and value head using the configuration.
-        """
-        self.encoder = SimpleEncoder(self.cfg.encoder)
-        self.policy_head = PolicyHead(self.cfg.policy_head)
-        self.value_head = ValueHead(self.cfg.value_head)
-
-    def __call__(self, env_step: EnvStep) -> ModelOutput:
-        """
-        Forward pass for the Model. It first processes the env_step through the encoder,
-        and then applies the policy and value heads to generate the output.
-        """
-        # Get current state and action embeddings from the encoder
-        current_state_embedding, action_embeddings = self.encoder(env_step)
-
-        # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(
-            current_state_embedding, action_embeddings, env_step.legal
+            current_state_embedding, action_embeddings, env_step
         )
 
         # Apply the value head
@@ -128,7 +97,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
 
 
 def get_model(config: ConfigDict) -> nn.Module:
-    return SimpleModel(config)
+    return Model(config)
 
 
 def get_dummy_model() -> nn.Module:

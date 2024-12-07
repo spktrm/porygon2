@@ -10,10 +10,9 @@ import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
-from flax.typing import Array, Dtype, Initializer, PrecisionLike, PRNGKey, Shape
 
-np.set_printoptions(precision=2, suppress=True)
-jnp.set_printoptions(precision=2, suppress=True)
+# np.set_printoptions(precision=2, suppress=True)
+# jnp.set_printoptions(precision=2, suppress=True)
 
 
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
@@ -29,52 +28,7 @@ def activation_fn(array: chex.Array):
 
 
 def layer_norm(array: chex.Array):
-    return nn.RMSNorm()(array)
-
-
-class Linear(nn.Dense):
-    kernel_init: Initializer = None
-
-    @nn.compact
-    def __call__(self, inputs: jax.Array) -> jax.Array:
-        """Applies a linear transformation to the inputs along the last dimension.
-
-        Args:
-        inputs: The nd-array to be transformed.
-
-        Returns:
-        The transformed input.
-        """
-        stddev = 1.0 / np.sqrt(inputs.shape[-1])
-        kernel = self.param(
-            "kernel",
-            self.kernel_init or nn.initializers.truncated_normal(stddev=stddev),
-            (jnp.shape(inputs)[-1], self.features),
-            self.param_dtype,
-        )
-        if self.use_bias:
-            bias = self.param(
-                "bias", self.bias_init, (self.features,), self.param_dtype
-            )
-        else:
-            bias = None
-        inputs, kernel, bias = promote_dtype(inputs, kernel, bias, dtype=self.dtype)
-
-        if self.dot_general_cls is not None:
-            dot_general = self.dot_general_cls()
-        elif self.dot_general is not None:
-            dot_general = self.dot_general
-        else:
-            dot_general = lax.dot_general
-        y = dot_general(
-            inputs,
-            kernel,
-            (((inputs.ndim - 1,), (0,)), ((), ())),
-            precision=self.precision,
-        )
-        if bias is not None:
-            y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
-        return y
+    return nn.LayerNorm()(array)
 
 
 class SNDense(nn.Module):
@@ -194,18 +148,19 @@ class VectorResblock(nn.Module):
         input_size = x.shape[-1]
         for i in range(self.num_layers):
             if i < self.num_layers - 1:
-                output_size = self.hidden_size or input_size
-                kernel_init = None
+                kwargs = dict(features=self.hidden_size or input_size)
             else:
-                output_size = input_size
-                kernel_init = nn.initializers.normal(stddev=0.005)
+                kwargs = dict(
+                    features=input_size,
+                    kernel_init=nn.initializers.normal(stddev=0.005),
+                )
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
             if self.use_spectral_linear:
-                x = SNDense(features=output_size)(x)
+                x = SNDense(**kwargs)(x)
             else:
-                x = Linear(features=output_size, kernel_init=kernel_init)(x)
+                x = nn.Dense(**kwargs)(x)
         return x + shortcut
 
 
@@ -247,7 +202,7 @@ class Logits(nn.Module):
 
             # Apply activation and dense layer with custom kernel initializer
             x = activation_fn(x)
-            x = Linear(features=output_size, kernel_init=self.kernel_init)(x)
+            x = nn.Dense(features=output_size, kernel_init=self.kernel_init)(x)
         return x
 
 
@@ -316,7 +271,8 @@ class MultiHeadAttention(nn.Module):
     key_size: int
     value_size: Optional[int] = None
     model_size: Optional[int] = None
-    need_pos: bool = False
+    query_need_pos: bool = False
+    key_need_pos: bool = False
     use_spectral_linear: bool = False
 
     @nn.compact
@@ -350,7 +306,7 @@ class MultiHeadAttention(nn.Module):
         value_size = self.value_size or self.key_size
         model_size = self.model_size or self.key_size * self.num_heads
 
-        linear_mod = SNDense if self.use_spectral_linear else Linear
+        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
 
         def _linear_projection(
             x: jax.Array, head_size: int, need_pos: bool = False
@@ -362,8 +318,10 @@ class MultiHeadAttention(nn.Module):
             return y.reshape((*leading_dims, self.num_heads, head_size))
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = _linear_projection(query, key_size, self.need_pos)  # [T', H, Q=K]
-        key_heads = _linear_projection(key, key_size, self.need_pos)  # [T, H, K]
+        query_heads = _linear_projection(
+            query, key_size, self.query_need_pos
+        )  # [T', H, Q=K]
+        key_heads = _linear_projection(key, key_size, self.key_need_pos)  # [T, H, K]
         value_heads = _linear_projection(value, value_size)  # [T, H, V]
 
         # Compute attention weights.
@@ -396,24 +354,19 @@ class MultiHeadAttention(nn.Module):
         return final_projection(attn)  # [T', D']
 
 
-def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray) -> jnp.ndarray:
+def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray = None) -> jnp.ndarray:
     """Create a combined attention mask for cross-attention."""
-    if mask1 is not None and mask2 is not None:
-        # mask1: (batch_size, seq_len1), mask2: (batch_size, seq_len2)
-        # We want a (batch_size, 1, seq_len1, seq_len2) mask for broadcasting.
-        mask1 = mask1[..., None]  # Shape: (batch_size, seq_len1, 1)
-        mask2 = mask2[..., None, :]  # Shape: (batch_size, 1, seq_len2)
-        # Combine them with logical AND (only allow attending if both elements are not masked).
-        combined_mask = mask1 & mask2  # Shape: (batch_size, seq_len1, seq_len2)
-        combined_mask = combined_mask[
-            ..., None, :, :
-        ]  # Shape: (batch_size, 1, seq_len1, seq_len2)
+
+    if mask1 is not None:
+        if mask2 is not None:
+            return jnp.einsum("...i,...j->...ij", mask1, mask2)[..., None, :, :]
+        else:
+            return mask1[None, None]
     else:
-        combined_mask = None  # No mask if both are None
-    return combined_mask
+        return None
 
 
-class Transformer(nn.Module):
+class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
     key_size: int
@@ -422,9 +375,11 @@ class Transformer(nn.Module):
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
-    need_pos: bool = False
+    x_need_pos: bool = False
+    y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
+    norm_first: bool = True
 
     @nn.compact
     def __call__(self, x: chex.Array, mask: chex.Array = None):
@@ -432,91 +387,71 @@ class Transformer(nn.Module):
         if mask is None:
             mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        logits_mask = create_attention_mask(mask, mask)
+        sa_mask = create_attention_mask(mask)
+
+        def encoder_layer(x: chex.Array):
+            if self.norm_first:
+                x_ln = layer_norm(x)
+                x = x + MultiHeadAttention(
+                    num_heads=self.num_heads,
+                    key_size=self.key_size,
+                    value_size=self.value_size,
+                    model_size=self.model_size,
+                    query_need_pos=self.x_need_pos,
+                    key_need_pos=self.y_need_pos,
+                    use_spectral_linear=self.use_spectral_linear,
+                )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+                x_ln = layer_norm(x)
+                return x + MLP(
+                    (self.resblocks_hidden_size, self.model_size),
+                    use_layer_norm=False,
+                    activate_first=False,
+                    use_spectral_linear=self.use_spectral_linear,
+                )(x_ln)
+            else:
+                x = layer_norm(
+                    x
+                    + MultiHeadAttention(
+                        num_heads=self.num_heads,
+                        key_size=self.key_size,
+                        value_size=self.value_size,
+                        model_size=self.model_size,
+                        query_need_pos=self.x_need_pos,
+                        key_need_pos=self.y_need_pos,
+                        use_spectral_linear=self.use_spectral_linear,
+                    )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+                )
+                return layer_norm(
+                    x
+                    + MLP(
+                        (self.resblocks_hidden_size, self.model_size),
+                        use_layer_norm=False,
+                        activate_first=False,
+                        use_spectral_linear=self.use_spectral_linear,
+                    )(x)
+                )
 
         for _ in range(self.num_layers):
-            x1 = x
-            if self.use_layer_norm:
-                x1 = layer_norm(x1)
-            x1 = activation_fn(x1)
-            x1 = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                need_pos=self.need_pos,
-                use_spectral_linear=self.use_spectral_linear,
-            )(query=x1, key=x1, value=x1, mask=logits_mask)
-            x1 = jnp.where(mask[..., jnp.newaxis], x1, 0)
-            x = x + x1
-
-            x = VectorResblock(
-                hidden_size=self.resblocks_hidden_size,
-                use_layer_norm=self.use_layer_norm,
-            )(x)
+            x = encoder_layer(x)
 
         x = jnp.where(mask[..., jnp.newaxis], x, 0)
         return x
 
 
-class CrossAttentionLayer(nn.Module):
-    key_size: int
-    value_size: int
-    model_size: int
-    num_heads: int
-    dtype: Any = jnp.float32
-    need_pos: bool = False
-    use_spectral_linear: bool = False
+class TransformerDecoder(nn.Module):
+    """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    @nn.compact
-    def __call__(
-        self,
-        query_seq: chex.Array,
-        key_value_seq: chex.Array,
-        attention_mask: chex.Array = None,
-    ):
-        """
-        Cross-attention layer where the query sequence attends to the key-value sequence.
-
-        Args:
-            query_seq: Array of shape (query_length, hidden_size)
-            key_value_seq: Array of shape (key_value_length, hidden_size)
-            query_mask: Optional boolean array of shape (query_length,)
-            key_value_mask: Optional boolean array of shape (key_value_length,)
-
-        Returns:
-            attention_output: Array of shape (query_length, hidden_size)
-        """
-
-        attention_output = MultiHeadAttention(
-            num_heads=self.num_heads,
-            key_size=self.key_size,
-            value_size=self.value_size,
-            model_size=self.model_size,
-            need_pos=self.need_pos,
-            use_spectral_linear=self.use_spectral_linear,
-        )(
-            query=query_seq,
-            key=key_value_seq,
-            value=key_value_seq,
-            mask=attention_mask,
-        )
-
-        return attention_output  # Shape: (query_length, hidden_size)
-
-
-class CrossTransformer(nn.Module):
     key_size: int
     value_size: int
     model_size: int
     num_layers: int
     num_heads: int
-    dtype: Any = jnp.float32
     use_layer_norm: bool = True
     x_need_pos: bool = False
     y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
+    norm_first: bool = True
 
     @nn.compact
     def __call__(
@@ -526,94 +461,85 @@ class CrossTransformer(nn.Module):
         x_mask: chex.Array = None,
         y_mask: chex.Array = None,
     ):
-        # Prepare masks
-        if x_mask is not None:
-            # Convert to float mask and add batch dimension
-            x_mask = x_mask.astype(self.dtype)
-        else:
-            *_, query_length, __ = x.shape
-            x_mask = jnp.ones((1, query_length), dtype=self.dtype)
 
-        if y_mask is not None:
-            y_mask = y_mask.astype(self.dtype)
-        else:
-            *_, key_length, __ = y.shape
-            y_mask = jnp.ones((1, key_length), dtype=self.dtype)
+        if x_mask is None:
+            x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        # Create attention bias
-        attention_mask = self.make_attention_mask(x_mask, y_mask)
-        transposed_attention_mask = jnp.swapaxes(attention_mask, -1, -2)
+        if y_mask is None:
+            y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
 
-        expanded_x_mask = jnp.expand_dims(x_mask, axis=-1)
-        expanded_y_mask = jnp.expand_dims(y_mask, axis=-1)
+        sa_mask = create_attention_mask(x_mask)
+        ca_mask = create_attention_mask(x_mask, y_mask)
+
+        def decoder_layer(x: chex.Array, y: chex.Array):
+            if self.norm_first:
+                x_ln = layer_norm(x)
+                x = x + MultiHeadAttention(
+                    num_heads=self.num_heads,
+                    key_size=self.key_size,
+                    value_size=self.value_size,
+                    model_size=self.model_size,
+                    query_need_pos=self.x_need_pos,
+                    key_need_pos=self.x_need_pos,
+                    use_spectral_linear=self.use_spectral_linear,
+                )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+                x_ln = layer_norm(x)
+                x = x + MultiHeadAttention(
+                    num_heads=self.num_heads,
+                    key_size=self.key_size,
+                    value_size=self.value_size,
+                    model_size=self.model_size,
+                    query_need_pos=self.x_need_pos,
+                    key_need_pos=self.y_need_pos,
+                    use_spectral_linear=self.use_spectral_linear,
+                )(query=x_ln, key=y, value=y, mask=ca_mask)
+                x_ln = layer_norm(x)
+                return x + MLP(
+                    (self.resblocks_hidden_size, self.model_size),
+                    use_layer_norm=False,
+                    activate_first=False,
+                    use_spectral_linear=self.use_spectral_linear,
+                )(x_ln)
+            else:
+                x = layer_norm(
+                    x
+                    + MultiHeadAttention(
+                        num_heads=self.num_heads,
+                        key_size=self.key_size,
+                        value_size=self.value_size,
+                        model_size=self.model_size,
+                        query_need_pos=self.x_need_pos,
+                        key_need_pos=self.x_need_pos,
+                        use_spectral_linear=self.use_spectral_linear,
+                    )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+                )
+                x = layer_norm(
+                    x
+                    + MultiHeadAttention(
+                        num_heads=self.num_heads,
+                        key_size=self.key_size,
+                        value_size=self.value_size,
+                        model_size=self.model_size,
+                        query_need_pos=self.x_need_pos,
+                        key_need_pos=self.y_need_pos,
+                        use_spectral_linear=self.use_spectral_linear,
+                    )(query=x, key=y, value=y, mask=ca_mask)
+                )
+                return layer_norm(
+                    x
+                    + MLP(
+                        (self.resblocks_hidden_size, self.model_size),
+                        use_layer_norm=False,
+                        activate_first=False,
+                        use_spectral_linear=self.use_spectral_linear,
+                    )(x)
+                )
 
         for _ in range(self.num_layers):
-            x1 = x
-            y1 = y
+            x = decoder_layer(x, y)
 
-            if self.use_layer_norm:
-                x1 = layer_norm(x1)
-                y1 = layer_norm(y1)
-
-            x1 = activation_fn(x1)
-            y1 = activation_fn(y1)
-
-            x1 = CrossAttentionLayer(
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                num_heads=self.num_heads,
-                need_pos=self.x_need_pos,
-                use_spectral_linear=self.use_spectral_linear,
-            )(x1, y1, attention_mask)
-
-            y1 = CrossAttentionLayer(
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                num_heads=self.num_heads,
-                need_pos=self.y_need_pos,
-                use_spectral_linear=self.use_spectral_linear,
-            )(y1, x1, transposed_attention_mask)
-
-            x1 = jnp.where(expanded_x_mask, x1, 0)
-            y1 = jnp.where(expanded_y_mask, y1, 0)
-
-            x = x + x1
-            y = y + y1
-
-            x = VectorResblock(
-                hidden_size=self.resblocks_hidden_size,
-                use_layer_norm=self.use_layer_norm,
-                use_spectral_linear=self.use_spectral_linear,
-            )(x)
-
-            y = VectorResblock(
-                hidden_size=self.resblocks_hidden_size,
-                use_layer_norm=self.use_layer_norm,
-                use_spectral_linear=self.use_spectral_linear,
-            )(y)
-
-        x = jnp.where(expanded_x_mask, x, 0)
-        y = jnp.where(expanded_y_mask, y, 0)
-        return x, y
-
-    def make_attention_mask(
-        self, query_mask: chex.Array, key_value_mask: chex.Array
-    ) -> chex.Array:
-        """Creates an additive attention bias mask.
-
-        Args:
-            query_mask: (batch_size, query_length)
-            key_value_mask: (batch_size, key_length)
-
-        Returns:
-            attention_bias: (batch_size, 1, query_length, key_length)
-        """
-
-        attention_mask = jnp.einsum("...i,...j->...ij", query_mask, key_value_mask)
-        attention_mask = jnp.expand_dims(attention_mask, axis=-3)
-        return attention_mask.astype(self.dtype)
+        x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
+        return x
 
 
 class MLP(nn.Module):
@@ -621,14 +547,21 @@ class MLP(nn.Module):
 
     layer_sizes: Sequence[int]
     use_layer_norm: bool = True
+    activate_first: bool = True
+    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(self, x: chex.Array):
-        for size in self.layer_sizes:
-            if self.use_layer_norm:
-                x = layer_norm(x)
-            x = activation_fn(x)
-            x = Linear(size)(x)
+        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
+        for layer_index, size in enumerate(self.layer_sizes):
+            if layer_index == 0 and not self.activate_first:
+                # Skip layer normalization and activation for the first layer
+                x = linear_mod(size)(x)
+            else:
+                if self.use_layer_norm:
+                    x = layer_norm(x)
+                x = activation_fn(x)
+                x = linear_mod(size)(x)
         return x
 
 
@@ -653,9 +586,9 @@ class PointerLogits(nn.Module):
                 query = layer_norm(query)
             query = activation_fn(query)
             if i == self.num_layers_query - 1:
-                query = Linear(features=self.key_size)(query)
+                query = nn.Dense(features=self.key_size)(query)
             else:
-                query = Linear(features=query.shape[-1])(query)
+                query = nn.Dense(features=query.shape[-1])(query)
 
         # Keys.
         for i in range(self.num_layers_keys):
@@ -663,13 +596,13 @@ class PointerLogits(nn.Module):
                 keys = layer_norm(keys)
             keys = activation_fn(keys)
             if i == self.num_layers_keys - 1:
-                keys = Linear(features=self.key_size)(keys)
+                keys = nn.Dense(features=self.key_size)(keys)
             else:
-                keys = Linear(features=keys.shape[-1])(keys)
+                keys = nn.Dense(features=keys.shape[-1])(keys)
 
         # Pointer
         logits = query @ keys.T  # ij,j->i
-        return logits  # * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
+        return logits * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
 
 
 class ToAvgVector(nn.Module):
@@ -686,7 +619,7 @@ class ToAvgVector(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = Linear(features=size)(x)
+            x = nn.Dense(features=size)(x)
 
         if self.pool_method is PoolMethod.MEAN:
             x = (mask.astype(jnp.float32) @ x) / mask.sum().clip(min=1)
@@ -698,7 +631,7 @@ class ToAvgVector(nn.Module):
         if self.use_layer_norm:
             x = layer_norm(x)
         x = activation_fn(x)
-        x = Linear(features=self.output_stream_size or x.shape[-1])(x)
+        x = nn.Dense(features=self.output_stream_size or x.shape[-1])(x)
         return x
 
 
@@ -731,7 +664,7 @@ class VectorMerge(nn.Module):
         if len(inputs_to_gate) == 2:
             # more efficient than the general version below
             gate = [
-                Linear(gate_size, kernel_init=w_init, bias_init=b_init)(y)
+                nn.Dense(gate_size, kernel_init=w_init, bias_init=b_init)(y)
                 for y in init_gate
             ]
             gate = sum(gate)
@@ -739,7 +672,7 @@ class VectorMerge(nn.Module):
             gate = [sigmoid, 1.0 - sigmoid]
         else:
             gate = [
-                Linear(
+                nn.Dense(
                     len(inputs_to_gate) * gate_size,
                     kernel_init=w_init,
                     bias_init=b_init,
@@ -763,7 +696,7 @@ class VectorMerge(nn.Module):
                 feature = layer_norm(feature)
             feature = activation_fn(feature)
             gate.append(feature)
-            outputs.append(Linear(self.output_size)(feature))
+            outputs.append(nn.Dense(self.output_size)(feature))
         return gate, outputs
 
     @nn.compact

@@ -1,15 +1,10 @@
 from enum import Enum, auto
 from typing import Callable, List, TypedDict
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from embeddings.encoders import (
-    binary_encode,
-    multihot_encode,
-    onehot_encode,
-    sqrt_onehot_encode,
-)
+from embeddings.encoders import multihot_encode, onehot_encode, sqrt_onehot_encode
 
 
 class FeatureType(Enum):

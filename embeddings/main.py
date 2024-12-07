@@ -7,13 +7,11 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.figure_factory as ff
 from community import community_louvain
 from pyvis.network import Network
-from sklearn.decomposition import PCA
-from sklearn.discriminant_analysis import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
 
-from embeddings.encoders import onehot_encode
 from embeddings.protocols import (
     ABILITIES_PROTOCOLS,
     ITEMS_PROTOCOLS,
@@ -344,6 +342,16 @@ def main():
             mask = abs(encodings_arr).sum(-1) > 0
 
             encoded = encodings_arr[mask]
+            # pca = PCA(0.99)
+            # encoded = pca.fit_transform(encodings_arr[mask])
+
+            names = np.array(list(enc.stoi[name]))[mask.flatten()]
+
+            fig = ff.create_dendrogram(encoded, labels=names)
+            fig.update_layout(width=5 * 1920, height=1080)
+            img_bytes = fig.to_image("jpg")
+            with open(f"data/data/gen{gen}/{name}_hierarchy.jpg", "wb") as f:
+                f.write(img_bytes)
 
             print(
                 (
@@ -355,10 +363,8 @@ def main():
                     # pca.explained_variance_ratio_[: pca.n_components_].sum(),
                 )
             )
-            pca = PCA(0.95)
-            encoded = pca.fit_transform(encodings_arr[mask])
-            encoded = StandardScaler().fit_transform(encoded)
-            encoded = encoded.clip(min=-3, max=3)
+            # encoded = StandardScaler().fit_transform(encoded)
+            # encoded = encoded.clip(min=-3, max=3)
 
             new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
             new[mask] = encoded
@@ -371,7 +377,6 @@ def main():
             cosine_sim_flat = cosine_sim_flat[threshold_mask]
             threshold = np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
 
-            names = np.array(list(enc.stoi[name]))[mask.flatten()]
             graph = cosine_matrix_to_pyvis(
                 cosine_matrix=cosine_sim, labels=names, threshold=threshold
             )

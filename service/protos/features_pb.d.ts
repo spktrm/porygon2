@@ -51,9 +51,22 @@ export interface FeatureEntityMap {
 
 export const FeatureEntity: FeatureEntityMap;
 
+export interface MovesetActionTypeMap {
+  MOVESET_ACTION_TYPE_MOVE: 0;
+  MOVESET_ACTION_TYPE_SWITCH: 1;
+}
+
+export const MovesetActionType: MovesetActionTypeMap;
+
 export interface FeatureMovesetMap {
-  MOVEID: 0;
-  PPUSED: 1;
+  MOVESET_ACTION_ID: 0;
+  MOVESET_PPUSED: 1;
+  MOVESET_LEGAL: 2;
+  MOVESET_SIDE: 3;
+  MOVESET_ACTION_TYPE: 4;
+  MOVESET_EST_DAMAGE: 5;
+  MOVESET_MOVE_ID: 6;
+  MOVESET_SPECIES_ID: 7;
 }
 
 export const FeatureMoveset: FeatureMovesetMap;
@@ -141,28 +154,26 @@ export interface EdgeFromTypesMap {
 export const EdgeFromTypes: EdgeFromTypesMap;
 
 export interface FeatureEdgeMap {
-  POKE1_INDEX: 0;
-  POKE2_INDEX: 1;
-  TURN_ORDER_VALUE: 2;
-  EDGE_TYPE_TOKEN: 3;
-  MAJOR_ARG: 4;
-  MINOR_ARG: 5;
-  MOVE_TOKEN: 6;
-  ITEM_TOKEN: 7;
-  ABILITY_TOKEN: 8;
-  FROM_TYPE_TOKEN: 9;
-  FROM_SOURCE_TOKEN: 10;
-  DAMAGE_TOKEN: 11;
-  EFFECT_TOKEN: 12;
-  BOOST_ATK_VALUE: 13;
-  BOOST_DEF_VALUE: 14;
-  BOOST_SPA_VALUE: 15;
-  BOOST_SPD_VALUE: 16;
-  BOOST_SPE_VALUE: 17;
-  BOOST_ACCURACY_VALUE: 18;
-  BOOST_EVASION_VALUE: 19;
-  STATUS_TOKEN: 20;
-  EDGE_AFFECTING_SIDE: 21;
+  TURN_ORDER_VALUE: 0;
+  EDGE_TYPE_TOKEN: 1;
+  MAJOR_ARG: 2;
+  MINOR_ARG: 3;
+  ACTION_TOKEN: 4;
+  ITEM_TOKEN: 5;
+  ABILITY_TOKEN: 6;
+  FROM_TYPE_TOKEN: 7;
+  FROM_SOURCE_TOKEN: 8;
+  DAMAGE_TOKEN: 9;
+  EFFECT_TOKEN: 10;
+  BOOST_ATK_VALUE: 11;
+  BOOST_DEF_VALUE: 12;
+  BOOST_SPA_VALUE: 13;
+  BOOST_SPD_VALUE: 14;
+  BOOST_SPE_VALUE: 15;
+  BOOST_ACCURACY_VALUE: 16;
+  BOOST_EVASION_VALUE: 17;
+  STATUS_TOKEN: 18;
+  EDGE_AFFECTING_SIDE: 19;
 }
 
 export const FeatureEdge: FeatureEdgeMap;

@@ -14,18 +14,18 @@ from tqdm import tqdm
 from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
 from ml.utils import Params
-from rlenv.protos.servicev2_pb2 import ConnectMessage
 from rlenv.env import get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
 from rlenv.protos.servicev2_pb2 import (
     Action,
     ClientMessage,
+    ConnectMessage,
     ResetMessage,
     ServerMessage,
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import stack_steps
+from rlenv.utils import add_batch, stack_steps, stack_trajectories
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -70,12 +70,20 @@ class SinglePlayerEnvironment:
                 print(f"Connection closed for player {self.player_id}")
                 break
 
+    async def reset(self):
+        await self._reset()
+        return process_state(self.state)
+
     async def _reset(self):
         reset_message = ClientMessage(
             player_id=self.player_id, game_id=self.game_id, reset=ResetMessage()
         )
         await self.websocket.send(reset_message.SerializeToString())
         return await self._recv()
+
+    async def step(self, action: int):
+        await self._step(action)
+        return process_state(self.state)
 
     async def _step(self, action: int):
         if self.state and self.state.info.done:
@@ -107,7 +115,7 @@ class TwoPlayerEnvironment:
         self.current_state: State = None
         self.current_step: EnvStep = None
         self.current_player = None
-        self.done_count = 0
+        self.dones = np.zeros(2)
 
     async def initialize_players(self):
         """Initialize both players asynchronously."""
@@ -120,14 +128,14 @@ class TwoPlayerEnvironment:
         self.current_player = self.players[0]  # Start with the first player
 
     def is_done(self):
-        return self.done_count >= 2
+        return self.dones.sum() == 2
 
-    async def _reset(self):
+    async def _reset(self) -> EnvStep:
         """Reset both players, enqueue their initial states, and return the first state to act on."""
         # Reset both players and add their states to the queue
         while not self.state_queue.empty():
             await self.state_queue.get()
-        self.done_count = 0
+        self.dones = np.zeros(2)
 
         states = await asyncio.gather(*[player._reset() for player in self.players])
 
@@ -136,27 +144,28 @@ class TwoPlayerEnvironment:
 
         # Retrieve the first state to act on and set the corresponding player
         self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state, done=self.is_done())
+        self.current_step = process_state(self.current_state)
         return self.current_step
 
-    async def _step(self, action: int):
+    async def _step(self, action: int) -> EnvStep:
         """Process the action for the current player asynchronously."""
         # Start the action processing in the background without waiting for it to complete
         asyncio.create_task(self._perform_action(self.current_player, action))
 
         # Retrieve the next player and state from the queue, waiting if necessary
         self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state, done=self.is_done())
+        self.current_step = process_state(self.current_state)
         return self.current_step
 
     async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
         """Helper method to send the action to the player and enqueue the resulting state."""
         # Perform the step and add the resulting state along with the player back into the queue
         state = await player._step(action)
-        self.done_count += state.info.done
+        if not self.is_done():
+            self.dones[int(state.info.playerIndex)] = state.info.done
         if not state.info.done:
             await self.state_queue.put((player, state))
-        if self.done_count >= 2:
+        if self.is_done():
             await self.state_queue.put((player, state))
 
 
@@ -212,7 +221,7 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
 
 
 class BatchSinglePlayerEnvironment(BatchEnvironment):
-    def __init__(self, num_envs: int):
+    def __init__(self, num_envs: int, is_eval: bool = True):
         super().__init__(num_envs)
         try:
             self.loop = asyncio.get_event_loop()
@@ -221,12 +230,21 @@ class BatchSinglePlayerEnvironment(BatchEnvironment):
 
         self.envs: List[SinglePlayerEnvironment] = []
         self.player_id_count = 0
-        for game_id in range(num_envs):
-            env = self.loop.run_until_complete(
-                SinglePlayerEnvironment.create(10_000 + game_id, 10_000 + game_id)
-            )
-            self.envs.append(env)
-            self.player_id_count += 1
+        if is_eval:
+            for game_id in range(num_envs):
+                env = self.loop.run_until_complete(
+                    SinglePlayerEnvironment.create(10_000 + game_id, 10_000 + game_id)
+                )
+                self.envs.append(env)
+                self.player_id_count += 1
+        else:
+            for game_id in range(num_envs):
+                for _ in range(2):
+                    env = self.loop.run_until_complete(
+                        SinglePlayerEnvironment.create(self.player_id_count, game_id)
+                    )
+                    self.envs.append(env)
+                    self.player_id_count = self.player_id_count + 1
 
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
@@ -237,19 +255,13 @@ class BatchSinglePlayerEnvironment(BatchEnvironment):
                 *[env._step(action) for env, action in zip(self.envs, actions)]
             ),
         )
-        return [
-            process_state(state, done=env.is_done())
-            for state, env in zip(states, self.envs)
-        ]
+        return [process_state(state) for state in states]
 
     def reset(self):
         states = self.loop.run_until_complete(
             asyncio.gather(*[env._reset() for env in self.envs])
         )
-        return [
-            process_state(state, done=env.is_done())
-            for state, env in zip(states, self.envs)
-        ]
+        return [process_state(state) for state in states]
 
 
 class BatchCollectorV2:
@@ -262,6 +274,7 @@ class BatchCollectorV2:
         self.game: BatchEnvironment = env_constructor(batch_size)
         self.network = network
         self.finetuning = FineTuning()
+        self.batch_size = batch_size
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
         """Apply a batch of `actions` to a parallel list of `states`."""
@@ -319,13 +332,96 @@ class BatchCollectorV2:
 
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
         batch: TimeStep = stack_steps(timesteps)
-        # if not ((batch.env.ts[1:] >= batch.env.ts[:-1])).all():
-        #     raise ValueError
 
-        if not ((batch.env.turn[1:] >= batch.env.turn[:-1])).all():
+        if (batch.env.turn[1:] < batch.env.turn[:-1]).any():
             raise ValueError
 
+        if (batch.env.seed_hash != batch.env.seed_hash[0]).any():
+            raise ValueError
+
+        if not np.all(np.array([env.is_done() for env in self.game.envs])):
+            raise ValueError
+
+        # if not np.all(
+        #     np.abs((batch.actor.win_rewards * batch.env.valid[..., None]).sum(0)) == 1
+        # ):
+        #     raise ValueError
+
         return batch
+
+
+class SingleTrajectoryTrainingBatchCollector(BatchCollectorV2):
+    def __init__(self, network: nn.Module, batch_size: int):
+        super().__init__(network, batch_size, BatchTwoPlayerEnvironment)
+
+
+class DoubleTrajectoryTrainingBatchCollector(BatchCollectorV2):
+    game: BatchSinglePlayerEnvironment
+
+    def __init__(self, network: nn.Module, batch_size: int):
+        super().__init__(
+            network,
+            batch_size,
+            functools.partial(BatchSinglePlayerEnvironment, is_eval=False),
+        )
+
+    async def collect_trajectory(
+        self, params: Params, environment_index: int
+    ) -> TimeStep:
+        environment = self.game.envs[environment_index]
+
+        env_step = await environment.reset()
+        env_step = add_batch(env_step, axis=0)
+        timesteps = []
+
+        state_index = 0
+        while True:
+            prev_env_step = env_step
+            a, actor_step = self.actor_step(params, env_step)
+
+            env_step = await environment.step(a.item())
+            env_step = add_batch(env_step, axis=0)
+            timestep = TimeStep(
+                env=prev_env_step,
+                actor=ActorStep(
+                    action=actor_step.action,
+                    policy=actor_step.policy,
+                    win_rewards=env_step.win_rewards,
+                    hp_rewards=env_step.hp_rewards,
+                    fainted_rewards=env_step.fainted_rewards,
+                    switch_rewards=env_step.switch_rewards,
+                    longevity_rewards=env_step.longevity_rewards,
+                ),
+            )
+            timesteps.append(timestep)
+
+            if environment.is_done():
+                break
+
+            state_index += 1
+
+        # Concatenate all the timesteps together to form a single rollout [T, B, ..]
+        trajectory: TimeStep = stack_steps(timesteps)
+
+        return trajectory
+
+    def collect_batch_trajectory(
+        self, params: Params, resolution: int = 32
+    ) -> TimeStep:
+        tasks = [
+            self.collect_trajectory(params, env_index)
+            for env_index in range(2 * self.batch_size)
+        ]
+        trajectories = self.game.loop.run_until_complete(
+            asyncio.gather(*tasks),
+        )
+        batch = stack_trajectories(trajectories)
+        return batch
+
+
+class EvalBatchCollector(BatchCollectorV2):
+    def __init__(self, network: nn.Module, batch_size: int):
+        super().__init__(network, batch_size, BatchSinglePlayerEnvironment)
 
 
 def main():
@@ -336,22 +432,26 @@ def main():
     training_progress = tqdm(desc="training: ")
     evaluation_progress = tqdm(desc="evaluation: ")
 
-    num_envs = 16
+    num_envs = 8
     network = get_dummy_model()
-    training_env = BatchCollectorV2(network, num_envs)
-    evaluation_env = BatchCollectorV2(network, 4, BatchSinglePlayerEnvironment)
+    training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
+    evaluation_env = EvalBatchCollector(network, 4)
 
     ex = get_ex_step()
     params = network.init(jax.random.PRNGKey(42), ex)
 
-    avg_reward = np.zeros(num_envs)
-    tau = 1e-2
+    np.zeros(num_envs)
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
+
+        # with open("rlenv/ex_batch", "wb") as f:
+        #     pickle.dump(batch, f)
+        # break
+
         training_progress.update(batch.env.valid.sum())
-        # batch = evaluation_env.collect_batch_trajectory(params)
-        # evaluation_progress.update(batch.env.valid.sum())
+        batch = evaluation_env.collect_batch_trajectory(params)
+        evaluation_progress.update(batch.env.valid.sum())
         # win_rewards = np.sign(
         #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
         # )

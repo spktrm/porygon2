@@ -9,17 +9,10 @@ from jax import tree
 
 def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
 
-    # Compute dot products along the last dimension (D)
-    dot_product = jnp.sum(arr1 * arr2, axis=-1)
+    arr1 = arr1 / jnp.linalg.norm(arr1, axis=-1, keepdims=True)
+    arr2 = arr2 / jnp.linalg.norm(arr2, axis=-1, keepdims=True)
 
-    # Compute the L2 norms along the last dimension (D)
-    norm_arr1 = jnp.linalg.norm(arr1, axis=-1)
-    norm_arr2 = jnp.linalg.norm(arr2, axis=-1)
-
-    # Compute cosine similarity, handle division by zero if needed
-    cosine_sim = dot_product / (norm_arr1 * norm_arr2 + 1e-8)
-
-    return cosine_sim
+    return arr1 @ arr2.T
 
 
 def legal_policy(
@@ -266,9 +259,9 @@ def rnad_v_trace(
 
         # Learning output:
         our_learning_output = (
-            v
-            + eta_log_policy  # value
-            + actions_oh  # regularisation
+            v  # value
+            + eta_log_policy  # regularisation
+            + actions_oh
             * jnp.expand_dims(inv_mu, axis=-1)
             * (
                 jnp.expand_dims(discounted_reward, axis=-1)
@@ -328,9 +321,6 @@ def rnad_v_trace(
         ),
         reverse=True,
     )
-
-    # breakpoint_if_nonfinite(v_target)
-    # breakpoint_if_nonfinite(learning_output)
 
     return v_target, has_played, learning_output
 
@@ -505,18 +495,22 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     threshold: float = 2,
+    epsilon: float = 0.2,
 ) -> chex.Array:
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
 
-    for k, (logit_pi, pi, q_vr, is_c) in enumerate(
+    for k, (logit_pi, pi, q_vr, ratio) in enumerate(
         zip(logit_list, policy_list, q_vr_list, importance_sampling_correction)
     ):
         assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
-        adv_pi = is_c * adv_pi  # importance sampling correction
+        # adv_pi = jnp.minimum(
+        #     ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
+        # )  # importance sampling correction
+        adv_pi = ratio * adv_pi
         adv_pi = jnp.clip(adv_pi, a_min=-clip, a_max=clip)
         adv_pi = lax.stop_gradient(adv_pi)
 
@@ -594,23 +588,16 @@ def get_loss_heuristic(
     return renormalize(xentropy, valid)
 
 
-def get_entropy(
-    policy: chex.Array,
-    log_policy: chex.Array,
-    legal: chex.Array,
-) -> chex.Array:
-    loss_entropy = (policy * log_policy).sum(-1)
-    num_legal_actions = legal.sum(-1)
-    denom = jnp.log(num_legal_actions)
-    denom = jnp.where(num_legal_actions <= 1, 1, denom)
-    return loss_entropy / denom
-
-
 def get_loss_entropy(
     policy: chex.Array,
     log_policy: chex.Array,
     legal: chex.Array,
     valid: chex.Array,
 ) -> chex.Array:
-    loss_entropy = get_entropy(policy, log_policy, legal)
+    loss_entropy = (policy * log_policy).sum(-1)
     return renormalize(loss_entropy, valid)
+
+
+def get_average_logit_value(logit: chex.Array, legal: chex.Array, valid: chex.Array):
+    logit = logit - logit.mean(keepdims=True, axis=-1, where=legal)
+    return renormalize(jnp.abs(logit).mean(axis=-1, where=legal), valid)

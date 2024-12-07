@@ -37,7 +37,7 @@ class GameWorker {
         });
 
         this.worker.on("error", (err) => {
-            this.logger.error(`Error:`, err.message);
+            this.logger.error(err.stack?.toString());
         });
 
         this.worker.on("exit", (code: number) => {
@@ -109,10 +109,11 @@ export class GameServer {
             const playerId = clientMessage.getPlayerId();
 
             switch (messageType) {
-                case ClientMessage.MessageTypeCase.CONNECT:
+                case ClientMessage.MessageTypeCase.CONNECT: {
                     const gameId = clientMessage.getGameId();
                     this.assignPlayerToGame(ws, playerId, gameId);
                     break;
+                }
 
                 case ClientMessage.MessageTypeCase.STEP:
                 case ClientMessage.MessageTypeCase.RESET:
@@ -155,6 +156,9 @@ export class GameServer {
     ): void {
         const gameWorker = this.socketWorkerMap.get(ws);
         if (gameWorker) {
+            this.logger.debug(
+                `Worker Index ${gameWorker.workerIndex} recieved message`,
+            );
             gameWorker.worker.postMessage(clientMessageData);
             this.actionCount += 1;
         } else {
@@ -221,7 +225,7 @@ export class GameServer {
 }
 
 // Initialize the server
-const server = new GameServer(8080, {
+new GameServer(8080, {
     maxGamesPerWorker: 50,
     maxWorkers: 16,
     loggingLevel: "info", // Set to 'debug' for more verbose logging

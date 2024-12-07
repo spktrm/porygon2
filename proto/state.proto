@@ -5,24 +5,25 @@ package rlenv;
 import "history.proto";
 import "enums.proto";
 
+
+message Rewards {
+    float winReward = 1;
+    float hpReward = 2;
+    float faintedReward = 3;
+    float switchReward = 4;
+    float longevityReward = 5;
+}
+
 message Info {
     int32 gameId = 1;
     bool done = 2;
-    float winReward = 3;
-    float hpReward = 4;
-    bool playerIndex = 5;
-    int32 turn = 6;
-    int32 turnsSinceSwitch = 7;
-    int32 heuristicAction = 8;
-    int32 lastAction = 9;
-    int32 lastMove = 10;
-    float faintedReward = 11;
-    bytes heuristicDist = 12;
-    float switchReward = 13;
-    float ts = 14;
-    float longevityReward = 15;
-    float drawRatio = 16;
-    int32 workerIndex = 17;
+    bool playerIndex = 3;
+    int32 turn = 4;
+    float ts = 5;
+    float drawRatio = 6;
+    int32 workerIndex = 7;
+    Rewards rewards = 8;
+    int32 seed = 9;
 }
 
 message State {

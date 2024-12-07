@@ -29,15 +29,17 @@ export class GameWorker {
                 // Handle CONNECT case if needed
                 break;
 
-            case ClientMessage.MessageTypeCase.STEP:
+            case ClientMessage.MessageTypeCase.STEP: {
                 const stepMessage = clientMessage.getStep()!;
                 this.handleStep(gameId, stepMessage.getAction()!);
                 break;
+            }
 
-            case ClientMessage.MessageTypeCase.RESET:
+            case ClientMessage.MessageTypeCase.RESET: {
                 const playerId = clientMessage.getPlayerId();
                 this.handleReset(gameId, playerId);
                 break;
+            }
         }
     }
 

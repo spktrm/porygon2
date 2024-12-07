@@ -16,12 +16,14 @@ from flax.training import train_state
 from ml.config import ActorCriticConfig
 from ml.func import (
     _player_others,
+    get_average_logit_value,
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v,
     renormalize,
     rnad_v_trace,
 )
+from ml.learners.func import collect_gradient_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
@@ -40,8 +42,8 @@ class RNaDConfig(ActorCriticConfig):
 
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
-    entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (10_000,)
+    entropy_schedule_repeats: Sequence[int] = (10, 1)
+    entropy_schedule_size: Sequence[int] = (1000, 10_000)
 
     nerd: NerdConfig = NerdConfig()
 
@@ -215,7 +217,6 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
     params_prev_ = module.init(rng, ex)
 
     tx = optax.chain(
-        optax.clip(config.clip_gradient),
         optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
@@ -224,6 +225,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
             eps=config.adam.eps,
             weight_decay=config.adam.weight_decay,
         ),
+        optax.clip(config.clip_gradient),
     )
     return TrainState.create(
         apply_fn=module.apply,
@@ -261,9 +263,9 @@ def load(state: TrainState, path: str):
 
     state = state.replace(
         params=step["params"],
-        params_target=step["params"],
-        params_prev=step["params"],
-        params_prev_=step["params"],
+        params_target=step["params_target"],
+        params_prev=step["params_prev"],
+        params_prev_=step["params_prev_"],
         opt_state=step["opt_state"],
         step=step["step"],
     )
@@ -274,16 +276,15 @@ def load(state: TrainState, path: str):
 @functools.partial(jax.jit, static_argnums=(2,))
 def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     """Train for a single step."""
-    rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
-
-    pred_targ: ModelOutput = rollout(state.params_target, batch.env)
-    pred_prev: ModelOutput = rollout(state.params_prev, batch.env)
-    pred_prev_: ModelOutput = rollout(state.params_prev_, batch.env)
 
     def loss_fn(params: Params):
-        rollout_w_grad = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
+        rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
 
-        pred: ModelOutput = rollout_w_grad(params, batch.env)
+        pred: ModelOutput = rollout(params, batch.env)
+
+        pred_targ: ModelOutput = rollout(state.params_target, batch.env)
+        pred_prev: ModelOutput = rollout(state.params_prev, batch.env)
+        pred_prev_: ModelOutput = rollout(state.params_prev_, batch.env)
 
         logs = {}
 
@@ -295,11 +296,12 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
         # For the stability reasons, reward changes smoothly between iterations.
         # The mixing between old and new reward transform is a convex combination
         # parametrised by alpha.
-        log_policy_reg = pred.log_pi - (
+        policy_reg = (
             state.alpha * pred_prev.log_pi + (1 - state.alpha) * pred_prev_.log_pi
         )
+        log_policy_reg = pred.log_pi - policy_reg
 
-        valid = batch.env.valid * (batch.env.legal.sum(axis=-1) > 1)
+        valid = batch.env.valid
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
@@ -335,10 +337,6 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             has_played_list,
         )
 
-        # is_vector = jnp.expand_dims(
-        #     _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
-        #     axis=-1,
-        # )
         is_vector = jnp.expand_dims(jnp.ones_like(batch.env.valid), axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
@@ -355,7 +353,7 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             threshold=config.nerd.beta,
         )
 
-        loss_norm = renormalize(jnp.square(pred.logit).sum(axis=-1), valid)
+        loss_norm = get_average_logit_value(pred.logit, batch.env.legal, valid)
 
         loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
 
@@ -381,42 +379,24 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
         logs["switch_entropy"] = switch_entropy
         logs["loss_norm"] = loss_norm
 
+        kl_div = optax.kl_divergence(pred.log_pi, jnp.exp(policy_reg))
+        logs["kl_div"] = renormalize(kl_div, valid)
+
         return loss, logs
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     state = state.step_entropy()
     (loss_val, logs), grads = grad_fn(state.params)
+
+    jax.debug.breakpoint()
+
     state = state.apply_gradients(grads=grads, config=config)
     state = state.replace(
         actor_steps=state.actor_steps + batch.env.valid.sum(),
         learner_steps=state.learner_steps + 1,
     )
 
-    valid = batch.env.valid
-    lengths = valid.sum(0)
-
-    can_move = batch.env.legal[..., :4].any(axis=-1)
-    can_switch = batch.env.legal[..., 4:].any(axis=-1)
-
-    move_ratio = (
-        (batch.actor.action < 4).mean(axis=0, where=(can_switch & valid)).mean()
-    )
-    switch_ratio = (
-        (batch.actor.action >= 4).mean(axis=0, where=(can_move & valid)).mean()
-    )
-
-    extra_logs = dict(
-        actor_steps=valid.sum(),
-        loss=loss_val,
-        trajectory_length_mean=lengths.mean(),
-        trajectory_length_min=lengths.min(),
-        trajectory_length_max=lengths.max(),
-        early_finish_ratio=batch.actor.win_rewards[..., 0].any(axis=0).mean(),
-        gradient_norm=optax.global_norm(grads),
-        param_norm=optax.global_norm(state.params),
-        move_ratio=move_ratio,
-        switch_ratio=switch_ratio,
-    )
-    logs.update(extra_logs)
+    logs.update(dict(loss=loss_val))
+    logs.update(collect_gradient_telemetry_data(grads))
 
     return state, logs

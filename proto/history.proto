@@ -6,8 +6,8 @@ package history;
 message History {
     // two sided
     bytes edges = 1;
-    bytes nodes = 2;
-    int32 length = 3;
-    bytes sideConditions = 4;
-    bytes field = 5;
+    bytes entities = 2;
+    bytes sideConditions = 3;
+    bytes field = 4;
+    int32 length = 5;
 }

@@ -25,7 +25,7 @@ export const evalActionMapping: EvalActionFnType[] = [
 export const numEvals = Object.keys(evalActionMapping).length;
 
 export function getEvalAction(player: Player): Action {
-    if (!!player.playerId) {
+    if (player.playerId) {
         console.error("Evaluation playerId should be undefined");
     }
     return evalActionMapping[player.gameId - EVAL_GAME_ID_OFFSET]({ player });

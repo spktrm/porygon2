@@ -10,10 +10,7 @@ class EnvStep:
     turn: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()
-    heuristic_action: chex.Array = ()
-    heuristic_dist: chex.Array = ()
-    prev_action: chex.Array = ()
-    prev_move: chex.Array = ()
+    seed_hash: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()
@@ -29,7 +26,7 @@ class EnvStep:
 
     # Public Info
     history_edges: chex.Array = ()
-    history_nodes: chex.Array = ()
+    history_entities: chex.Array = ()
     history_side_conditions: chex.Array = ()
     history_field: chex.Array = ()
 

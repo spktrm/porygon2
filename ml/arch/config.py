@@ -42,8 +42,9 @@ def add_name_recursive(cfg, path=None):
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 256
-    vector_size = 1024
+    entity_size = 128
+    vector_size = 512
+
     use_layer_norm = True
     use_spectral_linear = False
 
@@ -55,23 +56,18 @@ def get_model_cfg():
     cfg.encoder.edge_encoder = ConfigDict()
     cfg.encoder.side_condition_encoder = ConfigDict()
     cfg.encoder.field_encoder = ConfigDict()
-    cfg.encoder.entity_edge_cross_transformer = ConfigDict()
-    cfg.encoder.aggregate_nodes_resnet = ConfigDict()
-    cfg.encoder.aggregate_edges_resnet = ConfigDict()
-    cfg.encoder.side_field_resnet = ConfigDict()
     cfg.encoder.timestep_merge = ConfigDict()
-    cfg.encoder.timestep_resnet = ConfigDict()
-    cfg.encoder.entity_aggregator = ConfigDict()
-    cfg.encoder.edge_aggregator = ConfigDict()
     cfg.encoder.timestep_transformer = ConfigDict()
     cfg.encoder.entity_transformer = ConfigDict()
-    cfg.encoder.entity_timestep_cross_transformer = ConfigDict()
+    cfg.encoder.entity_timestep_transformer = ConfigDict()
     cfg.encoder.action_transformer = ConfigDict()
-    cfg.encoder.action_entity_cross_transformer = ConfigDict()
-    cfg.encoder.contextual_entity_aggregator = ConfigDict()
-    cfg.encoder.contextual_timestep_aggregator = ConfigDict()
+    cfg.encoder.action_entity_transformer = ConfigDict()
+    cfg.encoder.contextual_entity_agg = ConfigDict()
+    cfg.encoder.contextual_timestep_agg = ConfigDict()
+    cfg.encoder.contextual_action_agg = ConfigDict()
     cfg.encoder.average_contextual_entity_resnet = ConfigDict()
     cfg.encoder.average_contextual_timestep_resnet = ConfigDict()
+    cfg.encoder.average_contextual_action_resnet = ConfigDict()
     cfg.encoder.state_merge = ConfigDict()
     cfg.encoder.state_resnet = ConfigDict()
 
@@ -81,40 +77,9 @@ def get_model_cfg():
     cfg.encoder.side_condition_encoder.entity_size = entity_size // 4
     cfg.encoder.field_encoder.entity_size = entity_size // 4
 
-    cfg.encoder.entity_edge_cross_transformer.num_layers = 1
-    cfg.encoder.entity_edge_cross_transformer.key_size = entity_size // 2
-    cfg.encoder.entity_edge_cross_transformer.value_size = entity_size // 2
-    cfg.encoder.entity_edge_cross_transformer.model_size = entity_size
-    cfg.encoder.entity_edge_cross_transformer.num_heads = 2
-    cfg.encoder.entity_edge_cross_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_edge_cross_transformer.x_need_pos = False
-    cfg.encoder.entity_edge_cross_transformer.y_need_pos = True
-    cfg.encoder.entity_edge_cross_transformer.use_spectral_linear = use_spectral_linear
-    cfg.encoder.entity_edge_cross_transformer.resblocks_hidden_size = entity_size // 2
-
-    cfg.encoder.entity_aggregator.units_hidden_sizes = (entity_size, entity_size)
-    cfg.encoder.entity_aggregator.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_aggregator.pool_method = PoolMethod.MEAN
-
-    cfg.encoder.edge_aggregator.units_hidden_sizes = (entity_size, entity_size)
-    cfg.encoder.edge_aggregator.use_layer_norm = use_layer_norm
-    cfg.encoder.edge_aggregator.pool_method = PoolMethod.MEAN
-
-    cfg.encoder.aggregate_nodes_resnet.num_resblocks = 0
-    cfg.encoder.aggregate_nodes_resnet.use_layer_norm = use_layer_norm
-
-    cfg.encoder.aggregate_edges_resnet.num_resblocks = 0
-    cfg.encoder.aggregate_edges_resnet.use_layer_norm = use_layer_norm
-
-    cfg.encoder.side_field_resnet.num_resblocks = 2
-    cfg.encoder.side_field_resnet.use_layer_norm = use_layer_norm
-
     cfg.encoder.timestep_merge.output_size = entity_size
     cfg.encoder.timestep_merge.gating_type = GatingType.POINTWISE
     cfg.encoder.timestep_merge.use_layer_norm = use_layer_norm
-
-    cfg.encoder.timestep_resnet.num_resblocks = 2
-    cfg.encoder.timestep_resnet.use_layer_norm = use_layer_norm
 
     num_transformer_layers = 1
     num_transformer_heads = 2
@@ -125,7 +90,8 @@ def get_model_cfg():
     cfg.encoder.timestep_transformer.model_size = entity_size
     cfg.encoder.timestep_transformer.num_heads = num_transformer_heads
     cfg.encoder.timestep_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.timestep_transformer.need_pos = True
+    cfg.encoder.timestep_transformer.x_need_pos = True
+    cfg.encoder.timestep_transformer.y_need_pos = True
     cfg.encoder.timestep_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.timestep_transformer.resblocks_hidden_size = entity_size // 2
 
@@ -135,24 +101,19 @@ def get_model_cfg():
     cfg.encoder.entity_transformer.model_size = entity_size
     cfg.encoder.entity_transformer.num_heads = num_transformer_heads
     cfg.encoder.entity_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_transformer.need_pos = False
     cfg.encoder.entity_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.encoder.entity_timestep_cross_transformer.num_layers = num_transformer_layers
-    cfg.encoder.entity_timestep_cross_transformer.key_size = entity_size // 2
-    cfg.encoder.entity_timestep_cross_transformer.value_size = entity_size // 2
-    cfg.encoder.entity_timestep_cross_transformer.model_size = entity_size
-    cfg.encoder.entity_timestep_cross_transformer.num_heads = num_transformer_heads
-    cfg.encoder.entity_timestep_cross_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_timestep_cross_transformer.x_need_pos = False
-    cfg.encoder.entity_timestep_cross_transformer.y_need_pos = True
-    cfg.encoder.entity_timestep_cross_transformer.use_spectral_linear = (
-        use_spectral_linear
-    )
-    cfg.encoder.entity_timestep_cross_transformer.resblocks_hidden_size = (
-        entity_size // 2
-    )
+    cfg.encoder.entity_timestep_transformer.num_layers = num_transformer_layers
+    cfg.encoder.entity_timestep_transformer.key_size = entity_size // 2
+    cfg.encoder.entity_timestep_transformer.value_size = entity_size // 2
+    cfg.encoder.entity_timestep_transformer.model_size = entity_size
+    cfg.encoder.entity_timestep_transformer.num_heads = num_transformer_heads
+    cfg.encoder.entity_timestep_transformer.use_layer_norm = use_layer_norm
+    cfg.encoder.entity_timestep_transformer.x_need_pos = False
+    cfg.encoder.entity_timestep_transformer.y_need_pos = True
+    cfg.encoder.entity_timestep_transformer.use_spectral_linear = use_spectral_linear
+    cfg.encoder.entity_timestep_transformer.resblocks_hidden_size = entity_size // 2
 
     cfg.encoder.action_transformer.num_layers = num_transformer_layers
     cfg.encoder.action_transformer.key_size = entity_size // 2
@@ -160,42 +121,38 @@ def get_model_cfg():
     cfg.encoder.action_transformer.model_size = entity_size
     cfg.encoder.action_transformer.num_heads = num_transformer_heads
     cfg.encoder.action_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.action_transformer.need_pos = False
     cfg.encoder.action_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.action_transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.encoder.action_entity_cross_transformer.num_layers = num_transformer_layers
-    cfg.encoder.action_entity_cross_transformer.key_size = entity_size // 2
-    cfg.encoder.action_entity_cross_transformer.value_size = entity_size // 2
-    cfg.encoder.action_entity_cross_transformer.model_size = entity_size
-    cfg.encoder.action_entity_cross_transformer.num_heads = num_transformer_heads
-    cfg.encoder.action_entity_cross_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.action_entity_cross_transformer.x_need_pos = False
-    cfg.encoder.action_entity_cross_transformer.y_need_pos = False
-    cfg.encoder.action_entity_cross_transformer.use_spectral_linear = (
-        use_spectral_linear
-    )
-    cfg.encoder.action_entity_cross_transformer.resblocks_hidden_size = entity_size // 2
+    cfg.encoder.action_entity_transformer.num_layers = num_transformer_layers
+    cfg.encoder.action_entity_transformer.key_size = entity_size // 2
+    cfg.encoder.action_entity_transformer.value_size = entity_size // 2
+    cfg.encoder.action_entity_transformer.model_size = entity_size
+    cfg.encoder.action_entity_transformer.num_heads = num_transformer_heads
+    cfg.encoder.action_entity_transformer.use_layer_norm = use_layer_norm
+    cfg.encoder.action_entity_transformer.use_spectral_linear = use_spectral_linear
+    cfg.encoder.action_entity_transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.encoder.contextual_entity_aggregator.units_hidden_sizes = (
-        entity_size,
-        vector_size,
-    )
-    cfg.encoder.contextual_entity_aggregator.use_layer_norm = use_layer_norm
-    cfg.encoder.contextual_entity_aggregator.pool_method = PoolMethod.MEAN
+    cfg.encoder.contextual_entity_agg.units_hidden_sizes = (entity_size, vector_size)
+    cfg.encoder.contextual_entity_agg.use_layer_norm = use_layer_norm
+    cfg.encoder.contextual_entity_agg.pool_method = PoolMethod.MEAN
 
-    cfg.encoder.contextual_timestep_aggregator.units_hidden_sizes = (
-        entity_size,
-        vector_size,
-    )
-    cfg.encoder.contextual_timestep_aggregator.use_layer_norm = use_layer_norm
-    cfg.encoder.contextual_timestep_aggregator.pool_method = PoolMethod.MEAN
+    cfg.encoder.contextual_timestep_agg.units_hidden_sizes = (entity_size, vector_size)
+    cfg.encoder.contextual_timestep_agg.use_layer_norm = use_layer_norm
+    cfg.encoder.contextual_timestep_agg.pool_method = PoolMethod.MEAN
+
+    cfg.encoder.contextual_action_agg.units_hidden_sizes = (entity_size, vector_size)
+    cfg.encoder.contextual_action_agg.use_layer_norm = use_layer_norm
+    cfg.encoder.contextual_action_agg.pool_method = PoolMethod.MEAN
 
     cfg.encoder.average_contextual_entity_resnet.num_resblocks = 0
     cfg.encoder.average_contextual_entity_resnet.use_layer_norm = use_layer_norm
 
     cfg.encoder.average_contextual_timestep_resnet.num_resblocks = 0
     cfg.encoder.average_contextual_timestep_resnet.use_layer_norm = use_layer_norm
+
+    cfg.encoder.average_contextual_action_resnet.num_resblocks = 0
+    cfg.encoder.average_contextual_action_resnet.use_layer_norm = use_layer_norm
 
     cfg.encoder.state_merge.output_size = vector_size
     cfg.encoder.state_merge.gating_type = GatingType.POINTWISE
@@ -215,7 +172,7 @@ def get_model_cfg():
     cfg.policy_head.pointer_logits = ConfigDict()
     cfg.policy_head.pointer_logits.num_layers_query = 1
     cfg.policy_head.pointer_logits.num_layers_keys = 2
-    cfg.policy_head.pointer_logits.key_size = 64
+    cfg.policy_head.pointer_logits.key_size = entity_size
     cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
     cfg.policy_head.entity_size = entity_size
     cfg.policy_head.vector_size = vector_size

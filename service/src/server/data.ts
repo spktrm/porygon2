@@ -1,4 +1,3 @@
-import { toID } from "@pkmn/data";
 import {
     AbilitiesEnum,
     ActionsEnum,
@@ -7,7 +6,6 @@ import {
     BoostsEnum,
     ConditionEnum,
     EffectEnum,
-    EffecttypesEnum,
     GendernameEnum,
     ItemeffecttypesEnum,
     ItemsEnum,
@@ -119,8 +117,6 @@ export const actionIndexMapping = {
     9: "switch 6",
 };
 
-export const MAX_TS = 50;
-
 export const sideIdMapping: {
     [k in "p1" | "p2"]: 0 | 1;
 } = {
@@ -128,28 +124,13 @@ export const sideIdMapping: {
     p2: 1,
 };
 
-export interface SideObject {
-    team: Uint8Array;
-    boosts: Uint8Array;
-    sideConditions: Uint8Array;
-    volatileStatus: Uint8Array;
-    additionalInformation: Uint8Array;
-}
-
-export interface FieldObject {
-    weather: Uint8Array;
-    turnContext: Uint8Array;
-}
-
-export type HistoryStep = [SideObject, SideObject, FieldObject];
-
 export const numPokemonFields = Object.keys(FeatureEntity).length;
 export const numTurnContextFields = Object.keys(FeatureTurnContext).length;
 export const numWeatherFields = Object.keys(FeatureWeather).length;
 export const numMoveFields = Object.keys(FeatureMoveset).length;
-export const numMovesetFields = 2 * 10 * numMoveFields;
+export const numMovesetFields = 10 * numMoveFields;
 
-export const NUM_HISTORY = 8;
+export const NUM_HISTORY = 32;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {

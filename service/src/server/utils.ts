@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export class TaskQueueSystem<T> {
     private results: Map<number, Promise<T>> = new Map();
     private resolvers: Map<number, (value: T) => void> = new Map();
@@ -50,6 +51,10 @@ export class TaskQueueSystem<T> {
 
     public allDone(): boolean {
         return this.resolvers.size === 0 && this.results.size === 0;
+    }
+
+    reset() {
+        this.pointer = 0;
     }
 }
 

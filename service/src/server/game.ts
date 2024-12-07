@@ -1,6 +1,6 @@
 import { TeamGenerators } from "@pkmn/randoms";
-import { BattleStreams, PokemonSet, Teams } from "@pkmn/sim";
-import { Player } from "./player";
+import { BattleStreams, Teams } from "@pkmn/sim";
+import { Player, Tracker } from "./player";
 import { TaskQueueSystem } from "./utils";
 import { recvFnType, sendFnType } from "./types";
 import { Action, GameState } from "../../protos/servicev2_pb";
@@ -10,6 +10,8 @@ import { getEvalAction } from "./eval";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
+
+export const DRAW_TURNS = 50;
 
 export class Game {
     gameId: number;
@@ -23,6 +25,8 @@ export class Game {
     playerIds: number[];
     maxPlayers: number;
 
+    tracker: Tracker;
+
     constructor(gameId: number, workerIndex: number, port: MessagePort) {
         this.gameId = gameId;
         this.workerIndex = workerIndex;
@@ -33,6 +37,8 @@ export class Game {
         this.maxPlayers = this.gameId < EVAL_GAME_ID_OFFSET ? 2 : 1;
         this.resetCount = 0;
         this.playerIds = [];
+
+        this.tracker = new Tracker();
     }
 
     addPlayerId(playerId: number) {
@@ -51,35 +57,49 @@ export class Game {
         return false;
     }
 
-    reset(options?: { seed: number[]; [k: string]: any }) {
+    reset(options?: { seed: number[] }) {
         this.resetCount += 1;
         if (this.canReset()) {
             if (this.playerIds.length < this.maxPlayers) {
                 console.error("No players have been added");
             }
-            this._reset(options);
             this.resetCount = 0;
+            this.tracker.reset();
+            this.tasks.reset();
+            this._reset(options);
         }
     }
 
-    async _reset(options?: { seed: number[]; [k: string]: any }) {
-        await new Promise(async (resolve) => {
-            while (true) {
-                if (this.tasks.allDone()) {
-                    break;
-                } else {
-                    await new Promise((resolve) => setTimeout(resolve, 1));
-                }
+    _drawGame() {
+        if (this.players !== undefined) {
+            for (const player of this.players) {
+                player.draw = true;
             }
-            resolve(true);
-        });
+        }
+    }
 
+    async _waitAllDone() {
+        await new Promise((resolve) => {
+            const interval = setInterval(() => {
+                if (this.tasks.allDone()) {
+                    clearInterval(interval);
+                    resolve(true);
+                }
+            }, 1);
+        });
+    }
+
+    async _reset(options?: { seed: number[] }) {
         const stream = new BattleStreams.BattleStream();
         const streams = BattleStreams.getPlayerStreams(stream);
         const spec = { formatid: formatId, ...options };
 
         void streams.omniscient.write(`>start ${JSON.stringify(spec)}
 `);
+        // await this._waitAllDone();
+        if (!this.tasks.allDone()) {
+            throw new Error("Not all tasks are finished");
+        }
 
         const p1spec = {
             name: `${this.workerIndex}-${this.gameId}-1`,
@@ -95,7 +115,15 @@ export class Game {
 
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
+            const { faintedReward, hpReward } = this.tracker.update2(
+                stream.battle!,
+            );
             const state = player.createState();
+
+            const rewards = state.getInfo()!.getRewards()!;
+            rewards.setHpreward(hpReward);
+            rewards.setFaintedreward(faintedReward);
+
             gameState.setState(state.serializeBinary());
             const playerId =
                 this.playerIds[+state.getInfo()!.getPlayerindex()] ?? 1;
@@ -105,6 +133,7 @@ export class Game {
             }
             gameState.setRqid(rqid);
             gameState.setPlayerId(playerId);
+
             if (this.gameId >= EVAL_GAME_ID_OFFSET && playerId === 1) {
                 const action = getEvalAction(player);
                 action.setRqid(rqid);
@@ -145,10 +174,29 @@ export class Game {
             player.start();
         }
 
-        for await (const chunk of streams.omniscient) {
-            if (chunk.includes("|turn|32")) {
-                for (const player of this.players) {
-                    player.done = true;
+        if (this.gameId < EVAL_GAME_ID_OFFSET) {
+            for await (const chunk of streams.omniscient) {
+                for (const line of chunk.split("\n")) {
+                    if (line.startsWith("|turn")) {
+                        const turnValue = parseInt(line.split("|")[2]);
+                        if (turnValue >= DRAW_TURNS) {
+                            this._drawGame();
+                        }
+                    }
+                }
+                if (stream.battle !== null) {
+                    const numConsecutiveSwitches = 20;
+                    const lastTenMoves = stream.battle.inputLog.slice(
+                        -numConsecutiveSwitches,
+                    );
+                    const switchCount = lastTenMoves.reduce((prev, curr) => {
+                        const isSwitch =
+                            curr.split(" ")[1].toString() === "switch";
+                        return prev + +isSwitch;
+                    }, 0);
+                    if (switchCount === numConsecutiveSwitches) {
+                        this._drawGame();
+                    }
                 }
             }
         }

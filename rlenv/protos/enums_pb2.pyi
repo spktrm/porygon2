@@ -5805,10 +5805,10 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 
 class ActionsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    ACTIONS__NULL: _ClassVar[ActionsEnum]
-    ACTIONS__PAD: _ClassVar[ActionsEnum]
-    ACTIONS__UNK: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE__NULL: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE__PAD: _ClassVar[ActionsEnum]
     ACTIONS_MOVE__SWITCH: _ClassVar[ActionsEnum]
+    ACTIONS_MOVE__UNK: _ClassVar[ActionsEnum]
     ACTIONS_MOVE_10000000VOLTTHUNDERBOLT: _ClassVar[ActionsEnum]
     ACTIONS_MOVE_ABSORB: _ClassVar[ActionsEnum]
     ACTIONS_MOVE_ACCELEROCK: _ClassVar[ActionsEnum]
@@ -6795,6 +6795,9 @@ class ActionsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTIONS_MOVE_ZENHEADBUTT: _ClassVar[ActionsEnum]
     ACTIONS_MOVE_ZINGZAP: _ClassVar[ActionsEnum]
     ACTIONS_MOVE_ZIPPYZAP: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH__NULL: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH__PAD: _ClassVar[ActionsEnum]
+    ACTIONS_SWITCH__UNK: _ClassVar[ActionsEnum]
     ACTIONS_SWITCH_ABABO: _ClassVar[ActionsEnum]
     ACTIONS_SWITCH_ABOMASNOW: _ClassVar[ActionsEnum]
     ACTIONS_SWITCH_ABOMASNOWMEGA: _ClassVar[ActionsEnum]
@@ -13958,10 +13961,10 @@ EFFECT_WEATHER_RAINDANCE: EffectEnum
 EFFECT_WEATHER_SANDSTORM: EffectEnum
 EFFECT_WEATHER_SNOW: EffectEnum
 EFFECT_WEATHER_SUNNYDAY: EffectEnum
-ACTIONS__NULL: ActionsEnum
-ACTIONS__PAD: ActionsEnum
-ACTIONS__UNK: ActionsEnum
+ACTIONS_MOVE__NULL: ActionsEnum
+ACTIONS_MOVE__PAD: ActionsEnum
 ACTIONS_MOVE__SWITCH: ActionsEnum
+ACTIONS_MOVE__UNK: ActionsEnum
 ACTIONS_MOVE_10000000VOLTTHUNDERBOLT: ActionsEnum
 ACTIONS_MOVE_ABSORB: ActionsEnum
 ACTIONS_MOVE_ACCELEROCK: ActionsEnum
@@ -14948,6 +14951,9 @@ ACTIONS_MOVE_ZAPCANNON: ActionsEnum
 ACTIONS_MOVE_ZENHEADBUTT: ActionsEnum
 ACTIONS_MOVE_ZINGZAP: ActionsEnum
 ACTIONS_MOVE_ZIPPYZAP: ActionsEnum
+ACTIONS_SWITCH__NULL: ActionsEnum
+ACTIONS_SWITCH__PAD: ActionsEnum
+ACTIONS_SWITCH__UNK: ActionsEnum
 ACTIONS_SWITCH_ABABO: ActionsEnum
 ACTIONS_SWITCH_ABOMASNOW: ActionsEnum
 ACTIONS_SWITCH_ABOMASNOWMEGA: ActionsEnum
