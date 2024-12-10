@@ -495,7 +495,7 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     threshold: float = 2,
-    epsilon: float = 0.2,
+    epsilon: float = 0.05,
 ) -> chex.Array:
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)
@@ -507,10 +507,9 @@ def get_loss_nerd(
         assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
-        # adv_pi = jnp.minimum(
-        #     ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
-        # )  # importance sampling correction
-        adv_pi = ratio * adv_pi
+        adv_pi = jnp.minimum(
+            ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
+        )  # importance sampling correction
         adv_pi = jnp.clip(adv_pi, a_min=-clip, a_max=clip)
         adv_pi = lax.stop_gradient(adv_pi)
 

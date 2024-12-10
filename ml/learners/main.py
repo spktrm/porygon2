@@ -22,7 +22,7 @@ def main():
     network = get_model(model_config)
 
     training_collector = SingleTrajectoryTrainingBatchCollector(
-        network, learner_config.batch_size
+        network, learner_config.minibatch_size
     )
     evaluation_collector = EvalBatchCollector(network, 4)
 

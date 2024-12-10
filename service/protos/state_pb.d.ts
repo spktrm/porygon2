@@ -71,6 +71,9 @@ export class Info extends jspb.Message {
   getSeed(): number;
   setSeed(value: number): void;
 
+  getDraw(): boolean;
+  setDraw(value: boolean): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -92,6 +95,7 @@ export namespace Info {
     workerindex: number,
     rewards?: Rewards.AsObject,
     seed: number,
+    draw: boolean,
   }
 }
 

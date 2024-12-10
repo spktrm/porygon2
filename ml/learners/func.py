@@ -28,6 +28,7 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
         trajectory_length_max=lengths.max(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
+        draw_ratio=batch.env.draw.any(axis=0).astype(float).mean(),
         early_finish_ratio=(
             jnp.abs(batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0) != 1
         ).mean(),
@@ -79,6 +80,7 @@ def collect_policy_stats_telemetry_data(
     legal_mask: chex.Array,
     state_mask: chex.Array,
     prev_policy: chex.Array,
+    ratio: chex.Array,
 ) -> dict[str, Any]:
     move_entropy = get_loss_entropy(
         policy[..., :4],
@@ -100,6 +102,7 @@ def collect_policy_stats_telemetry_data(
         "switch_entropy": switch_entropy,
         "avg_logit_value": avg_logit_value,
         "kl_div": renormalize(kl_div, state_mask),
+        "ratio": renormalize(ratio, state_mask),
     }
 
 
@@ -112,7 +115,7 @@ def collect_value_stats_telemetry_data(
         mask = jnp.ones_like(value_prediction)
     mask = jnp.squeeze(mask)
     explained_variance = 1 - (
-        jnp.square(jnp.std(value_prediction - value_target, where=mask))
+        jnp.square(jnp.std(value_target - value_prediction, where=mask))
         / jnp.square(jnp.std(value_target, where=mask))
     )
 

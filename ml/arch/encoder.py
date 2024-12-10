@@ -10,6 +10,7 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     PretrainedEmbedding,
     Resnet,
     ToAvgVector,
@@ -19,6 +20,7 @@ from ml.arch.modules import (
 )
 from rlenv.data import (
     NUM_ABILITIES,
+    NUM_ACTION_TYPES,
     NUM_ACTIONS,
     NUM_EDGE_FROM_TYPES,
     NUM_EDGE_TYPES,
@@ -199,7 +201,7 @@ class Encoder(nn.Module):
             **self.cfg.side_condition_encoder.to_dict()
         )
         field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
-        timestep_merge = VectorMerge(**self.cfg.timestep_merge.to_dict())
+        # timestep_merge = VectorMerge(**self.cfg.timestep_merge.to_dict())
         action_embeddings = nn.Embed(
             NUM_ACTIONS, self.cfg.entity_size, name="action_embeddings"
         )
@@ -215,12 +217,10 @@ class Encoder(nn.Module):
         abilities_linear = nn.Dense(self.cfg.entity_size)
         items_linear = nn.Dense(self.cfg.entity_size)
 
-        entity_embedding_layer_norm = nn.LayerNorm(name="entity_embedding_layer_norm")
-        edge_embedding_layer_norm = nn.LayerNorm(name="edge_embedding_layer_norm")
-        timestep_embedding_layer_norm = nn.LayerNorm(
-            name="timestep_embedding_layer_norm"
-        )
-        action_embedding_layer_norm = nn.LayerNorm(name="action_embedding_layer_norm")
+        entity_embedding_fn = MLP((self.cfg.entity_size,))
+        edge_embedding_fn = MLP((self.cfg.entity_size,))
+        timestep_embedding_fn = MLP((self.cfg.entity_size,))
+        action_embedding_fn = MLP((self.cfg.entity_size,))
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
             embeddings = [
@@ -290,7 +290,7 @@ class Encoder(nn.Module):
             ) + sum(embeddings)
 
             mask = get_entity_mask(entity)
-            embedding = entity_embedding_layer_norm(embedding)
+            embedding = entity_embedding_fn(embedding)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
 
@@ -355,7 +355,7 @@ class Encoder(nn.Module):
                 [nn.Dense(self.cfg.entity_size)(x) for x in features]
             ) + sum(embeddings)
             mask = get_edge_mask(edge)
-            embedding = edge_embedding_layer_norm(embedding)
+            embedding = edge_embedding_fn(embedding)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
 
@@ -381,15 +381,26 @@ class Encoder(nn.Module):
 
             # Merge aggregated embeddings with timestep context
 
-            timestep_embedding = timestep_merge(
-                edge_embeddings,
-                entity_embeddings[0],
-                entity_embeddings[1],
-                side_condition_embeddings[0],
-                side_condition_embeddings[1],
-                field_embedding,
+            timestep_embedding = jnp.concatenate(
+                (
+                    edge_embeddings,
+                    entity_embeddings[0],
+                    entity_embeddings[1],
+                    side_condition_embeddings[0],
+                    side_condition_embeddings[1],
+                    field_embedding,
+                ),
+                axis=-1,
             )
-            timestep_embedding = timestep_embedding_layer_norm(timestep_embedding)
+            # timestep_embedding = timestep_merge(
+            #     edge_embeddings,
+            #     entity_embeddings[0],
+            #     entity_embeddings[1],
+            #     side_condition_embeddings[0],
+            #     side_condition_embeddings[1],
+            #     field_embedding,
+            # )
+            timestep_embedding = timestep_embedding_fn(timestep_embedding)
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
             # Return combined timestep embedding and mask
@@ -412,10 +423,6 @@ class Encoder(nn.Module):
             env_step.team.reshape(-1, env_step.team.shape[-1])
         )
 
-        contextual_entity_embeddings = TransformerEncoder(
-            **self.cfg.entity_transformer.to_dict()
-        )(contextual_entity_embeddings, valid_entity_mask)
-
         # Cross-transform public and private embeddings
         contextual_entity_embeddings = TransformerDecoder(
             **self.cfg.entity_timestep_transformer.to_dict()
@@ -433,7 +440,9 @@ class Encoder(nn.Module):
                 # SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
                 # MOVE_ONEHOT(move[FeatureMoveset.MOVESET_MOVE_ID]),
                 # _encode_one_hot(move, FeatureMoveset.MOVESET_SIDE, 2),
-                # _encode_one_hot(move, FeatureMoveset.MOVESET_ACTION_TYPE, NUM_ACTION_TYPES),
+                # _encode_one_hot(
+                #     move, FeatureMoveset.MOVESET_ACTION_TYPE, NUM_ACTION_TYPES
+                # ),
                 # _encode_one_hot(move, FeatureMoveset.MOVESET_LEGAL, 2),
                 _encode_sqrt_one_hot(
                     move[FeatureMoveset.MOVESET_PPUSED].astype(jnp.int32), 65
@@ -450,7 +459,7 @@ class Encoder(nn.Module):
                 [nn.Dense(self.cfg.entity_size)(x) for x in features]
             ) + sum(embeddings)
 
-            embedding = action_embedding_layer_norm(embedding)
+            embedding = action_embedding_fn(embedding)
 
             return embedding, mask
 
@@ -471,34 +480,38 @@ class Encoder(nn.Module):
         # contextual_action_embeddings = layer_norm(contextual_action_embeddings)
 
         # Compute the current state from averaged private embeddings, followed by ResNet processing
-        average_contextual_entity_embeddings = ToAvgVector(
-            **self.cfg.contextual_entity_agg.to_dict()
-        )(contextual_entity_embeddings, valid_entity_mask)
+        # average_contextual_entity_embeddings = ToAvgVector(
+        #     **self.cfg.contextual_entity_agg.to_dict()
+        # )(contextual_entity_embeddings, valid_entity_mask)
 
-        average_contextual_timestep_embeddings = ToAvgVector(
-            **self.cfg.contextual_timestep_agg.to_dict()
-        )(contextual_timestep_embeddings, valid_timestep_mask)
+        # average_contextual_timestep_embeddings = ToAvgVector(
+        #     **self.cfg.contextual_timestep_agg.to_dict()
+        # )(contextual_timestep_embeddings, valid_timestep_mask)
 
-        average_contextual_action_embeddings = ToAvgVector(
-            **self.cfg.contextual_action_agg.to_dict()
-        )(contextual_action_embeddings, env_step.legal)
+        # average_contextual_action_embeddings = ToAvgVector(
+        #     **self.cfg.contextual_action_agg.to_dict()
+        # )(contextual_action_embeddings, env_step.legal)
 
-        draw_embedding = nn.Dense(self.cfg.vector_size)(
-            jax.nn.one_hot((env_step.draw_ratio.squeeze() * 24).astype(jnp.int32), 25)
+        # draw_embedding = nn.Dense(self.cfg.vector_size)(
+        #     jax.nn.one_hot((env_step.draw_ratio.squeeze() * 24).astype(jnp.int32), 25)
+        # )
+
+        # current_state = VectorMerge(**self.cfg.state_merge.to_dict())(
+        #     Resnet(**self.cfg.average_contextual_entity_resnet.to_dict())(
+        #         average_contextual_entity_embeddings
+        #     ),
+        #     Resnet(**self.cfg.average_contextual_timestep_resnet.to_dict())(
+        #         average_contextual_timestep_embeddings
+        #     ),
+        #     Resnet(**self.cfg.average_contextual_action_resnet.to_dict())(
+        #         average_contextual_action_embeddings
+        #     ),
+        # )
+        # current_state = current_state + draw_embedding
+        # current_state = Resnet(**self.cfg.state_resnet.to_dict())(current_state)
+
+        return (
+            contextual_entity_embeddings,
+            valid_entity_mask,
+            contextual_action_embeddings,
         )
-
-        current_state = VectorMerge(**self.cfg.state_merge.to_dict())(
-            Resnet(**self.cfg.average_contextual_entity_resnet.to_dict())(
-                average_contextual_entity_embeddings
-            ),
-            Resnet(**self.cfg.average_contextual_timestep_resnet.to_dict())(
-                average_contextual_timestep_embeddings
-            ),
-            Resnet(**self.cfg.average_contextual_action_resnet.to_dict())(
-                average_contextual_action_embeddings
-            ),
-        )
-        current_state = current_state + draw_embedding
-        current_state = Resnet(**self.cfg.state_resnet.to_dict())(current_state)
-
-        return current_state, contextual_action_embeddings

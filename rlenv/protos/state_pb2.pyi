@@ -21,7 +21,7 @@ class Rewards(_message.Message):
     def __init__(self, winReward: _Optional[float] = ..., hpReward: _Optional[float] = ..., faintedReward: _Optional[float] = ..., switchReward: _Optional[float] = ..., longevityReward: _Optional[float] = ...) -> None: ...
 
 class Info(_message.Message):
-    __slots__ = ("gameId", "done", "playerIndex", "turn", "ts", "drawRatio", "workerIndex", "rewards", "seed")
+    __slots__ = ("gameId", "done", "playerIndex", "turn", "ts", "drawRatio", "workerIndex", "rewards", "seed", "draw")
     GAMEID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
     PLAYERINDEX_FIELD_NUMBER: _ClassVar[int]
@@ -31,6 +31,7 @@ class Info(_message.Message):
     WORKERINDEX_FIELD_NUMBER: _ClassVar[int]
     REWARDS_FIELD_NUMBER: _ClassVar[int]
     SEED_FIELD_NUMBER: _ClassVar[int]
+    DRAW_FIELD_NUMBER: _ClassVar[int]
     gameId: int
     done: bool
     playerIndex: bool
@@ -40,7 +41,8 @@ class Info(_message.Message):
     workerIndex: int
     rewards: Rewards
     seed: int
-    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., drawRatio: _Optional[float] = ..., workerIndex: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ...) -> None: ...
+    draw: bool
+    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., drawRatio: _Optional[float] = ..., workerIndex: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ...) -> None: ...
 
 class State(_message.Message):
     __slots__ = ("info", "legalActions", "history", "moveset", "team", "key")

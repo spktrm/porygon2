@@ -34,15 +34,13 @@ class Model(nn.Module):
         and then applies the policy and value heads to generate the output.
         """
         # Get current state and action embeddings from the encoder
-        current_state_embedding, action_embeddings = self.encoder(env_step)
+        entity_embeddings, valid_entity_mask, action_embeddings = self.encoder(env_step)
 
         # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(
-            current_state_embedding, action_embeddings, env_step
-        )
+        logit, pi, log_pi = self.policy_head(action_embeddings, env_step)
 
         # Apply the value head
-        v = self.value_head(current_state_embedding)
+        v = self.value_head(entity_embeddings, valid_entity_mask)
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)

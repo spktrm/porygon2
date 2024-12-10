@@ -1848,6 +1848,7 @@ export class StateHandler {
         info.setPlayerindex(!!playerIndex);
         info.setTurn(this.player.privateBattle.turn);
         info.setDone(this.player.done);
+        info.setDraw(this.player.draw);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
@@ -1864,7 +1865,11 @@ export class StateHandler {
     }
 
     getState(numHistory?: number): State {
-        if (!this.player.done && this.player.getRequest() === undefined) {
+        if (
+            !this.player.offline &&
+            !this.player.done &&
+            this.player.getRequest() === undefined
+        ) {
             throw new Error("Need Request");
         }
 

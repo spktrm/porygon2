@@ -375,7 +375,8 @@ proto.rlenv.Info.toObject = function(includeInstance, msg) {
     drawratio: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
     workerindex: jspb.Message.getFieldWithDefault(msg, 7, 0),
     rewards: (f = msg.getRewards()) && proto.rlenv.Rewards.toObject(includeInstance, f),
-    seed: jspb.Message.getFieldWithDefault(msg, 9, 0)
+    seed: jspb.Message.getFieldWithDefault(msg, 9, 0),
+    draw: jspb.Message.getBooleanFieldWithDefault(msg, 10, false)
   };
 
   if (includeInstance) {
@@ -448,6 +449,10 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
     case 9:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setSeed(value);
+      break;
+    case 10:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setDraw(value);
       break;
     default:
       reader.skipField();
@@ -539,6 +544,13 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0) {
     writer.writeInt32(
       9,
+      f
+    );
+  }
+  f = message.getDraw();
+  if (f) {
+    writer.writeBool(
+      10,
       f
     );
   }
@@ -723,6 +735,24 @@ proto.rlenv.Info.prototype.getSeed = function() {
  */
 proto.rlenv.Info.prototype.setSeed = function(value) {
   return jspb.Message.setProto3IntField(this, 9, value);
+};
+
+
+/**
+ * optional bool draw = 10;
+ * @return {boolean}
+ */
+proto.rlenv.Info.prototype.getDraw = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 10, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setDraw = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 10, value);
 };
 
 

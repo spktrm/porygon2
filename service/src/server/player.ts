@@ -127,6 +127,7 @@ export class Player extends BattleStreams.BattlePlayer {
     draw: boolean;
 
     worldStream: BattleStreams.BattleStream | null;
+    offline: boolean;
 
     constructor(
         workerIndex: number,
@@ -137,6 +138,8 @@ export class Player extends BattleStreams.BattlePlayer {
         recv: recvFnType,
         worldStream: BattleStreams.BattleStream | null,
         choose?: (action: string) => void,
+        offline: boolean = false,
+        playerIndex: number | undefined = undefined,
     ) {
         super(playerStream);
 
@@ -158,13 +161,14 @@ export class Player extends BattleStreams.BattlePlayer {
         this.workerIndex = workerIndex;
         this.gameId = gameId;
         this.playerId = playerId;
-        this.playerIndex = undefined;
+        this.playerIndex = playerIndex;
         this.rqid = undefined;
 
         this.done = false;
         this.draw = false;
 
         this.worldStream = worldStream;
+        this.offline = offline;
     }
 
     getPlayerIndex(): number | undefined {
@@ -206,14 +210,14 @@ export class Player extends BattleStreams.BattlePlayer {
 
     isActionRequired(chunk: string): boolean {
         const request = this.getRequest()! as AnyObject;
-        if (!request) {
+        if (!this.offline && !request) {
             return false;
         }
-        this.rqid = request.rqid;
-        if (request.teamPreview) {
+        this.rqid = request?.rqid;
+        if (request?.teamPreview) {
             return true;
         }
-        if (request.wait) {
+        if (request?.wait) {
             return false;
         }
         if (this.worldStream === null) {
@@ -221,7 +225,7 @@ export class Player extends BattleStreams.BattlePlayer {
                 return true;
             }
             if (!chunk.includes("|request")) {
-                return !!(request.forceSwitch ?? [])[0];
+                return !!(request?.forceSwitch ?? [])[0];
             }
             return false;
         } else {
@@ -257,7 +261,7 @@ export class Player extends BattleStreams.BattlePlayer {
 
             if (
                 this.isWorldReady() &&
-                this.stream.buf.length === 0 &&
+                (this.offline || this.stream.buf.length === 0) &&
                 this.isActionRequired(chunk)
             ) {
                 const key = await this.send(this);

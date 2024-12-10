@@ -7,6 +7,7 @@ class EnvStep:
     ts: chex.Array = ()
     draw_ratio: chex.Array = ()
     valid: chex.Array = ()
+    draw: chex.Array = ()
     turn: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()

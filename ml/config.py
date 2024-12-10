@@ -163,6 +163,7 @@ class ActorCriticConfig:
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
     batch_size: int = 4
+    minibatch_size: int = batch_size
     # The learning rate for `params`.
     learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.
@@ -172,14 +173,14 @@ class ActorCriticConfig:
     # The "speed" at which `params_target` is following `params`.
     target_network_avg: float = 1e-3
 
-    gamma: float = 1.0
+    gamma: float = 0.99
     c_vtrace: float = 1.0
 
     # Options related to fine tuning of the agent.
     finetune: FineTuning = FineTuning()
 
     heuristic_loss_coef: float = 0.0
-    value_loss_coef: float = 0.25  # div 2 twice (2 players, derivative of **2)
+    value_loss_coef: float = 1.0  # div 2 twice (2 players, derivative of **2)
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.0
 

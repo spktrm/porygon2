@@ -24,6 +24,7 @@ message Info {
     int32 workerIndex = 7;
     Rewards rewards = 8;
     int32 seed = 9;
+    bool draw = 10;
 }
 
 message State {

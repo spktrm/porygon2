@@ -73,7 +73,9 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
         params=params,
         params_target=params_target,
         params_prev=params_prev,
-        tx=tx,
+        tx=optax.MultiSteps(
+            tx, every_k_schedule=config.batch_size // config.minibatch_size
+        ),
     )
 
 
@@ -98,9 +100,9 @@ def load(state: TrainState, path: str):
 
     state = state.replace(
         params=step["params"],
-        params_prev=step["params"],
-        params_target=step["params"],
-        # opt_state=step["opt_state"],
+        params_prev=step["params_prev"],
+        params_target=step["params_target"],
+        opt_state=step["opt_state"],
         step=step["step"],
     )
 
@@ -112,11 +114,13 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     """Train for a single step."""
 
     def loss_fn(params: Params):
-        rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
+        # Define a checkpointed function
+        def rollout_fn(params, env):
+            return jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))(params, env)
 
-        pred: ModelOutput = rollout(params, batch.env)
-        pred_targ: ModelOutput = rollout(state.params_target, batch.env)
-        pred_prev: ModelOutput = rollout(state.params_prev, batch.env)
+        pred: ModelOutput = rollout_fn(params, batch.env)
+        pred_targ: ModelOutput = rollout_fn(state.params_target, batch.env)
+        pred_prev: ModelOutput = rollout_fn(state.params_prev, batch.env)
 
         logs = {}
 
@@ -130,6 +134,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
         rewards = batch.actor.win_rewards
+
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
             v_target_, has_played, policy_target_ = reg_v_trace(
@@ -161,8 +166,8 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             )
         )
 
-        ratio = (action_oh * (pred.log_pi - pred_prev.log_pi)).sum(axis=-1)
-        ratio = jnp.ones_like(batch.env.valid)
+        ratio = (action_oh * jnp.exp(pred.log_pi - pred_prev.log_pi)).sum(axis=-1)
+        # ratio = jnp.ones_like(batch.env.valid)
         is_vector = jnp.expand_dims(ratio, axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
@@ -185,6 +190,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 batch.env.legal,
                 batch.env.valid,
                 pred_prev.pi,
+                ratio,
             )
         )
 
@@ -203,13 +209,12 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     state = state.replace(params_prev=state.params)
     state = state.apply_gradients(grads=grads)
-    new_params_target = optax.incremental_update(
-        new_tensors=state.params,
-        old_tensors=state.params_target,
-        step_size=config.target_network_avg,
-    )
     state = state.replace(
-        params_target=new_params_target,
+        params_target=optax.incremental_update(
+            new_tensors=state.params,
+            old_tensors=state.params_target,
+            step_size=config.target_network_avg,
+        ),
         actor_steps=state.actor_steps + batch.env.valid.sum(),
         learner_steps=state.learner_steps + 1,
     )

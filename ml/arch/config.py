@@ -42,8 +42,8 @@ def add_name_recursive(cfg, path=None):
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 128
-    vector_size = 512
+    entity_size = 256
+    vector_size = 1024
 
     use_layer_norm = True
     use_spectral_linear = False
@@ -58,7 +58,6 @@ def get_model_cfg():
     cfg.encoder.field_encoder = ConfigDict()
     cfg.encoder.timestep_merge = ConfigDict()
     cfg.encoder.timestep_transformer = ConfigDict()
-    cfg.encoder.entity_transformer = ConfigDict()
     cfg.encoder.entity_timestep_transformer = ConfigDict()
     cfg.encoder.action_transformer = ConfigDict()
     cfg.encoder.action_entity_transformer = ConfigDict()
@@ -95,15 +94,6 @@ def get_model_cfg():
     cfg.encoder.timestep_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.timestep_transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.encoder.entity_transformer.num_layers = num_transformer_layers
-    cfg.encoder.entity_transformer.key_size = entity_size // 2
-    cfg.encoder.entity_transformer.value_size = entity_size // 2
-    cfg.encoder.entity_transformer.model_size = entity_size
-    cfg.encoder.entity_transformer.num_heads = num_transformer_heads
-    cfg.encoder.entity_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_transformer.use_spectral_linear = use_spectral_linear
-    cfg.encoder.entity_transformer.resblocks_hidden_size = entity_size // 2
-
     cfg.encoder.entity_timestep_transformer.num_layers = num_transformer_layers
     cfg.encoder.entity_timestep_transformer.key_size = entity_size // 2
     cfg.encoder.entity_timestep_transformer.value_size = entity_size // 2
@@ -114,15 +104,6 @@ def get_model_cfg():
     cfg.encoder.entity_timestep_transformer.y_need_pos = True
     cfg.encoder.entity_timestep_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_timestep_transformer.resblocks_hidden_size = entity_size // 2
-
-    cfg.encoder.action_transformer.num_layers = num_transformer_layers
-    cfg.encoder.action_transformer.key_size = entity_size // 2
-    cfg.encoder.action_transformer.value_size = entity_size // 2
-    cfg.encoder.action_transformer.model_size = entity_size
-    cfg.encoder.action_transformer.num_heads = num_transformer_heads
-    cfg.encoder.action_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.action_transformer.use_spectral_linear = use_spectral_linear
-    cfg.encoder.action_transformer.resblocks_hidden_size = entity_size // 2
 
     cfg.encoder.action_entity_transformer.num_layers = num_transformer_layers
     cfg.encoder.action_entity_transformer.key_size = entity_size // 2
@@ -163,29 +144,39 @@ def get_model_cfg():
 
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()
-    cfg.policy_head.key_size = entity_size
+    cfg.policy_head.transformer = ConfigDict()
+    cfg.policy_head.logits = ConfigDict()
 
-    cfg.policy_head.query = ConfigDict()
-    cfg.policy_head.query.num_resblocks = 2
-    cfg.policy_head.query.use_layer_norm = use_layer_norm
+    cfg.policy_head.transformer.num_layers = num_transformer_layers
+    cfg.policy_head.transformer.key_size = entity_size // 2
+    cfg.policy_head.transformer.value_size = entity_size // 2
+    cfg.policy_head.transformer.model_size = entity_size
+    cfg.policy_head.transformer.num_heads = num_transformer_heads
+    cfg.policy_head.transformer.use_layer_norm = use_layer_norm
+    cfg.policy_head.transformer.use_spectral_linear = use_spectral_linear
+    cfg.policy_head.transformer.resblocks_hidden_size = entity_size // 2
 
-    cfg.policy_head.pointer_logits = ConfigDict()
-    cfg.policy_head.pointer_logits.num_layers_query = 1
-    cfg.policy_head.pointer_logits.num_layers_keys = 2
-    cfg.policy_head.pointer_logits.key_size = entity_size
-    cfg.policy_head.pointer_logits.use_layer_norm = use_layer_norm
-    cfg.policy_head.entity_size = entity_size
-    cfg.policy_head.vector_size = vector_size
+    cfg.policy_head.logits.num_logits = 1
+    cfg.policy_head.logits.num_linear_layers = 1
+    cfg.policy_head.logits.use_layer_norm = True
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
-    cfg.value_head.resnet = ConfigDict()
-    cfg.value_head.resnet.num_resblocks = 2
-    cfg.value_head.resnet.use_layer_norm = use_layer_norm
-
+    cfg.value_head.transformer = ConfigDict()
     cfg.value_head.logits = ConfigDict()
+
+    cfg.value_head.transformer.num_layers = num_transformer_layers
+    cfg.value_head.transformer.key_size = entity_size // 2
+    cfg.value_head.transformer.value_size = entity_size // 2
+    cfg.value_head.transformer.model_size = entity_size
+    cfg.value_head.transformer.num_heads = num_transformer_heads
+    cfg.value_head.transformer.use_layer_norm = use_layer_norm
+    cfg.value_head.transformer.use_spectral_linear = use_spectral_linear
+    cfg.value_head.transformer.resblocks_hidden_size = entity_size // 2
+
     cfg.value_head.logits.num_logits = 1
-    cfg.value_head.logits.use_layer_norm = use_layer_norm
+    cfg.value_head.logits.num_linear_layers = 1
+    cfg.value_head.logits.use_layer_norm = True
 
     return add_name_recursive(cfg)
 
