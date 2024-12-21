@@ -12,15 +12,11 @@ from ml_collections import ConfigDict
 from ml.arch.modules import (
     MLP,
     PretrainedEmbedding,
-    Resnet,
-    ToAvgVector,
     TransformerDecoder,
     TransformerEncoder,
-    VectorMerge,
 )
 from rlenv.data import (
     NUM_ABILITIES,
-    NUM_ACTION_TYPES,
     NUM_ACTIONS,
     NUM_EDGE_FROM_TYPES,
     NUM_EDGE_TYPES,
@@ -30,6 +26,7 @@ from rlenv.data import (
     NUM_ITEMS,
     NUM_MAJOR_ARGS,
     NUM_MINOR_ARGS,
+    NUM_MOVES,
     NUM_SPECIES,
     NUM_STATUS,
     NUM_VOLATILE_STATUS,
@@ -201,64 +198,42 @@ class Encoder(nn.Module):
             **self.cfg.side_condition_encoder.to_dict()
         )
         field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
-        # timestep_merge = VectorMerge(**self.cfg.timestep_merge.to_dict())
-        action_embeddings = nn.Embed(
-            NUM_ACTIONS, self.cfg.entity_size, name="action_embeddings"
-        )
-        species_embeddings = nn.Embed(
-            NUM_SPECIES, self.cfg.entity_size, name="species_embeddings"
-        )
-        abilities_embeddings = nn.Embed(
-            NUM_ABILITIES, self.cfg.entity_size, name="abilities_embeddings"
-        )
-        items_embeddings = nn.Embed(
-            NUM_ITEMS, self.cfg.entity_size, name="items_embeddings"
-        )
-        abilities_linear = nn.Dense(self.cfg.entity_size)
-        items_linear = nn.Dense(self.cfg.entity_size)
 
-        entity_embedding_fn = MLP((self.cfg.entity_size,))
-        edge_embedding_fn = MLP((self.cfg.entity_size,))
-        timestep_embedding_fn = MLP((self.cfg.entity_size,))
-        action_embedding_fn = MLP((self.cfg.entity_size,))
+        timestep_linear = lambda x: MLP((self.cfg.entity_size,))(
+            nn.Dense(self.cfg.entity_size)(x)
+        )
+        entity_linear = lambda x: MLP((self.cfg.entity_size,))(
+            nn.Dense(self.cfg.entity_size)(x)
+        )
+        edge_linear = lambda x: MLP((self.cfg.entity_size,))(
+            nn.Dense(self.cfg.entity_size)(x)
+        )
+        action_linear = lambda x: MLP((self.cfg.entity_size,))(
+            nn.Dense(self.cfg.entity_size)(x)
+        )
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
-            embeddings = [
-                species_embeddings(entity[FeatureEntity.ENTITY_SPECIES]),
-                abilities_embeddings(entity[FeatureEntity.ENTITY_ABILITY]),
-                items_embeddings(entity[FeatureEntity.ENTITY_ABILITY]),
-                abilities_linear(ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY])),
-                items_linear(ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM])),
-                action_embeddings(entity[FeatureEntity.ENTITY_MOVEID0]),
-                action_embeddings(entity[FeatureEntity.ENTITY_MOVEID1]),
-                action_embeddings(entity[FeatureEntity.ENTITY_MOVEID2]),
-                action_embeddings(entity[FeatureEntity.ENTITY_MOVEID3]),
-            ]
 
-            # Embeddings (to feed to nn.Dense modules):
-            features = [
-                SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
-                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_LEVEL], 100),
-                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_HP_TOKEN], 1023),
-                _encode_volatiles_onehot(entity),
-                _features_embedding(
-                    entity,
-                    {
-                        FeatureEntity.ENTITY_BOOST_ATK_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_DEF_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_SPA_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_SPD_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_SPE_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_EVASION_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE: 1 / 2,
-                        FeatureEntity.ENTITY_LEVEL: 1 / 100,
-                        FeatureEntity.ENTITY_HP_TOKEN: 1 / 1023,
-                    },
-                ),
-            ]
+            onehot_move = lambda x: jax.nn.one_hot(x, NUM_MOVES)
+            moveset_onehot = (
+                onehot_move(entity[FeatureEntity.ENTITY_MOVEID0])
+                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID1])
+                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID2])
+                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID3])
+            )
 
             # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
             one_hot_encoded = [
+                SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
+                ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY]),
+                ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM]),
+                _encode_one_hot(entity, FeatureEntity.ENTITY_SPECIES, NUM_SPECIES),
+                _encode_one_hot(entity, FeatureEntity.ENTITY_ABILITY, NUM_ABILITIES),
+                _encode_one_hot(entity, FeatureEntity.ENTITY_ITEM, NUM_ITEMS),
+                moveset_onehot,
+                _encode_volatiles_onehot(entity),
+                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_LEVEL], 100),
+                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_HP_TOKEN], 1023),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_GENDER, NUM_GENDERS),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_STATUS, NUM_STATUS),
                 _encode_one_hot(
@@ -283,28 +258,21 @@ class Encoder(nn.Module):
             ]
 
             boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            features.append(astype(boolean_code, jnp.float32))
-
-            embedding = sum(
-                [nn.Dense(self.cfg.entity_size)(x) for x in features]
-            ) + sum(embeddings)
+            embedding = entity_linear(boolean_code)
 
             mask = get_entity_mask(entity)
-            embedding = entity_embedding_fn(embedding)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
 
         def _encode_edge(edge: chex.Array) -> chex.Array:
-            embeddings = [
-                action_embeddings(edge[FeatureEdge.ACTION_TOKEN]),
-                items_embeddings(edge[FeatureEdge.ITEM_TOKEN]),
-                abilities_embeddings(edge[FeatureEdge.ABILITY_TOKEN]),
-                abilities_linear(ABILITY_ONEHOT(edge[FeatureEdge.ABILITY_TOKEN])),
-                items_linear(ITEM_ONEHOT(edge[FeatureEdge.ITEM_TOKEN])),
-            ]
 
             # Embeddings (to feed to nn.Dense modules):
-            features = [
+            one_hot_encoded = [
+                ABILITY_ONEHOT(edge[FeatureEdge.ABILITY_TOKEN]),
+                ITEM_ONEHOT(edge[FeatureEdge.ITEM_TOKEN]),
+                _encode_one_hot(edge, FeatureEdge.ACTION_TOKEN, NUM_ACTIONS),
+                _encode_one_hot(edge, FeatureEdge.ITEM_TOKEN, NUM_ITEMS),
+                _encode_one_hot(edge, FeatureEdge.ABILITY_TOKEN, NUM_ABILITIES),
                 _encode_one_hot(edge, FeatureEdge.MAJOR_ARG, NUM_MAJOR_ARGS),
                 _encode_one_hot(edge, FeatureEdge.MINOR_ARG, NUM_MINOR_ARGS),
                 _encode_one_hot(edge, FeatureEdge.FROM_SOURCE_TOKEN, NUM_EFFECTS),
@@ -321,23 +289,6 @@ class Encoder(nn.Module):
                 _binary_scale_embedding(
                     edge[FeatureEdge.EDGE_AFFECTING_SIDE].astype(jnp.int32), 3
                 ),
-                _features_embedding(
-                    edge,
-                    {
-                        FeatureEdge.DAMAGE_TOKEN: 1 / 1023,
-                        FeatureEdge.BOOST_ATK_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_DEF_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_SPA_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_SPD_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_SPE_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_EVASION_VALUE: 1 / 2,
-                        FeatureEdge.BOOST_ACCURACY_VALUE: 1 / 2,
-                    },
-                ),
-            ]
-
-            # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
-            one_hot_encoded = [
                 _encode_one_hot(edge, FeatureEdge.STATUS_TOKEN, NUM_STATUS),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_ATK_VALUE),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_DEF_VALUE),
@@ -349,13 +300,9 @@ class Encoder(nn.Module):
             ]
 
             boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            features.append(astype(boolean_code, jnp.float32))
+            embedding = edge_linear(boolean_code)
 
-            embedding = sum(
-                [nn.Dense(self.cfg.entity_size)(x) for x in features]
-            ) + sum(embeddings)
             mask = get_edge_mask(edge)
-            embedding = edge_embedding_fn(embedding)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
 
@@ -392,15 +339,8 @@ class Encoder(nn.Module):
                 ),
                 axis=-1,
             )
-            # timestep_embedding = timestep_merge(
-            #     edge_embeddings,
-            #     entity_embeddings[0],
-            #     entity_embeddings[1],
-            #     side_condition_embeddings[0],
-            #     side_condition_embeddings[1],
-            #     field_embedding,
-            # )
-            timestep_embedding = timestep_embedding_fn(timestep_embedding)
+
+            timestep_embedding = timestep_linear(timestep_embedding)
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
             # Return combined timestep embedding and mask
@@ -419,15 +359,14 @@ class Encoder(nn.Module):
         )(timestep_embeddings, valid_timestep_mask)
 
         # Process private entities and generate masks
-        contextual_entity_embeddings, valid_entity_mask = jax.vmap(_encode_entity)(
+        entity_embeddings, valid_entity_mask = jax.vmap(_encode_entity)(
             env_step.team.reshape(-1, env_step.team.shape[-1])
         )
 
-        # Cross-transform public and private embeddings
         contextual_entity_embeddings = TransformerDecoder(
             **self.cfg.entity_timestep_transformer.to_dict()
         )(
-            contextual_entity_embeddings,
+            entity_embeddings,
             contextual_timestep_embeddings,
             valid_entity_mask,
             valid_timestep_mask,
@@ -436,30 +375,20 @@ class Encoder(nn.Module):
         # Compute action embeddings
         def _encode_move(move: chex.Array) -> chex.Array:
             # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
-            features = [
-                # SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
-                # MOVE_ONEHOT(move[FeatureMoveset.MOVESET_MOVE_ID]),
-                # _encode_one_hot(move, FeatureMoveset.MOVESET_SIDE, 2),
-                # _encode_one_hot(
-                #     move, FeatureMoveset.MOVESET_ACTION_TYPE, NUM_ACTION_TYPES
-                # ),
-                # _encode_one_hot(move, FeatureMoveset.MOVESET_LEGAL, 2),
+            one_hot_encoded = [
+                SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
+                MOVE_ONEHOT(move[FeatureMoveset.MOVESET_MOVE_ID]),
+                _encode_one_hot(move, FeatureMoveset.MOVESET_ACTION_TYPE, 2),
+                _encode_one_hot(move, FeatureMoveset.MOVESET_ACTION_ID, NUM_ACTIONS),
                 _encode_sqrt_one_hot(
                     move[FeatureMoveset.MOVESET_PPUSED].astype(jnp.int32), 65
                 ),
-                # _encode_sqrt_one_hot(
-                #     move[FeatureMoveset.MOVESET_EST_DAMAGE].astype(jnp.int32), 512
-                # ),
             ]
-            embeddings = [action_embeddings(move[FeatureMoveset.MOVESET_ACTION_ID])]
 
             mask = get_move_mask(move)
 
-            embedding = sum(
-                [nn.Dense(self.cfg.entity_size)(x) for x in features]
-            ) + sum(embeddings)
-
-            embedding = action_embedding_fn(embedding)
+            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
+            embedding = action_linear(boolean_code)
 
             return embedding, mask
 
@@ -484,6 +413,10 @@ class Encoder(nn.Module):
         #     **self.cfg.contextual_entity_agg.to_dict()
         # )(contextual_entity_embeddings, valid_entity_mask)
 
+        # average_contextual_entity_embeddings = (
+        #     valid_entity_mask.astype(jnp.float32) @ contextual_entity_embeddings
+        # ) / valid_entity_mask.sum().clip(min=1)
+
         # average_contextual_timestep_embeddings = ToAvgVector(
         #     **self.cfg.contextual_timestep_agg.to_dict()
         # )(contextual_timestep_embeddings, valid_timestep_mask)
@@ -503,10 +436,8 @@ class Encoder(nn.Module):
         #     Resnet(**self.cfg.average_contextual_timestep_resnet.to_dict())(
         #         average_contextual_timestep_embeddings
         #     ),
-        #     Resnet(**self.cfg.average_contextual_action_resnet.to_dict())(
-        #         average_contextual_action_embeddings
-        #     ),
         # )
+
         # current_state = current_state + draw_embedding
         # current_state = Resnet(**self.cfg.state_resnet.to_dict())(current_state)
 

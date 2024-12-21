@@ -1,4 +1,4 @@
-from typing import Any, Sequence, Tuple
+from typing import Any, Callable, Sequence, Tuple
 
 import chex
 import jax
@@ -437,28 +437,99 @@ def reg_v_trace(
     return v_target, has_played, policy_target
 
 
-def get_loss_v(
+def generic_value_loss(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+    loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
+) -> chex.Array:
+    """
+    Compute a generic masked loss between predictions and targets using a given loss function.
+
+    Parameters
+    ----------
+    v_list : Sequence[chex.Array]
+        Predicted values, each array shaped [N, 1].
+    v_target_list : Sequence[chex.Array]
+        Target values, each array shaped [N, 1].
+    mask_list : Sequence[chex.Array]
+        Mask arrays, each shaped [N], indicating which entries contribute to the loss.
+    loss_fn : Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
+        A function that takes (prediction, target) and returns element-wise loss values.
+
+    Returns
+    -------
+    chex.Array
+        The scalar sum of all computed losses.
+    """
+    chex.assert_trees_all_equal_shapes(v_list, v_target_list)
+    chex.assert_shape(mask_list, v_list[0].shape[:-1])
+
+    loss_v_list = []
+    for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
+        # Expand mask to shape [N, 1]
+        mask_expanded = jnp.expand_dims(mask, axis=-1)
+
+        # Compute element-wise loss
+        loss_vals = loss_fn(v_n, lax.stop_gradient(v_target))
+
+        # Renormalize handles masking and division by sum(mask)
+        loss_v = renormalize(loss_vals, mask_expanded)
+
+        loss_v_list.append(loss_v)
+
+    return sum(loss_v_list)
+
+
+def mse_loss(pred: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
+    """Mean Squared Error loss."""
+    return (pred - target) ** 2
+
+
+def mae_loss(pred: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
+    """Mean Absolute Error loss."""
+    return jnp.abs(pred - target)
+
+
+def huber_loss(
+    pred: jnp.ndarray, target: jnp.ndarray, delta: float = 1.0
+) -> jnp.ndarray:
+    """Huber loss function."""
+    error = pred - target
+    abs_error = jnp.abs(error)
+    quadratic = jnp.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    return 0.5 * quadratic**2 + delta * linear
+
+
+def get_loss_v_mse(
     v_list: Sequence[chex.Array],
     v_target_list: Sequence[chex.Array],
     mask_list: Sequence[chex.Array],
 ) -> chex.Array:
-    """Define the loss function for the critic."""
-    chex.assert_trees_all_equal_shapes(v_list, v_target_list)
-    # v_list and v_target_list come with a degenerate trailing dimension,
-    # which mask_list tensors do not have.
-    chex.assert_shape(mask_list, v_list[0].shape[:-1])
-    loss_v_list = []
-    for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
-        assert v_n.shape[0] == v_target.shape[0]
+    """Compute MSE-based value loss."""
+    return generic_value_loss(v_list, v_target_list, mask_list, mse_loss)
 
-        loss_v = (
-            jnp.expand_dims(mask, axis=-1) * (v_n - lax.stop_gradient(v_target)) ** 2
-        )
-        normalization = jnp.sum(mask)
-        loss_v = jnp.sum(loss_v) / (normalization + (normalization == 0.0))
 
-        loss_v_list.append(loss_v)
-    return sum(loss_v_list)
+def get_loss_v_mae(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+) -> chex.Array:
+    """Compute MAE-based value loss."""
+    return generic_value_loss(v_list, v_target_list, mask_list, mae_loss)
+
+
+def get_loss_v_huber(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+    delta: float = 1.0,
+) -> chex.Array:
+    """Compute Huber-based value loss."""
+    return generic_value_loss(
+        v_list, v_target_list, mask_list, lambda p, t: huber_loss(p, t, delta)
+    )
 
 
 def apply_force_with_threshold(
@@ -495,7 +566,7 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     threshold: float = 2,
-    epsilon: float = 0.05,
+    epsilon: float = 0.2,
 ) -> chex.Array:
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)

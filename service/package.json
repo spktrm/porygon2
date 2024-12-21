@@ -14,6 +14,7 @@
         "start-evaluation2-server": "node dist/server/index.js --type evaluation2",
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
         "test": "npm run compile-base && node dist/tests/main.js",
+        "offline": "npm run compile-base && node dist/offline/main.js",
         "matchup": "npm run compile-base && node dist/tests/matchup.js",
         "preprocess-replays": "ts-node src/replays/main.ts"
     },

@@ -43,5 +43,7 @@ fi
 
 cd ../
 fix-protobuf-imports rlenv/protos/
+mkdir heuristics/protos/
+cp -r rlenv/protos/ heuristics/protos/
 
 echo "Protobuf compilation completed successfully!"

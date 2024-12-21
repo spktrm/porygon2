@@ -11,8 +11,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
 
-# np.set_printoptions(precision=2, suppress=True)
-# jnp.set_printoptions(precision=2, suppress=True)
+np.set_printoptions(precision=2, suppress=True)
+jnp.set_printoptions(precision=2, suppress=True)
 
 
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
@@ -27,7 +27,7 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array):
+def layer_norm(array: chex.Array, scale: int = 2.5):
     return nn.LayerNorm()(array)
 
 
@@ -248,6 +248,10 @@ def get_rope_embedding(x: chex.Array):
     return x_rope
 
 
+def l2_normalize(x: chex.Array, epsilon: float = 1e-6):
+    return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
+
+
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
 
@@ -300,7 +304,18 @@ class MultiHeadAttention(nn.Module):
 
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
-        *leading_dims, sequence_length, _ = query.shape
+        *leading_dims, s1_length, _ = query.shape
+        # *_, s2_length, __ = key.shape
+
+        # if s1_length == s2_length:
+        #     compress = self.param(
+        #         "compress", nn.initializers.xavier_uniform(), (s1_length, 4)
+        #     )
+
+        #     masked_compress = compress.T * mask.any(axis=-1)
+        #     key = masked_compress @ key
+        #     value = masked_compress @ value
+        #     mask = None
 
         key_size = self.key_size
         value_size = self.value_size or self.key_size
@@ -347,7 +362,7 @@ class MultiHeadAttention(nn.Module):
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
+        attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
         final_projection = linear_mod(model_size)
@@ -356,14 +371,13 @@ class MultiHeadAttention(nn.Module):
 
 def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray = None) -> jnp.ndarray:
     """Create a combined attention mask for cross-attention."""
-
-    if mask1 is not None:
-        if mask2 is not None:
-            return jnp.einsum("...i,...j->...ij", mask1, mask2)[..., None, :, :]
-        else:
-            return mask1[None, None]
-    else:
+    if mask1 is None:
         return None
+
+    if mask2 is None:
+        mask2 = mask1
+
+    return mask1[..., None, :, None] & mask2[..., None, None, :]
 
 
 class TransformerEncoder(nn.Module):
@@ -379,7 +393,6 @@ class TransformerEncoder(nn.Module):
     y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
-    norm_first: bool = True
 
     @nn.compact
     def __call__(self, x: chex.Array, mask: chex.Array = None):
@@ -390,46 +403,26 @@ class TransformerEncoder(nn.Module):
         sa_mask = create_attention_mask(mask)
 
         def encoder_layer(x: chex.Array):
-            if self.norm_first:
-                x_ln = layer_norm(x)
-                x = x + MultiHeadAttention(
-                    num_heads=self.num_heads,
-                    key_size=self.key_size,
-                    value_size=self.value_size,
-                    model_size=self.model_size,
-                    query_need_pos=self.x_need_pos,
-                    key_need_pos=self.y_need_pos,
-                    use_spectral_linear=self.use_spectral_linear,
-                )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-                x_ln = layer_norm(x)
-                return x + MLP(
-                    (self.resblocks_hidden_size, self.model_size),
-                    use_layer_norm=False,
-                    activate_first=False,
-                    use_spectral_linear=self.use_spectral_linear,
-                )(x_ln)
-            else:
-                x = layer_norm(
-                    x
-                    + MultiHeadAttention(
-                        num_heads=self.num_heads,
-                        key_size=self.key_size,
-                        value_size=self.value_size,
-                        model_size=self.model_size,
-                        query_need_pos=self.x_need_pos,
-                        key_need_pos=self.y_need_pos,
-                        use_spectral_linear=self.use_spectral_linear,
-                    )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-                )
-                return layer_norm(
-                    x
-                    + MLP(
-                        (self.resblocks_hidden_size, self.model_size),
-                        use_layer_norm=False,
-                        activate_first=False,
-                        use_spectral_linear=self.use_spectral_linear,
-                    )(x)
-                )
+            x_ln = layer_norm(x)
+            mha = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.y_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
+            x_ln = layer_norm(x)
+            mlp = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            return x
 
         for _ in range(self.num_layers):
             x = encoder_layer(x)
@@ -451,7 +444,6 @@ class TransformerDecoder(nn.Module):
     y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
-    norm_first: bool = True
 
     @nn.compact
     def __call__(
@@ -472,68 +464,37 @@ class TransformerDecoder(nn.Module):
         ca_mask = create_attention_mask(x_mask, y_mask)
 
         def decoder_layer(x: chex.Array, y: chex.Array):
-            if self.norm_first:
-                x_ln = layer_norm(x)
-                x = x + MultiHeadAttention(
-                    num_heads=self.num_heads,
-                    key_size=self.key_size,
-                    value_size=self.value_size,
-                    model_size=self.model_size,
-                    query_need_pos=self.x_need_pos,
-                    key_need_pos=self.x_need_pos,
-                    use_spectral_linear=self.use_spectral_linear,
-                )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-                x_ln = layer_norm(x)
-                x = x + MultiHeadAttention(
-                    num_heads=self.num_heads,
-                    key_size=self.key_size,
-                    value_size=self.value_size,
-                    model_size=self.model_size,
-                    query_need_pos=self.x_need_pos,
-                    key_need_pos=self.y_need_pos,
-                    use_spectral_linear=self.use_spectral_linear,
-                )(query=x_ln, key=y, value=y, mask=ca_mask)
-                x_ln = layer_norm(x)
-                return x + MLP(
-                    (self.resblocks_hidden_size, self.model_size),
-                    use_layer_norm=False,
-                    activate_first=False,
-                    use_spectral_linear=self.use_spectral_linear,
-                )(x_ln)
-            else:
-                x = layer_norm(
-                    x
-                    + MultiHeadAttention(
-                        num_heads=self.num_heads,
-                        key_size=self.key_size,
-                        value_size=self.value_size,
-                        model_size=self.model_size,
-                        query_need_pos=self.x_need_pos,
-                        key_need_pos=self.x_need_pos,
-                        use_spectral_linear=self.use_spectral_linear,
-                    )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-                )
-                x = layer_norm(
-                    x
-                    + MultiHeadAttention(
-                        num_heads=self.num_heads,
-                        key_size=self.key_size,
-                        value_size=self.value_size,
-                        model_size=self.model_size,
-                        query_need_pos=self.x_need_pos,
-                        key_need_pos=self.y_need_pos,
-                        use_spectral_linear=self.use_spectral_linear,
-                    )(query=x, key=y, value=y, mask=ca_mask)
-                )
-                return layer_norm(
-                    x
-                    + MLP(
-                        (self.resblocks_hidden_size, self.model_size),
-                        use_layer_norm=False,
-                        activate_first=False,
-                        use_spectral_linear=self.use_spectral_linear,
-                    )(x)
-                )
+            x_ln = layer_norm(x)
+            mha = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.x_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
+            x_ln = layer_norm(x)
+            ca = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.y_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=y, value=y, mask=ca_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
+            x_ln = layer_norm(x)
+            mlp = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            return x
 
         for _ in range(self.num_layers):
             x = decoder_layer(x, y)

@@ -24,40 +24,47 @@ async function worker(gameId: number, playerIds: number[]) {
     game.reset();
     game.reset();
 
-    (async () => {
-        let rewards = [];
+    let infos = [];
+    let rewardsCounts = [0, 0];
 
-        while (true) {
-            const gameState = await queue.get();
-            const rqid = gameState.getRqid();
+    while (true) {
+        const gameState = await queue.get();
+        const rqid = gameState.getRqid();
 
-            if (rqid >= 0) {
-                const state = State.deserializeBinary(
-                    gameState.getState_asU8(),
-                );
-                const info = state.getInfo()!;
-                rewards.push(info.getRewards()!);
-                const action = new Action();
-                action.setValue(-1);
-                game.tasks.submitResult(rqid, action);
-            } else {
-                game.reset();
-                rewards = [];
-            }
+        const state = State.deserializeBinary(gameState.getState_asU8());
+        const info = state.getInfo()!;
+        infos.push(info);
+
+        if (rqid >= 0) {
+            const action = new Action();
+            action.setValue(-1);
+            game.tasks.submitResult(rqid, action);
+        } else {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const rewards = info.getRewards()!;
+            infos.map((info) => {
+                const rewards = info.getRewards()!;
+                const playerIndex = info.getPlayerindex();
+                rewardsCounts[+playerIndex] += rewards.getFaintedreward();
+            });
+
+            game.reset();
+            infos = [];
+            rewardsCounts = [0, 0];
         }
-    })();
+    }
 }
 
-function main() {
+async function main() {
     for (const { gameId, playerIds } of [
-        // { gameId: 0, playerIds: [0, 1] },
+        { gameId: 0, playerIds: [0, 1] },
         // { gameId: 1, playerIds: [2, 3] },
-        { gameId: 10000, playerIds: [10000] },
+        // { gameId: 10000, playerIds: [10000] },
         // { gameId: 10001, playerIds: [10001] },
         // { gameId: 10002, playerIds: [10002] },
         // { gameId: 10003, playerIds: [10003] },
     ]) {
-        worker(gameId, playerIds);
+        await worker(gameId, playerIds);
     }
 }
 

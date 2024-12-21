@@ -41,6 +41,26 @@ export namespace Rewards {
   }
 }
 
+export class Heuristics extends jspb.Message {
+  getHeuristicaction(): number;
+  setHeuristicaction(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Heuristics.AsObject;
+  static toObject(includeInstance: boolean, msg: Heuristics): Heuristics.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Heuristics, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Heuristics;
+  static deserializeBinaryFromReader(message: Heuristics, reader: jspb.BinaryReader): Heuristics;
+}
+
+export namespace Heuristics {
+  export type AsObject = {
+    heuristicaction: number,
+  }
+}
+
 export class Info extends jspb.Message {
   getGameid(): number;
   setGameid(value: number): void;
@@ -74,6 +94,11 @@ export class Info extends jspb.Message {
   getDraw(): boolean;
   setDraw(value: boolean): void;
 
+  hasHeuristics(): boolean;
+  clearHeuristics(): void;
+  getHeuristics(): Heuristics | undefined;
+  setHeuristics(value?: Heuristics): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -96,6 +121,7 @@ export namespace Info {
     rewards?: Rewards.AsObject,
     seed: number,
     draw: boolean,
+    heuristics?: Heuristics.AsObject,
   }
 }
 
@@ -146,6 +172,62 @@ export namespace State {
     moveset: Uint8Array | string,
     team: Uint8Array | string,
     key: string,
+  }
+}
+
+export class Trajectory extends jspb.Message {
+  clearStatesList(): void;
+  getStatesList(): Array<State>;
+  setStatesList(value: Array<State>): void;
+  addStates(value?: State, index?: number): State;
+
+  clearActionsList(): void;
+  getActionsList(): Array<number>;
+  setActionsList(value: Array<number>): void;
+  addActions(value: number, index?: number): number;
+
+  clearRewardsList(): void;
+  getRewardsList(): Array<number>;
+  setRewardsList(value: Array<number>): void;
+  addRewards(value: number, index?: number): number;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Trajectory.AsObject;
+  static toObject(includeInstance: boolean, msg: Trajectory): Trajectory.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Trajectory, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Trajectory;
+  static deserializeBinaryFromReader(message: Trajectory, reader: jspb.BinaryReader): Trajectory;
+}
+
+export namespace Trajectory {
+  export type AsObject = {
+    statesList: Array<State.AsObject>,
+    actionsList: Array<number>,
+    rewardsList: Array<number>,
+  }
+}
+
+export class Dataset extends jspb.Message {
+  clearTrajectoriesList(): void;
+  getTrajectoriesList(): Array<Trajectory>;
+  setTrajectoriesList(value: Array<Trajectory>): void;
+  addTrajectories(value?: Trajectory, index?: number): Trajectory;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Dataset.AsObject;
+  static toObject(includeInstance: boolean, msg: Dataset): Dataset.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Dataset, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Dataset;
+  static deserializeBinaryFromReader(message: Dataset, reader: jspb.BinaryReader): Dataset;
+}
+
+export namespace Dataset {
+  export type AsObject = {
+    trajectoriesList: Array<Trajectory.AsObject>,
   }
 }
 

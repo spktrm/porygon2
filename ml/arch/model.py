@@ -13,8 +13,10 @@ from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
+from rlenv.data import NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, ModelOutput
+from rlenv.protos.features_pb2 import FeatureEdge, FeatureEntity, FeatureMoveset
 
 
 class Model(nn.Module):
@@ -28,19 +30,76 @@ class Model(nn.Module):
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
+    def _preprocess(self, env_step: EnvStep) -> EnvStep:
+        player_id = env_step.player_id
+        leading_dims = env_step.valid.shape[:-1]
+
+        moveset = env_step.moveset.reshape((*leading_dims, 2, -1, NUM_MOVE_FIELDS))
+        moveset.at[..., FeatureMoveset.MOVESET_SIDE].set(
+            moveset[..., FeatureMoveset.MOVESET_SIDE] ^ player_id
+        )
+
+        team = env_step.team.reshape((*leading_dims, 2, 6, NUM_ENTITY_FIELDS))
+        team.at[..., FeatureEntity.ENTITY_SIDE].set(
+            team[..., FeatureEntity.ENTITY_SIDE] ^ player_id
+        )
+
+        history_edges = env_step.history_edges
+        edge_affecting_side = history_edges[..., FeatureEdge.EDGE_AFFECTING_SIDE]
+        history_edges.at[..., FeatureEdge.EDGE_AFFECTING_SIDE].set(
+            jnp.where(
+                edge_affecting_side < 2,
+                edge_affecting_side ^ player_id,
+                edge_affecting_side,
+            )
+        )
+
+        history_entities = env_step.history_entities
+        history_entities.at[..., FeatureEntity.ENTITY_SIDE].set(
+            history_entities[..., FeatureEntity.ENTITY_SIDE] ^ player_id
+        )
+
+        return EnvStep(
+            ts=env_step.ts,
+            draw_ratio=env_step.draw_ratio,
+            valid=env_step.valid,
+            draw=env_step.draw,
+            turn=env_step.turn,
+            game_id=env_step.game_id,
+            player_id=env_step.player_id,
+            seed_hash=env_step.seed_hash,
+            moveset=moveset,
+            legal=env_step.legal,
+            team=team,
+            heuristic_action=env_step.heuristic_action,
+            win_rewards=env_step.win_rewards,
+            fainted_rewards=env_step.fainted_rewards,
+            switch_rewards=env_step.switch_rewards,
+            longevity_rewards=env_step.longevity_rewards,
+            hp_rewards=env_step.hp_rewards,
+            history_edges=history_edges,
+            history_entities=history_entities,
+            history_side_conditions=env_step.history_side_conditions,
+            history_field=env_step.history_field,
+        )
+
     def __call__(self, env_step: EnvStep) -> ModelOutput:
         """
         Forward pass for the Model. It first processes the env_step through the encoder,
         and then applies the policy and value heads to generate the output.
         """
+        env_step = self._preprocess(env_step)
+
         # Get current state and action embeddings from the encoder
-        entity_embeddings, valid_entity_mask, action_embeddings = self.encoder(env_step)
+        (contextual_entity_embeddings, valid_entity_mask, action_embeddings) = (
+            self.encoder(env_step)
+        )
 
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(action_embeddings, env_step)
 
         # Apply the value head
-        v = self.value_head(entity_embeddings, valid_entity_mask)
+        v = self.value_head(contextual_entity_embeddings, valid_entity_mask)
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)

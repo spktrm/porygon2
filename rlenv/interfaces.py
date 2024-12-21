@@ -17,6 +17,7 @@ class EnvStep:
     moveset: chex.Array = ()
     legal: chex.Array = ()
     team: chex.Array = ()
+    heuristic_action: chex.Array = ()
 
     # Reward
     win_rewards: chex.Array = ()
@@ -57,3 +58,6 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
+    offline_logit: chex.Array = ()
+    offline_pi: chex.Array = ()
+    offline_log_pi: chex.Array = ()

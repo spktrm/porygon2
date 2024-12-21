@@ -44,6 +44,13 @@ def main():
     eval_freq = 5000
     save_freq = 1000
 
+    # buffer = ReplayBuffer()
+    # buffer_fill = tqdm(desc="Filling Buffer...", total=buffer.max_buffer_size)
+    # while len(buffer) < 50:
+    #     trajectories = training_collector.collect_batch_trajectory(state.params)
+    #     buffer.add_trajectories(trajectories)
+    #     buffer_fill.update(training_collector.batch_size)
+
     for step_idx in trange(0, learner_config.num_steps, desc="training"):
         if state.learner_steps % save_freq == 0 and state.learner_steps > 0:
             learner.save(state)
@@ -53,16 +60,28 @@ def main():
             state.learner_steps % (eval_freq // learner_config.num_eval_games) == 0
             and learner_config.do_eval
         ):
-            batch = evaluation_collector.collect_batch_trajectory(state.params)
+            eval_batch = evaluation_collector.collect_batch_trajectory(state.params)
             win_rewards = np.sign(
-                batch.actor.win_rewards[..., 0] * batch.env.valid.squeeze()
+                (
+                    eval_batch.actor.win_rewards[..., 0]
+                    * eval_batch.env.valid.squeeze()
+                ).sum(0)
+            )
+            fainted_rewards = (
+                eval_batch.actor.fainted_rewards[..., 0]
+                * eval_batch.env.valid.squeeze()
             ).sum(0)
             winrates = {f"wr{i}": wr for i, wr in enumerate(win_rewards)}
+            winrates.update({f"hp{i}": f for i, f in enumerate(fainted_rewards)})
 
         batch = training_collector.collect_batch_trajectory(state.params)
+        # buffer.add_trajectories(trajectories)
+
+        # batch = buffer.sample(learner_config.minibatch_size)
 
         logs: dict
         state, logs = learner.train_step(state, batch, learner_config)
+
         logs.update(collect_nn_telemetry_data(state))
         logs.update(collect_batch_telemetry_data(batch))
 

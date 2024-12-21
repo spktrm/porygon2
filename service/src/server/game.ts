@@ -90,6 +90,8 @@ export class Game {
     }
 
     async _reset(options?: { seed: number[] }) {
+        await this._waitAllDone();
+
         const stream = new BattleStreams.BattleStream();
         const streams = BattleStreams.getPlayerStreams(stream);
         const spec = { formatid: formatId, ...options };
@@ -113,11 +115,11 @@ export class Game {
         void streams.omniscient.write(`>player p1 ${JSON.stringify(p1spec)}
 >player p2 ${JSON.stringify(p2spec)}`);
 
+        const battle = stream.battle!;
+
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
-            const { faintedReward, hpReward } = this.tracker.update2(
-                stream.battle!,
-            );
+            const { faintedReward, hpReward } = this.tracker.update2(battle);
             const state = player.createState();
 
             const rewards = state.getInfo()!.getRewards()!;
@@ -184,20 +186,20 @@ export class Game {
                         }
                     }
                 }
-                if (stream.battle !== null) {
-                    const numConsecutiveSwitches = 20;
-                    const lastTenMoves = stream.battle.inputLog.slice(
-                        -numConsecutiveSwitches,
-                    );
-                    const switchCount = lastTenMoves.reduce((prev, curr) => {
-                        const isSwitch =
-                            curr.split(" ")[1].toString() === "switch";
-                        return prev + +isSwitch;
-                    }, 0);
-                    if (switchCount === numConsecutiveSwitches) {
-                        this._drawGame();
-                    }
-                }
+                // if (stream.battle !== null) {
+                //     const numConsecutiveSwitches = 20;
+                //     const lastTenMoves = stream.battle.inputLog.slice(
+                //         -numConsecutiveSwitches,
+                //     );
+                //     const switchCount = lastTenMoves.reduce((prev, curr) => {
+                //         const isSwitch =
+                //             curr.split(" ")[1].toString() === "switch";
+                //         return prev + +isSwitch;
+                //     }, 0);
+                //     if (switchCount === numConsecutiveSwitches) {
+                //         this._drawGame();
+                //     }
+                // }
             }
         }
     }

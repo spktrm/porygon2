@@ -10,6 +10,16 @@ from ml.func import get_average_logit_value, get_loss_entropy, renormalize
 from rlenv.interfaces import TimeStep
 
 
+def conditional_breakpoint(pred):
+    def true_fn():
+        pass
+
+    def false_fn():
+        jax.debug.breakpoint()
+
+    jax.lax.cond(pred, true_fn, false_fn)
+
+
 @jax.jit
 def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     valid = batch.env.valid
@@ -18,8 +28,8 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     can_move = batch.env.legal[..., :4].any(axis=-1)
     can_switch = batch.env.legal[..., 4:].any(axis=-1)
 
-    move_ratio = renormalize(batch.actor.action < 4, can_switch & valid)
-    switch_ratio = renormalize(batch.actor.action >= 4, can_move & valid)
+    move_ratio = renormalize(batch.actor.action < 4, can_move & can_switch & valid)
+    switch_ratio = renormalize(batch.actor.action >= 4, can_move & can_switch & valid)
 
     return dict(
         actor_steps=valid.sum(),
@@ -86,13 +96,13 @@ def collect_policy_stats_telemetry_data(
         policy[..., :4],
         log_policy[..., :4],
         legal_mask[..., :4],
-        state_mask & legal_mask[..., :4].any(axis=-1),
+        state_mask & (legal_mask[..., :4].sum(axis=-1) > 1),
     )
     switch_entropy = get_loss_entropy(
         policy[..., 4:],
         log_policy[..., 4:],
         legal_mask[..., 4:],
-        state_mask & legal_mask[..., 4:].any(axis=-1),
+        state_mask & (legal_mask[..., 4:].sum(axis=-1) > 1),
     )
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)
     kl_div = optax.kl_divergence(log_policy, prev_policy)
@@ -106,9 +116,9 @@ def collect_policy_stats_telemetry_data(
     }
 
 
-def collect_value_stats_telemetry_data(
+def calculate_explained_variance(
     value_prediction: chex.Array, value_target: chex.Array, mask: chex.Array = None
-) -> dict[str, Any]:
+):
     value_prediction = jnp.squeeze(value_prediction)
     value_target = jnp.squeeze(value_target)
     if mask is None:
@@ -118,5 +128,13 @@ def collect_value_stats_telemetry_data(
         jnp.square(jnp.std(value_target - value_prediction, where=mask))
         / jnp.square(jnp.std(value_target, where=mask))
     )
+    return explained_variance
 
+
+def collect_value_stats_telemetry_data(
+    value_prediction: chex.Array, value_target: chex.Array, mask: chex.Array = None
+) -> dict[str, Any]:
+    explained_variance = calculate_explained_variance(
+        value_prediction, value_target, mask
+    )
     return {"value_function_explained_variance": jnp.maximum(-1, explained_variance)}

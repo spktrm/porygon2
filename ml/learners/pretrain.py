@@ -16,7 +16,7 @@ from ml.config import ActorCriticConfig, AdamConfig
 from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
-    get_loss_v,
+    get_loss_v_mse,
     reg_v_trace,
     renormalize,
 )
@@ -155,7 +155,7 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
             has_played_list.append(has_played)
             v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v(
+        loss_v = get_loss_v_mse(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,

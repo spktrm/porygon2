@@ -7,7 +7,7 @@ import {
     PokemonIdent,
     Protocol,
 } from "@pkmn/protocol";
-import { Info, Rewards, State } from "../../protos/state_pb";
+import { Heuristics, Info, Rewards, State } from "../../protos/state_pb";
 import {
     AbilitiesEnum,
     ActionsEnum,
@@ -54,6 +54,7 @@ import { OneDBoolean, TypedArray } from "./utils";
 import { Player } from "./player";
 import { DRAW_TURNS } from "./game";
 import { GetMoveDamange } from "./baselines/max_dmg";
+import { GetHeuristicAction } from "./baselines/heuristic";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames = RemovePipes<BattleMajorArgName> | "turn";
@@ -95,7 +96,7 @@ const WEATHERS = {
     strongwinds: "deltastream",
 };
 
-function IndexValueFromEnum<T extends EnumMappings>(
+export function IndexValueFromEnum<T extends EnumMappings>(
     mappingType: Mappings,
     key: string,
 ): T[keyof T] {
@@ -230,10 +231,12 @@ function getArrayFromPokemon(candidate: Pokemon | null): Int16Array {
         );
         dataArr[FeatureEntity.ENTITY_ABILITY] = actualAbility;
     } else if (possibleAbilities.length === 1) {
-        const onlyAbility = IndexValueFromEnum<typeof AbilitiesEnum>(
-            "Ability",
-            possibleAbilities[0],
-        );
+        const onlyAbility = possibleAbilities[0]
+            ? IndexValueFromEnum<typeof AbilitiesEnum>(
+                  "Ability",
+                  possibleAbilities[0],
+              )
+            : AbilitiesEnum.ABILITIES__UNK;
         dataArr[FeatureEntity.ENTITY_ABILITY] = onlyAbility;
     } else {
         dataArr[FeatureEntity.ENTITY_ABILITY] = AbilitiesEnum.ABILITIES__UNK;
@@ -1839,6 +1842,29 @@ export class StateHandler {
         return rewards;
     }
 
+    getHeuristics() {
+        const heuristics = new Heuristics();
+
+        const action = GetHeuristicAction({ player: this.player });
+        const actionIndex = action.getValue();
+
+        if (actionIndex < 0) {
+            const legalActions = StateHandler.getLegalActions(
+                this.player.privateBattle.request,
+            );
+            const validIndices = legalActions
+                .toBinaryVector()
+                .flatMap((val, ind) => (val ? [ind] : []));
+            heuristics.setHeuristicaction(
+                validIndices[Math.random() * validIndices.length],
+            );
+        } else {
+            heuristics.setHeuristicaction(actionIndex);
+        }
+
+        return heuristics;
+    }
+
     getInfo() {
         const playerIndex = this.player.getPlayerIndex();
 
@@ -1861,6 +1887,10 @@ export class StateHandler {
 
         const rewards = this.getRewards();
         info.setRewards(rewards);
+
+        // const heuristics = this.getHeuristics();
+        // info.setHeuristics(heuristics);
+
         return info;
     }
 

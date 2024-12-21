@@ -46,8 +46,9 @@ export class Tracker {
             return aliveInTeam + remainingPokemon;
         });
         const aliveDiff = aliveTotal1 - aliveTotal2;
-        const faintedReward = aliveDiff - (this.faintedDiffs.at(-1) ?? 0);
         this.faintedDiffs.push(aliveDiff);
+        const faintedReward =
+            (this.faintedDiffs.at(-1) ?? 0) - (this.faintedDiffs.at(-2) ?? 0);
 
         // Calculate HP totals for both sides
         const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
@@ -69,16 +70,17 @@ export class Tracker {
     update2(battle: World) {
         const [aliveTotal1, aliveTotal2] = battle.sides.map((side) => {
             const aliveInTeam = side.pokemon.reduce(
-                (count, pokemon) => count + (pokemon.fainted ? 0 : 1),
+                (count, pokemon) => count + +(pokemon.hp > 0),
                 0,
             );
             return aliveInTeam;
         });
         const aliveDiff = aliveTotal1 - aliveTotal2;
-        const faintedReward = aliveDiff - (this.faintedDiffs.at(-1) ?? 0);
         this.faintedDiffs.push(aliveDiff);
+        const faintedReward =
+            (this.faintedDiffs.at(-1) ?? 0) - (this.faintedDiffs.at(-2) ?? 0);
 
-        // Calculate HP totals for both sides
+        // // Calculate HP totals for both sides
         const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
             const hpInTeam = side.pokemon.reduce(
                 (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
@@ -210,6 +212,9 @@ export class Player extends BattleStreams.BattlePlayer {
 
     isActionRequired(chunk: string): boolean {
         const request = this.getRequest()! as AnyObject;
+        if (this.offline) {
+            return true;
+        }
         if (!this.offline && !request) {
             return false;
         }
@@ -264,6 +269,7 @@ export class Player extends BattleStreams.BattlePlayer {
                 (this.offline || this.stream.buf.length === 0) &&
                 this.isActionRequired(chunk)
             ) {
+                this.log.push("---request---");
                 const key = await this.send(this);
                 this.privateBattle.request = undefined;
                 const action = await this.recv(key!);

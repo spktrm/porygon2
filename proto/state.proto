@@ -14,6 +14,10 @@ message Rewards {
     float longevityReward = 5;
 }
 
+message Heuristics {
+    int32 heuristicAction = 1;
+}
+
 message Info {
     int32 gameId = 1;
     bool done = 2;
@@ -25,6 +29,7 @@ message Info {
     Rewards rewards = 8;
     int32 seed = 9;
     bool draw = 10;
+    Heuristics heuristics = 11;
 }
 
 message State {
@@ -34,4 +39,14 @@ message State {
     bytes moveset = 4;
     bytes team = 5;
     string key = 6;
+}
+
+message Trajectory {
+    repeated State states = 1;
+    repeated int32 actions = 2;
+    repeated int32 rewards = 3;
+}
+
+message Dataset {
+    repeated Trajectory trajectories = 1;
 }

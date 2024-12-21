@@ -19,7 +19,7 @@ from ml.func import (
     get_average_logit_value,
     get_loss_entropy,
     get_loss_nerd,
-    get_loss_v,
+    get_loss_v_mse,
     renormalize,
     rnad_v_trace,
 )
@@ -34,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 10_000
+    clip: float = 3
 
 
 @chex.dataclass(frozen=True)
@@ -331,7 +331,7 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             has_played_list.append(has_played)
             v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v(
+        loss_v = get_loss_v_mse(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,

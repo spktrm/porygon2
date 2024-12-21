@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
+from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
@@ -444,14 +445,18 @@ def main():
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
-
-        # with open("rlenv/ex_batch", "wb") as f:
-        #     pickle.dump(batch, f)
-        # break
+        collect_batch_telemetry_data(batch)
 
         training_progress.update(batch.env.valid.sum())
         batch = evaluation_env.collect_batch_trajectory(params)
         evaluation_progress.update(batch.env.valid.sum())
+
+        if (
+            np.sign(((batch.actor.fainted_rewards * batch.env.valid[..., None])).sum(0))
+            != (batch.actor.win_rewards * batch.env.valid[..., None]).sum(0)
+        ).all():
+            raise ValueError
+
         # win_rewards = np.sign(
         #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
         # )
