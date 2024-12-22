@@ -13,6 +13,7 @@ data/data/
 
 # rlenv ignores
 rlenv/ex
+rlenv/ex_batch
 
 # server ignores
 
