@@ -26,7 +26,9 @@ class EnvStep:
     longevity_rewards: chex.Array = ()
     hp_rewards: chex.Array = ()
 
-    # Public Info
+
+@chex.dataclass(frozen=True)
+class HistoryStep:
     history_edges: chex.Array = ()
     history_entities: chex.Array = ()
     history_side_conditions: chex.Array = ()
