@@ -465,11 +465,10 @@ class EdgeBuffer {
         this.sideData = new Uint8Array(maxEdges * 2 * numSideConditions);
         this.fieldData = new Uint8Array(maxEdges * numWeatherFields);
 
-        const cursorStart = maxEdges - NUM_HISTORY;
-        this.edgeCursor = cursorStart * numEdgeFeatures;
-        this.entityCursor = cursorStart * 2 * numPokemonFields;
-        this.sideCursor = cursorStart * 2 * numSideConditions;
-        this.fieldCursor = cursorStart * numWeatherFields;
+        this.edgeCursor = 0;
+        this.entityCursor = 0;
+        this.sideCursor = 0;
+        this.fieldCursor = 0;
 
         this.numEdges = 0;
     }
@@ -480,16 +479,16 @@ class EdgeBuffer {
 
     addEdge(edge: Edge) {
         this.edgeData.set(edge.edgeData, this.edgeCursor);
-        this.edgeCursor -= numEdgeFeatures;
+        this.edgeCursor += numEdgeFeatures;
 
         this.entityData.set(edge.entityData, this.entityCursor);
-        this.entityCursor -= 2 * numPokemonFields;
+        this.entityCursor += 2 * numPokemonFields;
 
         this.sideData.set(edge.sideData, this.sideCursor);
-        this.sideCursor -= 2 * numSideConditions;
+        this.sideCursor += 2 * numSideConditions;
 
         this.fieldData.set(edge.fieldData, this.fieldCursor);
-        this.fieldCursor -= numWeatherFields;
+        this.fieldCursor += numWeatherFields;
 
         this.numEdges += 1;
     }
@@ -497,33 +496,35 @@ class EdgeBuffer {
     getHistory(numHistory: number = NUM_HISTORY) {
         const history = new History();
         const width = Math.min(this.numEdges, numHistory);
-        const trueWidth = width + 1;
         history.setEdges(
             new Uint8Array(
                 this.edgeData.slice(
-                    this.edgeCursor + numEdgeFeatures,
-                    this.edgeCursor + trueWidth * numEdgeFeatures,
+                    Math.max(0, this.edgeCursor - width * numEdgeFeatures),
+                    this.edgeCursor,
                 ).buffer,
             ),
         );
         history.setEntities(
             new Uint8Array(
                 this.entityData.slice(
-                    this.entityCursor + 2 * numPokemonFields,
-                    this.entityCursor + trueWidth * 2 * numPokemonFields,
+                    Math.max(
+                        0,
+                        this.entityCursor - width * 2 * numPokemonFields,
+                    ),
+                    this.entityCursor,
                 ).buffer,
             ),
         );
         history.setSideconditions(
             this.sideData.slice(
-                this.sideCursor + 2 * numSideConditions,
-                this.sideCursor + trueWidth * 2 * numSideConditions,
+                Math.max(0, this.sideCursor - width * 2 * numSideConditions),
+                this.sideCursor,
             ),
         );
         history.setField(
             this.fieldData.slice(
-                this.fieldCursor + numWeatherFields,
-                this.fieldCursor + trueWidth * numWeatherFields,
+                Math.max(0, this.fieldCursor - width * numWeatherFields),
+                this.fieldCursor,
             ),
         );
         history.setLength(width);
@@ -602,6 +603,11 @@ export class EventHandler implements Protocol.Handler {
     }
 
     addEdge(edge: Edge) {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex !== undefined)
+            edge.setFeature(FeatureEdge.PLAYER_ID, playerIndex);
+        edge.setFeature(FeatureEdge.REQUEST_COUNT, this.player.requestCount);
+        edge.setFeature(FeatureEdge.EDGE_VALID, 1);
         this.edgeBuffer.addEdge(edge);
     }
 
@@ -1813,6 +1819,9 @@ export class StateHandler {
 
     getInfo() {
         const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
 
         const info = new Info();
         info.setTs(performance.now());
@@ -1840,7 +1849,7 @@ export class StateHandler {
         return info;
     }
 
-    getState(numHistory?: number): State {
+    getState(numHistory: number = NUM_HISTORY): State {
         if (
             !this.player.offline &&
             !this.player.done &&
@@ -1862,7 +1871,11 @@ export class StateHandler {
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
-        const privateTeam = this.getPrivateTeam(+!!playerIndex);
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
+
+        const privateTeam = this.getPrivateTeam(playerIndex);
         state.setTeam(new Uint8Array(privateTeam.buffer));
         state.setMoveset(this.getMoveset());
 

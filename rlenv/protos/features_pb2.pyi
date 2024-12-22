@@ -160,6 +160,9 @@ class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BOOST_EVASION_VALUE: _ClassVar[FeatureEdge]
     STATUS_TOKEN: _ClassVar[FeatureEdge]
     EDGE_AFFECTING_SIDE: _ClassVar[FeatureEdge]
+    PLAYER_ID: _ClassVar[FeatureEdge]
+    REQUEST_COUNT: _ClassVar[FeatureEdge]
+    EDGE_VALID: _ClassVar[FeatureEdge]
 ENTITY_SPECIES: FeatureEntity
 ENTITY_ITEM: FeatureEntity
 ENTITY_ITEM_EFFECT: FeatureEntity
@@ -290,3 +293,6 @@ BOOST_ACCURACY_VALUE: FeatureEdge
 BOOST_EVASION_VALUE: FeatureEdge
 STATUS_TOKEN: FeatureEdge
 EDGE_AFFECTING_SIDE: FeatureEdge
+PLAYER_ID: FeatureEdge
+REQUEST_COUNT: FeatureEdge
+EDGE_VALID: FeatureEdge
