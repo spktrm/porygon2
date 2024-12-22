@@ -360,12 +360,6 @@ class Edge {
         }
         const data = getArrayFromPokemon(poke2, playerIndex);
         this.setPoke2FromData(data);
-        if (poke2 !== null) {
-            this.setFeature(
-                FeatureEdge.EDGE_AFFECTING_SIDE,
-                poke2.side.n ^ playerIndex,
-            );
-        }
     }
 
     updateSideConditionData() {
