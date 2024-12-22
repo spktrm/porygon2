@@ -208,7 +208,8 @@ proto.FeatureEdge = {
   EDGE_AFFECTING_SIDE: 19,
   PLAYER_ID: 20,
   REQUEST_COUNT: 21,
-  EDGE_VALID: 22
+  EDGE_VALID: 22,
+  EDGE_INDEX: 23
 };
 
 goog.object.extend(exports, proto);

@@ -44,6 +44,7 @@ import {
     NUM_HISTORY,
     numSideConditions,
     numWeatherFields,
+    MAX_EDGES,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -452,18 +453,12 @@ class EdgeBuffer {
     fieldCursor: number;
 
     numEdges: number;
-    maxEdges: number;
 
     constructor() {
-        const MAX_TURNS = 1000;
-
-        const maxEdges = NUM_HISTORY * MAX_TURNS;
-        this.maxEdges = maxEdges;
-
-        this.edgeData = new Int16Array(maxEdges * numEdgeFeatures);
-        this.entityData = new Int16Array(maxEdges * 2 * numPokemonFields);
-        this.sideData = new Uint8Array(maxEdges * 2 * numSideConditions);
-        this.fieldData = new Uint8Array(maxEdges * numWeatherFields);
+        this.edgeData = new Int16Array(MAX_EDGES * numEdgeFeatures);
+        this.entityData = new Int16Array(MAX_EDGES * 2 * numPokemonFields);
+        this.sideData = new Uint8Array(MAX_EDGES * 2 * numSideConditions);
+        this.fieldData = new Uint8Array(MAX_EDGES * numWeatherFields);
 
         this.edgeCursor = 0;
         this.entityCursor = 0;
@@ -471,10 +466,6 @@ class EdgeBuffer {
         this.fieldCursor = 0;
 
         this.numEdges = 0;
-    }
-
-    getBufferRemaining() {
-        return this.numEdges / this.maxEdges;
     }
 
     addEdge(edge: Edge) {
@@ -608,6 +599,7 @@ export class EventHandler implements Protocol.Handler {
             edge.setFeature(FeatureEdge.PLAYER_ID, playerIndex);
         edge.setFeature(FeatureEdge.REQUEST_COUNT, this.player.requestCount);
         edge.setFeature(FeatureEdge.EDGE_VALID, 1);
+        edge.setFeature(FeatureEdge.EDGE_INDEX, this.edgeBuffer.numEdges);
         this.edgeBuffer.addEdge(edge);
     }
 
