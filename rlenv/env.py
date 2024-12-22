@@ -1,7 +1,7 @@
 import numpy as np
 
 from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, HistoryStep
 from rlenv.protos.state_pb2 import State
 from rlenv.utils import padnstack
 
@@ -9,12 +9,7 @@ from rlenv.utils import padnstack
 def get_history(state: State):
     history = state.history
     history_length = history.length
-    moveset = np.frombuffer(bytearray(state.moveset), dtype=np.int16).reshape(
-        2, -1, NUM_MOVE_FIELDS
-    )
-    team = np.frombuffer(bytearray(state.team), dtype=np.int16).reshape(
-        2, 6, NUM_ENTITY_FIELDS
-    )
+
     history_edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
         (history_length, NUM_EDGE_FIELDS)
     )
@@ -27,13 +22,11 @@ def get_history(state: State):
     history_field = np.frombuffer(bytearray(history.field), dtype=np.uint8).reshape(
         (history_length, -1)
     )
-    return (
-        moveset,
-        team,
-        padnstack(history_edges),
-        padnstack(history_entities),
-        padnstack(history_side_conditions),
-        padnstack(history_field),
+    return HistoryStep(
+        history_edges=padnstack(history_edges).astype(np.int32),
+        history_entities=padnstack(history_entities).astype(np.int32),
+        history_side_conditions=padnstack(history_side_conditions).astype(np.int32),
+        history_field=padnstack(history_field).astype(np.int32),
     )
 
 
@@ -43,19 +36,22 @@ def get_legal_mask(state: State):
     return mask[:10].astype(bool)
 
 
-def process_state(state: State) -> EnvStep:
+def process_state(state: State):
     player_index = int(state.info.playerIndex)
-    (
-        moveset,
-        team,
-        history_edges,
-        history_entities,
-        history_side_conditions,
-        history_field,
-    ) = get_history(state)
+
+    history_step = get_history(state)
+
+    moveset = np.frombuffer(bytearray(state.moveset), dtype=np.int16).reshape(
+        2, -1, NUM_MOVE_FIELDS
+    )
+    team = np.frombuffer(bytearray(state.team), dtype=np.int16).reshape(
+        2, 6, NUM_ENTITY_FIELDS
+    )
+
     rewards = state.info.rewards
     heuristics = state.info.heuristics
-    return EnvStep(
+
+    env_step = EnvStep(
         ts=np.array(state.info.ts),
         draw_ratio=np.array(state.info.drawRatio),
         valid=~np.array(state.info.done, dtype=bool),
@@ -77,13 +73,11 @@ def process_state(state: State) -> EnvStep:
         legal=get_legal_mask(state),
         team=team.astype(np.int32),
         moveset=moveset.astype(np.int32),
-        history_edges=history_edges.astype(np.int32),
-        history_entities=history_entities.astype(np.int32),
-        history_side_conditions=history_side_conditions.astype(np.int32),
-        history_field=history_field.astype(np.int32),
         seed_hash=np.array(state.info.seed).astype(np.int32),
         heuristic_action=np.array(heuristics.heuristicAction).astype(np.int32),
     )
+
+    return env_step, history_step
 
 
 def get_ex_step() -> EnvStep:
