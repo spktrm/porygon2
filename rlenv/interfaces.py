@@ -7,18 +7,17 @@ class EnvStep:
     ts: chex.Array = ()
     draw_ratio: chex.Array = ()
     valid: chex.Array = ()
+    draw: chex.Array = ()
     turn: chex.Array = ()
     game_id: chex.Array = ()
     player_id: chex.Array = ()
-    heuristic_action: chex.Array = ()
-    heuristic_dist: chex.Array = ()
-    prev_action: chex.Array = ()
-    prev_move: chex.Array = ()
+    seed_hash: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()
     legal: chex.Array = ()
     team: chex.Array = ()
+    heuristic_action: chex.Array = ()
 
     # Reward
     win_rewards: chex.Array = ()
@@ -29,7 +28,7 @@ class EnvStep:
 
     # Public Info
     history_edges: chex.Array = ()
-    history_nodes: chex.Array = ()
+    history_entities: chex.Array = ()
     history_side_conditions: chex.Array = ()
     history_field: chex.Array = ()
 
@@ -59,3 +58,6 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
+    offline_logit: chex.Array = ()
+    offline_pi: chex.Array = ()
+    offline_log_pi: chex.Array = ()

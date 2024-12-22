@@ -42,8 +42,9 @@ class InferenceModel:
 
     def predict(self, env_step: EnvStep):
         output = self._network_jit_apply(env_step)
+        pi = self.finetuning._threshold(output.pi, env_step.legal)
         action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
+            lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x),
             axis=-1,
             arr=output.pi,
         )

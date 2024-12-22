@@ -1,48 +1,56 @@
-import assert from "assert";
-
-import { Action } from "../../protos/action_pb";
-import { port } from "./utils";
-import { State } from "../../protos/state_pb";
-import { chooseRandom } from "../logic/utils";
+import { MessagePort } from "worker_threads";
+import { Game } from "../server/game";
+import { Action, GameState } from "../../protos/servicev2_pb";
+import { AsyncQueue } from "../server/utils";
 import { writeFileSync } from "fs";
 import { exit } from "process";
-import { Game } from "../server/game";
 
-async function runGame(game: Game) {
-    await game.run();
+async function worker(gameId: number, playerIds: number[]) {
+    const queue = new AsyncQueue<GameState>();
 
-    assert(game.done);
+    const port = {
+        postMessage: (stateBuffer: Buffer) => {
+            const gameState = GameState.deserializeBinary(stateBuffer);
+            queue.put(gameState);
+        },
+    } as MessagePort;
+
+    const game = new Game(gameId, 0, port);
+
+    for (const playerId of playerIds) {
+        game.addPlayerId(playerId);
+    }
 
     game.reset();
-    return game;
-}
+    game.reset();
 
-async function main(verbose: boolean = false) {
-    let game = new Game({ port: port, gameId: 0 });
-
-    port.postMessage = (buffer) => {
-        const state = State.deserializeBinary(buffer);
-        const key = state.getKey();
-        const info = state.getInfo()!;
-        const turn = info.getTurn();
-        const playerIndex = info.getPlayerindex();
-        const legalActions = state.getLegalactions_asU8();
-
-        if (info && legalActions) {
-            if ((turn > 2 && playerIndex === true) || info.getDone()) {
-                writeFileSync("../rlenv/ex", buffer);
-                exit(0);
-            } else {
+    (async () => {
+        let i = 0;
+        while (true) {
+            const gameState = await queue.get();
+            const rqid = gameState.getRqid();
+            if (rqid >= 0) {
                 const action = new Action();
-                action.setKey(key);
-                const randomIndex = chooseRandom(legalActions);
-                action.setIndex(randomIndex);
-                game.queueSystem.submitResult(key, action);
+                action.setValue(-1);
+                game.tasks.submitResult(rqid, action);
+
+                if (i >= 5) {
+                    writeFileSync("../rlenv/ex", gameState.getState_asU8());
+                    exit(0);
+                } else {
+                    i += 1;
+                }
+            } else {
+                game.reset();
             }
         }
-    };
-
-    game = await runGame(game);
+    })();
 }
 
-main(false);
+function main() {
+    for (const { gameId, playerIds } of [{ gameId: 0, playerIds: [0, 1] }]) {
+        worker(gameId, playerIds);
+    }
+}
+
+main();

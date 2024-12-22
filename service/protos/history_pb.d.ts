@@ -9,13 +9,10 @@ export class History extends jspb.Message {
   getEdges_asB64(): string;
   setEdges(value: Uint8Array | string): void;
 
-  getNodes(): Uint8Array | string;
-  getNodes_asU8(): Uint8Array;
-  getNodes_asB64(): string;
-  setNodes(value: Uint8Array | string): void;
-
-  getLength(): number;
-  setLength(value: number): void;
+  getEntities(): Uint8Array | string;
+  getEntities_asU8(): Uint8Array;
+  getEntities_asB64(): string;
+  setEntities(value: Uint8Array | string): void;
 
   getSideconditions(): Uint8Array | string;
   getSideconditions_asU8(): Uint8Array;
@@ -26,6 +23,9 @@ export class History extends jspb.Message {
   getField_asU8(): Uint8Array;
   getField_asB64(): string;
   setField(value: Uint8Array | string): void;
+
+  getLength(): number;
+  setLength(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): History.AsObject;
@@ -40,10 +40,10 @@ export class History extends jspb.Message {
 export namespace History {
   export type AsObject = {
     edges: Uint8Array | string,
-    nodes: Uint8Array | string,
-    length: number,
+    entities: Uint8Array | string,
     sideconditions: Uint8Array | string,
     field: Uint8Array | string,
+    length: number,
   }
 }
 

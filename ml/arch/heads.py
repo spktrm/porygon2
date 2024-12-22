@@ -1,30 +1,51 @@
 import chex
 import flax.linen as nn
+import jax
+import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, PointerLogits, Resnet
+from ml.arch.modules import Logits, TransformerEncoder
 from ml.func import legal_log_policy, legal_policy
+from rlenv.data import NUM_ACTIONS
+from rlenv.interfaces import EnvStep
+
+
+class OfflinePolicyHead(nn.Module):
+
+    def setup(self):
+        self.logits = Logits(NUM_ACTIONS)
+
+    def __call__(self, state_embedding: chex.Array):
+
+        logits = self.logits(state_embedding)
+        logits = logits.reshape(-1)
+        logits = logits - logits.mean()
+
+        legal = jnp.ones_like(logits)
+        policy = legal_policy(logits, legal)
+        log_policy = legal_log_policy(logits, legal)
+
+        return logits, policy, log_policy
 
 
 class PolicyHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.resnet = Resnet(**self.cfg.query.to_dict())
-        self.logits = PointerLogits(**self.cfg.pointer_logits.to_dict())
+        self.transformer = TransformerEncoder(**self.cfg.transformer.to_dict())
+        self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(
         self,
-        state_embedding: chex.Array,
         action_embeddings: chex.Array,
-        legal: chex.Array,
+        env_step: EnvStep,
     ):
-        query = self.resnet(state_embedding)
-        logits = self.logits(query, action_embeddings)
+        legal = env_step.legal
 
-        # key_size = jnp.array(self.cfg.key_size, dtype=jnp.float32)
-        # norm_coeff = jax.lax.rsqrt(key_size)
-        # logits = norm_coeff * logits
+        action_embeddings = self.transformer(action_embeddings, legal)
+        logits = jax.vmap(self.logits)(action_embeddings)
+        logits = logits.reshape(-1)
+        logits = logits - logits.mean(where=legal)
 
         policy = legal_policy(logits, legal)
         log_policy = legal_log_policy(logits, legal)
@@ -36,9 +57,16 @@ class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.resnet = Resnet(**self.cfg.resnet.to_dict())
+        self.transformer = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-    def __call__(self, x: chex.Array):
-        x = self.resnet(x)
-        return self.logits(x)
+    def __call__(
+        self, contextual_entity_embeddings: chex.Array, valid_entity_mask: chex.Array
+    ):
+        contextual_entity_embeddings = self.transformer(
+            contextual_entity_embeddings, valid_entity_mask
+        )
+        contextual_entity_values = jax.vmap(self.logits)(contextual_entity_embeddings)
+        return contextual_entity_values.reshape(-1).mean(
+            where=valid_entity_mask, keepdims=True
+        )

@@ -1,22 +1,16 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import WebSocket from "ws";
-import { TaskQueueSystem } from "../utils";
-import { Action } from "../../protos/action_pb";
-import { StreamHandler } from "../logic/handler";
-import { actionIndexMapping } from "../logic/data";
-import { getEvalAction } from "../logic/eval";
 import { inspect } from "util";
+import { Player } from "../server/player";
+import { ObjectReadWriteStream } from "@pkmn/streams";
+import { recvFnType, sendFnType } from "../server/types";
+import { Action, GameState } from "../../protos/servicev2_pb";
+import { TaskQueueSystem } from "../server/utils";
 
 const offline = "localhost";
 const online = "sim.smogon.com";
-
-const queueSystem = new TaskQueueSystem<Action>();
-
-async function ActionFromResponse(response: Response): Promise<Action> {
-    const { action: actionIndex } = await response.json();
-    const action = new Action();
-    action.setIndex(actionIndex);
-    return action;
-}
 
 function stringToUniqueInt(str: string): number {
     let hash = 5381;
@@ -26,11 +20,83 @@ function stringToUniqueInt(str: string): number {
     return hash >>> 0; // Ensure the hash is a positive integer
 }
 
+async function ActionFromResponse(response: Response): Promise<Action> {
+    const { action: actionIndex } = await response.json();
+    const action = new Action();
+    action.setValue(actionIndex);
+    return action;
+}
+
+class ClientStream extends ObjectReadWriteStream<string> {
+    debug: boolean;
+    roomId: string | undefined;
+    player: Player;
+    tasks: TaskQueueSystem<Action>;
+
+    constructor(
+        options: {
+            debug?: boolean;
+            roomId?: string;
+            choose?: (action: string) => void;
+        } = {},
+    ) {
+        super();
+        this.debug = !!options.debug;
+        this.roomId = options?.roomId;
+
+        this.tasks = new TaskQueueSystem();
+
+        const sendFn: sendFnType = async (player) => {
+            const gameState = new GameState();
+            const state = player.createState();
+            gameState.setState(state.serializeBinary());
+            const playerId = 0;
+            let rqid = -1;
+            if (!state.getInfo()!.getDone()) {
+                rqid = this.tasks.createJob();
+            }
+            gameState.setRqid(rqid);
+            gameState.setPlayerId(playerId);
+            const response = await fetch("http://127.0.0.1:8080/predict", {
+                method: "POST",
+                body: state.serializeBinary(),
+            });
+            const action = await ActionFromResponse(response);
+            action.setRqid(rqid);
+            if (rqid >= 0) this.tasks.submitResult(rqid, action);
+            return rqid;
+        };
+
+        const recvFn: recvFnType = async (rqid) => {
+            return rqid >= 0 ? this.tasks.getResult(rqid) : undefined;
+        };
+
+        if (!options.roomId) {
+            throw new Error("Options must have roomId");
+        }
+
+        this.player = new Player(
+            0,
+            stringToUniqueInt(options?.roomId),
+            this,
+            0,
+            sendFn,
+            recvFn,
+            null,
+            options.choose!,
+        );
+        this.player.start();
+    }
+
+    _write(message: string) {
+        this.push(message);
+    }
+}
+
 class Battle {
     roomId: string;
     private ws: WebSocket;
-    handler: StreamHandler;
-
+    stream: ClientStream;
     prevMessage: string | undefined;
 
     constructor(roomId: string, ws: WebSocket) {
@@ -39,31 +105,15 @@ class Battle {
 
         this.prevMessage = undefined;
 
-        this.handler = new StreamHandler({
-            gameId: stringToUniqueInt(roomId),
-            sendFn: async (state) => {
-                const jobKey = queueSystem.createJob();
-                state.setKey(jobKey);
-                const response = await fetch("http://127.0.0.1:8080/predict", {
-                    method: "POST",
-                    body: state.serializeBinary(),
-                });
-                const action = await ActionFromResponse(response);
-                action.setKey(jobKey);
-                queueSystem.submitResult(jobKey, action);
-                return jobKey;
-            },
-            recvFn: async (key: string) => {
-                return await queueSystem.getResult(key);
+        const stream = new ClientStream({
+            roomId,
+            choose: (message: string) => {
+                const toSend = `${this.roomId}|/choose ${message}`;
+                this.ws.send(toSend);
+                this.prevMessage = message;
             },
         });
-        // this.handler.sendFn = async (state) => {
-        //     const jobKey = queueSystem.createJob();
-        //     state.setKey(jobKey);
-        //     const action = getEvalAction(this.handler, 11);
-        //     queueSystem.submitResult(jobKey, action);
-        //     return jobKey;
-        // };
+        this.stream = stream;
     }
 
     public async receive(message: string): Promise<void> {
@@ -73,20 +123,10 @@ class Battle {
         ) {
             this.send(this.prevMessage);
         }
-        const action = await this.handler.ingestChunk(message);
-        if (action !== undefined) {
-            const actionIndex = action.getIndex();
-            const actionString =
-                actionIndexMapping[
-                    actionIndex as keyof typeof actionIndexMapping
-                ] ?? "choose default";
-            const toSend = `/${actionString}|${this.handler.rqid}`;
-            console.log(toSend);
-            this.send(toSend);
-        }
+        this.stream.write(message);
     }
 
-    private send(message: string): void {
+    send(message: string): void {
         const toSend = `${this.roomId}|${message}`;
         this.ws.send(toSend);
         this.prevMessage = message;
@@ -118,6 +158,7 @@ class BattleManager {
         delete this.battles[roomId];
     }
 }
+
 class PokemonShowdownBot {
     private ws: WebSocket;
     private serverUrl: string = `ws://${offline}:8000/showdown/websocket`;
@@ -169,7 +210,10 @@ class PokemonShowdownBot {
                     try {
                         const data = JSON.parse(lines[1].split("|")[2]);
                         console.log(inspect(data, false, null, true));
-                    } catch (err) {}
+                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    } catch (err) {
+                        /* empty */
+                    }
                 }
                 return;
             } else if (line.startsWith("|win|") || line.startsWith("|tie|")) {

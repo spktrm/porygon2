@@ -30,6 +30,7 @@ async def predict(request: Request):
     response = await run_in_threadpool(model.predict, env_step)
     pprint(state.info)
 
+    pprint_nparray(np.array(env_step.moveset[0, :, 0]))
     pprint_nparray(np.array(response.pi))
     pprint_nparray(np.array(response.logit))
     pprint_nparray(np.array(response.v))

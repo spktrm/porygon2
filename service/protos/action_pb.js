@@ -71,7 +71,8 @@ proto.rlenv.Action.toObject = function(includeInstance, msg) {
   var f, obj = {
     key: jspb.Message.getFieldWithDefault(msg, 1, ""),
     index: jspb.Message.getFieldWithDefault(msg, 2, 0),
-    text: jspb.Message.getFieldWithDefault(msg, 3, "")
+    text: jspb.Message.getFieldWithDefault(msg, 3, ""),
+    gameid: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
 
   if (includeInstance) {
@@ -120,6 +121,10 @@ proto.rlenv.Action.deserializeBinaryFromReader = function(msg, reader) {
       var value = /** @type {string} */ (reader.readString());
       msg.setText(value);
       break;
+    case 4:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setGameid(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -167,6 +172,13 @@ proto.rlenv.Action.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writeString(
       3,
+      f
+    );
+  }
+  f = message.getGameid();
+  if (f !== 0) {
+    writer.writeInt32(
+      4,
       f
     );
   }
@@ -224,6 +236,24 @@ proto.rlenv.Action.prototype.getText = function() {
  */
 proto.rlenv.Action.prototype.setText = function(value) {
   return jspb.Message.setProto3StringField(this, 3, value);
+};
+
+
+/**
+ * optional int32 gameId = 4;
+ * @return {number}
+ */
+proto.rlenv.Action.prototype.getGameid = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 4, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Action} returns this
+ */
+proto.rlenv.Action.prototype.setGameid = function(value) {
+  return jspb.Message.setProto3IntField(this, 4, value);
 };
 
 

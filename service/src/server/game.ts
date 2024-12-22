@@ -1,197 +1,211 @@
-import { Battle as World } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { BattleStreams, Teams } from "@pkmn/sim";
-import { ObjectReadWriteStream } from "@pkmn/streams";
-
+import { Player, Tracker } from "./player";
+import { TaskQueueSystem } from "./utils";
+import { recvFnType, sendFnType } from "./types";
+import { Action, GameState } from "../../protos/servicev2_pb";
 import { MessagePort } from "worker_threads";
-import { StreamHandler } from "../logic/handler";
-import { actionIndexMapping, AllValidActions, MAX_TS } from "../logic/data";
-import { TaskQueueSystem } from "../utils";
-import { Action } from "../../protos/action_pb";
-import { State } from "../../protos/state_pb";
-import { Tracker } from "../logic/state";
+import { EVAL_GAME_ID_OFFSET } from "./data";
+import { getEvalAction } from "./eval";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 
+export const DRAW_TURNS = 150;
+
 export class Game {
-    port: MessagePort | null;
-    done: boolean;
     gameId: number;
-    handlers: {
-        [k: number]: StreamHandler;
-    };
-    queueSystem: TaskQueueSystem<Action>;
-    world: World | null;
-    ts: number;
-    tied: boolean;
-    earlyFinish: boolean;
+    workerIndex: number;
+
+    players: [Player, Player] | undefined;
+    tasks: TaskQueueSystem<Action>;
+    port: MessagePort;
+
+    resetCount: number;
+    playerIds: number[];
+    maxPlayers: number;
 
     tracker: Tracker;
 
-    constructor(args: { port: MessagePort | null; gameId: number }) {
-        const { gameId, port } = args;
-        this.port = port;
-        this.done = false;
+    constructor(gameId: number, workerIndex: number, port: MessagePort) {
         this.gameId = gameId;
-        this.world = null;
-        this.queueSystem = new TaskQueueSystem<Action>();
-        this.ts = 0;
-        this.tied = false;
-        this.earlyFinish = false;
+        this.workerIndex = workerIndex;
+
+        this.tasks = new TaskQueueSystem();
+        this.port = port;
+
+        this.maxPlayers = this.gameId < EVAL_GAME_ID_OFFSET ? 2 : 1;
+        this.resetCount = 0;
+        this.playerIds = [];
+
         this.tracker = new Tracker();
-
-        this.handlers = Object.fromEntries(
-            [0, 1].map((playerIndex) => [
-                playerIndex,
-                new StreamHandler({
-                    gameId,
-                    sendFn: async (state) => {
-                        const jobKey = this.queueSystem.createJob();
-                        state.setKey(jobKey);
-                        this.sendState(state);
-                        return jobKey;
-                    },
-                    recvFn: async (key: string) => {
-                        return await this.queueSystem.getResult(key);
-                    },
-                }),
-            ]),
-        );
     }
 
-    getWinner() {
-        if (this.world && this.done) {
-            return this.world.winner;
-        }
+    addPlayerId(playerId: number) {
+        if (this.playerIds.length < this.maxPlayers)
+            this.playerIds.push(playerId);
     }
 
-    sendState(state: State) {
-        this.tracker.update(this.world!);
-
-        const isDone = this.done;
-        let info = state.getInfo()!;
-
-        const winReward = this.tracker.getRewardFromFinish(
-            this.world!,
-            this.earlyFinish,
-        );
-        const hpReward = this.tracker.getHpChangeReward();
-        const faintedReward = this.tracker.getFaintedChangeReward();
-
-        info.setWinreward(winReward);
-        info.setFaintedreward(faintedReward);
-        info.setHpreward(hpReward);
-        info.setDone(isDone);
-        info.setDrawratio(Math.min(1, this.ts / MAX_TS));
-
-        if (isDone) {
-            // Object.values(this.handlers).map(
-            //     ({ actionLog }) =>
-            //         actionLog.reduce(
-            //             (a, b) => a + +(b.getIndex() < 4 && b.getIndex() >= 0),
-            //             0,
-            //         ) / actionLog.length,
-            // );
-            state.setLegalactions(AllValidActions.buffer);
-        }
-
-        state.setInfo(info);
-
-        const stateArr = state.serializeBinary();
-        this.ts += 1;
-        return this.port?.postMessage(stateArr, [stateArr.buffer]);
-    }
-
-    handleAction(stream: ObjectReadWriteStream<string>, action: Action) {
-        const actionIndex = action.getIndex();
-        if (actionIndex < 0) {
-            const actiontext = action.getText();
-            stream.write(actiontext);
-        } else {
-            const action =
-                actionIndexMapping[
-                    actionIndex as keyof typeof actionIndexMapping
-                ];
-            stream.write(action);
-        }
-    }
-
-    async runPlayer(args: {
-        id: "p1" | "p2";
-        stream: ObjectReadWriteStream<string>;
-    }) {
-        const { id, stream } = args;
-        let handler = this.handlers[{ p1: 0, p2: 1 }[id]];
-        handler.world = this.world;
-        for await (const chunk of stream) {
-            const action = await handler.ingestChunk(chunk, stream);
-            if (action !== undefined) {
-                this.handleAction(stream, action);
+    canReset() {
+        if (this.playerIds.length === this.maxPlayers) {
+            if (this.gameId >= EVAL_GAME_ID_OFFSET) {
+                return this.resetCount > 0;
+            } else {
+                return this.resetCount === 2;
             }
-            const playerIndex = handler.getPlayerIndex();
-            if (playerIndex) {
-                handler = this.handlers[playerIndex];
+        }
+        return false;
+    }
+
+    reset(options?: { seed: number[] }) {
+        this.resetCount += 1;
+        if (this.canReset()) {
+            if (this.playerIds.length < this.maxPlayers) {
+                console.error("No players have been added");
             }
-            if (this.ts > MAX_TS) {
-                this.earlyFinish = true;
-                break;
+            this.resetCount = 0;
+            this.tracker.reset();
+            this.tasks.reset();
+            this._reset(options);
+        }
+    }
+
+    _drawGame() {
+        if (this.players !== undefined) {
+            for (const player of this.players) {
+                player.draw = true;
             }
         }
     }
 
-    async run(options?: { seed: number[]; [k: string]: any }) {
+    async _waitAllDone() {
+        await new Promise((resolve) => {
+            const interval = setInterval(() => {
+                if (this.tasks.allDone()) {
+                    clearInterval(interval);
+                    resolve(true);
+                }
+            }, 1);
+        });
+    }
+
+    async _reset(options?: { seed: number[] }) {
+        await this._waitAllDone();
+
         const stream = new BattleStreams.BattleStream();
         const streams = BattleStreams.getPlayerStreams(stream);
         const spec = { formatid: formatId, ...options };
 
         void streams.omniscient.write(`>start ${JSON.stringify(spec)}
 `);
-
-        this.world = stream.battle;
-
-        const players = Promise.all([
-            this.runPlayer({
-                id: "p1",
-                stream: streams.p1,
-            }),
-            this.runPlayer({
-                id: "p2",
-                stream: streams.p2,
-            }),
-        ]);
+        // await this._waitAllDone();
+        if (!this.tasks.allDone()) {
+            throw new Error("Not all tasks are finished");
+        }
 
         const p1spec = {
-            name: `Bot${this.gameId}1`,
+            name: `${this.workerIndex}-${this.gameId}-1`,
             team: Teams.pack(generator.getTeam()),
         };
         const p2spec = {
-            name: `Bot${this.gameId}2`,
+            name: `${this.workerIndex}-${this.gameId}-2`,
             team: Teams.pack(generator.getTeam()),
         };
 
         void streams.omniscient.write(`>player p1 ${JSON.stringify(p1spec)}
 >player p2 ${JSON.stringify(p2spec)}`);
 
-        await players;
+        const battle = stream.battle!;
 
-        return new Promise(async (resolve, reject) => {
-            this.done = true;
-            const state = await this.handlers[0].getState();
-            this.sendState(state);
-            resolve(true);
-        });
+        const sendFn: sendFnType = async (player) => {
+            const gameState = new GameState();
+            const { faintedReward, hpReward } = this.tracker.update2(battle);
+            const state = player.createState();
+
+            const rewards = state.getInfo()!.getRewards()!;
+            rewards.setHpreward(hpReward);
+            rewards.setFaintedreward(faintedReward);
+
+            gameState.setState(state.serializeBinary());
+            const playerId =
+                this.playerIds[+state.getInfo()!.getPlayerindex()] ?? 1;
+            let rqid = -1;
+            if (!state.getInfo()!.getDone()) {
+                rqid = this.tasks.createJob();
+            }
+            gameState.setRqid(rqid);
+            gameState.setPlayerId(playerId);
+
+            if (this.gameId >= EVAL_GAME_ID_OFFSET && playerId === 1) {
+                const action = getEvalAction(player);
+                action.setRqid(rqid);
+                this.step(action);
+            } else {
+                const stateBuffer = gameState.serializeBinary();
+                this.port.postMessage(stateBuffer);
+            }
+            return rqid;
+        };
+
+        const recvFn: recvFnType = async (rqid) => {
+            return rqid >= 0 ? this.tasks.getResult(rqid) : undefined;
+        };
+
+        this.players = [
+            new Player(
+                this.workerIndex,
+                this.gameId,
+                streams.p1,
+                this.playerIds[0],
+                sendFn,
+                recvFn,
+                stream,
+            ),
+            new Player(
+                this.workerIndex,
+                this.gameId,
+                streams.p2,
+                this.playerIds[1],
+                sendFn,
+                recvFn,
+                stream,
+            ),
+        ];
+
+        for (const player of this.players) {
+            player.start();
+        }
+
+        if (this.gameId < EVAL_GAME_ID_OFFSET) {
+            for await (const chunk of streams.omniscient) {
+                for (const line of chunk.split("\n")) {
+                    if (line.startsWith("|turn")) {
+                        const turnValue = parseInt(line.split("|")[2]);
+                        if (turnValue >= DRAW_TURNS) {
+                            this._drawGame();
+                        }
+                    }
+                }
+                // if (stream.battle !== null) {
+                //     const numConsecutiveSwitches = 20;
+                //     const lastTenMoves = stream.battle.inputLog.slice(
+                //         -numConsecutiveSwitches,
+                //     );
+                //     const switchCount = lastTenMoves.reduce((prev, curr) => {
+                //         const isSwitch =
+                //             curr.split(" ")[1].toString() === "switch";
+                //         return prev + +isSwitch;
+                //     }, 0);
+                //     if (switchCount === numConsecutiveSwitches) {
+                //         this._drawGame();
+                //     }
+                // }
+            }
+        }
     }
 
-    reset() {
-        for (const playerIndex of [0, 1]) {
-            this.handlers[playerIndex].reset();
-        }
-        this.done = false;
-        this.world = null;
-        this.ts = 0;
-        this.tied = false;
-        this.tracker.reset();
-        this.earlyFinish = false;
+    step(action: Action) {
+        const rqid = action.getRqid();
+        if (rqid >= 0) this.tasks.submitResult(rqid, action);
     }
 }
