@@ -169,7 +169,10 @@ function getNullPokemon() {
 
 const nullPokemon = getNullPokemon();
 
-function getArrayFromPokemon(candidate: Pokemon | null): Int16Array {
+function getArrayFromPokemon(
+    candidate: Pokemon | null,
+    playerIndex: number,
+): Int16Array {
     if (candidate === null) {
         return getNullPokemon();
     }
@@ -283,7 +286,7 @@ function getArrayFromPokemon(candidate: Pokemon | null): Int16Array {
     }
     dataArr.set(volatiles.buffer, FeatureEntity.ENTITY_VOLATILES0);
 
-    dataArr[FeatureEntity.ENTITY_SIDE] = pokemon.side.n;
+    dataArr[FeatureEntity.ENTITY_SIDE] = pokemon.side.n ^ playerIndex;
 
     dataArr[FeatureEntity.ENTITY_BOOST_ATK_VALUE] = pokemon.boosts.atk ?? 0;
     dataArr[FeatureEntity.ENTITY_BOOST_DEF_VALUE] = pokemon.boosts.def ?? 0;
@@ -327,12 +330,42 @@ class Edge {
         return edge;
     }
 
-    setPoke1(data: Int16Array) {
+    setPoke1FromData(data: Int16Array) {
         this.entityData.set(data);
     }
 
-    setPoke2(data: Int16Array) {
+    setPoke1(poke1: Pokemon | null) {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+        const data = getArrayFromPokemon(poke1, playerIndex);
+        this.setPoke1FromData(data);
+        if (poke1 !== null) {
+            this.setFeature(
+                FeatureEdge.EDGE_AFFECTING_SIDE,
+                poke1.side.n ^ playerIndex,
+            );
+        }
+    }
+
+    setPoke2FromData(data: Int16Array) {
         this.entityData.set(data, numPokemonFields);
+    }
+
+    setPoke2(poke2: Pokemon | null) {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+        const data = getArrayFromPokemon(poke2, playerIndex);
+        this.setPoke2FromData(data);
+        if (poke2 !== null) {
+            this.setFeature(
+                FeatureEdge.EDGE_AFFECTING_SIDE,
+                poke2.side.n ^ playerIndex,
+            );
+        }
     }
 
     updateSideConditionData() {
@@ -582,7 +615,7 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, moveId, poke2Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         this.actionWindow[poke1.side.n].push(0);
 
         const move = this.getMove(moveId);
@@ -592,13 +625,12 @@ export class EventHandler implements Protocol.Handler {
         );
 
         const poke2 = this.getPokemon(poke2Ident as PokemonIdent);
-        const poke2Data = getArrayFromPokemon(poke2);
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setPoke2(poke2Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
+        edge.setPoke2(poke2);
+
         edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.MOVE_EDGE);
 
@@ -625,13 +657,12 @@ export class EventHandler implements Protocol.Handler {
         if (argName === "switch") {
             this.actionWindow[poke1.side.n].push(1);
         }
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName);
-        edge.setPoke1(poke1Data);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.SWITCH_EDGE);
 
         this.addEdge(edge);
@@ -643,7 +674,6 @@ export class EventHandler implements Protocol.Handler {
         const edge = new Edge(this.player);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         if (moveId) {
             const move = this.getMove(moveId);
@@ -657,8 +687,7 @@ export class EventHandler implements Protocol.Handler {
         const condition = this.getCondition(conditionId);
 
         edge.addMajorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.CANT_EDGE);
         edge.updateEdgeFromOf(condition);
 
@@ -669,13 +698,11 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const edge = new Edge(this.player);
 
         edge.addMajorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -685,7 +712,6 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const edge = new Edge(this.player);
 
@@ -693,13 +719,11 @@ export class EventHandler implements Protocol.Handler {
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
@@ -710,7 +734,6 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const edge = new Edge(this.player);
 
@@ -718,13 +741,11 @@ export class EventHandler implements Protocol.Handler {
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
@@ -738,9 +759,7 @@ export class EventHandler implements Protocol.Handler {
 
         if (poke1Ident) {
             const poke1 = this.getPokemon(poke1Ident)!;
-            const poke1Data = getArrayFromPokemon(poke1);
-            edge.setPoke1(poke1Data);
-            edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+            edge.setPoke1(poke1);
         }
 
         edge.addMinorArg(argName);
@@ -753,14 +772,12 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
         const fromEffect = this.getCondition(kwArgs.from);
 
         const edge = new Edge(this.player);
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
@@ -774,12 +791,10 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
         const true1Ident = poke1.originalIdent;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         if (kwArgs.from) {
@@ -796,8 +811,7 @@ export class EventHandler implements Protocol.Handler {
         this.currHp.set(true1Ident, currHp);
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.DAMAGE_TOKEN, Math.floor(1023 * diffRatio));
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
@@ -811,12 +825,10 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
         const trueIdent = poke1.originalIdent;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         const fromEffect = this.getCondition(kwArgs.from);
@@ -830,8 +842,7 @@ export class EventHandler implements Protocol.Handler {
         this.currHp.set(trueIdent, currHp);
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.DAMAGE_TOKEN, Math.floor(1024 * diffRatio));
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
@@ -846,20 +857,17 @@ export class EventHandler implements Protocol.Handler {
         const statusToken = IndexValueFromEnum("Status", statusId);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const edge = new Edge(this.player);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
         edge.updateEdgeFromOf(fromEffect);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.STATUS_TOKEN, statusToken);
 
@@ -871,13 +879,11 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
         const statusIndex = IndexValueFromEnum("Status", statusId);
 
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.STATUS_TOKEN, statusIndex);
 
@@ -889,12 +895,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -912,19 +915,17 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, stat, value] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
 
         const edge = new Edge(this.player);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(featureIndex, parseInt(value));
         edge.addMinorArg(argName);
@@ -936,19 +937,17 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, stat, value] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
 
         const edge = new Edge(this.player);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(featureIndex, -parseInt(value));
         edge.addMinorArg(argName);
@@ -960,7 +959,7 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, stat, value] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -968,12 +967,10 @@ export class EventHandler implements Protocol.Handler {
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(featureIndex, parseInt(value));
         edge.updateEdgeFromOf(fromEffect);
@@ -988,20 +985,17 @@ export class EventHandler implements Protocol.Handler {
         const edge = new Edge(this.player);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
         this.addEdge(edge);
@@ -1016,20 +1010,17 @@ export class EventHandler implements Protocol.Handler {
         const edge = new Edge(this.player);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
         this.addEdge(edge);
@@ -1044,20 +1035,17 @@ export class EventHandler implements Protocol.Handler {
         const edge = new Edge(this.player);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
         this.addEdge(edge);
@@ -1072,20 +1060,17 @@ export class EventHandler implements Protocol.Handler {
         const edge = new Edge(this.player);
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
         this.addEdge(edge);
@@ -1177,12 +1162,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -1193,12 +1175,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -1209,12 +1188,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -1225,12 +1201,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -1241,12 +1214,9 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addEdge(edge);
@@ -1257,21 +1227,17 @@ export class EventHandler implements Protocol.Handler {
 
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
         edge.addMinorArg(argName);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
@@ -1282,7 +1248,7 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, itemId] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const itemIndex = IndexValueFromEnum("Items", itemId);
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1290,12 +1256,10 @@ export class EventHandler implements Protocol.Handler {
 
         if (kwArgs.of) {
             const poke2 = this.getPokemon(kwArgs.of)!;
-            const poke2Data = getArrayFromPokemon(poke2);
-            edge.setPoke2(poke2Data);
+            edge.setPoke2(poke2);
         }
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.ITEM_TOKEN, itemIndex);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
@@ -1307,13 +1271,12 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, itemId] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const itemIndex = IndexValueFromEnum("Items", itemId);
         const fromEffect = this.getCondition(kwArgs.from);
 
         const edge = new Edge(this.player);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.ITEM_TOKEN, itemIndex);
         edge.updateEdgeFromOf(fromEffect);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
@@ -1325,13 +1288,12 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident, abilityId] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const abilityIndex = IndexValueFromEnum("Ability", abilityId);
         const fromEffect = this.getCondition(kwArgs.from);
 
         const edge = new Edge(this.player);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.ABILITY_TOKEN, abilityIndex);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
@@ -1346,12 +1308,11 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
 
         const poke1 = this.getPokemon(poke1Ident)!;
-        const poke1Data = getArrayFromPokemon(poke1);
+
         const fromEffect = this.getCondition(kwArgs.from);
 
         const edge = new Edge(this.player);
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
         edge.addMinorArg(argName);
@@ -1377,9 +1338,8 @@ export class EventHandler implements Protocol.Handler {
 
         if (poke1Ident) {
             const poke1 = this.getPokemon(poke1Ident)!;
-            const poke1Data = getArrayFromPokemon(poke1);
-            edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
-            edge.setPoke1(poke1Data);
+
+            edge.setPoke1(poke1);
         }
 
         const fromEffect = this.getCondition(kwArgs.from);
@@ -1395,12 +1355,9 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
@@ -1411,12 +1368,9 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
@@ -1427,12 +1381,9 @@ export class EventHandler implements Protocol.Handler {
         const [argName, poke1Ident] = args;
         const poke1 = this.getPokemon(poke1Ident)!;
 
-        const poke1Data = getArrayFromPokemon(poke1);
-
         const edge = new Edge(this.player);
 
-        edge.setPoke1(poke1Data);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, poke1.side.n);
+        edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
@@ -1565,7 +1516,7 @@ export class StateHandler {
         const battle = this.player.privateBattle;
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
-            throw new Error();
+            throw new Error("PlayerIndex is not defined");
         }
 
         const mySide = battle.sides[playerIndex];
@@ -1589,7 +1540,8 @@ export class StateHandler {
                 movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
                     MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
                 movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = ppUsed;
-                movesetArr[offset + FeatureMoveset.MOVESET_SIDE] = side.n;
+                movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
+                    side.n ^ playerIndex;
                 if ("disabled" in move) {
                     movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
                         move.disabled ? 0 : 1;
@@ -1740,7 +1692,7 @@ export class StateHandler {
                 (a, b) => +!a.isActive() - +!b.isActive(),
             );
             for (const member of sortedTeam) {
-                team.push(getArrayFromPokemon(member));
+                team.push(getArrayFromPokemon(member, playerIndex));
             }
             for (
                 let memberIndex = team.length;
@@ -1765,7 +1717,7 @@ export class StateHandler {
         const side = this.player.publicBattle.sides[playerIndex];
         const team: Int16Array[] = [];
         for (const member of side.team) {
-            team.push(getArrayFromPokemon(member));
+            team.push(getArrayFromPokemon(member, playerIndex));
         }
         for (
             let memberIndex = team.length;

@@ -130,6 +130,7 @@ export class Player extends BattleStreams.BattlePlayer {
 
     worldStream: BattleStreams.BattleStream | null;
     offline: boolean;
+    hasRequest: boolean;
 
     constructor(
         workerIndex: number,
@@ -171,6 +172,7 @@ export class Player extends BattleStreams.BattlePlayer {
 
         this.worldStream = worldStream;
         this.offline = offline;
+        this.hasRequest = false;
     }
 
     getPlayerIndex(): number | undefined {
@@ -247,6 +249,8 @@ export class Player extends BattleStreams.BattlePlayer {
     }
 
     async start() {
+        const backup: string[] = [];
+
         for await (const chunk of this.stream) {
             if (this.done || this.draw) {
                 // Early finish
@@ -259,8 +263,24 @@ export class Player extends BattleStreams.BattlePlayer {
                 console.log(err);
             }
 
-            for (const line of chunk.split("\n")) {
-                this.addLine(line);
+            if (!this.hasRequest) {
+                if (chunk.includes("|request")) {
+                    this.hasRequest = true;
+                }
+            }
+
+            if (this.hasRequest) {
+                for (const line of chunk.split("\n")) {
+                    this.addLine(line);
+                }
+                while (backup.length > 0) {
+                    const line = backup.shift();
+                    if (line) this.addLine(line);
+                }
+            } else {
+                for (const line of chunk.split("\n")) {
+                    backup.push(line);
+                }
             }
             this.privateBattle.update();
 
