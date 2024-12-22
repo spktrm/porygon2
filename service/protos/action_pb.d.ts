@@ -13,6 +13,9 @@ export class Action extends jspb.Message {
   getText(): string;
   setText(value: string): void;
 
+  getGameid(): number;
+  setGameid(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
   static toObject(includeInstance: boolean, msg: Action): Action.AsObject;
@@ -28,6 +31,7 @@ export namespace Action {
     key: string,
     index: number,
     text: string,
+    gameid: number,
   }
 }
 

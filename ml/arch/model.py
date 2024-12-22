@@ -33,18 +33,29 @@ class Model(nn.Module):
         Forward pass for the Model. It first processes the env_step through the encoder,
         and then applies the policy and value heads to generate the output.
         """
-        # Get current state and action embeddings from the encoder
-        current_state_embedding, action_embeddings = self.encoder(env_step)
 
-        # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(
-            current_state_embedding, action_embeddings, env_step.legal
+        # Get current state and action embeddings from the encoder
+        contextual_entity_embeddings, valid_entity_mask, action_embeddings = (
+            self.encoder(env_step)
         )
 
+        # Apply action argument heads
+        logit, pi, log_pi = self.policy_head(action_embeddings, env_step)
+
         # Apply the value head
-        v = self.value_head(current_state_embedding)
+        v = self.value_head(contextual_entity_embeddings, valid_entity_mask)
 
         # Return the model output
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
+
+
+class DummyModel(nn.Module):
+
+    @nn.compact
+    def __call__(self, env_step: EnvStep) -> ModelOutput:
+        mask = env_step.legal.astype(jnp.float32)
+        v = nn.Dense(1)(mask)
+        logit = log_pi = pi = mask / mask.sum()
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
 
 
@@ -90,6 +101,10 @@ def get_model(config: ConfigDict) -> nn.Module:
     return Model(config)
 
 
+def get_dummy_model() -> nn.Module:
+    return DummyModel()
+
+
 def assert_no_nan_or_inf(gradients, path=""):
     if isinstance(gradients, dict):
         for key, value in gradients.items():
@@ -100,50 +115,10 @@ def assert_no_nan_or_inf(gradients, path=""):
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
 
 
-# def test(params: Any):
-#     from ml.config import VtraceConfig
-#     from rlenv.utils import stack_steps
-
-#     config = get_model_cfg()
-#     network = get_model(config)
-
-#     learner = RNaDLearner(network, VtraceConfig())
-
-#     learner.params = params
-#     learner.params_target = params
-#     learner.params_prev = params
-#     learner.params_prev_ = params
-
-#     batch_size = 8
-
-#     batch = stack_steps(
-#         [
-#             TimeStep(
-#                 env=jax.tree.map(
-#                     lambda x: x[None].repeat(batch_size, 0),
-#                     get_ex_step(),
-#                 ),
-#                 actor=ActorStep(
-#                     action=np.random.randint(0, 9, (batch_size,)),
-#                     policy=np.random.random((batch_size, 10)),
-#                     win_rewards=np.zeros((batch_size, 2)),
-#                     hp_rewards=np.zeros((batch_size, 2)),
-#                     fainted_rewards=np.zeros((batch_size, 2)),
-#                 ),
-#             )
-#             for _ in range(64)
-#         ]
-#     )
-#     logs = learner.step(batch)
-#     pprint(logs)
-
-
 def main():
     config = get_model_cfg()
     network = get_model(config)
     ex_step = get_ex_step()
-    # with open("bad_state.pkl", "rb") as f:
-    #     ex_step = pickle.load(f)
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -155,13 +130,8 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex_step)
 
-    # for i in range(4):
-    #     step = jax.tree.map(lambda x: x[i], ex_step)
-    #     out = network.apply(params, step)
     network.apply(params, ex_step)
     pprint(get_num_params(params))
-
-    # test(params)
 
 
 if __name__ == "__main__":

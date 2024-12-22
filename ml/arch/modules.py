@@ -1,6 +1,5 @@
-import math
 from enum import Enum, auto
-from typing import Any, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import chex
 import flax.linen as nn
@@ -11,9 +10,6 @@ import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
-from flax.typing import Array, Dtype, Initializer, PrecisionLike
-from flax.typing import PRNGKey as PRNGKey
-from flax.typing import Shape as Shape
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -31,47 +27,92 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array):
-    return nn.RMSNorm()(array)
+def layer_norm(array: chex.Array, scale: int = 2.5):
+    return nn.LayerNorm()(array)
 
 
-class Linear(nn.Dense):
-    kernel_init: Initializer = None
+class SNDense(nn.Module):
+    """A linear transformation applied over the last dimension of the input with sigmaReparam.
+    Attributes:
+        features: the number of output features.
+        use_bias: whether to add a bias to the output (default: True).
+        dtype: the dtype of the computation (default: infer from input and params).
+        param_dtype: the dtype passed to parameter initializers (default: float32).
+        precision: numerical precision of the computation see `jax.lax.Precision`
+        for details.
+        kernel_init: initializer function for the weight matrix.
+        bias_init: initializer function for the bias.
+    """
+
+    features: int
+    use_bias: bool = True
+    dtype: Optional[Any] = None
+    param_dtype: Any = jnp.float32
+    precision: Any = None
+    bias_init: Callable[[Any], Any] = jax.nn.initializers.zeros
+    std_init: float = 0.1
+    denom_backward: bool = True
 
     @nn.compact
-    def __call__(self, inputs: jax.Array) -> jax.Array:
+    def __call__(self, inputs: chex.Array) -> Any:
         """Applies a linear transformation to the inputs along the last dimension.
-
         Args:
-        inputs: The nd-array to be transformed.
-
+            inputs: The nd-array to be transformed.
         Returns:
-        The transformed input.
+            The transformed input.
         """
-        stddev = 1.0 / np.sqrt(inputs.shape[-1])
+        initializing = self.is_mutable_collection("params")
+
         kernel = self.param(
             "kernel",
-            self.kernel_init or nn.initializers.truncated_normal(stddev=stddev),
+            jax.nn.initializers.normal(self.std_init),
             (jnp.shape(inputs)[-1], self.features),
             self.param_dtype,
         )
+
         if self.use_bias:
             bias = self.param(
                 "bias", self.bias_init, (self.features,), self.param_dtype
             )
         else:
             bias = None
-        inputs, kernel, bias = promote_dtype(inputs, kernel, bias, dtype=self.dtype)
 
-        if self.dot_general_cls is not None:
-            dot_general = self.dot_general_cls()
-        elif self.dot_general is not None:
-            dot_general = self.dot_general
-        else:
-            dot_general = lax.dot_general
-        y = dot_general(
+        # fake init
+        s = jnp.ones((1, 1))
+        vh = jnp.ones((1))
+        if initializing:
+            _, s, vh = lax.stop_gradient(jnp.linalg.svd(kernel, full_matrices=False))
+        sigma_param = self.param(
+            "sigma", jax.nn.initializers.ones, (1,), self.param_dtype
+        )
+        spectral_u_var = self.variable(
+            "spectral", "u", lambda shape: jnp.ones(shape) * vh[0], vh[0].shape
+        )
+        spectral_norm_var = self.variable(
+            "spectral", "norm", lambda shape: jnp.ones(shape) * s[0], (1,)
+        )
+        inputs, kernel, bias = promote_dtype(inputs, kernel, bias, dtype=self.dtype)
+        # power method to compute spectral norm
+        u = spectral_u_var.value
+        v = lax.stop_gradient(jnp.matmul(kernel, u))
+        # l2 norm
+        v = lax.stop_gradient(v / jnp.linalg.norm(v, ord=2))
+        u = lax.stop_gradient(jnp.matmul(jnp.transpose(kernel), v))
+        # l2 norm
+        u = lax.stop_gradient(u / jnp.linalg.norm(u, ord=2))
+        if spectral_u_var.is_mutable() and not initializing:
+            spectral_u_var.value = u
+        sigma = jnp.einsum("c,cd,d->", v, kernel, u)
+
+        if spectral_norm_var.is_mutable() and not initializing:
+            spectral_norm_var.value = sigma
+
+        inputs, sigma_param, sigma = promote_dtype(
+            inputs, sigma_param, sigma, dtype=self.dtype
+        )
+        y = lax.dot_general(
             inputs,
-            kernel,
+            (sigma_param / sigma) * kernel,
             (((inputs.ndim - 1,), (0,)), ((), ())),
             precision=self.precision,
         )
@@ -89,6 +130,7 @@ class GatingType(Enum):
 class PoolMethod(Enum):
     MAX = auto()
     MEAN = auto()
+    ATTN = auto()
 
 
 class VectorResblock(nn.Module):
@@ -97,6 +139,7 @@ class VectorResblock(nn.Module):
     num_layers: int = 2
     hidden_size: Optional[int] = None
     use_layer_norm: bool = True
+    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -105,36 +148,35 @@ class VectorResblock(nn.Module):
         input_size = x.shape[-1]
         for i in range(self.num_layers):
             if i < self.num_layers - 1:
-                output_size = self.hidden_size or input_size
-                kernel_init = None
+                kwargs = dict(features=self.hidden_size or input_size)
             else:
-                output_size = input_size
-                kernel_init = nn.initializers.normal(stddev=0.005)
+                kwargs = dict(
+                    features=input_size,
+                    kernel_init=nn.initializers.normal(stddev=0.005),
+                )
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = Linear(features=output_size, kernel_init=kernel_init)(x)
+            if self.use_spectral_linear:
+                x = SNDense(**kwargs)(x)
+            else:
+                x = nn.Dense(**kwargs)(x)
         return x + shortcut
-
-
-class UnitsResblock(VectorResblock):
-    """Fully connected residual block, unit-wise."""
-
-    def __call__(self, x: chex.Array) -> chex.Array:
-        chex.assert_type(x, jnp.float32)
-        return jax.vmap(super().__call__)(x)
 
 
 class Resnet(nn.Module):
     """A fully-connected resnet."""
 
     num_resblocks: int
+    hidden_size: int = None
     use_layer_norm: bool = True
 
     @nn.compact
     def __call__(self, x: chex.Array):
         for _ in range(self.num_resblocks):
-            x = VectorResblock(use_layer_norm=self.use_layer_norm)(x)
+            x = VectorResblock(
+                hidden_size=self.hidden_size, use_layer_norm=self.use_layer_norm
+            )(x)
         return x
 
 
@@ -160,8 +202,54 @@ class Logits(nn.Module):
 
             # Apply activation and dense layer with custom kernel initializer
             x = activation_fn(x)
-            x = Linear(features=output_size, kernel_init=self.kernel_init)(x)
+            x = nn.Dense(features=output_size, kernel_init=self.kernel_init)(x)
         return x
+
+
+def get_freqs(seq_len: int, dim: int, base: int = 10000):
+    theta = 1 / (base ** (jnp.arange(0, dim, 2) / dim))
+    t = jnp.arange(seq_len)
+
+    idx_theta = jnp.einsum("i,j->ij", t, theta)
+    idx_theta = jnp.concatenate([idx_theta, idx_theta], axis=1)
+
+    freqs_cos = jnp.cos(idx_theta)
+    freqs_sin = jnp.sin(idx_theta)
+
+    return freqs_cos, freqs_sin
+
+
+def normalize_masked(tensor: chex.Array, mask: chex.Array):
+    mask = mask + (1 - mask.any(axis=-1, keepdims=True))
+    return nn.LayerNorm()(tensor, mask=mask)
+
+
+class NormalizeAttention(nn.Module):
+    @nn.compact
+    def __call__(self, logits: chex.Array, mask: chex.Array):
+        gain = self.param(
+            "gain", lambda rng, shape: jnp.ones(shape), logits.shape[:1] + (1, 1)
+        )
+        bias = self.param(
+            "bias", lambda rng, shape: jnp.zeros(shape), logits.shape[:1] + (1, 1)
+        )
+        return (gain * normalize_masked(logits, mask) + bias) * mask
+
+
+def get_rope_embedding(x: chex.Array):
+    def negate_half(x: chex.Array):
+        d_2 = x.shape[-1] // 2
+        return jnp.concatenate([x[..., :d_2], -x[..., d_2:]], axis=-1)
+
+    seq_len, dim = x.shape
+    cos, sin = get_freqs(seq_len, dim)
+    neg_half_x = negate_half(x)
+    x_rope = (x * cos) + (neg_half_x * sin)
+    return x_rope
+
+
+def l2_normalize(x: chex.Array, epsilon: float = 1e-6):
+    return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
 
 
 class MultiHeadAttention(nn.Module):
@@ -187,6 +275,9 @@ class MultiHeadAttention(nn.Module):
     key_size: int
     value_size: Optional[int] = None
     model_size: Optional[int] = None
+    query_need_pos: bool = False
+    key_need_pos: bool = False
+    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(
@@ -213,25 +304,49 @@ class MultiHeadAttention(nn.Module):
 
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
-        *leading_dims, sequence_length, _ = query.shape
+        *leading_dims, s1_length, _ = query.shape
+        # *_, s2_length, __ = key.shape
 
-        def _linear_projection(x: jax.Array, head_size: int) -> jax.Array:
-            y = Linear(self.num_heads * head_size)(x)
+        # if s1_length == s2_length:
+        #     compress = self.param(
+        #         "compress", nn.initializers.xavier_uniform(), (s1_length, 4)
+        #     )
+
+        #     masked_compress = compress.T * mask.any(axis=-1)
+        #     key = masked_compress @ key
+        #     value = masked_compress @ value
+        #     mask = None
+
+        key_size = self.key_size
+        value_size = self.value_size or self.key_size
+        model_size = self.model_size or self.key_size * self.num_heads
+
+        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
+
+        def _linear_projection(
+            x: jax.Array, head_size: int, need_pos: bool = False
+        ) -> jax.Array:
+            y = linear_mod(self.num_heads * head_size)(x)
+            if need_pos:
+                y = get_rope_embedding(y)
             *leading_dims, _ = x.shape
             return y.reshape((*leading_dims, self.num_heads, head_size))
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = _linear_projection(query, self.key_size)  # [T', H, Q=K]
-        key_heads = _linear_projection(key, self.key_size)  # [T, H, K]
-        value_heads = _linear_projection(
-            value, self.value_size or self.key_size
-        )  # [T, H, V]
+        query_heads = _linear_projection(
+            query, key_size, self.query_need_pos
+        )  # [T', H, Q=K]
+        key_heads = _linear_projection(key, key_size, self.key_need_pos)  # [T, H, K]
+        value_heads = _linear_projection(value, value_size)  # [T, H, V]
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        # attn_logits = utils._prenorm_softmax(attn_logits, mask)
-        attn_logits = attn_logits / jnp.sqrt(self.key_size).astype(key.dtype)
 
+        # attn_weights = NormalizeAttention()(attn_logits, mask)
+
+        attn_logits = attn_logits * jax.lax.rsqrt(
+            jnp.array(key_size, dtype=jnp.float32)
+        )
         if mask is not None:
             if mask.ndim != attn_logits.ndim:
                 raise ValueError(
@@ -247,147 +362,37 @@ class MultiHeadAttention(nn.Module):
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
+        attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = Linear(self.model_size or attn.shape[-1])
+        final_projection = linear_mod(model_size)
         return final_projection(attn)  # [T', D']
 
 
-class MultiHeadDiffAttention(nn.Module):
-    """
-    Multi-head differential attention module with the core idea of subtracting the softmax.
-    This module is modeled similar to the default Flax MultiHeadDotProductAttention module.
-    """
-
-    num_heads: int
-    key_size: int
-    model_size: Optional[int] = None
-
-    @nn.compact
-    def __call__(
-        self,
-        query: jax.Array,
-        key: jax.Array,
-        value: jax.Array,
-        mask: Optional[jax.Array] = None,
-    ) -> jax.Array:
-        """Computes (optionally masked) MHA with queries, keys & values.
-
-        This module broadcasts over zero or more 'batch-like' leading dimensions.
-
-        Args:
-          query: Embeddings sequence used to compute queries; shape [..., T', D_q].
-          key: Embeddings sequence used to compute keys; shape [..., T, D_k].
-          value: Embeddings sequence used to compute values; shape [..., T, D_v].
-          mask: Optional mask applied to attention weights; shape [..., H=1, T', T].
-
-        Returns:
-          A new sequence of embeddings, consisting of a projection of the
-            attention-weighted value projections; shape [..., T', D'].
-        """
-
-        # In shape hints below, we suppress the leading dims [...] for brevity.
-        # Hence e.g. [A, B] should be read in every case as [..., A, B].
-        *leading_dims, sequence_length, _ = query.shape
-
-        def _query_key_projection(x: jax.Array, head_size: int) -> jax.Array:
-            y = Linear(self.num_heads * 2 * head_size)(x)
-            *leading_dims, _ = x.shape
-            return y.reshape((*leading_dims, 2 * self.num_heads, head_size))
-
-        def _value_projection(x: jax.Array, head_size: int) -> jax.Array:
-            y = Linear(self.num_heads * 2 * head_size)(x)
-            *leading_dims, _ = x.shape
-            return y.reshape((*leading_dims, self.num_heads, 2 * head_size))
-
-        # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = _query_key_projection(query, self.key_size)  # [T', H, Q=K]
-        key_heads = _query_key_projection(key, self.key_size)  # [T, H, K]
-        value_heads = _value_projection(value, self.key_size)  # [T, H, V]
-
-        # Compute attention weights.
-        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        # attn_logits = utils._prenorm_softmax(attn_logits, mask)
-        attn_logits = attn_logits / np.sqrt(self.key_size).astype(key.dtype)
-
-        if mask is not None:
-            if mask.ndim != attn_logits.ndim:
-                raise ValueError(
-                    f"Mask dimensionality {mask.ndim} must match logits dimensionality "
-                    f"{attn_logits.ndim}."
-                )
-            attn_logits = jnp.where(mask, attn_logits, -1e30)
-
-        attn_weights = jax.nn.softmax(attn_logits)  # [H, T', T]
-
-        if mask is not None:
-            attn_weights = jnp.where(mask, attn_weights, 0)
-
-        lambda_q1 = self.param(
-            "lambda_q1", nn.initializers.normal(stddev=0.1), (self.key_size,)
-        )
-        lambda_k1 = self.param(
-            "lambda_k1", nn.initializers.normal(stddev=0.1), (self.key_size,)
-        )
-        lambda_q2 = self.param(
-            "lambda_q2", nn.initializers.normal(stddev=0.1), (self.key_size,)
-        )
-        lambda_k2 = self.param(
-            "lambda_k2", nn.initializers.normal(stddev=0.1), (self.key_size,)
-        )
-
-        attn_weights = attn_weights.reshape(
-            *leading_dims, self.num_heads, 2, sequence_length, -1
-        )
-
-        lambda_1 = jnp.exp(jnp.sum(lambda_q1 * lambda_k1, axis=-1))
-        lambda_2 = jnp.exp(jnp.sum(lambda_q2 * lambda_k2, axis=-1))
-
-        def lambda_init_fn(depth):
-            return 0.8 - 0.6 * math.exp(-0.3 * depth)
-
-        lambda_init = lambda_init_fn(2)
-        lambda_full = lambda_1 - lambda_2 + lambda_init
-        attn_weights = (
-            attn_weights[..., 0, :, :] - lambda_full * attn_weights[..., 1, :, :]
-        )
-
-        # Weight the values by the attention and flatten the head vectors.
-        attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        attn = jnp.reshape(attn, (*leading_dims, sequence_length, -1))  # [T', H*V]
-        attn = layer_norm(attn)
-        attn = attn * (1 - lambda_init)
-
-        # Apply another projection to get the final embeddings.
-        final_projection = Linear(self.model_size or attn.shape[-1])
-        return final_projection(attn)  # [T', D']
-
-
-def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray) -> jnp.ndarray:
+def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray = None) -> jnp.ndarray:
     """Create a combined attention mask for cross-attention."""
-    if mask1 is not None and mask2 is not None:
-        # mask1: (batch_size, seq_len1), mask2: (batch_size, seq_len2)
-        # We want a (batch_size, 1, seq_len1, seq_len2) mask for broadcasting.
-        mask1 = mask1[..., None]  # Shape: (batch_size, seq_len1, 1)
-        mask2 = mask2[..., None, :]  # Shape: (batch_size, 1, seq_len2)
-        # Combine them with logical AND (only allow attending if both elements are not masked).
-        combined_mask = mask1 & mask2  # Shape: (batch_size, seq_len1, seq_len2)
-        combined_mask = combined_mask[
-            ..., None, :, :
-        ]  # Shape: (batch_size, 1, seq_len1, seq_len2)
-    else:
-        combined_mask = None  # No mask if both are None
-    return combined_mask
+    if mask1 is None:
+        return None
+
+    if mask2 is None:
+        mask2 = mask1
+
+    return mask1[..., None, :, None] & mask2[..., None, None, :]
 
 
-class Transformer(nn.Module):
+class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    hidden_size: int
+    key_size: int
+    value_size: int
+    model_size: int
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
+    x_need_pos: bool = False
+    y_need_pos: bool = False
+    use_spectral_linear: bool = False
+    resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
     def __call__(self, x: chex.Array, mask: chex.Array = None):
@@ -395,157 +400,107 @@ class Transformer(nn.Module):
         if mask is None:
             mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        logits_mask = create_attention_mask(mask, mask)
+        sa_mask = create_attention_mask(mask)
+
+        def encoder_layer(x: chex.Array):
+            x_ln = layer_norm(x)
+            mha = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.y_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
+            x_ln = layer_norm(x)
+            mlp = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            return x
 
         for _ in range(self.num_layers):
-            # Apply pre-layer normalization before attention
-            if self.use_layer_norm:
-                x = layer_norm(x)
-            x = activation_fn(x)
-            attn_output = MultiHeadDiffAttention(
-                num_heads=self.num_heads,
-                key_size=self.hidden_size // 2,
-                model_size=self.hidden_size,
-            )(query=x, key=x, value=x, mask=logits_mask)
-            attn_output = jnp.where(mask[..., jnp.newaxis], attn_output, 0)
-            x = x + attn_output
-            # Apply pre-layer normalization before the residual block
-            x = UnitsResblock(
-                hidden_size=self.hidden_size // 2, use_layer_norm=self.use_layer_norm
-            )(x)
-            x = jnp.where(mask[..., jnp.newaxis], x, 0)
+            x = encoder_layer(x)
 
+        x = jnp.where(mask[..., jnp.newaxis], x, 0)
         return x
 
 
-class CrossAttentionLayer(nn.Module):
-    hidden_size: int
-    num_heads: int
-    dtype: Any = jnp.float32
+class TransformerDecoder(nn.Module):
+    """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    @nn.compact
-    def __call__(
-        self,
-        query_seq: chex.Array,
-        key_value_seq: chex.Array,
-        attention_mask: chex.Array = None,
-    ):
-        """
-        Cross-attention layer where the query sequence attends to the key-value sequence.
-
-        Args:
-            query_seq: Array of shape (query_length, hidden_size)
-            key_value_seq: Array of shape (key_value_length, hidden_size)
-            query_mask: Optional boolean array of shape (query_length,)
-            key_value_mask: Optional boolean array of shape (key_value_length,)
-
-        Returns:
-            attention_output: Array of shape (query_length, hidden_size)
-        """
-
-        attention_output = MultiHeadDiffAttention(
-            num_heads=self.num_heads,
-            key_size=self.hidden_size // 2,
-            model_size=self.hidden_size,
-        )(
-            query=query_seq,
-            key=key_value_seq,
-            value=key_value_seq,
-            mask=attention_mask,
-        )
-
-        return attention_output  # Shape: (query_length, hidden_size)
-
-
-class CrossTransformer(nn.Module):
+    key_size: int
+    value_size: int
+    model_size: int
     num_layers: int
-    hidden_size: int
     num_heads: int
-    dtype: Any = jnp.float32
     use_layer_norm: bool = True
+    x_need_pos: bool = False
+    y_need_pos: bool = False
+    use_spectral_linear: bool = False
+    resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
     def __call__(
         self,
-        query_seq: chex.Array,
-        key_value_seq: chex.Array,
-        query_mask: chex.Array = None,
-        key_value_mask: chex.Array = None,
+        x: chex.Array,
+        y: chex.Array,
+        x_mask: chex.Array = None,
+        y_mask: chex.Array = None,
     ):
-        # Prepare masks
-        if query_mask is not None:
-            # Convert to float mask and add batch dimension
-            query_mask = query_mask.astype(self.dtype)
-        else:
-            *_, query_length, __ = query_seq.shape
-            query_mask = jnp.ones((1, query_length), dtype=self.dtype)
 
-        if key_value_mask is not None:
-            key_value_mask = key_value_mask.astype(self.dtype)
-        else:
-            *_, key_length, __ = key_value_seq.shape
-            key_value_mask = jnp.ones((1, key_length), dtype=self.dtype)
+        if x_mask is None:
+            x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        # Create attention bias
-        attention_mask = self.make_attention_mask(query_mask, key_value_mask)
-        transposed_attention_mask = jnp.swapaxes(attention_mask, -1, -2)
+        if y_mask is None:
+            y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
 
-        expanded_query_mask = jnp.expand_dims(query_mask, axis=-1)
-        expanded_key_value_mask = jnp.expand_dims(key_value_mask, axis=-1)
+        sa_mask = create_attention_mask(x_mask)
+        ca_mask = create_attention_mask(x_mask, y_mask)
+
+        def decoder_layer(x: chex.Array, y: chex.Array):
+            x_ln = layer_norm(x)
+            mha = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.x_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
+            x_ln = layer_norm(x)
+            ca = MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.key_size,
+                value_size=self.value_size,
+                model_size=self.model_size,
+                query_need_pos=self.x_need_pos,
+                key_need_pos=self.y_need_pos,
+                use_spectral_linear=self.use_spectral_linear,
+            )(query=x_ln, key=y, value=y, mask=ca_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
+            x_ln = layer_norm(x)
+            mlp = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            return x
 
         for _ in range(self.num_layers):
-            if self.use_layer_norm:
-                query_seq = layer_norm(query_seq)
-                key_value_seq = layer_norm(key_value_seq)
+            x = decoder_layer(x, y)
 
-            query_seq = activation_fn(query_seq)
-            key_value_seq = activation_fn(key_value_seq)
-
-            contextualized_query = CrossAttentionLayer(
-                hidden_size=self.hidden_size, num_heads=self.num_heads
-            )(query_seq, key_value_seq, attention_mask)
-            contextualized_key_value = CrossAttentionLayer(
-                hidden_size=self.hidden_size, num_heads=self.num_heads
-            )(key_value_seq, query_seq, transposed_attention_mask)
-
-            contextualized_query = jnp.where(
-                expanded_query_mask, contextualized_query, 0
-            )
-            contextualized_key_value = jnp.where(
-                expanded_key_value_mask, contextualized_key_value, 0
-            )
-
-            query_seq = query_seq + contextualized_query
-            key_value_seq = key_value_seq + contextualized_key_value
-
-            query_seq = UnitsResblock(
-                hidden_size=self.hidden_size // 2, use_layer_norm=self.use_layer_norm
-            )(query_seq)
-            key_value_seq = UnitsResblock(
-                hidden_size=self.hidden_size // 2, use_layer_norm=self.use_layer_norm
-            )(key_value_seq)
-
-            query_seq = jnp.where(expanded_query_mask, query_seq, 0)
-            key_value_seq = jnp.where(expanded_key_value_mask, key_value_seq, 0)
-
-        return query_seq, key_value_seq
-
-    def make_attention_mask(
-        self, query_mask: chex.Array, key_value_mask: chex.Array
-    ) -> chex.Array:
-        """Creates an additive attention bias mask.
-
-        Args:
-            query_mask: (batch_size, query_length)
-            key_value_mask: (batch_size, key_length)
-
-        Returns:
-            attention_bias: (batch_size, 1, query_length, key_length)
-        """
-
-        attention_mask = jnp.einsum("...i,...j->...ij", query_mask, key_value_mask)
-        attention_mask = jnp.expand_dims(attention_mask, axis=-3)
-        return attention_mask.astype(self.dtype)
+        x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
+        return x
 
 
 class MLP(nn.Module):
@@ -553,14 +508,21 @@ class MLP(nn.Module):
 
     layer_sizes: Sequence[int]
     use_layer_norm: bool = True
+    activate_first: bool = True
+    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(self, x: chex.Array):
-        for size in self.layer_sizes:
-            if self.use_layer_norm:
-                x = layer_norm(x)
-            x = activation_fn(x)
-            x = Linear(size)(x)
+        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
+        for layer_index, size in enumerate(self.layer_sizes):
+            if layer_index == 0 and not self.activate_first:
+                # Skip layer normalization and activation for the first layer
+                x = linear_mod(size)(x)
+            else:
+                if self.use_layer_norm:
+                    x = layer_norm(x)
+                x = activation_fn(x)
+                x = linear_mod(size)(x)
         return x
 
 
@@ -585,9 +547,9 @@ class PointerLogits(nn.Module):
                 query = layer_norm(query)
             query = activation_fn(query)
             if i == self.num_layers_query - 1:
-                query = Linear(features=self.key_size)(query)
+                query = nn.Dense(features=self.key_size)(query)
             else:
-                query = Linear(features=query.shape[-1])(query)
+                query = nn.Dense(features=query.shape[-1])(query)
 
         # Keys.
         for i in range(self.num_layers_keys):
@@ -595,13 +557,13 @@ class PointerLogits(nn.Module):
                 keys = layer_norm(keys)
             keys = activation_fn(keys)
             if i == self.num_layers_keys - 1:
-                keys = Linear(features=self.key_size)(keys)
+                keys = nn.Dense(features=self.key_size)(keys)
             else:
-                keys = Linear(features=keys.shape[-1])(keys)
+                keys = nn.Dense(features=keys.shape[-1])(keys)
 
         # Pointer
         logits = query @ keys.T  # ij,j->i
-        return logits
+        return logits * jax.lax.rsqrt(jnp.array(self.key_size, dtype=jnp.float32))
 
 
 class ToAvgVector(nn.Module):
@@ -618,7 +580,7 @@ class ToAvgVector(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = Linear(features=size)(x)
+            x = nn.Dense(features=size)(x)
 
         if self.pool_method is PoolMethod.MEAN:
             x = (mask.astype(jnp.float32) @ x) / mask.sum().clip(min=1)
@@ -630,7 +592,7 @@ class ToAvgVector(nn.Module):
         if self.use_layer_norm:
             x = layer_norm(x)
         x = activation_fn(x)
-        x = Linear(features=self.output_stream_size or x.shape[-1])(x)
+        x = nn.Dense(features=self.output_stream_size or x.shape[-1])(x)
         return x
 
 
@@ -663,7 +625,7 @@ class VectorMerge(nn.Module):
         if len(inputs_to_gate) == 2:
             # more efficient than the general version below
             gate = [
-                Linear(gate_size, kernel_init=w_init, bias_init=b_init)(y)
+                nn.Dense(gate_size, kernel_init=w_init, bias_init=b_init)(y)
                 for y in init_gate
             ]
             gate = sum(gate)
@@ -671,7 +633,7 @@ class VectorMerge(nn.Module):
             gate = [sigmoid, 1.0 - sigmoid]
         else:
             gate = [
-                Linear(
+                nn.Dense(
                     len(inputs_to_gate) * gate_size,
                     kernel_init=w_init,
                     bias_init=b_init,
@@ -695,7 +657,7 @@ class VectorMerge(nn.Module):
                 feature = layer_norm(feature)
             feature = activation_fn(feature)
             gate.append(feature)
-            outputs.append(Linear(self.output_size)(feature))
+            outputs.append(nn.Dense(self.output_size)(feature))
         return gate, outputs
 
     @nn.compact
@@ -712,76 +674,6 @@ class VectorMerge(nn.Module):
             output = sum(data)
         outputs = output
         return outputs
-
-
-class GLU(nn.Module):
-    """Gated Linear Unit.
-
-    Helper Modules:
-    Gating Linear Unit (GLU):
-        Inputs: input, context, output_size
-
-    # The gate value is a learnt function of the input.
-    gate = sigmoid(linear(input.size)(context))
-
-    # Gate the input and return an output of desired size.
-    gated_input = gate * input
-    output = linear(output_size)(gated_input)
-
-    return output
-    """
-
-    output_size: int = None
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, input: chex.Array, context: chex.Array):
-        if self.use_layer_norm:
-            context = layer_norm(context)
-        context = activation_fn(context)
-        gate = jax.nn.sigmoid(Linear(input.shape[-1])(context))
-        gated_input = gate * input
-        if self.use_layer_norm:
-            gated_input = layer_norm(gated_input)
-        gated_input = activation_fn(gated_input)
-        output = Linear(self.output_size or input.shape[-1])(gated_input)
-        return output
-
-
-class SSLReg(nn.Module):
-    @nn.compact
-    def __call__(self, st: chex.Array, stp1: chex.Array) -> chex.Array:
-
-        latent_action = VectorMerge(st.shape[-1])(st, stp1)
-        latent_action = MLP((st.shape[-1] // 4, st.shape[-1] // 8))(latent_action)
-        pred_stpd1 = VectorMerge(stp1.shape[-1])(st, latent_action)
-
-        return pred_stpd1
-
-
-class AutoEncoder(nn.Module):
-    output_size: int
-    latent_dim: int
-    hidden_sizes: Sequence[int]
-    use_layer_norm: bool = False
-
-    def setup(self):
-        self.encoder = MLP(self.hidden_sizes, self.use_layer_norm)
-        self.mean = MLP((self.latent_dim,), self.use_layer_norm)
-        self.log_stddev = MLP((self.latent_dim,), self.use_layer_norm)
-        self.decoder = MLP((self.output_size,), self.use_layer_norm)
-
-    def __call__(self, x: chex.Array, key):
-        h = self.encoder(x)
-        mean = self.mean(h)
-        log_stddev = self.log_stddev(h)
-        stddev = jnp.exp(log_stddev)
-        z = mean + stddev * jax.random.normal(key, mean.shape)
-        return self.decoder(z)
-
-    def encode(self, x: chex.Array):
-        h = self.encoder(x)
-        return self.mean(h)
 
 
 class PretrainedEmbedding:

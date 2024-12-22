@@ -46,9 +46,12 @@ def multihot_encode(series: pd.Series) -> pd.DataFrame:
 
 def lambda_onehot_encode(series: pd.Series, fn: Callable[[Any], int]) -> pd.DataFrame:
     series = series.astype(float)
+    min_value = series.min()
     max_value = series.max()
     max_lambda_value = fn(max_value)
-    return onehot_encode(series.map(lambda value: min(fn(value), max_lambda_value)))
+    return onehot_encode(
+        series.map(lambda value: min(fn(value - min_value), max_lambda_value))
+    )
 
 
 def tfidf_vectorize(

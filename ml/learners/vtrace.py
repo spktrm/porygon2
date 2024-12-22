@@ -14,24 +14,31 @@ from flax.training import train_state
 
 from ml.config import ActorCriticConfig
 from ml.func import (
+    _player_others,
     get_loss_entropy,
     get_loss_nerd,
-    get_loss_v,
-    reg_v_trace,
-    renormalize,
+    get_loss_v_huber,
+    rnad_v_trace,
+)
+from ml.learners.func import (
+    calculate_explained_variance,
+    collect_gradient_telemetry_data,
+    collect_loss_value_telemetry_data,
+    collect_policy_stats_telemetry_data,
 )
 from ml.learners.rnad import NerdConfig
 from ml.utils import Params
 from rlenv.env import get_ex_step
-from rlenv.interfaces import TimeStep
+from rlenv.interfaces import ModelOutput, TimeStep
 
 
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
-    entropy_loss_coef: float = 1e-3
-    target_network_avg: float = 1
+    entropy_loss_coef: float = 1e-2
+    target_network_avg: float = 1e-2
 
     nerd: NerdConfig = NerdConfig()
+    clip_gradient: float = 10
 
 
 def get_config():
@@ -45,22 +52,6 @@ class TrainState(train_state.TrainState):
     learner_steps: int = 0
     actor_steps: int = 0
 
-    def apply_gradients(self, *, grads, config: ActorCriticConfig, **kwargs):
-        """Applies gradients to parameters and updates EMA parameters."""
-        # Apply gradients to update params and opt_state
-
-        state = super().apply_gradients(grads=grads, **kwargs)
-
-        # Update EMA parameters
-        params_target = optax.incremental_update(
-            new_tensors=state.params,
-            old_tensors=state.params_target,
-            step_size=config.target_network_avg,
-        )
-
-        # Return new state with updated EMA params
-        return state.replace(params_target=params_target)
-
 
 def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfig):
     """Creates an initial `TrainState`."""
@@ -70,18 +61,24 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
     params_target = module.init(rng, ex)
 
     tx = optax.chain(
-        optax.clip_by_global_norm(config.clip_gradient),
-        optax.adamw(
+        optax.adam(
             learning_rate=config.learning_rate,
             eps_root=0.0,
             b1=config.adam.b1,
             b2=config.adam.b2,
             eps=config.adam.eps,
-            weight_decay=config.adam.weight_decay,
         ),
+        optax.clip_by_global_norm(config.clip_gradient),
+        # optax.clip(config.clip_gradient),
     )
+
     return TrainState.create(
-        apply_fn=module.apply, params=params, params_target=params_target, tx=tx
+        apply_fn=module.apply,
+        params=params,
+        params_target=params_target,
+        tx=optax.MultiSteps(
+            tx, every_k_schedule=config.batch_size // config.minibatch_size
+        ),
     )
 
 
@@ -105,7 +102,7 @@ def load(state: TrainState, path: str):
 
     state = state.replace(
         params=step["params"],
-        params_target=step["params_target"],
+        params_target=step.get("params_target", step["params"]),
         opt_state=step["opt_state"],
         step=step["step"],
     )
@@ -117,62 +114,72 @@ def load(state: TrainState, path: str):
 def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     """Train for a single step."""
 
-    def loss_fn(
-        params: Params,
-        params_target: Params,
-        learner_steps: int,
-    ):
-        rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
+    def loss_fn(params: Params):
+        # Define a checkpointed function
+        def rollout_fn(params, env):
+            return jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))(params, env)
 
-        pred = rollout(params, batch.env)
-        if config.target_network_avg < 1:
-            pred_targ = rollout(params_target, batch.env)
-            vtrace_v = pred_targ.v
-        else:
-            vtrace_v = pred.v
+        pred: ModelOutput = rollout_fn(params, batch.env)
+        pred_targ: ModelOutput = rollout_fn(state.params_target, batch.env)
 
         logs = {}
 
-        policy_pprocessed = config.finetune(pred.pi, batch.env.legal, learner_steps)
+        policy_pprocessed = config.finetune(
+            pred.pi, batch.env.legal, state.learner_steps
+        )
 
-        valid = batch.env.valid * (batch.env.legal.sum(axis=-1) > 1)
+        log_policy_reg = pred.log_pi - pred_targ.log_pi
+
+        valid = batch.env.valid
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = (
-            batch.actor.win_rewards
-            + 1e-1 * batch.actor.fainted_rewards / 6
-            + 1e-2 * batch.actor.hp_rewards / 6
-        )
+        rewards = batch.actor.fainted_rewards / 3
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
-            v_target_, has_played, policy_target_ = reg_v_trace(
-                vtrace_v,
+            v_target_, has_played, policy_target_ = rnad_v_trace(
+                pred_targ.v,
                 valid,
                 batch.env.player_id,
                 batch.actor.policy,
                 policy_pprocessed,
+                log_policy_reg,
+                _player_others(batch.env.player_id, valid, player),
                 action_oh,
                 reward,
                 player,
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
+                eta=0.2,
                 gamma=config.gamma,
             )
-            v_target_list.append(v_target_)
-            has_played_list.append(has_played)
-            v_trace_policy_target_list.append(policy_target_)
+            v_target_list.append(jax.lax.stop_gradient(v_target_))
+            has_played_list.append(jax.lax.stop_gradient(has_played))
+            v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v(
+        loss_v = get_loss_v_huber(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,
         )
+        explained_variance = (
+            calculate_explained_variance(pred.v, v_target_list[0], has_played_list[0])
+            + calculate_explained_variance(pred.v, v_target_list[1], has_played_list[1])
+        ) / 2
+        logs.update(
+            {"value_function_explained_variance": jnp.maximum(-1, explained_variance)}
+        )
 
-        is_vector = jnp.expand_dims(jnp.ones_like(valid), axis=-1)
+        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
+            axis=-1
+        )
+        ratio = policy_ratio
+        ratio = ratio * (batch.env.legal.sum(axis=-1) > 1)
+
+        is_vector = jnp.expand_dims(ratio, axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
         loss_nerd = get_loss_nerd(
@@ -186,82 +193,68 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             clip=config.nerd.clip,
             threshold=config.nerd.beta,
         )
-        # loss_nerd = get_loss_pg(
-        #     [pred.log_pi] * config.num_players,
-        #     v_trace_policy_target_list,
-        #     action_oh,
-        #     valid,
-        #     batch.env.player_id,
-        # )
-
-        loss_norm = renormalize(
-            jnp.square(pred.logit).mean(axis=-1, where=batch.env.legal), valid
+        logs.update(
+            collect_policy_stats_telemetry_data(
+                pred.logit,
+                pred.pi,
+                pred.log_pi,
+                batch.env.legal,
+                batch.env.valid,
+                pred_targ.pi,
+                policy_ratio,
+            )
         )
 
-        loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
+        # loss_heuristic = -renormalize(
+        #     (
+        #         jax.nn.one_hot(batch.env.heuristic_action, pred.log_pi.shape[-1])
+        #         * pred.log_pi
+        #     ).sum(axis=-1),
+        #     valid * (batch.env.legal.sum(axis=-1) > 1),
+        # )
+        # logs["heuristic_loss"] = loss_heuristic
 
+        loss_entropy = get_loss_entropy(
+            pred.pi,
+            pred.log_pi,
+            batch.env.legal,
+            valid * (batch.env.legal.sum(axis=-1) > 1),
+        )
         loss = (
             config.value_loss_coef * loss_v
             + config.policy_loss_coef * loss_nerd
-            + config.entropy_loss_coef * loss_entropy
-            # + 1e-5 * loss_norm
+            # + config.entropy_loss_coef * loss_entropy
+            # + config.entropy_loss_coef * loss_heuristic
         )
-
-        move_entropy = get_loss_entropy(
-            pred.pi[..., :4],
-            pred.log_pi[..., :4],
-            batch.env.legal[..., :4],
-            valid & batch.env.legal[..., :4].any(axis=-1),
-        )
-        switch_entropy = get_loss_entropy(
-            pred.pi[..., 4:],
-            pred.log_pi[..., 4:],
-            batch.env.legal[..., 4:],
-            valid & batch.env.legal[..., 4:].any(axis=-1),
-        )
-
-        logs["loss_v"] = loss_v
-        logs["loss_nerd"] = loss_nerd
-        logs["loss_entropy"] = loss_entropy
-        logs["move_entropy"] = move_entropy
-        logs["switch_entropy"] = switch_entropy
-        logs["loss_norm"] = loss_norm
+        logs.update(collect_loss_value_telemetry_data(loss_v, loss_nerd, loss_entropy))
 
         return loss, logs
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss_val, logs), grads = grad_fn(
-        state.params,
-        state.params_target,
-        state.learner_steps,
+    (loss_val, logs), grads = grad_fn(state.params)
+
+    logs.update(dict(loss=loss_val))
+
+    state = state.apply_gradients(grads=grads)
+
+    update_target = (state.step % (config.batch_size // config.minibatch_size)) == 0
+    params_target = jax.lax.cond(
+        update_target,
+        lambda: optax.incremental_update(
+            new_tensors=state.params,
+            old_tensors=state.params_target,
+            step_size=config.target_network_avg,
+        ),
+        lambda: state.params_target,
     )
-    state = state.apply_gradients(grads=grads, config=config)
+
     state = state.replace(
+        params_target=params_target,
         actor_steps=state.actor_steps + batch.env.valid.sum(),
         learner_steps=state.learner_steps + 1,
     )
 
-    valid = batch.env.valid
-    lengths = valid.sum(0)
-
-    can_move = batch.env.legal[..., :4].any(axis=-1)
-    can_switch = batch.env.legal[..., 4:].any(axis=-1)
-
-    move_ratio = renormalize(batch.actor.action < 4, can_switch & valid)
-    switch_ratio = renormalize(batch.actor.action >= 4, can_move & valid)
-
-    extra_logs = dict(
-        actor_steps=valid.sum(),
-        loss=loss_val,
-        trajectory_length_mean=lengths.mean(),
-        trajectory_length_min=lengths.min(),
-        trajectory_length_max=lengths.max(),
-        early_finish_ratio=batch.actor.win_rewards[..., 0].any(axis=0).mean(),
-        gradient_norm=optax.global_norm(grads),
-        param_norm=optax.global_norm(state.params),
-        move_ratio=move_ratio,
-        switch_ratio=switch_ratio,
-    )
-    logs.update(extra_logs)
+    logs.update(collect_gradient_telemetry_data(grads))
+    logs["update_target"] = update_target.astype(int)
 
     return state, logs

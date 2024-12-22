@@ -1,6 +1,7 @@
 import chex
 import haiku as hk
 import jax
+import numpy as np
 from jax import numpy as jnp
 
 
@@ -52,7 +53,7 @@ class FineTuning:
         """Unconditionally post process a given masked policy."""
         chex.assert_equal_shape((policy, mask))
         policy = self._threshold(policy, mask)
-        policy = self._discretize(policy)
+        # policy = self._discretize(policy)
         return policy
 
     def _threshold(self, policy: chex.Array, mask: chex.Array) -> chex.Array:
@@ -162,7 +163,8 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 8
+    batch_size: int = 4
+    minibatch_size: int = 4
     # The learning rate for `params`.
     learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.
@@ -170,22 +172,23 @@ class ActorCriticConfig:
     # All gradients values are clipped to [-clip_gradient, clip_gradient].
     clip_gradient: float = 10_000
     # The "speed" at which `params_target` is following `params`.
-    target_network_avg: float = 0.001
+    target_network_avg: float = 1e-3
 
     gamma: float = 1.0
     c_vtrace: float = 1.0
+    rho_vtrace: float = np.inf
 
     # Options related to fine tuning of the agent.
     finetune: FineTuning = FineTuning()
 
     heuristic_loss_coef: float = 0.0
-    value_loss_coef: float = 1.0
+    value_loss_coef: float = 1.0  # div 2 twice (2 players, derivative of **2)
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.0
 
     # The seed that fully controls the randomness.
     seed: int = 42
 
-    do_eval: bool = False
+    do_eval: bool = True
     num_eval_games: int = 200
     generation: int = 3

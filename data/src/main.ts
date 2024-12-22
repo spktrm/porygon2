@@ -227,9 +227,14 @@ const customScrapingFunctions: {
                 const interfaceContent = interfaceMatch[0];
                 const argMatches =
                     interfaceContent.match(/['"]?\|(\w+)\|['"]?:/g) || [];
-                return argMatches.map((match) =>
-                    match.replace(/['"]?\|(\w+)\|['"]?:/, "$1").toLowerCase(),
-                );
+                return [
+                    "turn",
+                    ...argMatches.map((match) =>
+                        match
+                            .replace(/['"]?\|(\w+)\|['"]?:/, "$1")
+                            .toLowerCase(),
+                    ),
+                ];
             }
         }
         return [];
@@ -414,11 +419,7 @@ type GenData = {
     //     }[];
 };
 
-async function getGenData(
-    genNo: number,
-    ruletable?: RuleTable,
-    format?: Format,
-): Promise<GenData> {
+async function getGenData(genNo: number): Promise<GenData> {
     const dex = new Dex.ModdedDex(`gen${genNo}`);
     const gens = new Generations(dexDex).get(genNo);
     const species = dex.species.all();
@@ -434,16 +435,7 @@ async function getGenData(
         .filter((type) => type.isNonstandard === null);
 
     const data = {
-        species: (ruletable
-            ? species.filter((x) => {
-                  return (
-                      !ruletable.isBannedSpecies(x) &&
-                      !ruletable.isRestrictedSpecies(x) &&
-                      x.isNonstandard === null
-                  );
-              })
-            : species
-        ).map((x) => {
+        species: species.map((x) => {
             const effectiveness = Object.fromEntries(
                 typechart.map((type) => [
                     type.name,
@@ -458,30 +450,9 @@ async function getGenData(
                 effectiveness,
             };
         }),
-        moves: ruletable
-            ? moves.filter((x) => {
-                  return (
-                      !ruletable.check(`move:${x.id}`) &&
-                      x.isNonstandard === null
-                  );
-              })
-            : moves,
-        abilities: ruletable
-            ? abilities.filter((x) => {
-                  return (
-                      !ruletable.check(`ability:${x.id}`) &&
-                      x.isNonstandard === null
-                  );
-              })
-            : abilities,
-        items: ruletable
-            ? items.filter((x) => {
-                  return (
-                      !ruletable.check(`item:${x.id}`) &&
-                      x.isNonstandard === null
-                  );
-              })
-            : dex.items.all(),
+        moves,
+        abilities,
+        items,
         typechart,
         learnsets,
     };
@@ -526,10 +497,10 @@ function formatData(data: GenData) {
     };
 }
 
-function standardize(values: string[], extraTokens: string[]) {
+function standardize(values: string[], extraTokens?: string[]) {
     return Object.fromEntries(
         [
-            ...extraTokens,
+            ...(extraTokens ?? []),
             ...Array.from(values).sort((a, b) => a.localeCompare(b)),
         ].map((value, index) => [value, index]),
     );
@@ -602,13 +573,12 @@ async function scrapeRepo() {
         EXTRA_TOKENS,
     );
 
-    data["Actions"] = standardize(
-        [
-            ...genFormatData.species.map((x) => `switch_${x}`),
-            ...genFormatData.moves.map((x) => `move_${x}`),
-        ],
-        EXTRA_TOKENS,
-    );
+    data["Actions"] = standardize([
+        ...[...genFormatData.species, ...EXTRA_TOKENS].map(
+            (x) => `switch_${x}`,
+        ),
+        ...[...genFormatData.moves, ...EXTRA_TOKENS].map((x) => `move_${x}`),
+    ]);
 
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,
@@ -618,16 +588,14 @@ async function scrapeRepo() {
     const datas = [];
     const parentDirs = [];
 
-    for (const { format, formatId, ruletable } of allFormats) {
-        const genNo = parseInt(formatId[3]);
-        const formatString = formatId.slice(4);
-        const parentDir = `${PARENT_DATA_DIR}/gen${genNo}/${formatString}/`;
+    for (const genNo of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+        const parentDir = `${PARENT_DATA_DIR}/gen${genNo}/`;
 
         if (!fs.existsSync(parentDir)) {
             fs.mkdirSync(parentDir, { recursive: true });
         }
 
-        const genDataPromise = getGenData(genNo, ruletable, format);
+        const genDataPromise = getGenData(genNo);
 
         datas.push(genDataPromise);
         parentDirs.push(parentDir);

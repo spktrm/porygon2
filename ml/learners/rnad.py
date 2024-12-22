@@ -16,12 +16,14 @@ from flax.training import train_state
 from ml.config import ActorCriticConfig
 from ml.func import (
     _player_others,
+    get_average_logit_value,
     get_loss_entropy,
     get_loss_nerd,
-    get_loss_v,
+    get_loss_v_mse,
     renormalize,
     rnad_v_trace,
 )
+from ml.learners.func import collect_gradient_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
@@ -32,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 10_000
+    clip: float = 3
 
 
 @chex.dataclass(frozen=True)
@@ -40,13 +42,13 @@ class RNaDConfig(ActorCriticConfig):
 
     # RNaD algorithm configuration.
     # Entropy schedule configuration. See EntropySchedule class documentation.
-    entropy_schedule_repeats: Sequence[int] = (1,)
-    entropy_schedule_size: Sequence[int] = (5_000,)
+    entropy_schedule_repeats: Sequence[int] = (10, 1)
+    entropy_schedule_size: Sequence[int] = (1000, 10_000)
 
     nerd: NerdConfig = NerdConfig()
 
     learning_rate: float = 3e-5
-    eta_reward_transform: float = 0.001
+    eta_reward_transform: float = 0.05
 
 
 def get_config():
@@ -192,9 +194,9 @@ class TrainState(train_state.TrainState):
         )
 
         params_prev, params_prev_ = jax.lax.cond(
-            self.update_target_net,
-            lambda: (self.params_target, self.params_prev),
-            lambda: (self.params_prev, self.params_prev_),
+            state.update_target_net,
+            lambda: (state.params_target, state.params_prev),
+            lambda: (state.params_prev, state.params_prev_),
         )
 
         # Return new state with updated EMA params
@@ -215,7 +217,6 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
     params_prev_ = module.init(rng, ex)
 
     tx = optax.chain(
-        optax.clip(config.clip_gradient),
         optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
@@ -224,6 +225,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
             eps=config.adam.eps,
             weight_decay=config.adam.weight_decay,
         ),
+        optax.clip(config.clip_gradient),
     )
     return TrainState.create(
         apply_fn=module.apply,
@@ -261,9 +263,11 @@ def load(state: TrainState, path: str):
 
     state = state.replace(
         params=step["params"],
-        params_target=step["params"],
-        params_prev=step["params"],
-        params_prev_=step["params"],
+        params_target=step["params_target"],
+        params_prev=step["params_prev"],
+        params_prev_=step["params_prev_"],
+        opt_state=step["opt_state"],
+        step=step["step"],
     )
 
     return state
@@ -273,34 +277,31 @@ def load(state: TrainState, path: str):
 def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     """Train for a single step."""
 
-    def loss_fn(
-        params: Params,
-        params_target: Params,
-        params_prev: Params,
-        params_prev_: Params,
-        alpha: float,
-        learner_steps: int,
-    ):
+    def loss_fn(params: Params):
         rollout = jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))
 
         pred: ModelOutput = rollout(params, batch.env)
-        pred_targ: ModelOutput = rollout(params_target, batch.env)
-        pred_prev: ModelOutput = rollout(params_prev, batch.env)
-        pred_prev_: ModelOutput = rollout(params_prev_, batch.env)
+
+        pred_targ: ModelOutput = rollout(state.params_target, batch.env)
+        pred_prev: ModelOutput = rollout(state.params_prev, batch.env)
+        pred_prev_: ModelOutput = rollout(state.params_prev_, batch.env)
 
         logs = {}
 
-        policy_pprocessed = config.finetune(pred.pi, batch.env.legal, learner_steps)
+        policy_pprocessed = config.finetune(
+            pred.pi, batch.env.legal, state.learner_steps
+        )
 
         # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
         # For the stability reasons, reward changes smoothly between iterations.
         # The mixing between old and new reward transform is a convex combination
         # parametrised by alpha.
-        log_policy_reg = pred.log_pi - (
-            alpha * pred_prev.log_pi + (1 - alpha) * pred_prev_.log_pi
+        policy_reg = (
+            state.alpha * pred_prev.log_pi + (1 - state.alpha) * pred_prev_.log_pi
         )
+        log_policy_reg = pred.log_pi - policy_reg
 
-        valid = batch.env.valid * (batch.env.legal.sum(axis=-1) > 1)
+        valid = batch.env.valid
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
@@ -326,20 +327,16 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
                 eta=config.eta_reward_transform,
                 gamma=config.gamma,
             )
-            v_target_list.append(v_target_)
+            v_target_list.append(jax.lax.stop_gradient(v_target_))
             has_played_list.append(has_played)
-            v_trace_policy_target_list.append(policy_target_)
+            v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v(
+        loss_v = get_loss_v_mse(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,
         )
 
-        # is_vector = jnp.expand_dims(
-        #     _policy_ratio(policy_pprocessed, ts.actor.policy, action_oh, valid),
-        #     axis=-1,
-        # )
         is_vector = jnp.expand_dims(jnp.ones_like(batch.env.valid), axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
@@ -356,17 +353,23 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             threshold=config.nerd.beta,
         )
 
-        loss_norm = renormalize(jnp.square(pred.logit).sum(axis=-1), valid)
+        loss_norm = get_average_logit_value(pred.logit, batch.env.legal, valid)
 
         loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
 
         loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
 
         move_entropy = get_loss_entropy(
-            pred.pi[..., :4], pred.log_pi[..., :4], batch.env.legal[..., :4], valid
+            pred.pi[..., :4],
+            pred.log_pi[..., :4],
+            batch.env.legal[..., :4],
+            valid & batch.env.legal[..., :4].any(axis=-1),
         )
         switch_entropy = get_loss_entropy(
-            pred.pi[..., 4:], pred.log_pi[..., 4:], batch.env.legal[..., 4:], valid
+            pred.pi[..., 4:],
+            pred.log_pi[..., 4:],
+            batch.env.legal[..., 4:],
+            valid & batch.env.legal[..., 4:].any(axis=-1),
         )
 
         logs["loss_v"] = loss_v
@@ -374,54 +377,26 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
         logs["loss_entropy"] = loss_entropy
         logs["move_entropy"] = move_entropy
         logs["switch_entropy"] = switch_entropy
-        logs["log_prob_diff"] = renormalize(
-            (pred.log_pi - pred_targ.log_pi).mean(axis=-1), valid
-        )
         logs["loss_norm"] = loss_norm
+
+        kl_div = optax.kl_divergence(pred.log_pi, jnp.exp(policy_reg))
+        logs["kl_div"] = renormalize(kl_div, valid)
 
         return loss, logs
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     state = state.step_entropy()
-    (loss_val, logs), grads = grad_fn(
-        state.params,
-        state.params_target,
-        state.params_prev,
-        state.params_prev_,
-        state.alpha,
-        state.learner_steps,
-    )
+    (loss_val, logs), grads = grad_fn(state.params)
+
+    jax.debug.breakpoint()
+
     state = state.apply_gradients(grads=grads, config=config)
     state = state.replace(
         actor_steps=state.actor_steps + batch.env.valid.sum(),
         learner_steps=state.learner_steps + 1,
     )
 
-    valid = batch.env.valid
-    lengths = valid.sum(0)
-
-    can_move = batch.env.legal[..., :4].any(axis=-1)
-    can_switch = batch.env.legal[..., 4:].any(axis=-1)
-
-    move_ratio = (
-        (batch.actor.action < 4).mean(axis=0, where=(can_switch & valid)).mean()
-    )
-    switch_ratio = (
-        (batch.actor.action >= 4).mean(axis=0, where=(can_move & valid)).mean()
-    )
-
-    extra_logs = dict(
-        actor_steps=valid.sum(),
-        loss=loss_val,
-        trajectory_length_mean=lengths.mean(),
-        trajectory_length_min=lengths.min(),
-        trajectory_length_max=lengths.max(),
-        alpha=state.alpha,
-        gradient_norm=optax.global_norm(grads),
-        param_norm=optax.global_norm(state.params),
-        move_ratio=move_ratio,
-        switch_ratio=switch_ratio,
-    )
-    logs.update(extra_logs)
+    logs.update(dict(loss=loss_val))
+    logs.update(collect_gradient_telemetry_data(grads))
 
     return state, logs

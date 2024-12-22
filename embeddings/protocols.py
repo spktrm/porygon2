@@ -1,14 +1,10 @@
 from enum import Enum, auto
 from typing import Callable, List, TypedDict
 
+import numpy as np
 import pandas as pd
 
-from embeddings.encoders import (
-    binary_encode,
-    multihot_encode,
-    onehot_encode,
-    sqrt_onehot_encode,
-)
+from embeddings.encoders import multihot_encode, onehot_encode, sqrt_onehot_encode
 
 
 class FeatureType(Enum):
@@ -24,22 +20,6 @@ class Protocol(TypedDict):
 
 
 SPECIES_PROTOCOLS: List[Protocol] = [
-    *[
-        {
-            "feature": stat_feature,
-            "func": binary_encode,
-            "feature_type": FeatureType.CATEGORICAL,
-        }
-        for stat_feature in [
-            "baseStats.hp",
-            "baseStats.atk",
-            "baseStats.def",
-            "baseStats.spa",
-            "baseStats.spd",
-            "baseStats.spe",
-            "bst",
-        ]
-    ],
     *[
         {
             "feature": stat_feature,
@@ -66,11 +46,6 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "genderRatio.F",
         ]
     ],
-    {
-        "feature": "weightkg",
-        "func": lambda x: binary_encode(10 * x),
-        "feature_type": FeatureType.CATEGORICAL,
-    },
     {
         "feature": "weightkg",
         "func": sqrt_onehot_encode,
@@ -108,8 +83,8 @@ SPECIES_PROTOCOLS: List[Protocol] = [
         ]
     ],
     {
-        "feature_fn": lambda x: x.startswith("damageTaken."),
-        "func": lambda x: x,
+        "feature_fn": lambda x: x.startswith("effectiveness."),
+        "func": lambda x: np.log1p(x),
         "feature_type": FeatureType.SCALAR,
     },
 ]
@@ -216,18 +191,8 @@ MOVES_PROTOCOLS: List[Protocol] = [
         "feature_type": FeatureType.CATEGORICAL,
     },
     {
-        "feature": "basePower",
-        "func": binary_encode,
-        "feature_type": FeatureType.CATEGORICAL,
-    },
-    # {
-    #     "feature": "desc",
-    #     "func": text_encoding,
-    #     "feature_type": FeatureType.SCALAR,
-    # },
-    {
         "feature": "accuracy",
-        "func": lambda x: binary_encode(
+        "func": lambda x: sqrt_onehot_encode(
             x.map(lambda v: 100 if isinstance(v, bool) else v)
         ),
         "feature_type": FeatureType.CATEGORICAL,
@@ -243,7 +208,7 @@ MOVES_PROTOCOLS: List[Protocol] = [
     },
     {
         "feature": "pp",
-        "func": lambda x: binary_encode(x.map(lambda v: int(v * 8 / 5))),
+        "func": lambda x: sqrt_onehot_encode(x.map(lambda v: int(v * 8 / 5))),
         "feature_type": FeatureType.CATEGORICAL,
     },
     {
@@ -347,9 +312,4 @@ ABILITIES_PROTOCOLS: List[Protocol] = [
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,
     },
-    # {
-    #     "feature": "desc",
-    #     "func": text_encoding,
-    #     "feature_type": FeatureType.SCALAR,
-    # },
 ]

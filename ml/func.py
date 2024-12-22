@@ -1,4 +1,4 @@
-from typing import Any, Sequence, Tuple
+from typing import Any, Callable, Sequence, Tuple
 
 import chex
 import jax
@@ -9,17 +9,10 @@ from jax import tree
 
 def cosine_similarity(arr1: jnp.ndarray, arr2: jnp.ndarray) -> jnp.ndarray:
 
-    # Compute dot products along the last dimension (D)
-    dot_product = jnp.sum(arr1 * arr2, axis=-1)
+    arr1 = arr1 / jnp.linalg.norm(arr1, axis=-1, keepdims=True)
+    arr2 = arr2 / jnp.linalg.norm(arr2, axis=-1, keepdims=True)
 
-    # Compute the L2 norms along the last dimension (D)
-    norm_arr1 = jnp.linalg.norm(arr1, axis=-1)
-    norm_arr2 = jnp.linalg.norm(arr2, axis=-1)
-
-    # Compute cosine similarity, handle division by zero if needed
-    cosine_sim = dot_product / (norm_arr1 * norm_arr2 + 1e-8)
-
-    return cosine_sim
+    return arr1 @ arr2.T
 
 
 def legal_policy(
@@ -266,9 +259,9 @@ def rnad_v_trace(
 
         # Learning output:
         our_learning_output = (
-            v
-            + eta_log_policy  # value
-            + actions_oh  # regularisation
+            v  # value
+            + eta_log_policy  # regularisation
+            + actions_oh
             * jnp.expand_dims(inv_mu, axis=-1)
             * (
                 jnp.expand_dims(discounted_reward, axis=-1)
@@ -328,9 +321,6 @@ def rnad_v_trace(
         ),
         reverse=True,
     )
-
-    # breakpoint_if_nonfinite(v_target)
-    # breakpoint_if_nonfinite(learning_output)
 
     return v_target, has_played, learning_output
 
@@ -447,28 +437,99 @@ def reg_v_trace(
     return v_target, has_played, policy_target
 
 
-def get_loss_v(
+def generic_value_loss(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+    loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
+) -> chex.Array:
+    """
+    Compute a generic masked loss between predictions and targets using a given loss function.
+
+    Parameters
+    ----------
+    v_list : Sequence[chex.Array]
+        Predicted values, each array shaped [N, 1].
+    v_target_list : Sequence[chex.Array]
+        Target values, each array shaped [N, 1].
+    mask_list : Sequence[chex.Array]
+        Mask arrays, each shaped [N], indicating which entries contribute to the loss.
+    loss_fn : Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
+        A function that takes (prediction, target) and returns element-wise loss values.
+
+    Returns
+    -------
+    chex.Array
+        The scalar sum of all computed losses.
+    """
+    chex.assert_trees_all_equal_shapes(v_list, v_target_list)
+    chex.assert_shape(mask_list, v_list[0].shape[:-1])
+
+    loss_v_list = []
+    for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
+        # Expand mask to shape [N, 1]
+        mask_expanded = jnp.expand_dims(mask, axis=-1)
+
+        # Compute element-wise loss
+        loss_vals = loss_fn(v_n, lax.stop_gradient(v_target))
+
+        # Renormalize handles masking and division by sum(mask)
+        loss_v = renormalize(loss_vals, mask_expanded)
+
+        loss_v_list.append(loss_v)
+
+    return sum(loss_v_list)
+
+
+def mse_loss(pred: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
+    """Mean Squared Error loss."""
+    return (pred - target) ** 2
+
+
+def mae_loss(pred: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
+    """Mean Absolute Error loss."""
+    return jnp.abs(pred - target)
+
+
+def huber_loss(
+    pred: jnp.ndarray, target: jnp.ndarray, delta: float = 1.0
+) -> jnp.ndarray:
+    """Huber loss function."""
+    error = pred - target
+    abs_error = jnp.abs(error)
+    quadratic = jnp.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    return 0.5 * quadratic**2 + delta * linear
+
+
+def get_loss_v_mse(
     v_list: Sequence[chex.Array],
     v_target_list: Sequence[chex.Array],
     mask_list: Sequence[chex.Array],
 ) -> chex.Array:
-    """Define the loss function for the critic."""
-    chex.assert_trees_all_equal_shapes(v_list, v_target_list)
-    # v_list and v_target_list come with a degenerate trailing dimension,
-    # which mask_list tensors do not have.
-    chex.assert_shape(mask_list, v_list[0].shape[:-1])
-    loss_v_list = []
-    for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
-        assert v_n.shape[0] == v_target.shape[0]
+    """Compute MSE-based value loss."""
+    return generic_value_loss(v_list, v_target_list, mask_list, mse_loss)
 
-        loss_v = (
-            jnp.expand_dims(mask, axis=-1) * (v_n - lax.stop_gradient(v_target)) ** 2
-        )
-        normalization = jnp.sum(mask)
-        loss_v = jnp.sum(loss_v) / (normalization + (normalization == 0.0))
 
-        loss_v_list.append(loss_v)
-    return sum(loss_v_list)
+def get_loss_v_mae(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+) -> chex.Array:
+    """Compute MAE-based value loss."""
+    return generic_value_loss(v_list, v_target_list, mask_list, mae_loss)
+
+
+def get_loss_v_huber(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+    delta: float = 1.0,
+) -> chex.Array:
+    """Compute Huber-based value loss."""
+    return generic_value_loss(
+        v_list, v_target_list, mask_list, lambda p, t: huber_loss(p, t, delta)
+    )
 
 
 def apply_force_with_threshold(
@@ -505,34 +566,35 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     threshold: float = 2,
+    epsilon: float = 0.2,
 ) -> chex.Array:
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
-    num_valid_actions = jnp.sum(legal_actions, axis=-1, keepdims=True)
 
-    for k, (logit_pi, pi, q_vr, is_c) in enumerate(
+    for k, (logit_pi, pi, q_vr, ratio) in enumerate(
         zip(logit_list, policy_list, q_vr_list, importance_sampling_correction)
     ):
         assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
-        adv_pi = is_c * adv_pi  # importance sampling correction
+        adv_pi = jnp.minimum(
+            ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
+        )  # importance sampling correction
         adv_pi = jnp.clip(adv_pi, a_min=-clip, a_max=clip)
         adv_pi = lax.stop_gradient(adv_pi)
 
-        valid_logit_sum = jnp.sum(logit_pi * legal_actions, axis=-1, keepdims=True)
-        mean_logit = valid_logit_sum / num_valid_actions
-
         # Subtract only the mean of the valid logits
-        logits = logit_pi - mean_logit
+        logits = logit_pi - jnp.mean(
+            logit_pi, axis=-1, keepdims=True, where=legal_actions
+        )
 
         threshold_center = jnp.zeros_like(logits)
 
         nerd_loss = jnp.sum(
-            legal_actions
-            * apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
+            apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
             axis=-1,
+            where=legal_actions,
         )
 
         nerd_loss = -renormalize(nerd_loss, valid * (player_ids == k))
@@ -542,18 +604,24 @@ def get_loss_nerd(
 
 def get_loss_pg(
     log_pi_list: Sequence[chex.Array],
+    policy_list: Sequence[chex.Array],
     q_vr_list: Sequence[chex.Array],
-    actions_oh: chex.Array,
     valid: chex.Array,
     player_ids: Sequence[chex.Array],
+    legal_actions: Sequence[chex.Array],
+    actions_oh: chex.Array,
 ) -> chex.Array:
     """Define the nerd loss."""
     loss_pi_list = []
 
-    for k, (log_pi, q_vr) in enumerate(zip(log_pi_list, q_vr_list)):
-        q_vr = lax.stop_gradient(q_vr)
+    for k, (log_pi, pi, q_vr) in enumerate(zip(log_pi_list, policy_list, q_vr_list)):
 
-        pg_loss = -(actions_oh * log_pi * q_vr).sum(axis=-1)
+        adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
+        adv_pi = adv_pi  # importance sampling correction
+        adv_pi = jnp.clip(adv_pi, a_min=-100, a_max=100)
+        adv_pi = lax.stop_gradient(adv_pi)
+
+        pg_loss = -(actions_oh * log_pi * adv_pi).mean(axis=-1, where=legal_actions)
         pg_loss = renormalize(pg_loss, valid * (player_ids == k))
 
         loss_pi_list.append(pg_loss)
@@ -590,23 +658,16 @@ def get_loss_heuristic(
     return renormalize(xentropy, valid)
 
 
-def get_entropy(
-    policy: chex.Array,
-    log_policy: chex.Array,
-    legal: chex.Array,
-) -> chex.Array:
-    loss_entropy = (policy * log_policy).sum(-1)
-    num_legal_actions = legal.sum(-1)
-    denom = jnp.log(num_legal_actions)
-    denom = jnp.where(num_legal_actions <= 1, 1, denom)
-    return loss_entropy / denom
-
-
 def get_loss_entropy(
     policy: chex.Array,
     log_policy: chex.Array,
     legal: chex.Array,
     valid: chex.Array,
 ) -> chex.Array:
-    loss_entropy = get_entropy(policy, log_policy, legal)
+    loss_entropy = (policy * log_policy).sum(-1)
     return renormalize(loss_entropy, valid)
+
+
+def get_average_logit_value(logit: chex.Array, legal: chex.Array, valid: chex.Array):
+    logit = logit - logit.mean(keepdims=True, axis=-1, where=legal)
+    return renormalize(jnp.abs(logit).mean(axis=-1, where=legal), valid)
