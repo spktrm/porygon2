@@ -1,7 +1,7 @@
 import numpy as np
 
 from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
-from rlenv.interfaces import EnvStep, HistoryStep
+from rlenv.interfaces import EnvStep, HistoryStep, RewardStep
 from rlenv.protos.state_pb2 import State
 from rlenv.utils import padnstack
 
@@ -51,14 +51,7 @@ def process_state(state: State):
     rewards = state.info.rewards
     heuristics = state.info.heuristics
 
-    env_step = EnvStep(
-        ts=np.array(state.info.ts),
-        draw_ratio=np.array(state.info.drawRatio),
-        valid=~np.array(state.info.done, dtype=bool),
-        draw=np.array(state.info.draw, dtype=bool),
-        player_id=np.array(player_index, dtype=np.int32),
-        game_id=np.array(state.info.gameId, dtype=np.int32),
-        turn=np.array(state.info.turn, dtype=np.int32),
+    reward_step = RewardStep(
         win_rewards=np.array([rewards.winReward, -rewards.winReward], dtype=np.float32),
         hp_rewards=np.array([rewards.hpReward, -rewards.hpReward], dtype=np.float32),
         fainted_rewards=np.array(
@@ -70,7 +63,18 @@ def process_state(state: State):
         longevity_rewards=np.array(
             [rewards.longevityReward, -rewards.longevityReward], dtype=np.float32
         ),
+    )
+
+    env_step = EnvStep(
+        ts=np.array(state.info.ts),
+        draw_ratio=np.array(state.info.drawRatio),
+        valid=~np.array(state.info.done, dtype=bool),
+        draw=np.array(state.info.draw, dtype=bool),
+        player_id=np.array(player_index, dtype=np.int32),
+        game_id=np.array(state.info.gameId, dtype=np.int32),
+        turn=np.array(state.info.turn, dtype=np.int32),
         legal=get_legal_mask(state),
+        rewards=reward_step,
         team=team.astype(np.int32),
         moveset=moveset.astype(np.int32),
         seed_hash=np.array(state.info.seed).astype(np.int32),

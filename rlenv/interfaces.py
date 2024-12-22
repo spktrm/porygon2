@@ -2,6 +2,15 @@ import chex
 
 
 @chex.dataclass(frozen=True)
+class RewardStep:
+    win_rewards: chex.Array = ()
+    fainted_rewards: chex.Array = ()
+    switch_rewards: chex.Array = ()
+    longevity_rewards: chex.Array = ()
+    hp_rewards: chex.Array = ()
+
+
+@chex.dataclass(frozen=True)
 class EnvStep:
     # Standard Info
     ts: chex.Array = ()
@@ -20,11 +29,7 @@ class EnvStep:
     heuristic_action: chex.Array = ()
 
     # Reward
-    win_rewards: chex.Array = ()
-    fainted_rewards: chex.Array = ()
-    switch_rewards: chex.Array = ()
-    longevity_rewards: chex.Array = ()
-    hp_rewards: chex.Array = ()
+    rewards: RewardStep = RewardStep()
 
 
 @chex.dataclass(frozen=True)
@@ -41,11 +46,7 @@ class ActorStep:
     policy: chex.Array = ()
 
     # rewards
-    win_rewards: chex.Array = ()
-    fainted_rewards: chex.Array = ()
-    switch_rewards: chex.Array = ()
-    longevity_rewards: chex.Array = ()
-    hp_rewards: chex.Array = ()
+    rewards: RewardStep = RewardStep()
 
 
 @chex.dataclass(frozen=True)

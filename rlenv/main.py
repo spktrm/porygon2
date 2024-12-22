@@ -296,16 +296,16 @@ class BatchCollectorV2:
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        return action, ActorStep(
-            action=action, policy=pi, win_rewards=(), hp_rewards=(), fainted_rewards=()
-        )
+        return action, ActorStep(action=action, policy=pi)
 
     def collect_batch_trajectory(
         self, params: Params, resolution: int = 32
     ) -> TimeStep:
         ex, hx = self.game.reset()
         timesteps = []
+
         env_step: EnvStep = stack_steps(ex)
+        history_step: HistoryStep = stack_steps(hx)
 
         state_index = 0
         while True:
@@ -313,17 +313,16 @@ class BatchCollectorV2:
             a, actor_step = self.actor_step(params, env_step)
 
             ex, hx = self._batch_of_states_apply_action(a)
+
             env_step = stack_steps(ex)
+            history_step = stack_steps(hx)
+
             timestep = TimeStep(
                 env=prev_env_step,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
-                    win_rewards=env_step.win_rewards,
-                    hp_rewards=env_step.hp_rewards,
-                    fainted_rewards=env_step.fainted_rewards,
-                    switch_rewards=env_step.switch_rewards,
-                    longevity_rewards=env_step.longevity_rewards,
+                    rewards=env_step.rewards,
                 ),
             )
             timesteps.append(timestep)
@@ -449,8 +448,12 @@ def main():
         evaluation_progress.update(batch.env.valid.sum())
 
         if (
-            np.sign(((batch.actor.fainted_rewards * batch.env.valid[..., None])).sum(0))
-            != (batch.actor.win_rewards * batch.env.valid[..., None]).sum(0)
+            np.sign(
+                (
+                    (batch.actor.rewards.fainted_rewards * batch.env.valid[..., None])
+                ).sum(0)
+            )
+            != (batch.actor.rewards.win_rewards * batch.env.valid[..., None]).sum(0)
         ).all():
             raise ValueError
 

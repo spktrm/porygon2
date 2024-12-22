@@ -135,7 +135,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.fainted_rewards / 3
+        rewards = batch.actor.rewards.fainted_rewards / 3
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]

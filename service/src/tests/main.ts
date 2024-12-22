@@ -26,6 +26,7 @@ async function worker(gameId: number, playerIds: number[]) {
 
     let infos = [];
     let rewardsCounts = [0, 0];
+    let maxEdges = 0;
 
     while (true) {
         const gameState = await queue.get();
@@ -47,6 +48,13 @@ async function worker(gameId: number, playerIds: number[]) {
                 const playerIndex = info.getPlayerindex();
                 rewardsCounts[+playerIndex] += rewards.getFaintedreward();
             });
+
+            const player = (game.players ?? [])[0];
+            if (player !== undefined) {
+                const num_edges = player.eventHandler.edgeBuffer.numEdges;
+                maxEdges = Math.max(num_edges, maxEdges);
+                console.log(maxEdges);
+            }
 
             game.reset();
             infos = [];

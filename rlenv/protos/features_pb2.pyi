@@ -163,6 +163,7 @@ class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PLAYER_ID: _ClassVar[FeatureEdge]
     REQUEST_COUNT: _ClassVar[FeatureEdge]
     EDGE_VALID: _ClassVar[FeatureEdge]
+    EDGE_INDEX: _ClassVar[FeatureEdge]
 ENTITY_SPECIES: FeatureEntity
 ENTITY_ITEM: FeatureEntity
 ENTITY_ITEM_EFFECT: FeatureEntity
@@ -296,3 +297,4 @@ EDGE_AFFECTING_SIDE: FeatureEdge
 PLAYER_ID: FeatureEdge
 REQUEST_COUNT: FeatureEdge
 EDGE_VALID: FeatureEdge
+EDGE_INDEX: FeatureEdge
