@@ -12,12 +12,13 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_model
+from ml.arch.model import get_dummy_model, get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
+from rlenv.protos.features_pb2 import FeatureEdge
 from rlenv.protos.servicev2_pb2 import (
     Action,
     ClientMessage,
@@ -27,7 +28,13 @@ from rlenv.protos.servicev2_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import add_batch, concatenate_steps, stack_steps, stack_trajectories
+from rlenv.utils import (
+    add_batch,
+    concatenate_steps,
+    stack_steps,
+    stack_trajectories,
+    trim_history,
+)
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -131,8 +138,7 @@ class TwoPlayerEnvironment:
         self.hxs = {}
 
     def get_history(self):
-        history = concatenate_steps([self.hxs[0], self.hxs[1]])
-        return history
+        return stack_steps([self.hxs[0], self.hxs[1]], axis=1)
 
     async def initialize_players(self):
         """Initialize both players asynchronously."""
@@ -228,8 +234,9 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
 
     def get_history(self):
         history_steps = [env.get_history() for env in self.envs]
-        stacked_history = stack_steps(history_steps, axis=1)
-        return stacked_history
+        stacked_history: HistoryStep = stack_steps(history_steps, axis=2)
+        stacked_history = trim_history(stacked_history, resolution=128)
+        return jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), stacked_history)
 
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
@@ -332,7 +339,7 @@ class BatchCollectorV2:
         return action.squeeze(), ActorStep(action=action, policy=pi)
 
     def collect_batch_trajectory(
-        self, params: Params, resolution: int = 32
+        self, params: Params, resolution: int = 64
     ) -> TimeStep:
         ex, hx = self.game.reset()
         timesteps = []
@@ -344,7 +351,7 @@ class BatchCollectorV2:
         while True:
             prev_env_step = env_step
 
-            # history_step = trim_history(history_step)
+            history_step = trim_history(history_step, resolution=128)
             a, actor_step = self.actor_step(params, env_step, history_step)
 
             ex, hx = self._batch_of_states_apply_action(a)
@@ -464,7 +471,7 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_model()
+    network = get_dummy_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 

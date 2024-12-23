@@ -82,7 +82,7 @@ def process_state(state: State):
         request_count=np.array(state.info.requestCount).astype(np.int32),
         heuristic_action=np.array(heuristics.heuristicAction).astype(np.int32),
     )
-    env_step = jax.tree.map(lambda x: np.expand_dims(x, axis=0), env_step)
+    env_step: EnvStep = jax.tree.map(lambda x: np.expand_dims(x, axis=0), env_step)
 
     return env_step, history_step
 

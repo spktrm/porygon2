@@ -11,6 +11,7 @@ from ml_collections import ConfigDict
 
 from ml.arch.modules import (
     MLP,
+    CompressSequence,
     PretrainedEmbedding,
     TransformerDecoder,
     TransformerEncoder,
@@ -366,33 +367,32 @@ class Encoder(nn.Module):
             history_step.history_field,
         )
 
-        edge_request_count = jnp.where(
-            history_step.history_edges[..., FeatureEdge.EDGE_VALID],
-            history_step.history_edges[..., FeatureEdge.REQUEST_COUNT],
-            1e9,
+        (
+            compressed_embeddings0,
+            compressed_embeddings1,
+            timestep_self_attn_mask0,
+            timestep_self_attn_mask1,
+            timestep_causal_attn_mask0,
+            timestep_causal_attn_mask1,
+        ) = CompressSequence(self.cfg.entity_size)(
+            timestep_embeddings, history_step, env_step
         )
-        timestep_temporal_mask = jnp.expand_dims(
-            edge_request_count[..., None] >= edge_request_count, axis=0
-        )
-        entity_timestep_temporal_mask = (
-            env_step.request_count[..., None] >= edge_request_count
-        )[:, None, None, :]
 
         timestep_transformer = TransformerEncoder(
             **self.cfg.timestep_transformer.to_dict()
         )
-        player0_mask = history_step.history_edges[..., FeatureEdge.PLAYER_ID] == 0
-        player0_mask = valid_timestep_mask & player0_mask
 
-        player1_mask = history_step.history_edges[..., FeatureEdge.PLAYER_ID] == 1
-        player1_mask = valid_timestep_mask & player1_mask
+        causal_mask = jnp.expand_dims(jnp.eye(128), axis=0)
 
-        contextual_timestep_embeddings = timestep_transformer(
-            timestep_embeddings,
-            sa_mask=create_attention_mask(player0_mask) & timestep_temporal_mask,
-        ) + timestep_transformer(
-            timestep_embeddings,
-            sa_mask=create_attention_mask(player1_mask) & timestep_temporal_mask,
+        contextual_timestep_embeddings0 = timestep_transformer(
+            compressed_embeddings0,
+            mask=timestep_self_attn_mask0,
+            causal_mask=causal_mask,
+        )
+        contextual_timestep_embeddings1 = timestep_transformer(
+            compressed_embeddings1,
+            mask=timestep_self_attn_mask1,
+            causal_mask=causal_mask,
         )
 
         # Process private entities and generate masks
@@ -404,33 +404,23 @@ class Encoder(nn.Module):
             **self.cfg.entity_timestep_transformer.to_dict()
         )
         cast_timestep_to_entity = jax.vmap(
-            entity_timestep_transformer, in_axes=(0, None, 0, None, 0)
+            entity_timestep_transformer, in_axes=(0, None, 0, 0)
         )
 
-        p1_ca_mask = (
-            jax.vmap(create_attention_mask, in_axes=(0, None))(
-                valid_entity_mask, player0_mask
-            )
-            & entity_timestep_temporal_mask
-        )
-        p2_ca_mask = (
-            jax.vmap(create_attention_mask, in_axes=(0, None))(
-                valid_entity_mask, player1_mask
-            )
-            & entity_timestep_temporal_mask
-        )
-        contextual_entity_embeddings = cast_timestep_to_entity(
+        contextual_entity_embeddings0 = cast_timestep_to_entity(
             entity_embeddings,
-            contextual_timestep_embeddings,
+            contextual_timestep_embeddings0,
             valid_entity_mask & jnp.expand_dims(env_step.player_id == 0, axis=-1),
-            None,
-            p1_ca_mask,
-        ) + cast_timestep_to_entity(
+            timestep_causal_attn_mask0,
+        )
+        contextual_entity_embeddings1 = cast_timestep_to_entity(
             entity_embeddings,
-            contextual_timestep_embeddings,
+            contextual_timestep_embeddings1,
             valid_entity_mask & jnp.expand_dims(env_step.player_id == 1, axis=-1),
-            None,
-            p2_ca_mask,
+            timestep_causal_attn_mask1,
+        )
+        contextual_entity_embeddings = (
+            contextual_entity_embeddings0 + contextual_entity_embeddings1
         )
 
         # Compute action embeddings

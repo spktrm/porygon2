@@ -26,8 +26,8 @@ async def predict(request: Request):
     data = await request.body()
     state = State.FromString(data)
 
-    env_step = process_state(state)
-    response = await run_in_threadpool(model.predict, env_step)
+    env_step, history_step = process_state(state)
+    response = await run_in_threadpool(model.predict, env_step, history_step)
     pprint(state.info)
 
     pprint_nparray(np.array(env_step.moveset[0, :, 0]))
