@@ -28,7 +28,7 @@ class Heuristics(_message.Message):
     def __init__(self, heuristicAction: _Optional[int] = ...) -> None: ...
 
 class Info(_message.Message):
-    __slots__ = ("gameId", "done", "playerIndex", "turn", "ts", "drawRatio", "workerIndex", "rewards", "seed", "draw", "heuristics")
+    __slots__ = ("gameId", "done", "playerIndex", "turn", "ts", "drawRatio", "workerIndex", "rewards", "seed", "draw", "heuristics", "requestCount")
     GAMEID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
     PLAYERINDEX_FIELD_NUMBER: _ClassVar[int]
@@ -40,6 +40,7 @@ class Info(_message.Message):
     SEED_FIELD_NUMBER: _ClassVar[int]
     DRAW_FIELD_NUMBER: _ClassVar[int]
     HEURISTICS_FIELD_NUMBER: _ClassVar[int]
+    REQUESTCOUNT_FIELD_NUMBER: _ClassVar[int]
     gameId: int
     done: bool
     playerIndex: bool
@@ -51,7 +52,8 @@ class Info(_message.Message):
     seed: int
     draw: bool
     heuristics: Heuristics
-    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., drawRatio: _Optional[float] = ..., workerIndex: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ...) -> None: ...
+    requestCount: int
+    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., drawRatio: _Optional[float] = ..., workerIndex: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., requestCount: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
     __slots__ = ("info", "legalActions", "history", "moveset", "team", "key")

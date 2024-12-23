@@ -21,6 +21,7 @@ class EnvStep:
     game_id: chex.Array = ()
     player_id: chex.Array = ()
     seed_hash: chex.Array = ()
+    request_count: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()
@@ -53,6 +54,7 @@ class ActorStep:
 class TimeStep:
     env: EnvStep = EnvStep()
     actor: ActorStep = ActorStep()
+    history: HistoryStep = HistoryStep()
 
 
 @chex.dataclass(frozen=True)

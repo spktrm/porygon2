@@ -83,7 +83,7 @@ def get_model_cfg():
 
     num_transformer_layers = 1
     num_transformer_heads = 2
-    transformer_hidden_size_scale = 64
+    transformer_hidden_size_scale = 2
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
 
     cfg.encoder.entity_transformer.num_layers = num_transformer_layers
@@ -92,8 +92,6 @@ def get_model_cfg():
     cfg.encoder.entity_transformer.model_size = entity_size
     cfg.encoder.entity_transformer.num_heads = num_transformer_heads
     cfg.encoder.entity_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_transformer.x_need_pos = True
-    cfg.encoder.entity_transformer.y_need_pos = True
     cfg.encoder.entity_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_transformer.resblocks_hidden_size = transformer_hidden_size
 
@@ -103,8 +101,6 @@ def get_model_cfg():
     cfg.encoder.timestep_transformer.model_size = entity_size
     cfg.encoder.timestep_transformer.num_heads = num_transformer_heads
     cfg.encoder.timestep_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.timestep_transformer.x_need_pos = True
-    cfg.encoder.timestep_transformer.y_need_pos = True
     cfg.encoder.timestep_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.timestep_transformer.resblocks_hidden_size = transformer_hidden_size
 
@@ -114,8 +110,6 @@ def get_model_cfg():
     cfg.encoder.entity_timestep_transformer.model_size = entity_size
     cfg.encoder.entity_timestep_transformer.num_heads = num_transformer_heads
     cfg.encoder.entity_timestep_transformer.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_timestep_transformer.x_need_pos = False
-    cfg.encoder.entity_timestep_transformer.y_need_pos = True
     cfg.encoder.entity_timestep_transformer.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_timestep_transformer.resblocks_hidden_size = (
         transformer_hidden_size
