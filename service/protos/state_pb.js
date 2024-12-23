@@ -573,7 +573,8 @@ proto.rlenv.Info.toObject = function(includeInstance, msg) {
     rewards: (f = msg.getRewards()) && proto.rlenv.Rewards.toObject(includeInstance, f),
     seed: jspb.Message.getFieldWithDefault(msg, 9, 0),
     draw: jspb.Message.getBooleanFieldWithDefault(msg, 10, false),
-    heuristics: (f = msg.getHeuristics()) && proto.rlenv.Heuristics.toObject(includeInstance, f)
+    heuristics: (f = msg.getHeuristics()) && proto.rlenv.Heuristics.toObject(includeInstance, f),
+    requestcount: jspb.Message.getFieldWithDefault(msg, 12, 0)
   };
 
   if (includeInstance) {
@@ -655,6 +656,10 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
       var value = new proto.rlenv.Heuristics;
       reader.readMessage(value,proto.rlenv.Heuristics.deserializeBinaryFromReader);
       msg.setHeuristics(value);
+      break;
+    case 12:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setRequestcount(value);
       break;
     default:
       reader.skipField();
@@ -762,6 +767,13 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
       11,
       f,
       proto.rlenv.Heuristics.serializeBinaryToWriter
+    );
+  }
+  f = message.getRequestcount();
+  if (f !== 0) {
+    writer.writeInt32(
+      12,
+      f
     );
   }
 };
@@ -1000,6 +1012,24 @@ proto.rlenv.Info.prototype.clearHeuristics = function() {
  */
 proto.rlenv.Info.prototype.hasHeuristics = function() {
   return jspb.Message.getField(this, 11) != null;
+};
+
+
+/**
+ * optional int32 requestCount = 12;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getRequestcount = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 12, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setRequestcount = function(value) {
+  return jspb.Message.setProto3IntField(this, 12, value);
 };
 
 

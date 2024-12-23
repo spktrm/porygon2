@@ -133,7 +133,7 @@ export const numMovesetFields = 10 * numMoveFields;
 export const MAX_TURNS = 1000;
 export const MAX_EDGES_PER_TURN = 32;
 
-export const MAX_EDGES = 2048;
+export const MAX_EDGES = 1024;
 export const NUM_HISTORY = MAX_EDGES;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);

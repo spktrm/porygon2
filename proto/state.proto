@@ -30,6 +30,7 @@ message Info {
     int32 seed = 9;
     bool draw = 10;
     Heuristics heuristics = 11;
+    int32 requestCount = 12;
 }
 
 message State {

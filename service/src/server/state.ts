@@ -45,6 +45,7 @@ import {
     numSideConditions,
     numWeatherFields,
     MAX_EDGES,
+    MAX_EDGES_PER_TURN,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -455,10 +456,18 @@ class EdgeBuffer {
     numEdges: number;
 
     constructor() {
-        this.edgeData = new Int16Array(MAX_EDGES * numEdgeFeatures);
-        this.entityData = new Int16Array(MAX_EDGES * 2 * numPokemonFields);
-        this.sideData = new Uint8Array(MAX_EDGES * 2 * numSideConditions);
-        this.fieldData = new Uint8Array(MAX_EDGES * numWeatherFields);
+        this.edgeData = new Int16Array(
+            MAX_EDGES_PER_TURN * MAX_EDGES * numEdgeFeatures,
+        );
+        this.entityData = new Int16Array(
+            MAX_EDGES_PER_TURN * MAX_EDGES * 2 * numPokemonFields,
+        );
+        this.sideData = new Uint8Array(
+            MAX_EDGES_PER_TURN * MAX_EDGES * 2 * numSideConditions,
+        );
+        this.fieldData = new Uint8Array(
+            MAX_EDGES_PER_TURN * MAX_EDGES * numWeatherFields,
+        );
 
         this.edgeCursor = 0;
         this.entityCursor = 0;
@@ -530,6 +539,8 @@ export class EventHandler implements Protocol.Handler {
     actives: Map<ID, PokemonIdent>;
     actionWindow: { [k: number]: number[] };
     edgeBuffer: EdgeBuffer;
+    turnOrder: number;
+    turnNum: number;
 
     constructor(player: Player) {
         this.player = player;
@@ -540,6 +551,8 @@ export class EventHandler implements Protocol.Handler {
             1: [],
         };
         this.edgeBuffer = new EdgeBuffer();
+        this.turnOrder = 0;
+        this.turnNum = 0;
     }
 
     getPokemon(pokemonid: PokemonIdent) {
@@ -600,6 +613,9 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.REQUEST_COUNT, this.player.requestCount);
         edge.setFeature(FeatureEdge.EDGE_VALID, 1);
         edge.setFeature(FeatureEdge.EDGE_INDEX, this.edgeBuffer.numEdges);
+        edge.setFeature(FeatureEdge.TURN_ORDER_VALUE, this.turnOrder);
+        edge.setFeature(FeatureEdge.TURN_VALUE, this.turnNum);
+
         this.edgeBuffer.addEdge(edge);
     }
 
@@ -1389,16 +1405,19 @@ export class EventHandler implements Protocol.Handler {
         edge.addMajorArg("turn");
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
 
+        this.turnOrder = 0;
         this.addEdge(edge);
     }
 
     "|turn|"(args: Args["|turn|"]) {
-        const [argName] = args;
+        const [argName, turnNum] = args;
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
 
+        this.turnOrder = 0;
+        this.turnNum = parseInt(turnNum);
         this.addEdge(edge);
     }
 
@@ -1822,6 +1841,7 @@ export class StateHandler {
         info.setTurn(this.player.privateBattle.turn);
         info.setDone(this.player.done);
         info.setDraw(this.player.draw);
+        info.setRequestcount(this.player.requestCount);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {

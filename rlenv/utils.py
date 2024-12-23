@@ -5,7 +5,8 @@ import jax
 import numpy as np
 
 from rlenv.data import NUM_HISTORY
-from rlenv.interfaces import ActorStep, EnvStep, TimeStep
+from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, TimeStep
+from rlenv.protos.features_pb2 import FeatureEdge
 
 T = TypeVar("T")
 
@@ -17,6 +18,15 @@ def add_batch(step: T, axis: int = 0) -> T:
 # @jax.jit
 def stack_steps(steps: Sequence[T], axis: int = 0) -> T:
     return jax.tree.map(lambda *xs: np.stack(xs, axis=axis), *steps)
+
+
+# @jax.jit
+def trim_history(history_step: HistoryStep, resolution: int = 32) -> HistoryStep:
+    traj_length = np.max(
+        history_step.history_edges[..., FeatureEdge.EDGE_VALID].sum(axis=0)
+    )
+    traj_length = resolution * math.ceil(traj_length / resolution)
+    return jax.tree.map(lambda x: x[:traj_length], history_step)
 
 
 def concatenate_steps(steps: Sequence[T], axis: int = 0) -> T:

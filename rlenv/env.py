@@ -1,3 +1,4 @@
+import jax
 import numpy as np
 
 from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
@@ -78,11 +79,13 @@ def process_state(state: State):
         team=team.astype(np.int32),
         moveset=moveset.astype(np.int32),
         seed_hash=np.array(state.info.seed).astype(np.int32),
+        request_count=np.array(state.info.requestCount).astype(np.int32),
         heuristic_action=np.array(heuristics.heuristicAction).astype(np.int32),
     )
+    env_step = jax.tree.map(lambda x: np.expand_dims(x, axis=0), env_step)
 
     return env_step, history_step
 
 
-def get_ex_step() -> EnvStep:
+def get_ex_step():
     return process_state(EX_STATE)

@@ -99,6 +99,9 @@ export class Info extends jspb.Message {
   getHeuristics(): Heuristics | undefined;
   setHeuristics(value?: Heuristics): void;
 
+  getRequestcount(): number;
+  setRequestcount(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -122,6 +125,7 @@ export namespace Info {
     seed: number,
     draw: boolean,
     heuristics?: Heuristics.AsObject,
+    requestcount: number,
   }
 }
 

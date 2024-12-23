@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import pickle
 from abc import ABC, abstractmethod
 from typing import Callable, List, Sequence, Tuple
 
@@ -11,7 +12,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model
+from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -26,7 +27,7 @@ from rlenv.protos.servicev2_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import add_batch, stack_steps, stack_trajectories
+from rlenv.utils import add_batch, concatenate_steps, stack_steps, stack_trajectories
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -41,8 +42,12 @@ class SinglePlayerEnvironment:
         self.player_id = player_id
         self.game_id = game_id
         self.state = None
+        self.history = None
         self.mess = None
         self.queue = asyncio.Queue()
+
+    def get_history(self):
+        return self.history
 
     def is_done(self):
         return self.state.info.done
@@ -71,9 +76,14 @@ class SinglePlayerEnvironment:
                 print(f"Connection closed for player {self.player_id}")
                 break
 
+    def _process_state(self):
+        ex, hx = process_state(self.state)
+        self.history = hx
+        return ex, hx
+
     async def reset(self):
         await self._reset()
-        return process_state(self.state)
+        return self._process_state()
 
     async def _reset(self):
         reset_message = ClientMessage(
@@ -84,7 +94,7 @@ class SinglePlayerEnvironment:
 
     async def step(self, action: int):
         await self._step(action)
-        return process_state(self.state)
+        return self._process_state()
 
     async def _step(self, action: int):
         if self.state and self.state.info.done:
@@ -118,6 +128,12 @@ class TwoPlayerEnvironment:
         self.current_player = None
         self.dones = np.zeros(2)
 
+        self.hxs = {}
+
+    def get_history(self):
+        history = concatenate_steps([self.hxs[0], self.hxs[1]])
+        return history
+
     async def initialize_players(self):
         """Initialize both players asynchronously."""
         self.players = await asyncio.gather(
@@ -145,7 +161,7 @@ class TwoPlayerEnvironment:
 
         # Retrieve the first state to act on and set the corresponding player
         self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state)
+        self.current_step = self._process_state()
         return self.current_step
 
     async def _step(self, action: int):
@@ -155,8 +171,13 @@ class TwoPlayerEnvironment:
 
         # Retrieve the next player and state from the queue, waiting if necessary
         self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state)
+        self.current_step = self._process_state()
         return self.current_step
+
+    def _process_state(self):
+        ex, hx = process_state(self.current_state)
+        self.hxs[int(self.current_state.info.playerIndex)] = hx
+        return ex, hx
 
     async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
         """Helper method to send the action to the player and enqueue the resulting state."""
@@ -205,6 +226,11 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
             self.envs.append(env)
             self.player_id_count += 2
 
+    def get_history(self):
+        history_steps = [env.get_history() for env in self.envs]
+        stacked_history = stack_steps(history_steps, axis=1)
+        return stacked_history
+
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
 
@@ -249,6 +275,11 @@ class BatchSinglePlayerEnvironment(BatchEnvironment):
                     self.envs.append(env)
                     self.player_id_count = self.player_id_count + 1
 
+    def get_history(self):
+        history_steps = [env.get_history() for env in self.envs]
+        stacked_history = stack_steps(history_steps, axis=1)
+        return stacked_history
+
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
 
@@ -284,19 +315,21 @@ class BatchCollectorV2:
         return self.game.step(list(actions))
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> chex.Array:
+    def _network_jit_apply(
+        self, params: Params, env_step: EnvStep, history_step: HistoryStep
+    ) -> chex.Array:
         rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
-            self.network.apply, (None, 0), 0
+            self.network.apply, (None, 1, 1), 1
         )
-        output = rollout(params, env_steps)
+        output = rollout(params, env_step, history_step)
         return output.pi
 
-    def actor_step(self, params: Params, env_step: EnvStep):
-        pi = self._network_jit_apply(params, env_step)
+    def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
+        pi = self._network_jit_apply(params, env_step, history_step)
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        return action, ActorStep(action=action, policy=pi)
+        return action.squeeze(), ActorStep(action=action, policy=pi)
 
     def collect_batch_trajectory(
         self, params: Params, resolution: int = 32
@@ -304,18 +337,20 @@ class BatchCollectorV2:
         ex, hx = self.game.reset()
         timesteps = []
 
-        env_step: EnvStep = stack_steps(ex)
-        history_step: HistoryStep = stack_steps(hx)
+        env_step: EnvStep = stack_steps(ex, axis=1)
+        history_step: HistoryStep = stack_steps(hx, axis=1)
 
         state_index = 0
         while True:
             prev_env_step = env_step
-            a, actor_step = self.actor_step(params, env_step)
+
+            # history_step = trim_history(history_step)
+            a, actor_step = self.actor_step(params, env_step, history_step)
 
             ex, hx = self._batch_of_states_apply_action(a)
 
-            env_step = stack_steps(ex)
-            history_step = stack_steps(hx)
+            env_step = stack_steps(ex, axis=1)
+            history_step = stack_steps(hx, axis=1)
 
             timestep = TimeStep(
                 env=prev_env_step,
@@ -333,7 +368,10 @@ class BatchCollectorV2:
             state_index += 1
 
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
-        batch: TimeStep = stack_steps(timesteps)
+        batch: TimeStep = concatenate_steps(timesteps, axis=0)
+        batch = TimeStep(
+            env=batch.env, actor=batch.actor, history=self.game.get_history()
+        )
 
         if (batch.env.turn[1:] < batch.env.turn[:-1]).any():
             raise ValueError
@@ -383,11 +421,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchCollectorV2):
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
-                    win_rewards=env_step.win_rewards,
-                    hp_rewards=env_step.hp_rewards,
-                    fainted_rewards=env_step.fainted_rewards,
-                    switch_rewards=env_step.switch_rewards,
-                    longevity_rewards=env_step.longevity_rewards,
+                    rewards=env_step.rewards,
                 ),
             )
             timesteps.append(timestep)
@@ -430,17 +464,22 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_dummy_model()
+    network = get_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 
     ex, hx = get_ex_step()
-    params = network.init(jax.random.PRNGKey(42), ex)
+    params = network.init(jax.random.PRNGKey(42), ex, hx)
 
     np.zeros(num_envs)
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
+        with open("rlenv/ex_batch", "wb") as f:
+            pickle.dump(batch, f)
+
+        return
+
         collect_batch_telemetry_data(batch)
 
         training_progress.update(batch.env.valid.sum())

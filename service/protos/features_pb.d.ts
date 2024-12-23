@@ -178,6 +178,7 @@ export interface FeatureEdgeMap {
   REQUEST_COUNT: 21;
   EDGE_VALID: 22;
   EDGE_INDEX: 23;
+  TURN_VALUE: 24;
 }
 
 export const FeatureEdge: FeatureEdgeMap;

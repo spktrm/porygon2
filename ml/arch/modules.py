@@ -236,18 +236,6 @@ class NormalizeAttention(nn.Module):
         return (gain * normalize_masked(logits, mask) + bias) * mask
 
 
-def get_rope_embedding(x: chex.Array):
-    def negate_half(x: chex.Array):
-        d_2 = x.shape[-1] // 2
-        return jnp.concatenate([x[..., :d_2], -x[..., d_2:]], axis=-1)
-
-    seq_len, dim = x.shape
-    cos, sin = get_freqs(seq_len, dim)
-    neg_half_x = negate_half(x)
-    x_rope = (x * cos) + (neg_half_x * sin)
-    return x_rope
-
-
 def l2_normalize(x: chex.Array, epsilon: float = 1e-6):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
 
@@ -275,8 +263,6 @@ class MultiHeadAttention(nn.Module):
     key_size: int
     value_size: Optional[int] = None
     model_size: Optional[int] = None
-    query_need_pos: bool = False
-    key_need_pos: bool = False
     use_spectral_linear: bool = False
 
     @nn.compact
@@ -323,20 +309,14 @@ class MultiHeadAttention(nn.Module):
 
         linear_mod = SNDense if self.use_spectral_linear else nn.Dense
 
-        def _linear_projection(
-            x: jax.Array, head_size: int, need_pos: bool = False
-        ) -> jax.Array:
+        def _linear_projection(x: jax.Array, head_size: int) -> jax.Array:
             y = linear_mod(self.num_heads * head_size)(x)
-            if need_pos:
-                y = get_rope_embedding(y)
             *leading_dims, _ = x.shape
             return y.reshape((*leading_dims, self.num_heads, head_size))
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = _linear_projection(
-            query, key_size, self.query_need_pos
-        )  # [T', H, Q=K]
-        key_heads = _linear_projection(key, key_size, self.key_need_pos)  # [T, H, K]
+        query_heads = _linear_projection(query, key_size)  # [T', H, Q=K]
+        key_heads = _linear_projection(key, key_size)  # [T, H, K]
         value_heads = _linear_projection(value, value_size)  # [T, H, V]
 
         # Compute attention weights.
@@ -389,18 +369,19 @@ class TransformerEncoder(nn.Module):
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
-    x_need_pos: bool = False
-    y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array = None):
+    def __call__(
+        self, x: chex.Array, mask: chex.Array = None, sa_mask: chex.Array = None
+    ):
 
         if mask is None:
             mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        sa_mask = create_attention_mask(mask)
+        if sa_mask is None:
+            sa_mask = create_attention_mask(mask)
 
         def encoder_layer(x: chex.Array):
             x_ln = layer_norm(x)
@@ -409,8 +390,6 @@ class TransformerEncoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
@@ -426,8 +405,8 @@ class TransformerEncoder(nn.Module):
 
         for _ in range(self.num_layers):
             x = encoder_layer(x)
+            x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
-        x = jnp.where(mask[..., jnp.newaxis], x, 0)
         return x
 
 
@@ -440,8 +419,6 @@ class TransformerDecoder(nn.Module):
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
-    x_need_pos: bool = False
-    y_need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
 
@@ -452,6 +429,7 @@ class TransformerDecoder(nn.Module):
         y: chex.Array,
         x_mask: chex.Array = None,
         y_mask: chex.Array = None,
+        ca_mask: chex.Array = None,
     ):
 
         if x_mask is None:
@@ -461,7 +439,8 @@ class TransformerDecoder(nn.Module):
             y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
 
         sa_mask = create_attention_mask(x_mask)
-        ca_mask = create_attention_mask(x_mask, y_mask)
+        if ca_mask is None:
+            ca_mask = create_attention_mask(x_mask, y_mask)
 
         def decoder_layer(x: chex.Array, y: chex.Array):
             x_ln = layer_norm(x)
@@ -470,8 +449,6 @@ class TransformerDecoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.x_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
@@ -481,8 +458,6 @@ class TransformerDecoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=y, value=y, mask=ca_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
@@ -498,8 +473,8 @@ class TransformerDecoder(nn.Module):
 
         for _ in range(self.num_layers):
             x = decoder_layer(x, y)
+            x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
-        x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
         return x
 
 

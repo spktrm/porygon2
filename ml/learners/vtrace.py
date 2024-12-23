@@ -55,10 +55,10 @@ class TrainState(train_state.TrainState):
 
 def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfig):
     """Creates an initial `TrainState`."""
-    ex = get_ex_step()
+    ex, hx = get_ex_step()
 
-    params = module.init(rng, ex)
-    params_target = module.init(rng, ex)
+    params = module.init(rng, ex, hx)
+    params_target = module.init(rng, ex, hx)
 
     tx = optax.chain(
         optax.adam(
@@ -116,11 +116,15 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     def loss_fn(params: Params):
         # Define a checkpointed function
-        def rollout_fn(params, env):
-            return jax.vmap(jax.vmap(state.apply_fn, (None, 0)), (None, 0))(params, env)
+        def rollout_fn(params, env, history):
+            return jax.vmap(state.apply_fn, in_axes=(None, 1, 1), out_axes=1)(
+                params, env, history
+            )
 
-        pred: ModelOutput = rollout_fn(params, batch.env)
-        pred_targ: ModelOutput = rollout_fn(state.params_target, batch.env)
+        pred: ModelOutput = rollout_fn(params, batch.env, batch.history)
+        pred_targ: ModelOutput = rollout_fn(
+            state.params_target, batch.env, batch.history
+        )
 
         logs = {}
 
