@@ -7,18 +7,18 @@ from typing import Callable, List, Sequence, Tuple
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 import numpy as np
 import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model, get_model
+from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
-from rlenv.protos.features_pb2 import FeatureEdge
 from rlenv.protos.servicev2_pb2 import (
     Action,
     ClientMessage,
@@ -138,7 +138,13 @@ class TwoPlayerEnvironment:
         self.hxs = {}
 
     def get_history(self):
-        return stack_steps([self.hxs[0], self.hxs[1]], axis=1)
+        return concatenate_steps(
+            [
+                self.hxs.get(0, self.hxs.get(1)),
+                self.hxs.get(1, self.hxs.get(0)),
+            ],
+            axis=1,
+        )
 
     async def initialize_players(self):
         """Initialize both players asynchronously."""
@@ -183,7 +189,7 @@ class TwoPlayerEnvironment:
     def _process_state(self):
         ex, hx = process_state(self.current_state)
         self.hxs[int(self.current_state.info.playerIndex)] = hx
-        return ex, hx
+        return ex, self.get_history()
 
     async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
         """Helper method to send the action to the player and enqueue the resulting state."""
@@ -234,9 +240,8 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
 
     def get_history(self):
         history_steps = [env.get_history() for env in self.envs]
-        stacked_history: HistoryStep = stack_steps(history_steps, axis=2)
-        stacked_history = trim_history(stacked_history, resolution=128)
-        return jax.tree.map(lambda x: x.reshape(-1, *x.shape[2:]), stacked_history)
+        stacked_history: HistoryStep = stack_steps(history_steps, axis=1)
+        return trim_history(stacked_history)
 
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
@@ -332,6 +337,8 @@ class BatchCollectorV2:
         return output.pi
 
     def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
+        env_step = jax.tree.map(lambda x: jnp.asarray(x), env_step)
+        history_step = jax.tree.map(lambda x: jnp.asarray(x), history_step)
         pi = self._network_jit_apply(params, env_step, history_step)
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
@@ -351,7 +358,7 @@ class BatchCollectorV2:
         while True:
             prev_env_step = env_step
 
-            history_step = trim_history(history_step, resolution=128)
+            history_step = trim_history(history_step)
             a, actor_step = self.actor_step(params, env_step, history_step)
 
             ex, hx = self._batch_of_states_apply_action(a)
@@ -482,10 +489,10 @@ def main():
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
-        with open("rlenv/ex_batch", "wb") as f:
-            pickle.dump(batch, f)
+        # with open("rlenv/ex_batch", "wb") as f:
+        #     pickle.dump(batch, f)
 
-        return
+        # return
 
         collect_batch_telemetry_data(batch)
 

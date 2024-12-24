@@ -2,32 +2,32 @@ import jax
 import numpy as np
 
 from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
-from rlenv.interfaces import EnvStep, HistoryStep, RewardStep
+from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
+from rlenv.protos.history_pb2 import History
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import padnstack
+from rlenv.utils import padnstack, trim_history
 
 
-def get_history(state: State):
-    history = state.history
+def get_history(history: History):
     history_length = history.length
 
-    history_edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
+    edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
         (history_length, NUM_EDGE_FIELDS)
     )
-    history_entities = np.frombuffer(
-        bytearray(history.entities), dtype=np.int16
-    ).reshape((history_length, 2, NUM_ENTITY_FIELDS))
-    history_side_conditions = np.frombuffer(
+    entities = np.frombuffer(bytearray(history.entities), dtype=np.int16).reshape(
+        (history_length, 2, NUM_ENTITY_FIELDS)
+    )
+    side_conditions = np.frombuffer(
         bytearray(history.sideConditions), dtype=np.uint8
     ).reshape((history_length, 2, -1))
-    history_field = np.frombuffer(bytearray(history.field), dtype=np.uint8).reshape(
+    field = np.frombuffer(bytearray(history.field), dtype=np.uint8).reshape(
         (history_length, -1)
     )
-    return HistoryStep(
-        history_edges=padnstack(history_edges).astype(np.int32),
-        history_entities=padnstack(history_entities).astype(np.int32),
-        history_side_conditions=padnstack(history_side_conditions).astype(np.int32),
-        history_field=padnstack(history_field).astype(np.int32),
+    return HistoryContainer(
+        edges=padnstack(edges).astype(np.int32),
+        entities=padnstack(entities).astype(np.int32),
+        side_conditions=padnstack(side_conditions).astype(np.int32),
+        field=padnstack(field).astype(np.int32),
     )
 
 
@@ -40,7 +40,8 @@ def get_legal_mask(state: State):
 def process_state(state: State):
     player_index = int(state.info.playerIndex)
 
-    history_step = get_history(state)
+    major_history_step = get_history(state.majorHistory)
+    minor_history_step = get_history(state.minorHistory)
 
     moveset = np.frombuffer(bytearray(state.moveset), dtype=np.int16).reshape(
         2, -1, NUM_MOVE_FIELDS
@@ -84,8 +85,19 @@ def process_state(state: State):
     )
     env_step: EnvStep = jax.tree.map(lambda x: np.expand_dims(x, axis=0), env_step)
 
+    history_step = HistoryStep(
+        major_history=major_history_step,
+        minor_history=minor_history_step,
+    )
+    history_step: HistoryStep = jax.tree.map(
+        lambda x: np.expand_dims(x, axis=1), history_step
+    )
+
     return env_step, history_step
 
 
 def get_ex_step():
-    return process_state(EX_STATE)
+    ex, hx = process_state(EX_STATE)
+    hx = jax.tree.map(lambda x: np.repeat(x, repeats=2, axis=1), hx)
+    hx = trim_history(hx)
+    return ex, hx

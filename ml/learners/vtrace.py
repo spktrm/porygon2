@@ -18,7 +18,6 @@ from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v_huber,
-    renormalize,
     rnad_v_trace,
 )
 from ml.learners.func import (
@@ -31,7 +30,6 @@ from ml.learners.rnad import NerdConfig
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
-from rlenv.protos.features_pb2 import FeatureEdge
 
 
 @chex.dataclass(frozen=True)
@@ -230,13 +228,10 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         loss = (
             config.value_loss_coef * loss_v
             + config.policy_loss_coef * loss_nerd
-            + config.entropy_loss_coef * loss_entropy
+            # + config.entropy_loss_coef * loss_entropy
             # + config.entropy_loss_coef * loss_heuristic
         )
         logs.update(collect_loss_value_telemetry_data(loss_v, loss_nerd, loss_entropy))
-        logs["history_valid"] = (
-            batch.history.history_edges[..., FeatureEdge.EDGE_VALID].sum(0).mean()
-        )
 
         return loss, logs
 
