@@ -11,7 +11,7 @@ from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, HistoryStep
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -33,15 +33,15 @@ class InferenceModel:
 
         self.params = step["params"]
         print("initializing...")
-        self.predict(get_ex_step())
+        self.predict(*get_ex_step())
         print("model initialized!")
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, env_step: EnvStep):
-        return self.network.apply(self.params, env_step)
+    def _network_jit_apply(self, env_step: EnvStep, history_step: HistoryStep):
+        return self.network.apply(self.params, env_step, history_step)
 
-    def predict(self, env_step: EnvStep):
-        output = self._network_jit_apply(env_step)
+    def predict(self, env_step: EnvStep, history_step: HistoryStep):
+        output = self._network_jit_apply(env_step, history_step)
         pi = self.finetuning._threshold(output.pi, env_step.legal)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x),

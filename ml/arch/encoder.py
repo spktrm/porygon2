@@ -32,7 +32,7 @@ from rlenv.data import (
     NUM_VOLATILE_STATUS,
     NUM_WEATHER,
 )
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
 from rlenv.protos.enums_pb2 import ActionsEnum, SideconditionEnum, SpeciesEnum
 from rlenv.protos.features_pb2 import (
     EdgeTypes,
@@ -144,7 +144,8 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
 
 def get_edge_mask(edge: chex.Array) -> chex.Array:
     edge_type_token = astype(edge[FeatureEdge.EDGE_TYPE_TOKEN], jnp.int32)
-    return jnp.not_equal(edge_type_token, EdgeTypes.EDGE_TYPE_NONE)
+    edge_valid = astype(edge[FeatureEdge.EDGE_VALID], jnp.int32)
+    return jnp.not_equal(edge_type_token, EdgeTypes.EDGE_TYPE_NONE) & edge_valid
 
 
 class SideEncoder(nn.Module):
@@ -187,7 +188,9 @@ class Encoder(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+    def __call__(
+        self, env_step: EnvStep, history_step: HistoryStep
+    ) -> Tuple[chex.Array, chex.Array]:
         """
         Forward pass of the Encoder model. Processes an environment step and outputs
         the current state and action embeddings.
@@ -289,6 +292,12 @@ class Encoder(nn.Module):
                 _binary_scale_embedding(
                     edge[FeatureEdge.EDGE_AFFECTING_SIDE].astype(jnp.int32), 3
                 ),
+                _binary_scale_embedding(
+                    edge[FeatureEdge.TURN_ORDER_VALUE].astype(jnp.int32), 32
+                ),
+                _binary_scale_embedding(
+                    edge[FeatureEdge.REQUEST_COUNT].astype(jnp.int32), 128
+                ),
                 _encode_one_hot(edge, FeatureEdge.STATUS_TOKEN, NUM_STATUS),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_ATK_VALUE),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_DEF_VALUE),
@@ -303,28 +312,25 @@ class Encoder(nn.Module):
             embedding = edge_linear(boolean_code)
 
             mask = get_edge_mask(edge)
+
             embedding = jnp.where(mask, embedding, 0)
+
             return embedding, mask
 
         # Encode each timestep's nodes, edges, side conditions, and field data
-        def _encode_timestep(
-            entities_per_edge: chex.Array,
-            edge_features: chex.Array,
-            side_conditions_per_edge: chex.Array,
-            field_per_edge: chex.Array,
-        ):
+        def _encode_timestep(history_container: HistoryContainer):
             # Encode nodes (entities) and generate masks
-            entity_embeddings, _ = jax.vmap(_encode_entity)(entities_per_edge)
+            entity_embeddings, _ = jax.vmap(_encode_entity)(history_container.entities)
 
             # Encode edges, incorporating entity embeddings
-            edge_embeddings, edge_mask = _encode_edge(edge_features)
+            edge_embeddings, edge_mask = _encode_edge(history_container.edges)
 
             # Encode side conditions and field data
             side_condition_embeddings = jax.vmap(side_condition_encoder)(
-                side_conditions_per_edge
+                history_container.side_conditions
             )
 
-            field_embedding = field_encoder(field_per_edge)
+            field_embedding = field_encoder(history_container.field)
 
             # Merge aggregated embeddings with timestep context
 
@@ -347,29 +353,109 @@ class Encoder(nn.Module):
             return timestep_embedding, edge_mask
 
         # Process history across timesteps
-        timestep_embeddings, valid_timestep_mask = jax.vmap(_encode_timestep)(
-            env_step.history_entities,
-            env_step.history_edges,
-            env_step.history_side_conditions,
-            env_step.history_field,
+        encode_timesteps = jax.vmap(jax.vmap(_encode_timestep))
+
+        major_timestep_embeddings, valid_major_timestep_mask = encode_timesteps(
+            history_step.major_history
+        )
+        minor_timestep_embeddings, valid_minor_timestep_mask = encode_timesteps(
+            history_step.minor_history
         )
 
-        contextual_timestep_embeddings = TransformerEncoder(
-            **self.cfg.timestep_transformer.to_dict()
-        )(timestep_embeddings, valid_timestep_mask)
+        timestep_decoder = TransformerDecoder(
+            **self.cfg.timestep_transformer_decoder.to_dict()
+        )
+        timestep_encoder = TransformerEncoder(
+            **self.cfg.timestep_transformer_encoder.to_dict()
+        )
+
+        def _create_decoder_causal_mask(edges1: chex.Array, edges2: chex.Array):
+            edge1_request_count = jnp.where(
+                edges1[..., FeatureEdge.EDGE_VALID],
+                edges1[..., FeatureEdge.REQUEST_COUNT],
+                1e9,
+            )
+            edge2_request_count = jnp.where(
+                edges2[..., FeatureEdge.EDGE_VALID],
+                edges2[..., FeatureEdge.REQUEST_COUNT],
+                1e13,
+            )
+            mask = edge1_request_count[..., None] == edge2_request_count[..., None, :]
+            return mask[None]
+
+        decoder_causal_mask = jax.vmap(
+            _create_decoder_causal_mask, in_axes=(1, 1), out_axes=1
+        )(history_step.major_history.edges, history_step.minor_history.edges)
+
+        contextual_major_timestep_embeddings = jax.vmap(
+            timestep_decoder, in_axes=(1, 1, 1, 1, 1), out_axes=1
+        )(
+            major_timestep_embeddings,
+            minor_timestep_embeddings,
+            valid_major_timestep_mask,
+            valid_minor_timestep_mask,
+            decoder_causal_mask,
+        )
+
+        def _create_encoder_causal_mask(edges1: chex.Array, edges2: chex.Array):
+            edge1_request_count = jnp.where(
+                edges1[..., FeatureEdge.EDGE_VALID],
+                edges1[..., FeatureEdge.REQUEST_COUNT],
+                1e9,
+            )
+            edge2_request_count = jnp.where(
+                edges2[..., FeatureEdge.EDGE_VALID],
+                edges2[..., FeatureEdge.REQUEST_COUNT],
+                1e13,
+            )
+            mask = edge1_request_count[..., None] >= edge2_request_count[..., None, :]
+            return mask[None]
+
+        encoder_causal_mask = jax.vmap(
+            _create_encoder_causal_mask, in_axes=(1, 1), out_axes=1
+        )(history_step.major_history.edges, history_step.major_history.edges)
+
+        contextual_timestep_embeddings = jax.vmap(
+            timestep_encoder, in_axes=(1, 1, 1), out_axes=1
+        )(
+            contextual_major_timestep_embeddings,
+            valid_major_timestep_mask,
+            encoder_causal_mask,
+        )
 
         # Process private entities and generate masks
-        entity_embeddings, valid_entity_mask = jax.vmap(_encode_entity)(
-            env_step.team.reshape(-1, env_step.team.shape[-1])
+        entity_embeddings, valid_entity_mask = jax.vmap(jax.vmap(_encode_entity))(
+            env_step.team.reshape(env_step.team.shape[0], -1, env_step.team.shape[-1])
         )
 
-        contextual_entity_embeddings = TransformerDecoder(
-            **self.cfg.entity_timestep_transformer.to_dict()
-        )(
-            entity_embeddings,
-            contextual_timestep_embeddings,
+        entity_transformer_encoder = TransformerEncoder(
+            **self.cfg.entity_transformer_encoder.to_dict()
+        )
+        contextual_entity_embeddings = jax.vmap(entity_transformer_encoder)(
+            entity_embeddings, valid_entity_mask
+        )
+
+        major_edge_request_count = jnp.where(
+            history_step.major_history.edges[..., FeatureEdge.EDGE_VALID],
+            history_step.major_history.edges[..., FeatureEdge.REQUEST_COUNT],
+            1e9,
+        )
+        entity_timestep_decoder = TransformerDecoder(
+            **self.cfg.entity_timestep_transformer_decoder.to_dict()
+        )
+        cast_timestep_to_entity = jax.vmap(
+            entity_timestep_decoder, in_axes=(0, 1, 0, 1)
+        )
+        entity_timestep_causal_mask = (
+            jnp.take(major_edge_request_count, env_step.player_id, axis=1)
+            <= env_step.request_count
+        )
+
+        contextual_entity_embeddings = cast_timestep_to_entity(
+            contextual_entity_embeddings,
+            jnp.take(contextual_timestep_embeddings, env_step.player_id, axis=1),
             valid_entity_mask,
-            valid_timestep_mask,
+            entity_timestep_causal_mask,
         )
 
         # Compute action embeddings
@@ -392,54 +478,17 @@ class Encoder(nn.Module):
 
             return embedding, mask
 
-        action_embeddings, _ = jax.vmap(_encode_move)(env_step.moveset[0])
+        action_embeddings, _ = jax.vmap(jax.vmap(_encode_move))(env_step.moveset[:, 0])
 
-        contextual_action_embeddings = TransformerDecoder(
-            **self.cfg.action_entity_transformer.to_dict()
-        )(
+        action_entity_transformer = TransformerDecoder(
+            **self.cfg.action_entity_transformer_decoder.to_dict()
+        )
+        contextual_action_embeddings = jax.vmap(action_entity_transformer)(
             action_embeddings,
             contextual_entity_embeddings,
             env_step.legal,
             valid_entity_mask,
         )
-
-        # contextual_action_embeddings = TransformerEncoder(
-        #     **self.cfg.action_transformer.to_dict()
-        # )(contextual_action_embeddings, env_step.legal)
-        # contextual_action_embeddings = layer_norm(contextual_action_embeddings)
-
-        # Compute the current state from averaged private embeddings, followed by ResNet processing
-        # average_contextual_entity_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_entity_agg.to_dict()
-        # )(contextual_entity_embeddings, valid_entity_mask)
-
-        # average_contextual_entity_embeddings = (
-        #     valid_entity_mask.astype(jnp.float32) @ contextual_entity_embeddings
-        # ) / valid_entity_mask.sum().clip(min=1)
-
-        # average_contextual_timestep_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_timestep_agg.to_dict()
-        # )(contextual_timestep_embeddings, valid_timestep_mask)
-
-        # average_contextual_action_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_action_agg.to_dict()
-        # )(contextual_action_embeddings, env_step.legal)
-
-        # draw_embedding = nn.Dense(self.cfg.vector_size)(
-        #     jax.nn.one_hot((env_step.draw_ratio.squeeze() * 24).astype(jnp.int32), 25)
-        # )
-
-        # current_state = VectorMerge(**self.cfg.state_merge.to_dict())(
-        #     Resnet(**self.cfg.average_contextual_entity_resnet.to_dict())(
-        #         average_contextual_entity_embeddings
-        #     ),
-        #     Resnet(**self.cfg.average_contextual_timestep_resnet.to_dict())(
-        #         average_contextual_timestep_embeddings
-        #     ),
-        # )
-
-        # current_state = current_state + draw_embedding
-        # current_state = Resnet(**self.cfg.state_resnet.to_dict())(current_state)
 
         return (
             contextual_entity_embeddings,

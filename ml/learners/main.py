@@ -2,6 +2,7 @@ import json
 from pprint import pprint
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 from tqdm import trange
 
@@ -63,12 +64,12 @@ def main():
             eval_batch = evaluation_collector.collect_batch_trajectory(state.params)
             win_rewards = np.sign(
                 (
-                    eval_batch.actor.win_rewards[..., 0]
+                    eval_batch.actor.rewards.win_rewards[..., 0]
                     * eval_batch.env.valid.squeeze()
                 ).sum(0)
             )
             fainted_rewards = (
-                eval_batch.actor.fainted_rewards[..., 0]
+                eval_batch.actor.rewards.fainted_rewards[..., 0]
                 * eval_batch.env.valid.squeeze()
             ).sum(0)
             winrates = {f"wr{i}": wr for i, wr in enumerate(win_rewards)}
@@ -80,6 +81,8 @@ def main():
         # batch = buffer.sample(learner_config.minibatch_size)
 
         logs: dict
+        batch = jax.tree.map(lambda x: jnp.asarray(x), batch)
+
         state, logs = learner.train_step(state, batch, learner_config)
 
         logs.update(collect_nn_telemetry_data(state))
