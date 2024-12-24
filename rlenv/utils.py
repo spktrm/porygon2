@@ -1,11 +1,13 @@
+import functools
 import math
 from typing import Sequence, TypeVar
 
 import jax
 import numpy as np
+import jax.numpy as jnp
 
 from rlenv.data import NUM_HISTORY
-from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, TimeStep
+from rlenv.interfaces import ActorStep, EnvStep, HistoryContainer, HistoryStep, TimeStep
 from rlenv.protos.features_pb2 import FeatureEdge
 
 T = TypeVar("T")
@@ -20,13 +22,24 @@ def stack_steps(steps: Sequence[T], axis: int = 0) -> T:
     return jax.tree.map(lambda *xs: np.stack(xs, axis=axis), *steps)
 
 
-# @jax.jit
-def trim_history(history_step: HistoryStep, resolution: int = 32) -> HistoryStep:
-    traj_length = np.max(
-        history_step.history_edges[..., FeatureEdge.EDGE_VALID].sum(axis=0)
+def trim_container(
+    container: HistoryContainer, resolution: int = 32
+) -> HistoryContainer:
+    traj_length = jnp.max(container.edges[..., FeatureEdge.EDGE_VALID].sum(axis=0))
+    traj_length = resolution * jnp.ceil(traj_length / resolution).astype(int)
+
+    def dynamic_slice(x, length):
+        slice_length = jnp.minimum(x.shape[0], length)  # Ensure bounds are safe
+        return jax.lax.dynamic_slice(x, (0,) * x.ndim, (slice_length,) + x.shape[1:])
+
+    return jax.tree_map(lambda x: dynamic_slice(x, traj_length), container)
+
+
+def trim_history(step: HistoryStep) -> HistoryStep:
+    return HistoryStep(
+        major_history=trim_container(step.major_history),
+        minor_history=trim_container(step.minor_history),
     )
-    traj_length = resolution * math.ceil(traj_length / resolution)
-    return jax.tree.map(lambda x: x[:traj_length], history_step)
 
 
 def concatenate_steps(steps: Sequence[T], axis: int = 0) -> T:

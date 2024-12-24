@@ -11,9 +11,6 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
 
-from rlenv.interfaces import EnvStep, HistoryStep
-from rlenv.protos.features_pb2 import FeatureEdge
-
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
@@ -377,16 +374,14 @@ class TransformerEncoder(nn.Module):
 
     @nn.compact
     def __call__(
-        self, x: chex.Array, mask: chex.Array = None, causal_mask: chex.Array = None
+        self, x: chex.Array, mask: chex.Array = None, ca_mask: chex.Array = None
     ):
-
         if mask is None:
             mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        sa_mask = create_attention_mask(mask)
-
-        if causal_mask is not None:
-            sa_mask = sa_mask * causal_mask
+        self_attn_mask = create_attention_mask(mask)
+        if ca_mask is not None:
+            self_attn_mask = self_attn_mask & ca_mask
 
         def encoder_layer(x: chex.Array):
             x_ln = layer_norm(x)
@@ -396,7 +391,7 @@ class TransformerEncoder(nn.Module):
                 value_size=self.value_size,
                 model_size=self.model_size,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
             x_ln = layer_norm(x)
             mlp = MLP(
@@ -443,20 +438,11 @@ class TransformerDecoder(nn.Module):
         if y_mask is None:
             y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
 
-        sa_mask = create_attention_mask(x_mask)
-        if ca_mask is None:
-            ca_mask = create_attention_mask(x_mask, y_mask)
+        cross_attn_mask = create_attention_mask(x_mask, y_mask)
+        if ca_mask is not None:
+            cross_attn_mask = cross_attn_mask & ca_mask
 
         def decoder_layer(x: chex.Array, y: chex.Array):
-            x_ln = layer_norm(x)
-            mha = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
             x_ln = layer_norm(x)
             ca = MultiHeadAttention(
                 num_heads=self.num_heads,
@@ -464,7 +450,7 @@ class TransformerDecoder(nn.Module):
                 value_size=self.value_size,
                 model_size=self.model_size,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=y, value=y, mask=ca_mask)
+            )(query=x_ln, key=y, value=y, mask=cross_attn_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
             x_ln = layer_norm(x)
             mlp = MLP(
@@ -673,87 +659,3 @@ Array = Any
 PrecisionLike = Union[
     None, str, lax.Precision, Tuple[str, str], Tuple[lax.Precision, lax.Precision]
 ]
-
-
-class CompressSequence(nn.Module):
-    entity_size: int
-    num_heads: int = 4
-    max_timestep: int = 128
-
-    @nn.compact
-    def __call__(
-        self,
-        timestep_embeddings: chex.Array,
-        history_step: HistoryStep,
-        env_step: EnvStep,
-    ) -> chex.Array:
-        timestep_attention = MLP((self.entity_size, self.num_heads))(
-            timestep_embeddings
-        )
-
-        edge_request_count = jnp.where(
-            history_step.history_edges[..., FeatureEdge.EDGE_VALID],
-            history_step.history_edges[..., FeatureEdge.REQUEST_COUNT],
-            1e9,
-        )
-        edge_request_count_onehot = jax.nn.one_hot(
-            edge_request_count, self.max_timestep
-        )
-
-        player0_mask = jnp.expand_dims(
-            history_step.history_edges[..., FeatureEdge.PLAYER_ID] == 0, axis=-1
-        )
-        player1_mask = jnp.expand_dims(
-            history_step.history_edges[..., FeatureEdge.PLAYER_ID] == 1, axis=-1
-        )
-        timestep_self_attn_mask0 = (edge_request_count_onehot * player0_mask).any(
-            axis=0
-        )
-        timestep_self_attn_mask1 = (edge_request_count_onehot * player1_mask).any(
-            axis=0
-        )
-
-        edge_request_count_onehot = jnp.expand_dims(edge_request_count_onehot, axis=1)
-
-        attention_weights0 = jnp.where(
-            edge_request_count_onehot,
-            jnp.expand_dims(player0_mask * timestep_attention, axis=-1),
-            -1e9,
-        )
-        attention_weights1 = jnp.where(
-            edge_request_count_onehot,
-            jnp.expand_dims(player1_mask * timestep_attention, axis=-1),
-            -1e9,
-        )
-
-        attention_probs0 = jnp.permute_dims(
-            jax.nn.softmax(attention_weights0, axis=0), (2, 1, 0)
-        )
-        attention_probs1 = jnp.permute_dims(
-            jax.nn.softmax(attention_weights1, axis=0), (2, 1, 0)
-        )
-
-        timestep_embeddings = jnp.permute_dims(
-            jnp.expand_dims(timestep_embeddings, axis=1), (1, 0, 2)
-        )
-
-        project = MLP((self.entity_size,))
-        compressed_embeddings0 = jnp.reshape(
-            attention_probs0 @ timestep_embeddings, (self.max_timestep, -1)
-        )
-        compressed_embeddings1 = jnp.reshape(
-            attention_probs1 @ timestep_embeddings, (self.max_timestep, -1)
-        )
-
-        timestep_causal_attn_mask0 = timestep_causal_attn_mask1 = (
-            env_step.request_count[..., None] >= (jnp.arange(1, self.max_timestep + 1))
-        )
-
-        return (
-            project(compressed_embeddings0),
-            project(compressed_embeddings1),
-            timestep_self_attn_mask0,
-            timestep_self_attn_mask1,
-            timestep_causal_attn_mask0,
-            timestep_causal_attn_mask1,
-        )
