@@ -1,14 +1,20 @@
 import jax
 import numpy as np
 
-from rlenv.data import EX_STATE, NUM_EDGE_FIELDS, NUM_ENTITY_FIELDS, NUM_MOVE_FIELDS
+from rlenv.data import (
+    EX_STATE,
+    NUM_EDGE_FIELDS,
+    NUM_ENTITY_FIELDS,
+    NUM_HISTORY,
+    NUM_MOVE_FIELDS,
+)
 from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
 from rlenv.protos.history_pb2 import History
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import padnstack, trim_history
+from rlenv.utils import padnstack
 
 
-def get_history(history: History):
+def get_history(history: History, padding_length: int = NUM_HISTORY):
     history_length = history.length
 
     edges = np.frombuffer(bytearray(history.edges), dtype=np.int16).reshape(
@@ -24,10 +30,10 @@ def get_history(history: History):
         (history_length, -1)
     )
     return HistoryContainer(
-        edges=padnstack(edges).astype(np.int32),
-        entities=padnstack(entities).astype(np.int32),
-        side_conditions=padnstack(side_conditions).astype(np.int32),
-        field=padnstack(field).astype(np.int32),
+        edges=padnstack(edges, padding_length).astype(np.int32),
+        entities=padnstack(entities, padding_length).astype(np.int32),
+        side_conditions=padnstack(side_conditions, padding_length).astype(np.int32),
+        field=padnstack(field, padding_length).astype(np.int32),
     )
 
 
@@ -40,8 +46,8 @@ def get_legal_mask(state: State):
 def process_state(state: State):
     player_index = int(state.info.playerIndex)
 
-    major_history_step = get_history(state.majorHistory)
-    minor_history_step = get_history(state.minorHistory)
+    major_history_step = get_history(state.majorHistory, 384)
+    minor_history_step = get_history(state.minorHistory, 576)
 
     moveset = np.frombuffer(bytearray(state.moveset), dtype=np.int16).reshape(
         2, -1, NUM_MOVE_FIELDS
@@ -92,12 +98,12 @@ def process_state(state: State):
     history_step: HistoryStep = jax.tree.map(
         lambda x: np.expand_dims(x, axis=1), history_step
     )
+    history_step = jax.tree.map(lambda x: np.repeat(x, repeats=2, axis=1), history_step)
 
     return env_step, history_step
 
 
 def get_ex_step():
     ex, hx = process_state(EX_STATE)
-    hx = jax.tree.map(lambda x: np.repeat(x, repeats=2, axis=1), hx)
-    hx = trim_history(hx)
+    # hx = trim_history(ex, hx)
     return ex, hx

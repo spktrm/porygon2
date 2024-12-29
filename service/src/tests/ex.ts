@@ -24,33 +24,23 @@ async function worker(gameId: number, playerIds: number[]) {
     game.reset();
     game.reset();
 
-    (async () => {
-        let i = 0;
-        while (true) {
-            const gameState = await queue.get();
-            const rqid = gameState.getRqid();
-            if (rqid >= 0) {
-                const action = new Action();
-                action.setValue(-1);
-                game.tasks.submitResult(rqid, action);
-
-                if (i >= 5) {
-                    writeFileSync("../rlenv/ex", gameState.getState_asU8());
-                    exit(0);
-                } else {
-                    i += 1;
-                }
-            } else {
-                game.reset();
-            }
+    while (true) {
+        const gameState = await queue.get();
+        const rqid = gameState.getRqid();
+        if (rqid >= 0) {
+            const action = new Action();
+            action.setValue(-1);
+            game.tasks.submitResult(rqid, action);
+        } else {
+            writeFileSync("../rlenv/ex", gameState.getState_asU8());
+            game.reset();
+            exit(0);
         }
-    })();
+    }
 }
 
-function main() {
-    for (const { gameId, playerIds } of [{ gameId: 0, playerIds: [0, 1] }]) {
-        worker(gameId, playerIds);
-    }
+async function main() {
+    await worker(0, [0, 1]);
 }
 
 main();
