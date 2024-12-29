@@ -45,8 +45,8 @@ def get_legal_mask(state: State):
 def process_state(state: State):
     player_index = int(state.info.playerIndex)
 
-    major_history_step = get_history(state.majorHistory, 64)
-    minor_history_step = get_history(state.minorHistory, 64)
+    major_history_step = get_history(state.majorHistory, NUM_HISTORY)
+    minor_history_step = get_history(state.minorHistory, NUM_HISTORY)
 
     moveset = np.frombuffer(bytearray(state.moveset), dtype=np.int16).reshape(
         2, -1, NUM_MOVE_FIELDS

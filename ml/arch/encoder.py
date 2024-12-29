@@ -386,13 +386,17 @@ class Encoder(nn.Module):
             **self.cfg.timestep_transformer_encoder.to_dict()
         )
 
+        valid_major_timestep_mask = valid_major_timestep_mask & (
+            major_history_request_count >= smallest_request_count
+        )
+        valid_minor_timestep_mask = valid_minor_timestep_mask & (
+            minor_history_request_count >= smallest_request_count
+        )
         contextual_major_timestep_embeddings = timestep_decoder(
             major_timestep_embeddings,
             minor_timestep_embeddings,
-            valid_major_timestep_mask
-            & (major_history_request_count >= smallest_request_count),
-            valid_minor_timestep_mask
-            & (minor_history_request_count >= smallest_request_count),
+            valid_major_timestep_mask,
+            valid_minor_timestep_mask,
         )
         contextual_timestep_embeddings = timestep_encoder(
             contextual_major_timestep_embeddings, valid_major_timestep_mask
