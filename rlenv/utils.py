@@ -84,8 +84,9 @@ def stack_trajectories(trajectories: Sequence[TimeStep], resolution: int = 32) -
     )
 
 
-# @jax.jit
 def padnstack(arr: np.ndarray, padding: int = NUM_HISTORY) -> np.ndarray:
-    stacked = np.resize(arr, (padding, *arr.shape[1:]))
-    mask = np.arange(padding) < arr.shape[0]
-    return np.where(mask[..., *((None,) * (len(arr.shape) - 1))], stacked, 0)
+    output_shape = (padding, *arr.shape[1:])
+    result = np.zeros(output_shape, dtype=arr.dtype)
+    length_to_copy = min(padding, arr.shape[0])
+    result[:length_to_copy] = arr[:length_to_copy]
+    return result

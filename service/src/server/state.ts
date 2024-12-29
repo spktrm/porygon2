@@ -196,10 +196,7 @@ function getArrayFromPokemon(
         for (const move of moveSlots) {
             const { id, ppUsed } = move;
             const maxPP = pokemon.side.battle.gens.dex.moves.get(id).pp;
-            const idValue = IndexValueFromEnum<typeof ActionsEnum>(
-                "Actions",
-                `move_${id}`,
-            );
+            const idValue = IndexValueFromEnum<typeof MovesEnum>("Move", id);
             const correctUsed = ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
 
             moveIds.push(idValue);
@@ -474,10 +471,6 @@ class EdgeBuffer {
         this.numEdges = 0;
     }
 
-    getBufferRemaining() {
-        return this.numEdges / this.maxEdges;
-    }
-
     addEdge(edge: Edge) {
         this.edgeData.set(edge.edgeData, this.edgeCursor);
         this.edgeCursor -= numEdgeFeatures;
@@ -530,14 +523,17 @@ class EdgeBuffer {
         return history;
     }
 }
-
 export class EventHandler implements Protocol.Handler {
     readonly player: Player;
 
     currHp: Map<string, number>;
     actives: Map<ID, PokemonIdent>;
     actionWindow: { [k: number]: number[] };
-    edgeBuffer: EdgeBuffer;
+    turnOrder: number;
+    turnNum: number;
+
+    majorEdgeBuffer: EdgeBuffer;
+    minorEdgeBuffer: EdgeBuffer;
 
     constructor(player: Player) {
         this.player = player;
@@ -547,7 +543,10 @@ export class EventHandler implements Protocol.Handler {
             0: [],
             1: [],
         };
-        this.edgeBuffer = new EdgeBuffer();
+        this.majorEdgeBuffer = new EdgeBuffer();
+        this.minorEdgeBuffer = new EdgeBuffer();
+        this.turnOrder = 0;
+        this.turnNum = 0;
     }
 
     getPokemon(pokemonid: PokemonIdent) {
@@ -601,8 +600,27 @@ export class EventHandler implements Protocol.Handler {
         return this.player.publicBattle.getSide(ident);
     }
 
-    addEdge(edge: Edge) {
-        this.edgeBuffer.addEdge(edge);
+    _preprocessEdge(edge: Edge) {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex !== undefined) {
+            edge.setFeature(FeatureEdge.PLAYER_ID, playerIndex);
+        }
+        edge.setFeature(FeatureEdge.REQUEST_COUNT, this.player.requestCount);
+        edge.setFeature(FeatureEdge.EDGE_VALID, 1);
+        edge.setFeature(FeatureEdge.EDGE_INDEX, this.majorEdgeBuffer.numEdges);
+        edge.setFeature(FeatureEdge.TURN_ORDER_VALUE, this.turnOrder);
+        edge.setFeature(FeatureEdge.TURN_VALUE, this.turnNum);
+        return edge;
+    }
+
+    addMajorEdge(edge: Edge) {
+        const preprocessedEdge = this._preprocessEdge(edge);
+        this.majorEdgeBuffer.addEdge(preprocessedEdge);
+    }
+
+    addMinorEdge(edge: Edge) {
+        const preprocessedEdge = this._preprocessEdge(edge);
+        this.minorEdgeBuffer.addEdge(preprocessedEdge);
     }
 
     "|move|"(args: Args["|move|"]) {
@@ -628,7 +646,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.MOVE_EDGE);
 
-        this.addEdge(edge);
+        this.addMajorEdge(edge);
     }
 
     "|drag|"(args: Args["|drag|"]) {
@@ -659,7 +677,7 @@ export class EventHandler implements Protocol.Handler {
 
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.SWITCH_EDGE);
 
-        this.addEdge(edge);
+        this.addMajorEdge(edge);
     }
 
     "|cant|"(args: Args["|cant|"]) {
@@ -685,7 +703,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.CANT_EDGE);
         edge.updateEdgeFromOf(condition);
 
-        this.addEdge(edge);
+        this.addMajorEdge(edge);
     }
 
     "|faint|"(args: Args["|faint|"]) {
@@ -699,7 +717,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMajorEdge(edge);
     }
 
     "|-fail|"(args: Args["|-fail|"], kwArgs: KWArgs["|-fail|"]) {
@@ -721,7 +739,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-block|"(args: Args["|-block|"], kwArgs: KWArgs["|-block|"]) {
@@ -743,7 +761,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-notarget|"(args: Args["|-notarget|"]) {
@@ -759,7 +777,7 @@ export class EventHandler implements Protocol.Handler {
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-miss|"(args: Args["|-miss|"], kwArgs: KWArgs["|-miss|"]) {
@@ -775,7 +793,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-damage|"(args: Args["|-damage|"], kwArgs: KWArgs["|-damage|"]) {
@@ -809,7 +827,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.DAMAGE_TOKEN, Math.floor(1023 * diffRatio));
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-heal|"(args: Args["|-heal|"], kwArgs: KWArgs["|-heal|"]) {
@@ -841,7 +859,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {
@@ -865,7 +883,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.STATUS_TOKEN, statusToken);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-curestatus|"(args: Args["|-curestatus|"]) {
@@ -881,7 +899,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.STATUS_TOKEN, statusIndex);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-cureteam|"(args: Args["|-cureteam|"]) {
@@ -894,7 +912,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     static getStatBoostEdgeFeatureIndex(
@@ -924,7 +942,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(featureIndex, parseInt(value));
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-unboost|"(args: Args["|-unboost|"], kwArgs: KWArgs["|-unboost|"]) {
@@ -946,7 +964,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(featureIndex, -parseInt(value));
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-setboost|"(args: Args["|-setboost|"], kwArgs: KWArgs["|-setboost|"]) {
@@ -970,7 +988,7 @@ export class EventHandler implements Protocol.Handler {
         edge.updateEdgeFromOf(fromEffect);
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-swapboost|"(args: Args["|-swapboost|"], kwArgs: KWArgs["|-swapboost|"]) {
@@ -992,7 +1010,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-invertboost|"(
@@ -1017,7 +1035,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-clearboost|"(
@@ -1042,7 +1060,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-clearnegativeboost|"(
@@ -1067,7 +1085,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-copyboost|"() {}
@@ -1083,7 +1101,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-fieldstart|"(
@@ -1102,7 +1120,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-fieldend|"(args: Args["|-fieldend|"], kwArgs: KWArgs["|-fieldend|"]) {
@@ -1118,7 +1136,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-sidestart|"(args: Args["|-sidestart|"]) {
@@ -1132,7 +1150,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, side.n);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-sideend|"(args: Args["|-sideend|"]) {
@@ -1146,7 +1164,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, side.n);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-swapsideconditions|"() {}
@@ -1161,7 +1179,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-end|"(args: Args["|-end|"]) {
@@ -1174,7 +1192,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-crit|"(args: Args["|-crit|"]) {
@@ -1187,7 +1205,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-supereffective|"(args: Args["|-supereffective|"]) {
@@ -1200,7 +1218,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-resisted|"(args: Args["|-resisted|"]) {
@@ -1213,7 +1231,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setPoke1(poke1);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-immune|"(args: Args["|-immune|"], kwArgs: KWArgs["|-immune|"]) {
@@ -1235,7 +1253,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-item|"(args: Args["|-item|"], kwArgs: KWArgs["|-item|"]) {
@@ -1258,7 +1276,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
         edge.addMinorArg(argName);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-enditem|"(args: Args["|-enditem|"], kwArgs: KWArgs["|-enditem|"]) {
@@ -1275,7 +1293,7 @@ export class EventHandler implements Protocol.Handler {
         edge.updateEdgeFromOf(fromEffect);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-ability|"(args: Args["|-ability|"], kwArgs: KWArgs["|-ability|"]) {
@@ -1292,7 +1310,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
         edge.addMinorArg(argName);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-endability|"(
@@ -1310,7 +1328,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
         edge.addMinorArg(argName);
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-transform|"() {}
@@ -1342,7 +1360,7 @@ export class EventHandler implements Protocol.Handler {
         edge.addMinorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-mustrecharge|"(args: Args["|-mustrecharge|"]) {
@@ -1355,7 +1373,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-prepare|"(args: Args["|-prepare|"]) {
@@ -1368,7 +1386,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|-hitcount|"(args: Args["|-hitcount|"]) {
@@ -1381,7 +1399,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.addMinorArg(argName);
 
-        this.addEdge(edge);
+        this.addMinorEdge(edge);
     }
 
     "|done|"() {}
@@ -1391,17 +1409,20 @@ export class EventHandler implements Protocol.Handler {
         edge.addMajorArg("turn");
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
 
-        this.addEdge(edge);
+        this.turnOrder = 0;
+        this.addMajorEdge(edge);
     }
 
     "|turn|"(args: Args["|turn|"]) {
-        const [argName] = args;
+        const [argName, turnNum] = args;
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName);
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
 
-        this.addEdge(edge);
+        this.turnOrder = 0;
+        this.turnNum = parseInt(turnNum);
+        this.addMajorEdge(edge);
     }
 
     reset() {
@@ -1726,8 +1747,12 @@ export class StateHandler {
         return concatenateArrays(team);
     }
 
-    getHistory(numHistory: number = NUM_HISTORY) {
-        return this.player.eventHandler.edgeBuffer.getHistory(numHistory);
+    getMajorHistory(numHistory: number = NUM_HISTORY) {
+        return this.player.eventHandler.majorEdgeBuffer.getHistory(numHistory);
+    }
+
+    getMinorHistory(numHistory: number = NUM_HISTORY) {
+        return this.player.eventHandler.minorEdgeBuffer.getHistory(numHistory);
     }
 
     getRewards() {
@@ -1813,6 +1838,9 @@ export class StateHandler {
 
     getInfo() {
         const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
 
         const info = new Info();
         info.setTs(performance.now());
@@ -1821,6 +1849,7 @@ export class StateHandler {
         info.setTurn(this.player.privateBattle.turn);
         info.setDone(this.player.done);
         info.setDraw(this.player.draw);
+        info.setRequestcount(this.player.requestCount);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
@@ -1840,7 +1869,7 @@ export class StateHandler {
         return info;
     }
 
-    getState(numHistory?: number): State {
+    getState(numHistory: number = NUM_HISTORY): State {
         if (
             !this.player.offline &&
             !this.player.done &&
@@ -1858,11 +1887,18 @@ export class StateHandler {
         );
         state.setLegalactions(legalActions.buffer);
 
-        const history = this.getHistory(numHistory);
-        state.setHistory(history);
+        const majorHistory = this.getMajorHistory(numHistory);
+        state.setMajorhistory(majorHistory);
+
+        const minorHistory = this.getMinorHistory(numHistory);
+        state.setMinorhistory(minorHistory);
 
         const playerIndex = this.player.getPlayerIndex();
-        const privateTeam = this.getPrivateTeam(+!!playerIndex);
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
+
+        const privateTeam = this.getPrivateTeam(playerIndex);
         state.setTeam(new Uint8Array(privateTeam.buffer));
         state.setMoveset(this.getMoveset());
 

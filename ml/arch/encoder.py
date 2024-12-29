@@ -32,7 +32,7 @@ from rlenv.data import (
     NUM_VOLATILE_STATUS,
     NUM_WEATHER,
 )
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, HistoryStep
 from rlenv.protos.enums_pb2 import ActionsEnum, SideconditionEnum, SpeciesEnum
 from rlenv.protos.features_pb2 import (
     EdgeTypes,
@@ -69,6 +69,13 @@ def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
 def _encode_one_hot(entity: chex.Array, feature_idx: int, num_classes: int):
     chex.assert_rank(entity, 1)
     return jax.nn.one_hot(entity[feature_idx], num_classes)
+
+
+def _encode_multi_hot(entity: chex.Array, feature_idxs: chex.Array, num_classes: int):
+    indices = entity[feature_idxs]
+    buffer = jnp.zeros(num_classes, dtype=jnp.int32)
+    buffer = buffer.at[indices].add(1)
+    return buffer
 
 
 def _encode_boost_one_hot(entity: chex.Array, feature_idx: int):
@@ -187,7 +194,9 @@ class Encoder(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+    def __call__(
+        self, env_step: EnvStep, history_step: HistoryStep
+    ) -> Tuple[chex.Array, chex.Array]:
         """
         Forward pass of the Encoder model. Processes an environment step and outputs
         the current state and action embeddings.
