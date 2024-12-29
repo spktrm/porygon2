@@ -11,7 +11,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model
+from ml.arch.model import get_dummy_model, get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -288,7 +288,7 @@ class BatchCollectorV2:
         self, params: Params, env_steps: EnvStep, history_step: HistoryStep
     ) -> chex.Array:
         rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
-            self.network.apply, (None, 0), 0
+            self.network.apply, (None, 0, 0), 0
         )
         output = rollout(params, env_steps, history_step)
         return output.pi
@@ -322,7 +322,7 @@ class BatchCollectorV2:
 
             timestep = TimeStep(
                 env=prev_env_step,
-                history_step=prev_history_step,
+                history=prev_history_step,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
@@ -439,12 +439,12 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_dummy_model()
+    network = get_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 
-    ex = get_ex_step()
-    params = network.init(jax.random.PRNGKey(42), ex)
+    ex, hx = get_ex_step()
+    params = network.init(jax.random.PRNGKey(42), ex, hx)
 
     np.zeros(num_envs)
 

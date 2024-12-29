@@ -489,7 +489,7 @@ class EdgeBuffer {
 
     getHistory(numHistory: number = NUM_HISTORY) {
         const history = new History();
-        const width = Math.min(this.numEdges, numHistory);
+        const width = Math.max(1, Math.min(this.numEdges, numHistory));
         const trueWidth = width + 1;
         history.setEdges(
             new Uint8Array(
@@ -609,6 +609,7 @@ export class EventHandler implements Protocol.Handler {
         edge.setFeature(FeatureEdge.EDGE_VALID, 1);
         edge.setFeature(FeatureEdge.EDGE_INDEX, this.majorEdgeBuffer.numEdges);
         edge.setFeature(FeatureEdge.TURN_ORDER_VALUE, this.turnOrder);
+        this.turnOrder += 1;
         edge.setFeature(FeatureEdge.TURN_VALUE, this.turnNum);
         return edge;
     }

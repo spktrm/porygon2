@@ -40,7 +40,7 @@ def add_name_recursive(cfg, path=None):
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 128
+    entity_size = 512
     vector_size = 512
 
     use_layer_norm = True
@@ -68,12 +68,14 @@ def get_model_cfg():
 
     num_transformer_layers = 1
     num_transformer_heads = 2
-    transformer_hidden_size_scale = 2
+    transformer_hidden_size_scale = 4
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
+    transformer_key_value_scale = 0.25
+    transformer_key_value_size = int(transformer_key_value_scale * entity_size)
 
     cfg.encoder.timestep_transformer_decoder.num_layers = num_transformer_layers
-    cfg.encoder.timestep_transformer_decoder.key_size = entity_size
-    cfg.encoder.timestep_transformer_decoder.value_size = entity_size
+    cfg.encoder.timestep_transformer_decoder.key_size = transformer_key_value_size
+    cfg.encoder.timestep_transformer_decoder.value_size = transformer_key_value_size
     cfg.encoder.timestep_transformer_decoder.model_size = entity_size
     cfg.encoder.timestep_transformer_decoder.num_heads = num_transformer_heads
     cfg.encoder.timestep_transformer_decoder.use_layer_norm = use_layer_norm
@@ -83,8 +85,8 @@ def get_model_cfg():
     )
 
     cfg.encoder.timestep_transformer_encoder.num_layers = num_transformer_layers
-    cfg.encoder.timestep_transformer_encoder.key_size = entity_size
-    cfg.encoder.timestep_transformer_encoder.value_size = entity_size
+    cfg.encoder.timestep_transformer_encoder.key_size = transformer_key_value_size
+    cfg.encoder.timestep_transformer_encoder.value_size = transformer_key_value_size
     cfg.encoder.timestep_transformer_encoder.model_size = entity_size
     cfg.encoder.timestep_transformer_encoder.num_heads = num_transformer_heads
     cfg.encoder.timestep_transformer_encoder.use_layer_norm = use_layer_norm
@@ -94,8 +96,12 @@ def get_model_cfg():
     )
 
     cfg.encoder.entity_timestep_transformer_decoder.num_layers = num_transformer_layers
-    cfg.encoder.entity_timestep_transformer_decoder.key_size = entity_size
-    cfg.encoder.entity_timestep_transformer_decoder.value_size = entity_size
+    cfg.encoder.entity_timestep_transformer_decoder.key_size = (
+        transformer_key_value_size
+    )
+    cfg.encoder.entity_timestep_transformer_decoder.value_size = (
+        transformer_key_value_size
+    )
     cfg.encoder.entity_timestep_transformer_decoder.model_size = entity_size
     cfg.encoder.entity_timestep_transformer_decoder.num_heads = num_transformer_heads
     cfg.encoder.entity_timestep_transformer_decoder.use_layer_norm = use_layer_norm
@@ -107,8 +113,8 @@ def get_model_cfg():
     )
 
     cfg.encoder.entity_transformer_encoder.num_layers = num_transformer_layers
-    cfg.encoder.entity_transformer_encoder.key_size = entity_size
-    cfg.encoder.entity_transformer_encoder.value_size = entity_size
+    cfg.encoder.entity_transformer_encoder.key_size = transformer_key_value_size
+    cfg.encoder.entity_transformer_encoder.value_size = transformer_key_value_size
     cfg.encoder.entity_transformer_encoder.model_size = entity_size
     cfg.encoder.entity_transformer_encoder.num_heads = num_transformer_heads
     cfg.encoder.entity_transformer_encoder.use_layer_norm = use_layer_norm
@@ -118,8 +124,10 @@ def get_model_cfg():
     )
 
     cfg.encoder.action_entity_transformer_decoder.num_layers = num_transformer_layers
-    cfg.encoder.action_entity_transformer_decoder.key_size = entity_size
-    cfg.encoder.action_entity_transformer_decoder.value_size = entity_size
+    cfg.encoder.action_entity_transformer_decoder.key_size = transformer_key_value_size
+    cfg.encoder.action_entity_transformer_decoder.value_size = (
+        transformer_key_value_size
+    )
     cfg.encoder.action_entity_transformer_decoder.model_size = entity_size
     cfg.encoder.action_entity_transformer_decoder.num_heads = num_transformer_heads
     cfg.encoder.action_entity_transformer_decoder.use_layer_norm = use_layer_norm
@@ -136,8 +144,8 @@ def get_model_cfg():
     cfg.policy_head.logits = ConfigDict()
 
     cfg.policy_head.transformer.num_layers = num_transformer_layers
-    cfg.policy_head.transformer.key_size = entity_size
-    cfg.policy_head.transformer.value_size = entity_size
+    cfg.policy_head.transformer.key_size = transformer_key_value_size
+    cfg.policy_head.transformer.value_size = transformer_key_value_size
     cfg.policy_head.transformer.model_size = entity_size
     cfg.policy_head.transformer.num_heads = num_transformer_heads
     cfg.policy_head.transformer.use_layer_norm = use_layer_norm
@@ -154,8 +162,8 @@ def get_model_cfg():
     cfg.value_head.logits = ConfigDict()
 
     cfg.value_head.transformer.num_layers = num_transformer_layers
-    cfg.value_head.transformer.key_size = entity_size
-    cfg.value_head.transformer.value_size = entity_size
+    cfg.value_head.transformer.key_size = transformer_key_value_size
+    cfg.value_head.transformer.value_size = transformer_key_value_size
     cfg.value_head.transformer.model_size = entity_size
     cfg.value_head.transformer.num_heads = num_transformer_heads
     cfg.value_head.transformer.use_layer_norm = use_layer_norm
