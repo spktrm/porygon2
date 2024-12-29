@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Optional, Sequence
 
 import chex
 import flax.linen as nn

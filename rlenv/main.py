@@ -11,7 +11,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model, get_model
+from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -26,7 +26,7 @@ from rlenv.protos.servicev2_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import add_batch, stack_steps, stack_trajectories
+from rlenv.utils import stack_steps
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -359,70 +359,6 @@ class BatchCollectorV2:
 class SingleTrajectoryTrainingBatchCollector(BatchCollectorV2):
     def __init__(self, network: nn.Module, batch_size: int):
         super().__init__(network, batch_size, BatchTwoPlayerEnvironment)
-
-
-class DoubleTrajectoryTrainingBatchCollector(BatchCollectorV2):
-    game: BatchSinglePlayerEnvironment
-
-    def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(
-            network,
-            batch_size,
-            functools.partial(BatchSinglePlayerEnvironment, is_eval=False),
-        )
-
-    async def collect_trajectory(
-        self, params: Params, environment_index: int
-    ) -> TimeStep:
-        environment = self.game.envs[environment_index]
-
-        env_step = await environment.reset()
-        env_step = add_batch(env_step, axis=0)
-        timesteps = []
-
-        state_index = 0
-        while True:
-            prev_env_step = env_step
-            a, actor_step = self.actor_step(params, env_step)
-
-            env_step = await environment.step(a.item())
-            env_step = add_batch(env_step, axis=0)
-            timestep = TimeStep(
-                env=prev_env_step,
-                actor=ActorStep(
-                    action=actor_step.action,
-                    policy=actor_step.policy,
-                    win_rewards=env_step.win_rewards,
-                    hp_rewards=env_step.hp_rewards,
-                    fainted_rewards=env_step.fainted_rewards,
-                    switch_rewards=env_step.switch_rewards,
-                    longevity_rewards=env_step.longevity_rewards,
-                ),
-            )
-            timesteps.append(timestep)
-
-            if environment.is_done():
-                break
-
-            state_index += 1
-
-        # Concatenate all the timesteps together to form a single rollout [T, B, ..]
-        trajectory: TimeStep = stack_steps(timesteps)
-
-        return trajectory
-
-    def collect_batch_trajectory(
-        self, params: Params, resolution: int = 32
-    ) -> TimeStep:
-        tasks = [
-            self.collect_trajectory(params, env_index)
-            for env_index in range(2 * self.batch_size)
-        ]
-        trajectories = self.game.loop.run_until_complete(
-            asyncio.gather(*tasks),
-        )
-        batch = stack_trajectories(trajectories)
-        return batch
 
 
 class EvalBatchCollector(BatchCollectorV2):
