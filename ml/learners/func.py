@@ -40,9 +40,10 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
         switch_ratio=switch_ratio,
         draw_ratio=batch.env.draw.any(axis=0).astype(float).mean(),
         early_finish_ratio=(
-            jnp.abs(batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0) != 1
+            jnp.abs(batch.actor.rewards.win_rewards[..., 0] * batch.env.valid).sum(0)
+            != 1
         ).mean(),
-        reward_sum=jnp.abs(batch.actor.win_rewards * batch.env.valid[..., None])
+        reward_sum=jnp.abs(batch.actor.rewards.win_rewards * batch.env.valid[..., None])
         .sum(0)
         .mean(),
     )

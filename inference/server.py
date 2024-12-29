@@ -8,6 +8,7 @@ from model import InferenceModel
 
 from inference.interfaces import PredictionResponse
 from rlenv.env import process_state
+from rlenv.protos.features_pb2 import FeatureMoveset
 from rlenv.protos.state_pb2 import State
 
 app = FastAPI()
@@ -26,11 +27,11 @@ async def predict(request: Request):
     data = await request.body()
     state = State.FromString(data)
 
-    env_step = process_state(state)
-    response = await run_in_threadpool(model.predict, env_step)
+    env_step, history_step = process_state(state)
+    response = await run_in_threadpool(model.predict, env_step, history_step)
     pprint(state.info)
 
-    pprint_nparray(np.array(env_step.moveset[0, :, 0]))
+    pprint_nparray(env_step.moveset[0, 0, ..., FeatureMoveset.MOVESET_ACTION_ID])
     pprint_nparray(np.array(response.pi))
     pprint_nparray(np.array(response.logit))
     pprint_nparray(np.array(response.v))
