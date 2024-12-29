@@ -28,13 +28,7 @@ from rlenv.protos.servicev2_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import (
-    add_batch,
-    concatenate_steps,
-    stack_steps,
-    stack_trajectories,
-    trim_history,
-)
+from rlenv.utils import add_batch, concatenate_steps, stack_steps, stack_trajectories
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -138,10 +132,10 @@ class TwoPlayerEnvironment:
         self.hxs = {}
 
     def get_history(self):
-        return concatenate_steps(
+        return stack_steps(
             [
-                self.hxs.get(0, self.hxs.get(1)),
-                self.hxs.get(1, self.hxs.get(0)),
+                jax.tree.map(lambda x: x[:, 0], self.hxs.get(0)),
+                jax.tree.map(lambda x: x[:, 0], self.hxs.get(1)),
             ],
             axis=1,
         )
@@ -189,7 +183,7 @@ class TwoPlayerEnvironment:
     def _process_state(self):
         ex, hx = process_state(self.current_state)
         self.hxs[int(self.current_state.info.playerIndex)] = hx
-        return ex, self.get_history()
+        return ex, hx
 
     async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
         """Helper method to send the action to the player and enqueue the resulting state."""
@@ -241,7 +235,7 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
     def get_history(self):
         history_steps = [env.get_history() for env in self.envs]
         stacked_history: HistoryStep = stack_steps(history_steps, axis=1)
-        return trim_history(stacked_history)
+        return stacked_history
 
     def is_done(self):
         return np.array([env.is_done() for env in self.envs]).all()
@@ -358,7 +352,7 @@ class BatchCollectorV2:
         while True:
             prev_env_step = env_step
 
-            history_step = trim_history(history_step)
+            # history_step = trim_history(env_step, history_step)
             a, actor_step = self.actor_step(params, env_step, history_step)
 
             ex, hx = self._batch_of_states_apply_action(a)
@@ -489,10 +483,10 @@ def main():
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
-        # with open("rlenv/ex_batch", "wb") as f:
-        #     pickle.dump(batch, f)
+        with open("rlenv/ex_batch", "wb") as f:
+            pickle.dump(batch, f)
 
-        # return
+        return
 
         collect_batch_telemetry_data(batch)
 

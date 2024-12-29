@@ -198,10 +198,7 @@ function getArrayFromPokemon(
         for (const move of moveSlots) {
             const { id, ppUsed } = move;
             const maxPP = pokemon.side.battle.gens.dex.moves.get(id).pp;
-            const idValue = IndexValueFromEnum<typeof ActionsEnum>(
-                "Actions",
-                `move_${id}`,
-            );
+            const idValue = IndexValueFromEnum<typeof MovesEnum>("Move", id);
             const correctUsed = ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
 
             moveIds.push(idValue);

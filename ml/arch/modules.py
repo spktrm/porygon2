@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Optional, Sequence
 
 import chex
 import flax.linen as nn
@@ -27,8 +27,12 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array, scale: int = 2.5):
-    return nn.LayerNorm()(array)
+def layer_norm(array: chex.Array):
+    return nn.RMSNorm()(array)
+
+
+def softcap(array: chex.Array, max_value: int = 50):
+    return max_value * nn.tanh(array / max_value)
 
 
 class SNDense(nn.Module):
@@ -291,17 +295,6 @@ class MultiHeadAttention(nn.Module):
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, s1_length, _ = query.shape
-        # *_, s2_length, __ = key.shape
-
-        # if s1_length == s2_length:
-        #     compress = self.param(
-        #         "compress", nn.initializers.xavier_uniform(), (s1_length, 4)
-        #     )
-
-        #     masked_compress = compress.T * mask.any(axis=-1)
-        #     key = masked_compress @ key
-        #     value = masked_compress @ value
-        #     mask = None
 
         key_size = self.key_size
         value_size = self.value_size or self.key_size
@@ -321,6 +314,7 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = softcap(attn_logits)
 
         # attn_weights = NormalizeAttention()(attn_logits, mask)
 
@@ -431,7 +425,6 @@ class TransformerDecoder(nn.Module):
         y_mask: chex.Array = None,
         ca_mask: chex.Array = None,
     ):
-
         if x_mask is None:
             x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
@@ -650,12 +643,3 @@ class PretrainedEmbedding:
 
     def __call__(self, indices):
         return jnp.take(self.embeddings, indices, axis=0)
-
-
-PRNGKey = Any
-Shape = Tuple[int, ...]
-Dtype = Any  # this could be a real type?
-Array = Any
-PrecisionLike = Union[
-    None, str, lax.Precision, Tuple[str, str], Tuple[lax.Precision, lax.Precision]
-]

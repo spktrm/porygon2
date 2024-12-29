@@ -132,6 +132,9 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex, hx)
 
+    # network.apply(params, ex, hx)
+    # pprint(get_num_params(params))
+
     def rollout_fn(params, env, history):
         return jax.vmap(network.apply, in_axes=(None, 1, 1), out_axes=1)(
             params, env, history
@@ -140,8 +143,11 @@ def main():
     with open("rlenv/ex_batch", "rb") as f:
         batch: TimeStep = pickle.load(f)
 
-    rollout_fn(params, batch.env, batch.history)
-    pprint(get_num_params(params))
+    out = rollout_fn(params, batch.env, batch.history)
+    print(out.pi.shape)
+    print(out.log_pi.shape)
+    print(out.logit.shape)
+    print(out.v.shape)
 
 
 if __name__ == "__main__":

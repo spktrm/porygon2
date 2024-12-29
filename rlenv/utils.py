@@ -1,10 +1,8 @@
-import functools
 import math
 from typing import Sequence, TypeVar
 
 import jax
 import numpy as np
-import jax.numpy as jnp
 
 from rlenv.data import NUM_HISTORY
 from rlenv.interfaces import ActorStep, EnvStep, HistoryContainer, HistoryStep, TimeStep
@@ -23,22 +21,42 @@ def stack_steps(steps: Sequence[T], axis: int = 0) -> T:
 
 
 def trim_container(
-    container: HistoryContainer, resolution: int = 32
+    request_count: int, container: HistoryContainer, resolution: int = 32
 ) -> HistoryContainer:
-    traj_length = jnp.max(container.edges[..., FeatureEdge.EDGE_VALID].sum(axis=0))
-    traj_length = resolution * jnp.ceil(traj_length / resolution).astype(int)
+    history_length = container.edges.shape[0]
+    arange_idx = np.arange(history_length)[..., None, None]
+    request_count = request_count[..., None]
+    upper_bound = np.max(
+        container.edges[..., FeatureEdge.EDGE_VALID]
+        * (container.edges[..., FeatureEdge.REQUEST_COUNT] <= request_count)
+        * arange_idx,
+    )
+    lower_bound = np.min(
+        np.where(
+            container.edges[..., FeatureEdge.EDGE_VALID]
+            & (container.edges[..., FeatureEdge.REQUEST_COUNT] - request_count)
+            <= 8,
+            arange_idx,
+            10000,
+        ),
+    )
 
-    def dynamic_slice(x, length):
-        slice_length = jnp.minimum(x.shape[0], length)  # Ensure bounds are safe
-        return jax.lax.dynamic_slice(x, (0,) * x.ndim, (slice_length,) + x.shape[1:])
+    traj_length_upper = min(
+        history_length, resolution * math.ceil(upper_bound / resolution)
+    )
+    traj_length_lower = max(0, resolution * math.floor(lower_bound / resolution))
+    return jax.tree.map(lambda x: x[traj_length_lower:traj_length_upper], container)
 
-    return jax.tree_map(lambda x: dynamic_slice(x, traj_length), container)
 
-
-def trim_history(step: HistoryStep) -> HistoryStep:
+# @jax.jit
+def trim_history(env_step: EnvStep, history_step: HistoryStep) -> HistoryStep:
     return HistoryStep(
-        major_history=trim_container(step.major_history),
-        minor_history=trim_container(step.minor_history),
+        major_history=trim_container(
+            env_step.request_count, history_step.major_history, resolution=32
+        ),
+        minor_history=trim_container(
+            env_step.request_count, history_step.minor_history, resolution=32
+        ),
     )
 
 
@@ -107,8 +125,9 @@ def stack_trajectories(trajectories: Sequence[TimeStep], resolution: int = 32) -
     )
 
 
-# @jax.jit
 def padnstack(arr: np.ndarray, padding: int = NUM_HISTORY) -> np.ndarray:
-    stacked = np.resize(arr, (padding, *arr.shape[1:]))
-    mask = np.arange(padding) < arr.shape[0]
-    return np.where(mask[..., *((None,) * (len(arr.shape) - 1))], stacked, 0)
+    output_shape = (padding, *arr.shape[1:])
+    result = np.zeros(output_shape, dtype=arr.dtype)
+    length_to_copy = min(padding, arr.shape[0])
+    result[:length_to_copy] = arr[:length_to_copy]
+    return result
