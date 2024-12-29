@@ -1,5 +1,7 @@
 import os
 
+import jax.numpy as jnp
+
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
     ActionsEnum,
@@ -65,3 +67,23 @@ NUM_HISTORY = 32
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
+
+MOVESET_ID_FEATURE_IDXS = jnp.array(
+    [
+        FeatureEntity.ENTITY_MOVEID0,
+        FeatureEntity.ENTITY_MOVEID1,
+        FeatureEntity.ENTITY_MOVEID2,
+        FeatureEntity.ENTITY_MOVEID3,
+    ],
+    dtype=jnp.int32,
+)
+
+MOVESET_PP_FEATURE_IDXS = jnp.array(
+    [
+        FeatureEntity.ENTITY_MOVEPP0,
+        FeatureEntity.ENTITY_MOVEPP1,
+        FeatureEntity.ENTITY_MOVEPP2,
+        FeatureEntity.ENTITY_MOVEPP3,
+    ],
+    dtype=jnp.int32,
+)

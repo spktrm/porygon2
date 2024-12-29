@@ -1,7 +1,7 @@
 import asyncio
 import functools
 from abc import ABC, abstractmethod
-from typing import Callable, List, Sequence
+from typing import Callable, List, Sequence, Tuple
 
 import chex
 import flax.linen as nn
@@ -16,7 +16,7 @@ from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step, process_state
-from rlenv.interfaces import ActorStep, EnvStep, ModelOutput, TimeStep
+from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.servicev2_pb2 import (
     Action,
     ClientMessage,
@@ -114,7 +114,7 @@ class TwoPlayerEnvironment:
         self.players = []
         self.state_queue = asyncio.Queue()
         self.current_state: State = None
-        self.current_step: EnvStep = None
+        self.current_step: Tuple[EnvStep, HistoryStep] = None
         self.current_player = None
         self.dones = np.zeros(2)
 
@@ -131,7 +131,7 @@ class TwoPlayerEnvironment:
     def is_done(self):
         return self.dones.sum() == 2
 
-    async def _reset(self) -> EnvStep:
+    async def _reset(self):
         """Reset both players, enqueue their initial states, and return the first state to act on."""
         # Reset both players and add their states to the queue
         while not self.state_queue.empty():
@@ -148,7 +148,7 @@ class TwoPlayerEnvironment:
         self.current_step = process_state(self.current_state)
         return self.current_step
 
-    async def _step(self, action: int) -> EnvStep:
+    async def _step(self, action: int):
         """Process the action for the current player asynchronously."""
         # Start the action processing in the background without waiting for it to complete
         asyncio.create_task(self._perform_action(self.current_player, action))
@@ -179,11 +179,11 @@ class BatchEnvironment(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def step(self, actions: List[int]) -> List[EnvStep]:
+    def step(self, actions: List[int]) -> Tuple[List[EnvStep], List[HistoryStep]]:
         raise NotImplementedError
 
     @abstractmethod
-    def reset(self) -> List[EnvStep]:
+    def reset(self) -> Tuple[List[EnvStep], List[HistoryStep]]:
         raise NotImplementedError
 
 
@@ -209,16 +209,18 @@ class BatchTwoPlayerEnvironment(BatchEnvironment):
         return np.array([env.is_done() for env in self.envs]).all()
 
     def step(self, actions: List[int]):
-        return self.loop.run_until_complete(
+        out = self.loop.run_until_complete(
             asyncio.gather(
                 *[env._step(action) for env, action in zip(self.envs, actions)]
             ),
         )
+        return list(zip(*out))
 
     def reset(self):
-        return self.loop.run_until_complete(
+        out = self.loop.run_until_complete(
             asyncio.gather(*[env._reset() for env in self.envs])
         )
+        return list(zip(*out))
 
 
 class BatchSinglePlayerEnvironment(BatchEnvironment):
@@ -256,13 +258,13 @@ class BatchSinglePlayerEnvironment(BatchEnvironment):
                 *[env._step(action) for env, action in zip(self.envs, actions)]
             ),
         )
-        return [process_state(state) for state in states]
+        return zip(*[process_state(state) for state in states])
 
     def reset(self):
         states = self.loop.run_until_complete(
             asyncio.gather(*[env._reset() for env in self.envs])
         )
-        return [process_state(state) for state in states]
+        return zip(*[process_state(state) for state in states])
 
 
 class BatchCollectorV2:
@@ -282,46 +284,49 @@ class BatchCollectorV2:
         return self.game.step(list(actions))
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, params: Params, env_steps: EnvStep) -> chex.Array:
+    def _network_jit_apply(
+        self, params: Params, env_steps: EnvStep, history_step: HistoryStep
+    ) -> chex.Array:
         rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
             self.network.apply, (None, 0), 0
         )
-        output = rollout(params, env_steps)
+        output = rollout(params, env_steps, history_step)
         return output.pi
 
-    def actor_step(self, params: Params, env_step: EnvStep):
-        pi = self._network_jit_apply(params, env_step)
+    def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
+        pi = self._network_jit_apply(params, env_step, history_step)
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        return action, ActorStep(
-            action=action, policy=pi, win_rewards=(), hp_rewards=(), fainted_rewards=()
-        )
+        return action, ActorStep(action=action, policy=pi, rewards=())
 
     def collect_batch_trajectory(
         self, params: Params, resolution: int = 32
     ) -> TimeStep:
-        states = self.game.reset()
         timesteps = []
-        env_step: EnvStep = stack_steps(states)
+
+        ex, hx = self.game.reset()
+        env_step: EnvStep = stack_steps(ex)
+        history_step: HistoryStep = stack_steps(hx)
 
         state_index = 0
         while True:
             prev_env_step = env_step
-            a, actor_step = self.actor_step(params, env_step)
+            prev_history_step = history_step
 
-            states = self._batch_of_states_apply_action(a)
-            env_step = stack_steps(states)
+            a, actor_step = self.actor_step(params, env_step, history_step)
+
+            ex, hx = self._batch_of_states_apply_action(a)
+            env_step = stack_steps(ex)
+            history_step = stack_steps(hx)
+
             timestep = TimeStep(
                 env=prev_env_step,
+                history_step=prev_history_step,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
-                    win_rewards=env_step.win_rewards,
-                    hp_rewards=env_step.hp_rewards,
-                    fainted_rewards=env_step.fainted_rewards,
-                    switch_rewards=env_step.switch_rewards,
-                    longevity_rewards=env_step.longevity_rewards,
+                    rewards=env_step.rewards,
                 ),
             )
             timesteps.append(timestep)
@@ -450,12 +455,6 @@ def main():
         training_progress.update(batch.env.valid.sum())
         batch = evaluation_env.collect_batch_trajectory(params)
         evaluation_progress.update(batch.env.valid.sum())
-
-        if (
-            np.sign(((batch.actor.fainted_rewards * batch.env.valid[..., None])).sum(0))
-            != (batch.actor.win_rewards * batch.env.valid[..., None]).sum(0)
-        ).all():
-            raise ValueError
 
         # win_rewards = np.sign(
         #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)

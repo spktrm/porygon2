@@ -14,7 +14,7 @@ from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep, ModelOutput
+from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
 
 class Model(nn.Module):
@@ -28,7 +28,7 @@ class Model(nn.Module):
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
-    def __call__(self, env_step: EnvStep) -> ModelOutput:
+    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
         """
         Forward pass for the Model. It first processes the env_step through the encoder,
         and then applies the policy and value heads to generate the output.
@@ -36,7 +36,7 @@ class Model(nn.Module):
 
         # Get current state and action embeddings from the encoder
         contextual_entity_embeddings, valid_entity_mask, action_embeddings = (
-            self.encoder(env_step)
+            self.encoder(env_step, history_step)
         )
 
         # Apply action argument heads
@@ -118,7 +118,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     config = get_model_cfg()
     network = get_model(config)
-    ex_step = get_ex_step()
+    ex, hx = get_ex_step()
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -128,9 +128,9 @@ def main():
         params = step["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, ex_step)
+        params = network.init(key, ex, hx)
 
-    network.apply(params, ex_step)
+    network.apply(params, ex, hx)
     pprint(get_num_params(params))
 
 

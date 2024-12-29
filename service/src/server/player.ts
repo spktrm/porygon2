@@ -124,6 +124,7 @@ export class Player extends BattleStreams.BattlePlayer {
     playerId: number | undefined;
     playerIndex: number | undefined;
     rqid: string | undefined;
+    requestCount: number;
 
     done: boolean;
     draw: boolean;
@@ -166,6 +167,7 @@ export class Player extends BattleStreams.BattlePlayer {
         this.playerId = playerId;
         this.playerIndex = playerIndex;
         this.rqid = undefined;
+        this.requestCount = 0;
 
         this.done = false;
         this.draw = false;
@@ -290,6 +292,7 @@ export class Player extends BattleStreams.BattlePlayer {
                 this.isActionRequired(chunk)
             ) {
                 this.log.push("---request---");
+                this.requestCount += 1;
                 const key = await this.send(this);
                 this.privateBattle.request = undefined;
                 const action = await this.recv(key!);
