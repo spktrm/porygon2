@@ -9,12 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from ml.arch.modules import (
-    MLP,
-    PretrainedEmbedding,
-    TransformerDecoder,
-    TransformerEncoder,
-)
+from ml.arch.modules import PretrainedEmbedding, TransformerDecoder, TransformerEncoder
 from rlenv.data import (
     MOVESET_ID_FEATURE_IDXS,
     NUM_ABILITIES,
