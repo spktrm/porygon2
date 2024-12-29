@@ -63,12 +63,12 @@ def main():
             eval_batch = evaluation_collector.collect_batch_trajectory(state.params)
             win_rewards = np.sign(
                 (
-                    eval_batch.actor.win_rewards[..., 0]
+                    eval_batch.actor.rewards.win_rewards[..., 0]
                     * eval_batch.env.valid.squeeze()
                 ).sum(0)
             )
             fainted_rewards = (
-                eval_batch.actor.fainted_rewards[..., 0]
+                eval_batch.actor.rewards.fainted_rewards[..., 0]
                 * eval_batch.env.valid.squeeze()
             ).sum(0)
             winrates = {f"wr{i}": wr for i, wr in enumerate(win_rewards)}

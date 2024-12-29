@@ -27,8 +27,12 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array, scale: int = 2.5):
-    return nn.LayerNorm()(array)
+def layer_norm(array: chex.Array):
+    return nn.RMSNorm()(array)
+
+
+def softcap(array: chex.Array, max_value: int = 50):
+    return max_value * nn.tanh(array / max_value)
 
 
 class SNDense(nn.Module):
@@ -219,23 +223,6 @@ def get_freqs(seq_len: int, dim: int, base: int = 10000):
     return freqs_cos, freqs_sin
 
 
-def normalize_masked(tensor: chex.Array, mask: chex.Array):
-    mask = mask + (1 - mask.any(axis=-1, keepdims=True))
-    return nn.LayerNorm()(tensor, mask=mask)
-
-
-class NormalizeAttention(nn.Module):
-    @nn.compact
-    def __call__(self, logits: chex.Array, mask: chex.Array):
-        gain = self.param(
-            "gain", lambda rng, shape: jnp.ones(shape), logits.shape[:1] + (1, 1)
-        )
-        bias = self.param(
-            "bias", lambda rng, shape: jnp.zeros(shape), logits.shape[:1] + (1, 1)
-        )
-        return (gain * normalize_masked(logits, mask) + bias) * mask
-
-
 def get_rope_embedding(x: chex.Array):
     def negate_half(x: chex.Array):
         d_2 = x.shape[-1] // 2
@@ -305,17 +292,6 @@ class MultiHeadAttention(nn.Module):
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, s1_length, _ = query.shape
-        # *_, s2_length, __ = key.shape
-
-        # if s1_length == s2_length:
-        #     compress = self.param(
-        #         "compress", nn.initializers.xavier_uniform(), (s1_length, 4)
-        #     )
-
-        #     masked_compress = compress.T * mask.any(axis=-1)
-        #     key = masked_compress @ key
-        #     value = masked_compress @ value
-        #     mask = None
 
         key_size = self.key_size
         value_size = self.value_size or self.key_size
@@ -341,8 +317,7 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-
-        # attn_weights = NormalizeAttention()(attn_logits, mask)
+        attn_logits = softcap(attn_logits)
 
         attn_logits = attn_logits * jax.lax.rsqrt(
             jnp.array(key_size, dtype=jnp.float32)
@@ -395,12 +370,15 @@ class TransformerEncoder(nn.Module):
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array = None):
-
+    def __call__(
+        self, x: chex.Array, mask: chex.Array = None, ca_mask: chex.Array = None
+    ):
         if mask is None:
             mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
-        sa_mask = create_attention_mask(mask)
+        self_attn_mask = create_attention_mask(mask)
+        if ca_mask is not None:
+            self_attn_mask = self_attn_mask & ca_mask
 
         def encoder_layer(x: chex.Array):
             x_ln = layer_norm(x)
@@ -412,7 +390,7 @@ class TransformerEncoder(nn.Module):
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
+            )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
             x_ln = layer_norm(x)
             mlp = MLP(
@@ -426,8 +404,8 @@ class TransformerEncoder(nn.Module):
 
         for _ in range(self.num_layers):
             x = encoder_layer(x)
+            x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
-        x = jnp.where(mask[..., jnp.newaxis], x, 0)
         return x
 
 
@@ -452,6 +430,7 @@ class TransformerDecoder(nn.Module):
         y: chex.Array,
         x_mask: chex.Array = None,
         y_mask: chex.Array = None,
+        ca_mask: chex.Array = None,
     ):
 
         if x_mask is None:
@@ -460,21 +439,11 @@ class TransformerDecoder(nn.Module):
         if y_mask is None:
             y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
 
-        sa_mask = create_attention_mask(x_mask)
-        ca_mask = create_attention_mask(x_mask, y_mask)
+        cross_attn_mask = create_attention_mask(x_mask, y_mask)
+        if ca_mask is not None:
+            cross_attn_mask = cross_attn_mask & ca_mask
 
         def decoder_layer(x: chex.Array, y: chex.Array):
-            x_ln = layer_norm(x)
-            mha = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.x_need_pos,
-                use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=x_ln, value=x_ln, mask=sa_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
             x_ln = layer_norm(x)
             ca = MultiHeadAttention(
                 num_heads=self.num_heads,
@@ -498,8 +467,8 @@ class TransformerDecoder(nn.Module):
 
         for _ in range(self.num_layers):
             x = decoder_layer(x, y)
+            x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
-        x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
         return x
 
 
@@ -684,12 +653,3 @@ class PretrainedEmbedding:
 
     def __call__(self, indices):
         return jnp.take(self.embeddings, indices, axis=0)
-
-
-PRNGKey = Any
-Shape = Tuple[int, ...]
-Dtype = Any  # this could be a real type?
-Array = Any
-PrecisionLike = Union[
-    None, str, lax.Precision, Tuple[str, str], Tuple[lax.Precision, lax.Precision]
-]

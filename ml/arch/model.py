@@ -52,7 +52,7 @@ class Model(nn.Module):
 class DummyModel(nn.Module):
 
     @nn.compact
-    def __call__(self, env_step: EnvStep) -> ModelOutput:
+    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
         mask = env_step.legal.astype(jnp.float32)
         v = nn.Dense(1)(mask)
         logit = log_pi = pi = mask / mask.sum()
@@ -97,7 +97,9 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     return build_param_dict(vars, total_params, 0)
 
 
-def get_model(config: ConfigDict) -> nn.Module:
+def get_model(config: ConfigDict = None) -> nn.Module:
+    if config is None:
+        config = get_model_cfg()
     return Model(config)
 
 
