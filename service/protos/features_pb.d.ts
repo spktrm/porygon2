@@ -174,6 +174,11 @@ export interface FeatureEdgeMap {
   BOOST_EVASION_VALUE: 17;
   STATUS_TOKEN: 18;
   EDGE_AFFECTING_SIDE: 19;
+  PLAYER_ID: 20;
+  REQUEST_COUNT: 21;
+  EDGE_VALID: 22;
+  EDGE_INDEX: 23;
+  TURN_VALUE: 24;
 }
 
 export const FeatureEdge: FeatureEdgeMap;

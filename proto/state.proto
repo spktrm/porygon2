@@ -30,15 +30,17 @@ message Info {
     int32 seed = 9;
     bool draw = 10;
     Heuristics heuristics = 11;
+    int32 requestCount = 12;
 }
 
 message State {
     Info info = 1;
     bytes legalActions = 2;
-    history.History history = 3;
+    history.History majorHistory = 3;
     bytes moveset = 4;
     bytes team = 5;
     string key = 6;
+    history.History minorHistory = 7;
 }
 
 message Trajectory {
