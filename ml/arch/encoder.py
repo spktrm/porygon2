@@ -10,12 +10,13 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
-    MLP,
+    GRUFeatureCombiner,
     PretrainedEmbedding,
     TransformerDecoder,
     TransformerEncoder,
 )
 from rlenv.data import (
+    MOVESET_ID_FEATURE_IDXS,
     NUM_ABILITIES,
     NUM_ACTIONS,
     NUM_EDGE_FROM_TYPES,
@@ -32,7 +33,7 @@ from rlenv.data import (
     NUM_VOLATILE_STATUS,
     NUM_WEATHER,
 )
-from rlenv.interfaces import EnvStep
+from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
 from rlenv.protos.enums_pb2 import ActionsEnum, SideconditionEnum, SpeciesEnum
 from rlenv.protos.features_pb2 import (
     EdgeTypes,
@@ -69,6 +70,13 @@ def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
 def _encode_one_hot(entity: chex.Array, feature_idx: int, num_classes: int):
     chex.assert_rank(entity, 1)
     return jax.nn.one_hot(entity[feature_idx], num_classes)
+
+
+def _encode_multi_hot(entity: chex.Array, feature_idxs: chex.Array, num_classes: int):
+    indices = entity[feature_idxs]
+    buffer = jnp.zeros(num_classes)
+    buffer = buffer.at[indices].add(1)
+    return buffer
 
 
 def _encode_boost_one_hot(entity: chex.Array, feature_idx: int):
@@ -160,9 +168,7 @@ class SideEncoder(nn.Module):
             _encode_one_hot(side, SideconditionEnum.SIDECONDITION_TOXICSPIKES, 3),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-
-        embedding = nn.Dense(self.entity_size)(boolean_code)
-        return embedding
+        return nn.Dense(self.entity_size)(boolean_code)
 
 
 class FieldEncoder(nn.Module):
@@ -178,16 +184,16 @@ class FieldEncoder(nn.Module):
             _encode_one_hot(field, FeatureWeather.MIN_DURATION, 9),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-
-        embedding = nn.Dense(self.entity_size)(boolean_code)
-        return embedding
+        return nn.Dense(self.entity_size)(boolean_code)
 
 
 class Encoder(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, env_step: EnvStep) -> Tuple[chex.Array, chex.Array]:
+    def __call__(
+        self, env_step: EnvStep, history_step: HistoryStep
+    ) -> Tuple[chex.Array, chex.Array]:
         """
         Forward pass of the Encoder model. Processes an environment step and outputs
         the current state and action embeddings.
@@ -199,29 +205,12 @@ class Encoder(nn.Module):
         )
         field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
 
-        timestep_linear = lambda x: MLP((self.cfg.entity_size,))(
-            nn.Dense(self.cfg.entity_size)(x)
-        )
-        entity_linear = lambda x: MLP((self.cfg.entity_size,))(
-            nn.Dense(self.cfg.entity_size)(x)
-        )
-        edge_linear = lambda x: MLP((self.cfg.entity_size,))(
-            nn.Dense(self.cfg.entity_size)(x)
-        )
-        action_linear = lambda x: MLP((self.cfg.entity_size,))(
-            nn.Dense(self.cfg.entity_size)(x)
-        )
+        entity_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        edge_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        timestep_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        action_combiner = GRUFeatureCombiner(self.cfg.entity_size)
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
-
-            onehot_move = lambda x: jax.nn.one_hot(x, NUM_MOVES)
-            moveset_onehot = (
-                onehot_move(entity[FeatureEntity.ENTITY_MOVEID0])
-                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID1])
-                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID2])
-                + onehot_move(entity[FeatureEntity.ENTITY_MOVEID3])
-            )
-
             # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
             one_hot_encoded = [
                 SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
@@ -230,7 +219,8 @@ class Encoder(nn.Module):
                 _encode_one_hot(entity, FeatureEntity.ENTITY_SPECIES, NUM_SPECIES),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_ABILITY, NUM_ABILITIES),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_ITEM, NUM_ITEMS),
-                moveset_onehot,
+                _encode_one_hot(entity, FeatureEntity.ENTITY_SIDE, 2),
+                _encode_multi_hot(entity, MOVESET_ID_FEATURE_IDXS, NUM_MOVES) / 4,
                 _encode_volatiles_onehot(entity),
                 _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_LEVEL], 100),
                 _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_HP_TOKEN], 1023),
@@ -239,9 +229,9 @@ class Encoder(nn.Module):
                 _encode_one_hot(
                     entity, FeatureEntity.ENTITY_ITEM_EFFECT, NUM_ITEM_EFFECTS
                 ),
-                # _encode_one_hot(entity, FeatureEntity.ENTITY_BEING_CALLED_BACK, 2),
+                _encode_one_hot(entity, FeatureEntity.ENTITY_BEING_CALLED_BACK, 2),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_TRAPPED, 2),
-                # _encode_one_hot(entity, FeatureEntity.ENTITY_NEWLY_SWITCHED, 2),
+                _encode_one_hot(entity, FeatureEntity.ENTITY_NEWLY_SWITCHED, 2),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_TOXIC_TURNS, 8),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_SLEEP_TURNS, 4),
                 _encode_one_hot(entity, FeatureEntity.ENTITY_FAINTED, 2),
@@ -257,14 +247,19 @@ class Encoder(nn.Module):
                 ),
             ]
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = entity_linear(boolean_code)
+            embedding = entity_combiner(one_hot_encoded)
 
             mask = get_entity_mask(entity)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
 
-        def _encode_edge(edge: chex.Array) -> chex.Array:
+        def _encode_edge(
+            edge: chex.Array, turn_offset: chex.Array, request_count_offset: chex.Array
+        ) -> chex.Array:
+            turn = jnp.abs(edge[FeatureEdge.TURN_VALUE] - turn_offset)
+            request_count = jnp.abs(
+                edge[FeatureEdge.REQUEST_COUNT] - request_count_offset
+            )
 
             # Embeddings (to feed to nn.Dense modules):
             one_hot_encoded = [
@@ -289,6 +284,11 @@ class Encoder(nn.Module):
                 _binary_scale_embedding(
                     edge[FeatureEdge.EDGE_AFFECTING_SIDE].astype(jnp.int32), 3
                 ),
+                _binary_scale_embedding(
+                    edge[FeatureEdge.TURN_ORDER_VALUE].astype(jnp.int32), 32
+                ),
+                _binary_scale_embedding(turn.astype(jnp.int32), 128),
+                _binary_scale_embedding(request_count.astype(jnp.int32), 128),
                 _encode_one_hot(edge, FeatureEdge.STATUS_TOKEN, NUM_STATUS),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_ATK_VALUE),
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_DEF_VALUE),
@@ -299,8 +299,7 @@ class Encoder(nn.Module):
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_ACCURACY_VALUE),
             ]
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = edge_linear(boolean_code)
+            embedding = edge_combiner(one_hot_encoded)
 
             mask = get_edge_mask(edge)
             embedding = jnp.where(mask, embedding, 0)
@@ -308,68 +307,114 @@ class Encoder(nn.Module):
 
         # Encode each timestep's nodes, edges, side conditions, and field data
         def _encode_timestep(
-            entities_per_edge: chex.Array,
-            edge_features: chex.Array,
-            side_conditions_per_edge: chex.Array,
-            field_per_edge: chex.Array,
+            history_container: HistoryContainer,
+            turn_offset: chex.Array,
+            request_count_offset: chex.Array,
         ):
             # Encode nodes (entities) and generate masks
-            entity_embeddings, _ = jax.vmap(_encode_entity)(entities_per_edge)
+            entity_embeddings, _ = jax.vmap(_encode_entity)(history_container.entities)
 
             # Encode edges, incorporating entity embeddings
-            edge_embeddings, edge_mask = _encode_edge(edge_features)
+            edge_embeddings, edge_mask = _encode_edge(
+                history_container.edges, turn_offset, request_count_offset
+            )
 
             # Encode side conditions and field data
             side_condition_embeddings = jax.vmap(side_condition_encoder)(
-                side_conditions_per_edge
+                history_container.side_conditions
             )
 
-            field_embedding = field_encoder(field_per_edge)
+            field_embedding = field_encoder(history_container.field)
 
             # Merge aggregated embeddings with timestep context
 
-            timestep_embedding = jnp.concatenate(
-                (
-                    edge_embeddings,
-                    entity_embeddings[0],
-                    entity_embeddings[1],
-                    side_condition_embeddings[0],
-                    side_condition_embeddings[1],
-                    field_embedding,
-                ),
-                axis=-1,
-            )
+            timestep_embeddings = [
+                edge_embeddings,
+                entity_embeddings[0],
+                entity_embeddings[1],
+                side_condition_embeddings[0],
+                side_condition_embeddings[1],
+                field_embedding,
+            ]
 
-            timestep_embedding = timestep_linear(timestep_embedding)
+            timestep_embedding = timestep_combiner(timestep_embeddings)
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
             # Return combined timestep embedding and mask
             return timestep_embedding, edge_mask
 
-        # Process history across timesteps
-        timestep_embeddings, valid_timestep_mask = jax.vmap(_encode_timestep)(
-            env_step.history_entities,
-            env_step.history_edges,
-            env_step.history_side_conditions,
-            env_step.history_field,
+        major_history_request_count = history_step.major_history.edges[
+            ..., FeatureEdge.REQUEST_COUNT
+        ]
+        minor_history_request_count = history_step.minor_history.edges[
+            ..., FeatureEdge.REQUEST_COUNT
+        ]
+        smallest_request_count = jnp.maximum(
+            major_history_request_count.min(), minor_history_request_count.min()
         )
 
-        contextual_timestep_embeddings = TransformerEncoder(
-            **self.cfg.timestep_transformer.to_dict()
-        )(timestep_embeddings, valid_timestep_mask)
+        # Process history across timesteps
+        def _encode_timesteps(history_container: HistoryContainer):
+            turn_offset = history_container.edges[..., FeatureEdge.TURN_VALUE].max(0)
+            request_count_offset = history_container.edges[
+                ..., FeatureEdge.REQUEST_COUNT
+            ].max(0)
+            return jax.vmap(_encode_timestep, in_axes=(0, None, None))(
+                history_container, turn_offset, request_count_offset
+            )
+
+        major_timestep_embeddings, valid_major_timestep_mask = _encode_timesteps(
+            history_step.major_history
+        )
+        minor_timestep_embeddings, valid_minor_timestep_mask = _encode_timesteps(
+            history_step.minor_history
+        )
+
+        timestep_decoder = TransformerDecoder(
+            **self.cfg.timestep_transformer_decoder.to_dict()
+        )
+        timestep_encoder = TransformerEncoder(
+            **self.cfg.timestep_transformer_encoder.to_dict()
+        )
+
+        valid_major_timestep_mask = valid_major_timestep_mask & (
+            major_history_request_count >= smallest_request_count
+        )
+        valid_minor_timestep_mask = valid_minor_timestep_mask & (
+            minor_history_request_count >= smallest_request_count
+        )
+        contextual_major_timestep_embeddings = timestep_decoder(
+            major_timestep_embeddings,
+            minor_timestep_embeddings,
+            valid_major_timestep_mask,
+            valid_minor_timestep_mask,
+        )
+        contextual_timestep_embeddings = timestep_encoder(
+            contextual_major_timestep_embeddings, valid_major_timestep_mask
+        )
 
         # Process private entities and generate masks
         entity_embeddings, valid_entity_mask = jax.vmap(_encode_entity)(
             env_step.team.reshape(-1, env_step.team.shape[-1])
         )
 
-        contextual_entity_embeddings = TransformerDecoder(
-            **self.cfg.entity_timestep_transformer.to_dict()
-        )(
-            entity_embeddings,
+        entity_transformer_encoder = TransformerEncoder(
+            **self.cfg.entity_transformer_encoder.to_dict()
+        )
+
+        contextual_entity_embeddings = entity_transformer_encoder(
+            entity_embeddings, valid_entity_mask
+        )
+
+        entity_timestep_decoder = TransformerDecoder(
+            **self.cfg.entity_timestep_transformer_decoder.to_dict()
+        )
+
+        contextual_entity_embeddings = entity_timestep_decoder(
+            contextual_entity_embeddings,
             contextual_timestep_embeddings,
             valid_entity_mask,
-            valid_timestep_mask,
+            valid_major_timestep_mask,
         )
 
         # Compute action embeddings
@@ -385,61 +430,23 @@ class Encoder(nn.Module):
                 ),
             ]
 
-            mask = get_move_mask(move)
+            embedding = action_combiner(one_hot_encoded)
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = action_linear(boolean_code)
+            mask = get_move_mask(move)
+            embedding = jnp.where(mask, embedding, 0)
 
             return embedding, mask
 
         action_embeddings, _ = jax.vmap(_encode_move)(env_step.moveset[0])
 
         contextual_action_embeddings = TransformerDecoder(
-            **self.cfg.action_entity_transformer.to_dict()
+            **self.cfg.action_entity_transformer_decoder.to_dict()
         )(
             action_embeddings,
             contextual_entity_embeddings,
             env_step.legal,
             valid_entity_mask,
         )
-
-        # contextual_action_embeddings = TransformerEncoder(
-        #     **self.cfg.action_transformer.to_dict()
-        # )(contextual_action_embeddings, env_step.legal)
-        # contextual_action_embeddings = layer_norm(contextual_action_embeddings)
-
-        # Compute the current state from averaged private embeddings, followed by ResNet processing
-        # average_contextual_entity_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_entity_agg.to_dict()
-        # )(contextual_entity_embeddings, valid_entity_mask)
-
-        # average_contextual_entity_embeddings = (
-        #     valid_entity_mask.astype(jnp.float32) @ contextual_entity_embeddings
-        # ) / valid_entity_mask.sum().clip(min=1)
-
-        # average_contextual_timestep_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_timestep_agg.to_dict()
-        # )(contextual_timestep_embeddings, valid_timestep_mask)
-
-        # average_contextual_action_embeddings = ToAvgVector(
-        #     **self.cfg.contextual_action_agg.to_dict()
-        # )(contextual_action_embeddings, env_step.legal)
-
-        # draw_embedding = nn.Dense(self.cfg.vector_size)(
-        #     jax.nn.one_hot((env_step.draw_ratio.squeeze() * 24).astype(jnp.int32), 25)
-        # )
-
-        # current_state = VectorMerge(**self.cfg.state_merge.to_dict())(
-        #     Resnet(**self.cfg.average_contextual_entity_resnet.to_dict())(
-        #         average_contextual_entity_embeddings
-        #     ),
-        #     Resnet(**self.cfg.average_contextual_timestep_resnet.to_dict())(
-        #         average_contextual_timestep_embeddings
-        #     ),
-        # )
-
-        # current_state = current_state + draw_embedding
-        # current_state = Resnet(**self.cfg.state_resnet.to_dict())(current_state)
 
         return (
             contextual_entity_embeddings,
