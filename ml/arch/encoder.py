@@ -9,7 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from ml.arch.modules import PretrainedEmbedding, TransformerDecoder, TransformerEncoder
+from ml.arch.modules import (
+    GRUFeatureCombiner,
+    PretrainedEmbedding,
+    TransformerDecoder,
+    TransformerEncoder,
+)
 from rlenv.data import (
     MOVESET_ID_FEATURE_IDXS,
     NUM_ABILITIES,
@@ -69,7 +74,7 @@ def _encode_one_hot(entity: chex.Array, feature_idx: int, num_classes: int):
 
 def _encode_multi_hot(entity: chex.Array, feature_idxs: chex.Array, num_classes: int):
     indices = entity[feature_idxs]
-    buffer = jnp.zeros(num_classes, dtype=jnp.int32)
+    buffer = jnp.zeros(num_classes)
     buffer = buffer.at[indices].add(1)
     return buffer
 
@@ -163,9 +168,7 @@ class SideEncoder(nn.Module):
             _encode_one_hot(side, SideconditionEnum.SIDECONDITION_TOXICSPIKES, 3),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-        mask = side.any(axis=-1, keepdims=True)
-        embedding = nn.Dense(self.entity_size)(boolean_code)
-        return jnp.where(mask, embedding, 0)
+        return nn.Dense(self.entity_size)(boolean_code)
 
 
 class FieldEncoder(nn.Module):
@@ -181,9 +184,7 @@ class FieldEncoder(nn.Module):
             _encode_one_hot(field, FeatureWeather.MIN_DURATION, 9),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-        mask = field.any(axis=-1, keepdims=True)
-        embedding = nn.Dense(self.entity_size)(boolean_code)
-        return jnp.where(mask, embedding, 0)
+        return nn.Dense(self.entity_size)(boolean_code)
 
 
 class Encoder(nn.Module):
@@ -204,10 +205,10 @@ class Encoder(nn.Module):
         )
         field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
 
-        timestep_linear = nn.Dense(self.cfg.entity_size)
-        entity_linear = nn.Dense(self.cfg.entity_size)
-        edge_linear = nn.Dense(self.cfg.entity_size)
-        action_linear = nn.Dense(self.cfg.entity_size)
+        entity_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        edge_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        timestep_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        action_combiner = GRUFeatureCombiner(self.cfg.entity_size)
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
             # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
@@ -246,8 +247,7 @@ class Encoder(nn.Module):
                 ),
             ]
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = entity_linear(boolean_code)
+            embedding = entity_combiner(one_hot_encoded)
 
             mask = get_entity_mask(entity)
             embedding = jnp.where(mask, embedding, 0)
@@ -299,8 +299,7 @@ class Encoder(nn.Module):
                 _encode_boost_one_hot(edge, FeatureEdge.BOOST_ACCURACY_VALUE),
             ]
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = edge_linear(boolean_code)
+            embedding = edge_combiner(one_hot_encoded)
 
             mask = get_edge_mask(edge)
             embedding = jnp.where(mask, embedding, 0)
@@ -329,19 +328,16 @@ class Encoder(nn.Module):
 
             # Merge aggregated embeddings with timestep context
 
-            timestep_embedding = jnp.concatenate(
-                (
-                    edge_embeddings,
-                    entity_embeddings[0],
-                    entity_embeddings[1],
-                    side_condition_embeddings[0],
-                    side_condition_embeddings[1],
-                    field_embedding,
-                ),
-                axis=-1,
-            )
+            timestep_embeddings = [
+                edge_embeddings,
+                entity_embeddings[0],
+                entity_embeddings[1],
+                side_condition_embeddings[0],
+                side_condition_embeddings[1],
+                field_embedding,
+            ]
 
-            timestep_embedding = timestep_linear(timestep_embedding)
+            timestep_embedding = timestep_combiner(timestep_embeddings)
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
             # Return combined timestep embedding and mask
@@ -434,10 +430,10 @@ class Encoder(nn.Module):
                 ),
             ]
 
-            mask = get_move_mask(move)
+            embedding = action_combiner(one_hot_encoded)
 
-            boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
-            embedding = action_linear(boolean_code)
+            mask = get_move_mask(move)
+            embedding = jnp.where(mask, embedding, 0)
 
             return embedding, mask
 

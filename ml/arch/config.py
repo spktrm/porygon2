@@ -40,7 +40,7 @@ def add_name_recursive(cfg, path=None):
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 512
+    entity_size = 256
     vector_size = 512
 
     use_layer_norm = True
@@ -70,7 +70,7 @@ def get_model_cfg():
     num_transformer_heads = 2
     transformer_hidden_size_scale = 4
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
-    transformer_key_value_scale = 0.25
+    transformer_key_value_scale = 0.5
     transformer_key_value_size = int(transformer_key_value_scale * entity_size)
 
     cfg.encoder.timestep_transformer_decoder.num_layers = num_transformer_layers

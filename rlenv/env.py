@@ -1,3 +1,5 @@
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from rlenv.data import (
@@ -96,5 +98,12 @@ def process_state(state: State):
     return env_step, history_step
 
 
+def as_jax_arr(x):
+    return jax.tree.map(lambda i: jnp.array(i), x)
+
+
 def get_ex_step():
-    return process_state(EX_STATE)
+    ex, hx = process_state(EX_STATE)
+    ex = as_jax_arr(ex)
+    hx = as_jax_arr(hx)
+    return ex, hx
