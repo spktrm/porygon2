@@ -15,7 +15,7 @@ from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
-from rlenv.env import get_ex_step, process_state
+from rlenv.env import as_jax_arr, get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.servicev2_pb2 import (
     Action,
@@ -294,6 +294,8 @@ class BatchCollectorV2:
         return output.pi
 
     def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
+        env_step = as_jax_arr(env_step)
+        history_step = as_jax_arr(history_step)
         pi = self._network_jit_apply(params, env_step, history_step)
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
@@ -353,7 +355,7 @@ class BatchCollectorV2:
         # ):
         #     raise ValueError
 
-        return batch
+        return as_jax_arr(batch)
 
 
 class SingleTrajectoryTrainingBatchCollector(BatchCollectorV2):

@@ -4,8 +4,6 @@ from typing import Any, Callable, List, Optional, Sequence
 import chex
 import flax.linen as nn
 import jax
-import jax.experimental
-import jax.experimental.host_callback
 import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
@@ -653,3 +651,53 @@ class PretrainedEmbedding:
 
     def __call__(self, indices):
         return jnp.take(self.embeddings, indices, axis=0)
+
+
+class SwiGLU(nn.Module):
+    @nn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        feature_dim = x.shape[-1]
+
+        w1 = nn.Dense(feature_dim, use_bias=False)
+        w2 = nn.Dense(feature_dim, use_bias=False)
+        w3 = nn.Dense(feature_dim, use_bias=False)
+
+        x1 = w1(x)
+        x2 = w2(x)
+        h = nn.silu(x1) * x2
+
+        return w3(h)
+
+
+class GRUFeatureCombiner(nn.Module):
+    """
+    A Flax module that uses GRU-like gating to combine N feature vectors.
+
+    Attributes:
+        feature_dim: The target dimension of the combined feature vector.
+    """
+
+    feature_dim: int
+    hidden_dim: int = None
+    num_hidden_dims: int = 1
+
+    @nn.compact
+    def __call__(self, features: List[jnp.ndarray]) -> jnp.ndarray:
+        """
+        Combine feature vectors using GRU-inspired gating.
+
+        Args:
+            features: A list of tensors of shape (feature_dim_i,), where feature_dim_i can vary.
+
+        Returns:
+            A tensor of shape (feature_dim,), representing the combined feature vector.
+        """
+        concatenated_features = jnp.concatenate(features, axis=-1)
+        hidden_dim = self.hidden_dim or self.feature_dim
+        layer_sizes = (hidden_dim,) * self.num_hidden_dims + (self.feature_dim,)
+
+        embedding = nn.Dense(self.feature_dim)(concatenated_features)
+        embedding = MLP(layer_sizes)(embedding)
+        embedding = SwiGLU()(embedding)
+
+        return layer_norm(embedding)
