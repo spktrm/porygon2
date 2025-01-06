@@ -19,6 +19,7 @@ from rlenv.protos.enums_pb2 import (
     SpeciesEnum,
     StatusEnum,
     TerrainEnum,
+    TypechartEnum,
     VolatilestatusEnum,
     WeatherEnum,
 )
@@ -41,6 +42,7 @@ NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())
 # NUM_TYPES = len(TypesEnum.keys())
 NUM_VOLATILE_STATUS = len(VolatilestatusEnum.keys())
+NUM_TYPECHART = len(TypechartEnum.keys())
 NUM_SIDE_CONDITION = len(SideconditionEnum.keys())
 NUM_BOOSTS = len(BoostsEnum.keys())
 NUM_PSEUDOWEATHER = len(PseudoweatherEnum.keys())
@@ -87,3 +89,48 @@ MOVESET_PP_FEATURE_IDXS = jnp.array(
     ],
     dtype=jnp.int32,
 )
+
+
+MAX_BOOST_VALUE = 13
+
+
+ENTITY_MAX_VALUES = {
+    FeatureEntity.ENTITY_SIDE: 2,
+    FeatureEntity.ENTITY_LEVEL: 100,
+    FeatureEntity.ENTITY_HP_RATIO: 31,
+    FeatureEntity.ENTITY_GENDER: NUM_GENDERS,
+    FeatureEntity.ENTITY_STATUS: NUM_STATUS,
+    FeatureEntity.ENTITY_ITEM_EFFECT: NUM_ITEM_EFFECTS,
+    FeatureEntity.ENTITY_BEING_CALLED_BACK: 2,
+    FeatureEntity.ENTITY_TRAPPED: 2,
+    FeatureEntity.ENTITY_NEWLY_SWITCHED: 2,
+    FeatureEntity.ENTITY_TOXIC_TURNS: 8,
+    FeatureEntity.ENTITY_SLEEP_TURNS: 4,
+    FeatureEntity.ENTITY_FAINTED: 2,
+    FeatureEntity.ENTITY_ACTIVE: 2,
+    FeatureEntity.ENTITY_BOOST_ATK_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_DEF_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_SPA_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_SPD_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_SPE_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
+    FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+}
+
+EDGE_MAX_VALUES = {
+    FeatureEdge.MAJOR_ARG: NUM_MAJOR_ARGS,
+    FeatureEdge.MINOR_ARG: NUM_MINOR_ARGS,
+    FeatureEdge.FROM_SOURCE_TOKEN: NUM_EFFECTS,
+    FeatureEdge.FROM_TYPE_TOKEN: NUM_EDGE_FROM_TYPES,
+    FeatureEdge.EDGE_TYPE_TOKEN: NUM_EDGE_TYPES,
+    FeatureEdge.DAMAGE_RATIO: 31,
+    FeatureEdge.HEAL_RATIO: 31,
+    FeatureEdge.STATUS_TOKEN: NUM_STATUS,
+    FeatureEdge.BOOST_ATK_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_DEF_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_SPA_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_SPD_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_SPE_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
+    FeatureEdge.BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+}

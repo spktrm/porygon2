@@ -664,7 +664,9 @@ def get_loss_entropy(
     legal: chex.Array,
     valid: chex.Array,
 ) -> chex.Array:
-    loss_entropy = (policy * log_policy).sum(-1)
+    policy_sum = policy.sum(axis=-1)
+    policy_sum = policy_sum + (policy_sum == 0)
+    loss_entropy = ((policy / policy_sum) * log_policy).sum(-1)
     return renormalize(loss_entropy, valid)
 
 

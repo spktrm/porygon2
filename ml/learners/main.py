@@ -28,7 +28,7 @@ def main():
 
     state = learner.create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         state = learner.load(state, latest_ckpt)
 

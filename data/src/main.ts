@@ -494,6 +494,7 @@ function formatData(data: GenData) {
         moves: [SWITCH_TOKEN, ...moveIds, "recharge"],
         abilities: data.abilities.map(getId),
         items: data.items.map(getId),
+        typechart: data.typechart.map(getId),
     };
 }
 

@@ -12,7 +12,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params, get_most_recent_file
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
@@ -35,15 +35,13 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        contextual_entity_embeddings, valid_entity_mask, action_embeddings = (
-            self.encoder(env_step, history_step)
-        )
+        action_embeddings = self.encoder(env_step, history_step)
 
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(action_embeddings, env_step)
 
         # Apply the value head
-        v = self.value_head(contextual_entity_embeddings, valid_entity_mask)
+        v = self.value_head(action_embeddings, env_step)
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
@@ -122,7 +120,7 @@ def main():
     network = get_model(config)
     ex, hx = get_ex_step()
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

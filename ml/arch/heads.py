@@ -61,12 +61,14 @@ class ValueHead(nn.Module):
         self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(
-        self, contextual_entity_embeddings: chex.Array, valid_entity_mask: chex.Array
+        self,
+        action_embeddings: chex.Array,
+        env_step: EnvStep,
     ):
-        contextual_entity_embeddings = self.transformer(
-            contextual_entity_embeddings, valid_entity_mask
-        )
-        contextual_entity_values = jax.vmap(self.logits)(contextual_entity_embeddings)
-        return contextual_entity_values.reshape(-1).mean(
-            where=valid_entity_mask, keepdims=True
-        )
+        legal = env_step.legal
+
+        action_embeddings = self.transformer(action_embeddings, legal)
+        logits = jax.vmap(self.logits)(action_embeddings)
+        logits = logits.reshape(-1)
+
+        return logits.mean(where=legal, keepdims=True)

@@ -11,7 +11,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_model
+from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -278,6 +278,7 @@ class BatchCollectorV2:
         self.network = network
         self.finetuning = FineTuning()
         self.batch_size = batch_size
+        self.key = jax.random.key(42)
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
         """Apply a batch of `actions` to a parallel list of `states`."""
@@ -377,7 +378,7 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_model()
+    network = get_dummy_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 

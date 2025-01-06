@@ -22,12 +22,13 @@ from ml.func import (
 )
 from ml.learners.func import (
     calculate_explained_variance,
+    calculate_r2,
     collect_gradient_telemetry_data,
     collect_loss_value_telemetry_data,
     collect_policy_stats_telemetry_data,
 )
 from ml.learners.rnad import NerdConfig
-from ml.utils import Params
+from ml.utils import Params, breakpoint_if_nonfinite, breakpoint_w_func
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
 
@@ -139,7 +140,11 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.rewards.fainted_rewards / 3
+        rewards = (
+            batch.actor.rewards.hp_rewards / 100
+            + batch.actor.rewards.fainted_rewards / 10
+            + batch.actor.rewards.win_rewards
+        )
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -170,12 +175,10 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             has_played_list,
         )
         explained_variance = (
-            calculate_explained_variance(pred.v, v_target_list[0], has_played_list[0])
-            + calculate_explained_variance(pred.v, v_target_list[1], has_played_list[1])
+            calculate_r2(pred.v, v_target_list[0], has_played_list[0])
+            + calculate_r2(pred.v, v_target_list[1], has_played_list[1])
         ) / 2
-        logs.update(
-            {"value_function_explained_variance": jnp.maximum(-1, explained_variance)}
-        )
+        logs.update({"value_function_r2": jnp.maximum(explained_variance, 0)})
 
         policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
             axis=-1
