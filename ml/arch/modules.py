@@ -380,6 +380,9 @@ class TransformerEncoder(nn.Module):
 
         def encoder_layer(x: chex.Array):
             x_ln = layer_norm(x)
+            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            x_ln = layer_norm(x)
             mha = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -391,12 +394,7 @@ class TransformerEncoder(nn.Module):
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
             x_ln = layer_norm(x)
-            mlp = MLP(
-                (self.resblocks_hidden_size, self.model_size),
-                use_layer_norm=False,
-                activate_first=False,
-                use_spectral_linear=self.use_spectral_linear,
-            )(x_ln)
+            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
             return x
 
@@ -443,6 +441,9 @@ class TransformerDecoder(nn.Module):
 
         def decoder_layer(x: chex.Array, y: chex.Array):
             x_ln = layer_norm(x)
+            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            x_ln = layer_norm(x)
             ca = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -454,12 +455,7 @@ class TransformerDecoder(nn.Module):
             )(query=x_ln, key=y, value=y, mask=ca_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
             x_ln = layer_norm(x)
-            mlp = MLP(
-                (self.resblocks_hidden_size, self.model_size),
-                use_layer_norm=False,
-                activate_first=False,
-                use_spectral_linear=self.use_spectral_linear,
-            )(x_ln)
+            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
             return x
 
@@ -653,13 +649,57 @@ class PretrainedEmbedding:
         return jnp.take(self.embeddings, indices, axis=0)
 
 
+class BinaryEncoder:
+    def __init__(self, num_bits: int, max_encodings: int = None):
+        """
+        Initialize the BinaryEncoder with a specified number of bits.
+
+        Parameters:
+        num_bits (int): The length of the binary vector.
+        """
+        self.num_bits = num_bits
+        self.max_encodings = max_encodings
+
+        self.encodings = jnp.asarray(self._precompute_vectors())
+
+    def _precompute_vectors(self):
+        """
+        Precompute all binary vectors for values in the range [0, 2**num_bits - 1] using numpy operations.
+
+        Returns:
+        numpy.ndarray: A 2D array where each row is a binary vector representing a value.
+        """
+        total_values = self.max_encodings or 2**self.num_bits
+        # Create a range of integers and convert to binary using numpy unpacking
+        values = np.arange(total_values, dtype=int)[:, None]
+        powers_of_two = 2 ** np.arange(self.num_bits - 1, -1, -1, dtype=int)
+        vectors = (values & powers_of_two) > 0
+        return vectors.astype(int)
+
+    def __call__(self, indices: chex.Array):
+        """
+        Encode the given value into a binary vector.
+
+        Parameters:
+        value (int): An integer value in the range [0, 2**num_bits - 1].
+
+        Returns:
+        numpy.ndarray: A binary vector representing the value.
+        """
+
+        return jnp.take(self.encodings, indices, axis=0)
+
+
 class SwiGLU(nn.Module):
+    hidden_size: int = None
+
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
         feature_dim = x.shape[-1]
+        hidden_size = self.hidden_size or feature_dim
 
-        w1 = nn.Dense(feature_dim, use_bias=False)
-        w2 = nn.Dense(feature_dim, use_bias=False)
+        w1 = nn.Dense(hidden_size, use_bias=False)
+        w2 = nn.Dense(hidden_size, use_bias=False)
         w3 = nn.Dense(feature_dim, use_bias=False)
 
         x1 = w1(x)
@@ -701,3 +741,20 @@ class GRUFeatureCombiner(nn.Module):
         embedding = SwiGLU()(embedding)
 
         return layer_norm(embedding)
+
+
+class SumEmbeddings(nn.Module):
+    output_size: int
+
+    @nn.compact
+    def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
+        return sum([nn.Dense(self.output_size)(x) for x in embeddings])
+
+
+class MergeEmbeddings(nn.Module):
+    output_size: int
+
+    @nn.compact
+    def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
+        embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
+        return SumEmbeddings(self.output_size)(embeddings)

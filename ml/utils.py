@@ -26,8 +26,8 @@ def get_most_recent_file(dir_path):
     return most_recent_file
 
 
-def breakpoint_if_nonfinite(x):
-    is_finite = jnp.isfinite(x).all()
+def breakpoint_w_func(x, func: callable):
+    func_val = func(x)
 
     def true_fn(x):
         pass
@@ -35,4 +35,8 @@ def breakpoint_if_nonfinite(x):
     def false_fn(x):
         jax.debug.breakpoint()
 
-    jax.lax.cond(is_finite, true_fn, false_fn, x)
+    jax.lax.cond(func_val, true_fn, false_fn, x)
+
+
+def breakpoint_if_nonfinite(x):
+    breakpoint_w_func(x, lambda z: jnp.isfinite(z).all())

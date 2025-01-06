@@ -93,18 +93,24 @@ def collect_policy_stats_telemetry_data(
     prev_policy: chex.Array,
     ratio: chex.Array,
 ) -> dict[str, Any]:
+    move_mask = legal_mask[..., :4]
+    move_mask_sum = move_mask.sum(axis=-1)
     move_entropy = get_loss_entropy(
         policy[..., :4],
         log_policy[..., :4],
-        legal_mask[..., :4],
-        state_mask & (legal_mask[..., :4].sum(axis=-1) > 1),
+        move_mask,
+        state_mask & (move_mask_sum > 1),
     )
+
+    switch_mask = legal_mask[..., 4:]
+    switch_mask_sum = switch_mask.sum(axis=-1)
     switch_entropy = get_loss_entropy(
         policy[..., 4:],
         log_policy[..., 4:],
-        legal_mask[..., 4:],
-        state_mask & (legal_mask[..., 4:].sum(axis=-1) > 1),
+        switch_mask,
+        state_mask & (switch_mask_sum > 1),
     )
+
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)
     kl_div = optax.kl_divergence(log_policy, prev_policy)
 
@@ -130,6 +136,41 @@ def calculate_explained_variance(
         / jnp.square(jnp.std(value_target, where=mask))
     )
     return explained_variance
+
+
+def calculate_r2(
+    value_prediction: chex.Array, value_target: chex.Array, mask: chex.Array = None
+) -> chex.Array:
+    """
+    Calculate the R-squared (coefficient of determination) value.
+
+    Args:
+        value_prediction: Predicted values (chex.Array).
+        value_target: True target values (chex.Array).
+        mask: Optional mask to include/exclude certain values (chex.Array, default is None).
+
+    Returns:
+        R-squared value as a chex.Array.
+    """
+    value_prediction = jnp.squeeze(value_prediction)
+    value_target = jnp.squeeze(value_target)
+    if mask is None:
+        mask = jnp.ones_like(value_prediction)
+    else:
+        mask = jnp.squeeze(mask)
+
+    # Calculate residual sum of squares (SS_residual)
+    residuals = value_target - value_prediction
+    ss_residual = jnp.sum(jnp.square(residuals), where=mask)
+
+    # Calculate total sum of squares (SS_total)
+    mean_target = jnp.mean(value_target, where=mask)
+    ss_total = jnp.sum(jnp.square(value_target - mean_target), where=mask)
+
+    # Add epsilon to avoid division by zero
+    epsilon = 1e-8
+    r2 = 1 - (ss_residual / (ss_total + epsilon))
+    return r2
 
 
 def collect_value_stats_telemetry_data(

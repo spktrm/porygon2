@@ -1,36 +1,27 @@
-import functools
-import math
 from typing import Mapping, Tuple
 
 import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
-    GRUFeatureCombiner,
+    MergeEmbeddings,
     PretrainedEmbedding,
+    SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
+    activation_fn,
 )
 from rlenv.data import (
-    MOVESET_ID_FEATURE_IDXS,
+    EDGE_MAX_VALUES,
+    ENTITY_MAX_VALUES,
     NUM_ABILITIES,
     NUM_ACTIONS,
-    NUM_EDGE_FROM_TYPES,
-    NUM_EDGE_TYPES,
     NUM_EFFECTS,
-    NUM_GENDERS,
-    NUM_ITEM_EFFECTS,
     NUM_ITEMS,
-    NUM_MAJOR_ARGS,
-    NUM_MINOR_ARGS,
-    NUM_MOVES,
     NUM_SPECIES,
-    NUM_STATUS,
-    NUM_VOLATILE_STATUS,
     NUM_WEATHER,
 )
 from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
@@ -67,51 +58,34 @@ def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
         return x
 
 
-def _encode_one_hot(entity: chex.Array, feature_idx: int, num_classes: int):
+def _encode_entity_one_hot(entity: chex.Array, feature_idx: int):
     chex.assert_rank(entity, 1)
-    return jax.nn.one_hot(entity[feature_idx], num_classes)
+    return jax.nn.one_hot(entity[feature_idx], ENTITY_MAX_VALUES[feature_idx])
 
 
-def _encode_multi_hot(entity: chex.Array, feature_idxs: chex.Array, num_classes: int):
-    indices = entity[feature_idxs]
-    buffer = jnp.zeros(num_classes)
-    buffer = buffer.at[indices].add(1)
-    return buffer
-
-
-def _encode_boost_one_hot(entity: chex.Array, feature_idx: int):
+def _encode_entity_boost_one_hot(entity: chex.Array, feature_idx: int):
     chex.assert_rank(entity, 1)
-    return jax.nn.one_hot(entity[feature_idx] + 6, 13)
+    return jax.nn.one_hot(entity[feature_idx] + 6, ENTITY_MAX_VALUES[feature_idx])
 
 
-def _encode_volatiles_onehot(entity: chex.Array) -> chex.Array:
-    chex.assert_rank(entity, 1)
-    volatiles = jax.lax.slice(
-        entity,
-        (FeatureEntity.ENTITY_VOLATILES0,),
-        (FeatureEntity.ENTITY_VOLATILES8 + 1,),
-    )
-    onehot = jax.vmap(functools.partial(_binary_scale_embedding, world_dim=16))(
-        volatiles
-    )
-    return astype(onehot.reshape(-1)[:NUM_VOLATILE_STATUS], jnp.float32)
+def _encode_edge_one_hot(edge: chex.Array, feature_idx: int):
+    chex.assert_rank(edge, 1)
+    return jax.nn.one_hot(edge[feature_idx], EDGE_MAX_VALUES[feature_idx])
+
+
+def _encode_edge_boost_one_hot(edge: chex.Array, feature_idx: int):
+    chex.assert_rank(edge, 1)
+    return jax.nn.one_hot(edge[feature_idx] + 6, EDGE_MAX_VALUES[feature_idx])
 
 
 def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array:
     """Encode the feature using its binary representation."""
     chex.assert_rank(to_encode, 0)
     num_bits = (world_dim - 1).bit_length()
-    bit_mask = 1 << np.arange(num_bits)
+    bit_mask = 1 << jnp.arange(num_bits)
     pos = jnp.broadcast_to(to_encode[jnp.newaxis], num_bits)
     result = jnp.not_equal(jnp.bitwise_and(pos, bit_mask), 0)
     return astype(result, jnp.float32)
-
-
-def _encode_sqrt_one_hot(to_encode: chex.Array, max_value: int) -> chex.Array:
-    max_sqrt_value = int(math.floor(math.sqrt(max_value)))
-    x = jnp.floor(jnp.sqrt(to_encode.astype(jnp.float32)))
-    x = jnp.minimum(x.astype(jnp.int32), max_sqrt_value)
-    return jax.nn.one_hot(x, max_sqrt_value + 1)
 
 
 def _features_embedding(
@@ -164,8 +138,8 @@ class SideEncoder(nn.Module):
         # Embeddings (to feed to nn.Dense modules):
         one_hot_encoded = [
             astype(side > 0, jnp.float32),
-            _encode_one_hot(side, SideconditionEnum.SIDECONDITION_SPIKES, 4),
-            _encode_one_hot(side, SideconditionEnum.SIDECONDITION_TOXICSPIKES, 3),
+            jax.nn.one_hot(side[SideconditionEnum.SIDECONDITION_SPIKES], 4),
+            jax.nn.one_hot(side[SideconditionEnum.SIDECONDITION_TOXICSPIKES], 3),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
         return nn.Dense(self.entity_size)(boolean_code)
@@ -179,9 +153,9 @@ class FieldEncoder(nn.Module):
 
         # Embeddings (to feed to nn.Dense modules):
         one_hot_encoded = [
-            _encode_one_hot(field, FeatureWeather.WEATHER_ID, NUM_WEATHER),
-            _encode_one_hot(field, FeatureWeather.MAX_DURATION, 9),
-            _encode_one_hot(field, FeatureWeather.MIN_DURATION, 9),
+            jax.nn.one_hot(field[FeatureWeather.WEATHER_ID], NUM_WEATHER),
+            jax.nn.one_hot(field[FeatureWeather.MAX_DURATION], 9),
+            jax.nn.one_hot(field[FeatureWeather.MIN_DURATION], 9),
         ]
         boolean_code = jnp.concatenate(one_hot_encoded, axis=-1)
         return nn.Dense(self.entity_size)(boolean_code)
@@ -205,50 +179,122 @@ class Encoder(nn.Module):
         )
         field_encoder = FieldEncoder(**self.cfg.field_encoder.to_dict())
 
-        entity_combiner = GRUFeatureCombiner(self.cfg.entity_size)
-        edge_combiner = GRUFeatureCombiner(self.cfg.entity_size)
-        timestep_combiner = GRUFeatureCombiner(self.cfg.entity_size)
-        action_combiner = GRUFeatureCombiner(self.cfg.entity_size)
+        entity_size = self.cfg.entity_size
+
+        species_embedding = nn.Embed(NUM_SPECIES, entity_size)
+        abilities_embedding = nn.Embed(NUM_ABILITIES, entity_size)
+        items_embedding = nn.Embed(NUM_ITEMS, entity_size)
+        actions_embedding = nn.Embed(NUM_ACTIONS, entity_size)
+        effects_embedding = nn.Embed(NUM_EFFECTS, entity_size)
+        side_embedding = nn.Embed(2, entity_size)
+
+        entity_aggregate = SumEmbeddings(entity_size)
+        edge_aggregate = SumEmbeddings(entity_size)
+        timestep_aggregate = MergeEmbeddings(entity_size)
+        action_aggregate = SumEmbeddings(entity_size)
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
             # Encoded one-hots (to pass to jax.nn.one_hot then nn.Dense):
-            one_hot_encoded = [
+
+            moveset_embedding = actions_embedding(
+                entity[FeatureEntity.ENTITY_MOVEID0 : FeatureEntity.ENTITY_MOVEID3 + 1]
+            ).sum(0)
+
+            volatiles_indices = entity[
+                FeatureEntity.ENTITY_VOLATILES0 : FeatureEntity.ENTITY_VOLATILES8 + 1
+            ]
+            volatiles_embedding = (
+                jnp.unpackbits(
+                    volatiles_indices.astype(jnp.uint16).view(jnp.uint8), axis=-1
+                )
+                .astype(float)
+                .reshape(-1)
+            )
+
+            typechange_indices = entity[
+                FeatureEntity.ENTITY_TYPECHANGE0 : FeatureEntity.ENTITY_TYPECHANGE1 + 1
+            ]
+            typechange_embedding = (
+                jnp.unpackbits(
+                    typechange_indices.astype(jnp.uint16).view(jnp.uint8), axis=-1
+                )
+                .astype(float)
+                .reshape(-1)
+            )
+
+            one_hot_encoded = jnp.concatenate(
+                [
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_LEVEL),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_HP_RATIO),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_GENDER),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_STATUS),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_ITEM_EFFECT),
+                    _encode_entity_one_hot(
+                        entity, FeatureEntity.ENTITY_BEING_CALLED_BACK
+                    ),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_TRAPPED),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_NEWLY_SWITCHED),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_TOXIC_TURNS),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_SLEEP_TURNS),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_FAINTED),
+                    _encode_entity_one_hot(entity, FeatureEntity.ENTITY_ACTIVE),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_ATK_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_DEF_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_SPA_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_SPD_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_SPE_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_EVASION_VALUE
+                    ),
+                    _encode_entity_boost_one_hot(
+                        entity, FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE
+                    ),
+                ],
+                axis=-1,
+            )
+
+            embeddings = [
                 SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
                 ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY]),
                 ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM]),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_SPECIES, NUM_SPECIES),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_ABILITY, NUM_ABILITIES),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_ITEM, NUM_ITEMS),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_SIDE, 2),
-                _encode_multi_hot(entity, MOVESET_ID_FEATURE_IDXS, NUM_MOVES) / 4,
-                _encode_volatiles_onehot(entity),
-                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_LEVEL], 100),
-                _encode_sqrt_one_hot(entity[FeatureEntity.ENTITY_HP_TOKEN], 1023),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_GENDER, NUM_GENDERS),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_STATUS, NUM_STATUS),
-                _encode_one_hot(
-                    entity, FeatureEntity.ENTITY_ITEM_EFFECT, NUM_ITEM_EFFECTS
+                activation_fn(species_embedding(entity[FeatureEntity.ENTITY_SPECIES])),
+                activation_fn(
+                    abilities_embedding(entity[FeatureEntity.ENTITY_ABILITY])
                 ),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_BEING_CALLED_BACK, 2),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_TRAPPED, 2),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_NEWLY_SWITCHED, 2),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_TOXIC_TURNS, 8),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_SLEEP_TURNS, 4),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_FAINTED, 2),
-                _encode_one_hot(entity, FeatureEntity.ENTITY_ACTIVE, 2),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_ATK_VALUE),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_DEF_VALUE),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_SPA_VALUE),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_SPD_VALUE),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_SPE_VALUE),
-                _encode_boost_one_hot(entity, FeatureEntity.ENTITY_BOOST_EVASION_VALUE),
-                _encode_boost_one_hot(
-                    entity, FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE
+                activation_fn(items_embedding(entity[FeatureEntity.ENTITY_ITEM])),
+                activation_fn(side_embedding(entity[FeatureEntity.ENTITY_SIDE])),
+                activation_fn(moveset_embedding / 4),
+                one_hot_encoded,
+                _features_embedding(
+                    entity,
+                    {
+                        FeatureEntity.ENTITY_HP_RATIO: 1
+                        / ENTITY_MAX_VALUES[FeatureEntity.ENTITY_HP_RATIO],
+                        FeatureEntity.ENTITY_LEVEL: 1 / 100,
+                        FeatureEntity.ENTITY_BOOST_ATK_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_DEF_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_SPA_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_SPD_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_SPE_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_EVASION_VALUE: 1 / 6,
+                        FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE: 1 / 6,
+                    },
                 ),
+                volatiles_embedding,
+                typechange_embedding,
             ]
 
-            embedding = entity_combiner(one_hot_encoded)
-
+            embedding = entity_aggregate(embeddings)
             mask = get_entity_mask(entity)
             embedding = jnp.where(mask, embedding, 0)
             return embedding, mask
@@ -262,44 +308,41 @@ class Encoder(nn.Module):
             )
 
             # Embeddings (to feed to nn.Dense modules):
-            one_hot_encoded = [
+            one_hot_encoded = jnp.concatenate(
+                [
+                    _encode_edge_one_hot(edge, FeatureEdge.MAJOR_ARG),
+                    _encode_edge_one_hot(edge, FeatureEdge.MINOR_ARG),
+                    _encode_edge_one_hot(edge, FeatureEdge.FROM_TYPE_TOKEN),
+                    _encode_edge_one_hot(edge, FeatureEdge.EDGE_TYPE_TOKEN),
+                    _encode_edge_one_hot(edge, FeatureEdge.DAMAGE_RATIO),
+                    _encode_edge_one_hot(edge, FeatureEdge.HEAL_RATIO),
+                    _encode_edge_one_hot(edge, FeatureEdge.STATUS_TOKEN),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_ATK_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_DEF_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_SPA_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_SPD_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_SPE_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_EVASION_VALUE),
+                    _encode_edge_boost_one_hot(edge, FeatureEdge.BOOST_ACCURACY_VALUE),
+                ],
+                axis=-1,
+            )
+
+            embeddings = [
                 ABILITY_ONEHOT(edge[FeatureEdge.ABILITY_TOKEN]),
                 ITEM_ONEHOT(edge[FeatureEdge.ITEM_TOKEN]),
-                _encode_one_hot(edge, FeatureEdge.ACTION_TOKEN, NUM_ACTIONS),
-                _encode_one_hot(edge, FeatureEdge.ITEM_TOKEN, NUM_ITEMS),
-                _encode_one_hot(edge, FeatureEdge.ABILITY_TOKEN, NUM_ABILITIES),
-                _encode_one_hot(edge, FeatureEdge.MAJOR_ARG, NUM_MAJOR_ARGS),
-                _encode_one_hot(edge, FeatureEdge.MINOR_ARG, NUM_MINOR_ARGS),
-                _encode_one_hot(edge, FeatureEdge.FROM_SOURCE_TOKEN, NUM_EFFECTS),
-                _encode_one_hot(edge, FeatureEdge.FROM_TYPE_TOKEN, NUM_EDGE_FROM_TYPES),
-                _encode_one_hot(edge, FeatureEdge.EDGE_TYPE_TOKEN, NUM_EDGE_TYPES),
-                # Healing
-                _encode_sqrt_one_hot(
-                    (edge[FeatureEdge.DAMAGE_TOKEN]).clip(min=0), 1023
-                ),
-                # Damage
-                _encode_sqrt_one_hot(
-                    jnp.abs(edge[FeatureEdge.DAMAGE_TOKEN].clip(max=0)), 1023
-                ),
-                _binary_scale_embedding(
-                    edge[FeatureEdge.EDGE_AFFECTING_SIDE].astype(jnp.int32), 3
-                ),
-                _binary_scale_embedding(
-                    edge[FeatureEdge.TURN_ORDER_VALUE].astype(jnp.int32), 32
-                ),
-                _binary_scale_embedding(turn.astype(jnp.int32), 128),
-                _binary_scale_embedding(request_count.astype(jnp.int32), 128),
-                _encode_one_hot(edge, FeatureEdge.STATUS_TOKEN, NUM_STATUS),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_ATK_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_DEF_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_SPA_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_SPD_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_SPE_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_EVASION_VALUE),
-                _encode_boost_one_hot(edge, FeatureEdge.BOOST_ACCURACY_VALUE),
+                activation_fn(items_embedding(edge[FeatureEdge.ITEM_TOKEN])),
+                activation_fn(abilities_embedding(edge[FeatureEdge.ABILITY_TOKEN])),
+                activation_fn(actions_embedding(edge[FeatureEdge.ACTION_TOKEN])),
+                activation_fn(effects_embedding(edge[FeatureEdge.FROM_SOURCE_TOKEN])),
+                one_hot_encoded,
+                _binary_scale_embedding(edge[FeatureEdge.EDGE_AFFECTING_SIDE], 3),
+                _binary_scale_embedding(edge[FeatureEdge.TURN_ORDER_VALUE], 32),
+                _binary_scale_embedding(turn, 128),
+                _binary_scale_embedding(request_count, 128),
             ]
 
-            embedding = edge_combiner(one_hot_encoded)
+            embedding = edge_aggregate(embeddings)
 
             mask = get_edge_mask(edge)
             embedding = jnp.where(mask, embedding, 0)
@@ -336,8 +379,7 @@ class Encoder(nn.Module):
                 side_condition_embeddings[1],
                 field_embedding,
             ]
-
-            timestep_embedding = timestep_combiner(timestep_embeddings)
+            timestep_embedding = timestep_aggregate(timestep_embeddings)
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
             # Return combined timestep embedding and mask
@@ -423,14 +465,14 @@ class Encoder(nn.Module):
             one_hot_encoded = [
                 SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
                 MOVE_ONEHOT(move[FeatureMoveset.MOVESET_MOVE_ID]),
-                _encode_one_hot(move, FeatureMoveset.MOVESET_ACTION_TYPE, 2),
-                _encode_one_hot(move, FeatureMoveset.MOVESET_ACTION_ID, NUM_ACTIONS),
-                _encode_sqrt_one_hot(
-                    move[FeatureMoveset.MOVESET_PPUSED].astype(jnp.int32), 65
+                jax.nn.one_hot(move[FeatureMoveset.MOVESET_ACTION_TYPE], 2),
+                activation_fn(
+                    actions_embedding(move[FeatureMoveset.MOVESET_ACTION_ID])
                 ),
+                jax.nn.one_hot(move[FeatureMoveset.MOVESET_PPUSED], 65),
             ]
 
-            embedding = action_combiner(one_hot_encoded)
+            embedding = action_aggregate(one_hot_encoded)
 
             mask = get_move_mask(move)
             embedding = jnp.where(mask, embedding, 0)
@@ -448,8 +490,4 @@ class Encoder(nn.Module):
             valid_entity_mask,
         )
 
-        return (
-            contextual_entity_embeddings,
-            valid_entity_mask,
-            contextual_action_embeddings,
-        )
+        return contextual_action_embeddings

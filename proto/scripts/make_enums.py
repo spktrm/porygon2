@@ -9,11 +9,12 @@ def toid(string: str) -> str:
 
 
 def generate_enum(title: str, data: dict[str, int], use_toid: bool = True):
-    data = [
-        f"\t{title.upper()}_{((toid if use_toid else lambda x:x)(key)).upper()} = {value};"
-        for key, value in data.items()
+    data_lines = [
+        f"\t{title.upper()}_{((toid if use_toid else lambda x:x)(key)).upper()} = {idx};"
+        for idx, (key, value) in enumerate(data.items())
     ]
-    return f"enum {title.capitalize()}Enum {{\n" + "\n".join(data) + "\n}"
+    assert len(set(data.keys())) == len(set(data.values())), title
+    return f"enum {title.capitalize()}Enum {{\n" + "\n".join(data_lines) + "\n}"
 
 
 def main():

@@ -3287,6 +3287,31 @@ class ItemsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ITEMS_ZAPPLATE: _ClassVar[ItemsEnum]
     ITEMS_ZOOMLENS: _ClassVar[ItemsEnum]
 
+class TypechartEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    TYPECHART__NULL: _ClassVar[TypechartEnum]
+    TYPECHART__PAD: _ClassVar[TypechartEnum]
+    TYPECHART__UNK: _ClassVar[TypechartEnum]
+    TYPECHART_BUG: _ClassVar[TypechartEnum]
+    TYPECHART_DARK: _ClassVar[TypechartEnum]
+    TYPECHART_DRAGON: _ClassVar[TypechartEnum]
+    TYPECHART_ELECTRIC: _ClassVar[TypechartEnum]
+    TYPECHART_FAIRY: _ClassVar[TypechartEnum]
+    TYPECHART_FIGHTING: _ClassVar[TypechartEnum]
+    TYPECHART_FIRE: _ClassVar[TypechartEnum]
+    TYPECHART_FLYING: _ClassVar[TypechartEnum]
+    TYPECHART_GHOST: _ClassVar[TypechartEnum]
+    TYPECHART_GRASS: _ClassVar[TypechartEnum]
+    TYPECHART_GROUND: _ClassVar[TypechartEnum]
+    TYPECHART_ICE: _ClassVar[TypechartEnum]
+    TYPECHART_NORMAL: _ClassVar[TypechartEnum]
+    TYPECHART_POISON: _ClassVar[TypechartEnum]
+    TYPECHART_PSYCHIC: _ClassVar[TypechartEnum]
+    TYPECHART_ROCK: _ClassVar[TypechartEnum]
+    TYPECHART_STEEL: _ClassVar[TypechartEnum]
+    TYPECHART_STELLAR: _ClassVar[TypechartEnum]
+    TYPECHART_WATER: _ClassVar[TypechartEnum]
+
 class PseudoweatherEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     PSEUDOWEATHER__NULL: _ClassVar[PseudoweatherEnum]
@@ -11490,6 +11515,28 @@ ITEMS_WISEGLASSES: ItemsEnum
 ITEMS_YACHEBERRY: ItemsEnum
 ITEMS_ZAPPLATE: ItemsEnum
 ITEMS_ZOOMLENS: ItemsEnum
+TYPECHART__NULL: TypechartEnum
+TYPECHART__PAD: TypechartEnum
+TYPECHART__UNK: TypechartEnum
+TYPECHART_BUG: TypechartEnum
+TYPECHART_DARK: TypechartEnum
+TYPECHART_DRAGON: TypechartEnum
+TYPECHART_ELECTRIC: TypechartEnum
+TYPECHART_FAIRY: TypechartEnum
+TYPECHART_FIGHTING: TypechartEnum
+TYPECHART_FIRE: TypechartEnum
+TYPECHART_FLYING: TypechartEnum
+TYPECHART_GHOST: TypechartEnum
+TYPECHART_GRASS: TypechartEnum
+TYPECHART_GROUND: TypechartEnum
+TYPECHART_ICE: TypechartEnum
+TYPECHART_NORMAL: TypechartEnum
+TYPECHART_POISON: TypechartEnum
+TYPECHART_PSYCHIC: TypechartEnum
+TYPECHART_ROCK: TypechartEnum
+TYPECHART_STEEL: TypechartEnum
+TYPECHART_STELLAR: TypechartEnum
+TYPECHART_WATER: TypechartEnum
 PSEUDOWEATHER__NULL: PseudoweatherEnum
 PSEUDOWEATHER__PAD: PseudoweatherEnum
 PSEUDOWEATHER__UNK: PseudoweatherEnum

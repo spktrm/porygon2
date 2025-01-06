@@ -68,7 +68,7 @@ def get_model_cfg():
 
     num_transformer_layers = 1
     num_transformer_heads = 2
-    transformer_hidden_size_scale = 4
+    transformer_hidden_size_scale = 0.5
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
     transformer_key_value_scale = 0.5
     transformer_key_value_size = int(transformer_key_value_scale * entity_size)

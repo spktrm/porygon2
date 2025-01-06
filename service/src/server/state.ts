@@ -44,6 +44,7 @@ import {
     NUM_HISTORY,
     numSideConditions,
     numWeatherFields,
+    numTypes,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -133,8 +134,10 @@ export function concatenateArrays<T extends TypedArray>(arrays: T[]): T {
     return result;
 }
 
+const POKEMON_ARRAY_CONSTRUCTOR = Int16Array;
+
 function getBlankPokemonArr() {
-    return new Int16Array(numPokemonFields);
+    return new POKEMON_ARRAY_CONSTRUCTOR(numPokemonFields);
 }
 
 function getUnkPokemon(n?: number) {
@@ -154,7 +157,7 @@ function getUnkPokemon(n?: number) {
     data[FeatureEntity.ENTITY_MOVEID3] = MovesEnum.MOVES__UNK;
     data[FeatureEntity.ENTITY_HAS_STATUS] = 0;
     data[FeatureEntity.ENTITY_SIDE] = n ?? 0;
-    data[FeatureEntity.ENTITY_HP_TOKEN] = 1023;
+    data[FeatureEntity.ENTITY_HP] = 31;
     return data;
 }
 
@@ -169,10 +172,7 @@ function getNullPokemon() {
 
 const nullPokemon = getNullPokemon();
 
-function getArrayFromPokemon(
-    candidate: Pokemon | null,
-    playerIndex: number,
-): Int16Array {
+function getArrayFromPokemon(candidate: Pokemon | null, playerIndex: number) {
     if (candidate === null) {
         return getNullPokemon();
     }
@@ -196,7 +196,10 @@ function getArrayFromPokemon(
         for (const move of moveSlots) {
             const { id, ppUsed } = move;
             const maxPP = pokemon.side.battle.gens.dex.moves.get(id).pp;
-            const idValue = IndexValueFromEnum<typeof MovesEnum>("Move", id);
+            const idValue = IndexValueFromEnum<typeof ActionsEnum>(
+                "Actions",
+                `move_${id}`,
+            );
             const correctUsed = ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
 
             moveIds.push(idValue);
@@ -223,7 +226,7 @@ function getArrayFromPokemon(
           )
         : ItemeffecttypesEnum.ITEMEFFECTTYPES__NULL;
 
-    const possibleAbilities = Object.values(candidate.baseSpecies.abilities);
+    const possibleAbilities = Object.values(pokemon.baseSpecies.abilities);
     if (ability) {
         const actualAbility = IndexValueFromEnum<typeof AbilitiesEnum>(
             "Ability",
@@ -249,8 +252,8 @@ function getArrayFromPokemon(
     dataArr[FeatureEntity.ENTITY_FAINTED] = pokemon.fainted ? 1 : 0;
     dataArr[FeatureEntity.ENTITY_HP] = pokemon.hp;
     dataArr[FeatureEntity.ENTITY_MAXHP] = pokemon.maxhp;
-    dataArr[FeatureEntity.ENTITY_HP_TOKEN] = Math.floor(
-        (1023 * pokemon.hp) / pokemon.maxhp,
+    dataArr[FeatureEntity.ENTITY_HP_RATIO] = Math.floor(
+        (31 * pokemon.hp) / pokemon.maxhp,
     );
     dataArr[FeatureEntity.ENTITY_STATUS] = pokemon.status
         ? IndexValueFromEnum<typeof StatusEnum>("Status", pokemon.status)
@@ -273,7 +276,7 @@ function getArrayFromPokemon(
             movePps[moveIndex];
     }
 
-    const volatiles = new OneDBoolean(numVolatiles, Int16Array);
+    const volatiles = new OneDBoolean(numVolatiles, POKEMON_ARRAY_CONSTRUCTOR);
     for (const [key] of Object.entries({
         ...pokemon.volatiles,
         ...candidate.volatiles,
@@ -294,6 +297,19 @@ function getArrayFromPokemon(
         pokemon.boosts.evasion ?? 0;
     dataArr[FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE] =
         pokemon.boosts.accuracy ?? 0;
+
+    const typeChanged = new OneDBoolean(numTypes, POKEMON_ARRAY_CONSTRUCTOR);
+    const typechangeVolatile =
+        pokemon.volatiles.typechange ?? candidate.volatiles.typechange;
+    if (typechangeVolatile) {
+        if (typechangeVolatile.apparentType) {
+            for (const type of typechangeVolatile.apparentType.split("/")) {
+                const index = IndexValueFromEnum("Types", type);
+                typeChanged.set(index, true);
+            }
+        }
+    }
+    dataArr.set(typeChanged.buffer, FeatureEntity.ENTITY_TYPECHANGE0);
 
     return dataArr;
 }
@@ -825,7 +841,10 @@ export class EventHandler implements Protocol.Handler {
 
         edge.addMinorArg(argName);
         edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.DAMAGE_TOKEN, Math.floor(1023 * diffRatio));
+        edge.setFeature(
+            FeatureEdge.DAMAGE_RATIO,
+            Math.abs(Math.floor(31 * diffRatio)),
+        );
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
 
         this.addMinorEdge(edge);
@@ -856,7 +875,10 @@ export class EventHandler implements Protocol.Handler {
 
         edge.addMinorArg(argName);
         edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.DAMAGE_TOKEN, Math.floor(1024 * diffRatio));
+        edge.setFeature(
+            FeatureEdge.HEAL_RATIO,
+            Math.abs(Math.floor(31 * diffRatio)),
+        );
         edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
         edge.updateEdgeFromOf(fromEffect);
 

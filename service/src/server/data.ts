@@ -15,11 +15,11 @@ import {
     SideconditionEnum,
     SpeciesEnum,
     StatusEnum,
+    TypechartEnum,
     VolatilestatusEnum,
     WeatherEnum,
 } from "../../protos/enums_pb";
 import {
-    FeatureAdditionalInformation,
     FeatureEntity,
     FeatureMoveset,
     FeatureTurnContext,
@@ -32,6 +32,7 @@ export type EnumMappings =
     | typeof ItemsEnum
     | typeof StatusEnum
     | typeof ActionsEnum
+    | typeof TypechartEnum
     | typeof ItemeffecttypesEnum
     | typeof LastitemeffecttypesEnum
     | typeof MovesEnum
@@ -62,6 +63,7 @@ export type MoveIndex = 0 | 1 | 2 | 3;
 export type BenchIndex = MoveIndex | 4 | 5;
 
 export const MappingLookup = {
+    Types: TypechartEnum,
     Species: SpeciesEnum,
     Items: ItemsEnum,
     Status: StatusEnum,
@@ -83,11 +85,9 @@ export const MappingLookup = {
 };
 
 export const numBoosts = Object.keys(BoostsEnum).length;
+export const numTypes = Object.keys(TypechartEnum).length;
 export const numVolatiles = Object.keys(VolatilestatusEnum).length;
 export const numSideConditions = Object.keys(SideconditionEnum).length;
-export const numAdditionalInformations = Object.keys(
-    FeatureAdditionalInformation,
-).length;
 export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
 export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
 export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;

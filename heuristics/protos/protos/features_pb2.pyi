@@ -15,6 +15,7 @@ class FeatureEntity(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_FAINTED: _ClassVar[FeatureEntity]
     ENTITY_HP: _ClassVar[FeatureEntity]
     ENTITY_MAXHP: _ClassVar[FeatureEntity]
+    ENTITY_HP_RATIO: _ClassVar[FeatureEntity]
     ENTITY_STATUS: _ClassVar[FeatureEntity]
     ENTITY_TOXIC_TURNS: _ClassVar[FeatureEntity]
     ENTITY_SLEEP_TURNS: _ClassVar[FeatureEntity]
@@ -48,7 +49,8 @@ class FeatureEntity(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_VOLATILES7: _ClassVar[FeatureEntity]
     ENTITY_VOLATILES8: _ClassVar[FeatureEntity]
     ENTITY_SIDE: _ClassVar[FeatureEntity]
-    ENTITY_HP_TOKEN: _ClassVar[FeatureEntity]
+    ENTITY_TYPECHANGE0: _ClassVar[FeatureEntity]
+    ENTITY_TYPECHANGE1: _ClassVar[FeatureEntity]
 
 class MovesetActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -81,40 +83,6 @@ class FeatureWeather(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WEATHER_ID: _ClassVar[FeatureWeather]
     MIN_DURATION: _ClassVar[FeatureWeather]
     MAX_DURATION: _ClassVar[FeatureWeather]
-
-class FeatureAdditionalInformation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    NUM_FAINTED: _ClassVar[FeatureAdditionalInformation]
-    HP_TOTAL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_PAD: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_UNK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_BUG: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_DARK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_DRAGON: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ELECTRIC: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FAIRY: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FIGHTING: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FIRE: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FLYING: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GHOST: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GRASS: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GROUND: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ICE: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_NORMAL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_POISON: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_PSYCHIC: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ROCK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_STEEL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_STELLAR: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_WATER: _ClassVar[FeatureAdditionalInformation]
-    TOTAL_POKEMON: _ClassVar[FeatureAdditionalInformation]
-    WISHING: _ClassVar[FeatureAdditionalInformation]
-    MEMBER0_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER1_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER2_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER3_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER4_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER5_HP: _ClassVar[FeatureAdditionalInformation]
 
 class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -149,7 +117,8 @@ class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ABILITY_TOKEN: _ClassVar[FeatureEdge]
     FROM_TYPE_TOKEN: _ClassVar[FeatureEdge]
     FROM_SOURCE_TOKEN: _ClassVar[FeatureEdge]
-    DAMAGE_TOKEN: _ClassVar[FeatureEdge]
+    DAMAGE_RATIO: _ClassVar[FeatureEdge]
+    HEAL_RATIO: _ClassVar[FeatureEdge]
     EFFECT_TOKEN: _ClassVar[FeatureEdge]
     BOOST_ATK_VALUE: _ClassVar[FeatureEdge]
     BOOST_DEF_VALUE: _ClassVar[FeatureEdge]
@@ -174,6 +143,7 @@ ENTITY_ACTIVE: FeatureEntity
 ENTITY_FAINTED: FeatureEntity
 ENTITY_HP: FeatureEntity
 ENTITY_MAXHP: FeatureEntity
+ENTITY_HP_RATIO: FeatureEntity
 ENTITY_STATUS: FeatureEntity
 ENTITY_TOXIC_TURNS: FeatureEntity
 ENTITY_SLEEP_TURNS: FeatureEntity
@@ -207,7 +177,8 @@ ENTITY_VOLATILES6: FeatureEntity
 ENTITY_VOLATILES7: FeatureEntity
 ENTITY_VOLATILES8: FeatureEntity
 ENTITY_SIDE: FeatureEntity
-ENTITY_HP_TOKEN: FeatureEntity
+ENTITY_TYPECHANGE0: FeatureEntity
+ENTITY_TYPECHANGE1: FeatureEntity
 MOVESET_ACTION_TYPE_MOVE: MovesetActionType
 MOVESET_ACTION_TYPE_SWITCH: MovesetActionType
 MOVESET_ACTION_ID: FeatureMoveset
@@ -228,37 +199,6 @@ TURN: FeatureTurnContext
 WEATHER_ID: FeatureWeather
 MIN_DURATION: FeatureWeather
 MAX_DURATION: FeatureWeather
-NUM_FAINTED: FeatureAdditionalInformation
-HP_TOTAL: FeatureAdditionalInformation
-NUM_TYPES_PAD: FeatureAdditionalInformation
-NUM_TYPES_UNK: FeatureAdditionalInformation
-NUM_TYPES_BUG: FeatureAdditionalInformation
-NUM_TYPES_DARK: FeatureAdditionalInformation
-NUM_TYPES_DRAGON: FeatureAdditionalInformation
-NUM_TYPES_ELECTRIC: FeatureAdditionalInformation
-NUM_TYPES_FAIRY: FeatureAdditionalInformation
-NUM_TYPES_FIGHTING: FeatureAdditionalInformation
-NUM_TYPES_FIRE: FeatureAdditionalInformation
-NUM_TYPES_FLYING: FeatureAdditionalInformation
-NUM_TYPES_GHOST: FeatureAdditionalInformation
-NUM_TYPES_GRASS: FeatureAdditionalInformation
-NUM_TYPES_GROUND: FeatureAdditionalInformation
-NUM_TYPES_ICE: FeatureAdditionalInformation
-NUM_TYPES_NORMAL: FeatureAdditionalInformation
-NUM_TYPES_POISON: FeatureAdditionalInformation
-NUM_TYPES_PSYCHIC: FeatureAdditionalInformation
-NUM_TYPES_ROCK: FeatureAdditionalInformation
-NUM_TYPES_STEEL: FeatureAdditionalInformation
-NUM_TYPES_STELLAR: FeatureAdditionalInformation
-NUM_TYPES_WATER: FeatureAdditionalInformation
-TOTAL_POKEMON: FeatureAdditionalInformation
-WISHING: FeatureAdditionalInformation
-MEMBER0_HP: FeatureAdditionalInformation
-MEMBER1_HP: FeatureAdditionalInformation
-MEMBER2_HP: FeatureAdditionalInformation
-MEMBER3_HP: FeatureAdditionalInformation
-MEMBER4_HP: FeatureAdditionalInformation
-MEMBER5_HP: FeatureAdditionalInformation
 EDGE_TYPE_NONE: EdgeTypes
 MOVE_EDGE: EdgeTypes
 SWITCH_EDGE: EdgeTypes
@@ -284,7 +224,8 @@ ITEM_TOKEN: FeatureEdge
 ABILITY_TOKEN: FeatureEdge
 FROM_TYPE_TOKEN: FeatureEdge
 FROM_SOURCE_TOKEN: FeatureEdge
-DAMAGE_TOKEN: FeatureEdge
+DAMAGE_RATIO: FeatureEdge
+HEAL_RATIO: FeatureEdge
 EFFECT_TOKEN: FeatureEdge
 BOOST_ATK_VALUE: FeatureEdge
 BOOST_DEF_VALUE: FeatureEdge
