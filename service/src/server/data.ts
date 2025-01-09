@@ -1,3 +1,5 @@
+import * as fs from "fs";
+
 import {
     AbilitiesEnum,
     ActionsEnum,
@@ -19,12 +21,7 @@ import {
     VolatilestatusEnum,
     WeatherEnum,
 } from "../../protos/enums_pb";
-import {
-    FeatureEntity,
-    FeatureMoveset,
-    FeatureTurnContext,
-    FeatureWeather,
-} from "../../protos/features_pb";
+import { FeatureEntity, FeatureMoveset } from "../../protos/features_pb";
 import { OneDBoolean } from "./utils";
 
 export type EnumMappings =
@@ -125,12 +122,10 @@ export const sideIdMapping: {
 };
 
 export const numPokemonFields = Object.keys(FeatureEntity).length;
-export const numTurnContextFields = Object.keys(FeatureTurnContext).length;
-export const numWeatherFields = Object.keys(FeatureWeather).length;
 export const numMoveFields = Object.keys(FeatureMoveset).length;
 export const numMovesetFields = 10 * numMoveFields;
 
-export const NUM_HISTORY = 32;
+export const NUM_HISTORY = 16;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
@@ -138,3 +133,34 @@ for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
 }
 
 export const EVAL_GAME_ID_OFFSET = 10_000;
+
+// Define the path to the JSON file
+const filePath = "../data/data/data.json";
+
+// Read the file synchronously
+const fileContent = fs.readFileSync(filePath, "utf-8");
+
+function transformJson(
+    json: Record<string, Record<string, number>>,
+): Record<string, Record<number, string>> {
+    const transformed: Record<string, Record<number, string>> = {};
+
+    for (const [key, value] of Object.entries(json)) {
+        if (typeof value === "object" && value !== null) {
+            // Recursive transformation for nested objects
+            transformed[key] = Object.fromEntries(
+                Object.entries(value).map(([innerKey, innerValue]) => [
+                    innerValue as number,
+                    innerKey,
+                ]),
+            );
+        } else {
+            transformed[key] = value; // Keep non-object entries as-is
+        }
+    }
+
+    return transformed;
+}
+
+// Parse the JSON content
+export const jsonDatum = transformJson(JSON.parse(fileContent));

@@ -3576,14 +3576,22 @@ class BattlemajorargsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BATTLEMAJORARGS_CANT: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_CUSTOM: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_DETAILSCHANGE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_DONE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_DRAG: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_FAINT: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_INACTIVE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_INACTIVEOFF: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_MESSAGE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_MOVE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_REPLACE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_REQUEST: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_SENTCHOICE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_SWAP: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_SWITCH: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_TIE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_TURN: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_UPKEEP: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_WIN: _ClassVar[BattlemajorargsEnum]
 
 class BattleminorargsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -11775,14 +11783,22 @@ BATTLEMAJORARGS__UNK: BattlemajorargsEnum
 BATTLEMAJORARGS_CANT: BattlemajorargsEnum
 BATTLEMAJORARGS_CUSTOM: BattlemajorargsEnum
 BATTLEMAJORARGS_DETAILSCHANGE: BattlemajorargsEnum
+BATTLEMAJORARGS_DONE: BattlemajorargsEnum
 BATTLEMAJORARGS_DRAG: BattlemajorargsEnum
 BATTLEMAJORARGS_FAINT: BattlemajorargsEnum
+BATTLEMAJORARGS_INACTIVE: BattlemajorargsEnum
+BATTLEMAJORARGS_INACTIVEOFF: BattlemajorargsEnum
 BATTLEMAJORARGS_MESSAGE: BattlemajorargsEnum
 BATTLEMAJORARGS_MOVE: BattlemajorargsEnum
 BATTLEMAJORARGS_REPLACE: BattlemajorargsEnum
+BATTLEMAJORARGS_REQUEST: BattlemajorargsEnum
+BATTLEMAJORARGS_SENTCHOICE: BattlemajorargsEnum
 BATTLEMAJORARGS_SWAP: BattlemajorargsEnum
 BATTLEMAJORARGS_SWITCH: BattlemajorargsEnum
+BATTLEMAJORARGS_TIE: BattlemajorargsEnum
 BATTLEMAJORARGS_TURN: BattlemajorargsEnum
+BATTLEMAJORARGS_UPKEEP: BattlemajorargsEnum
+BATTLEMAJORARGS_WIN: BattlemajorargsEnum
 BATTLEMINORARGS__NULL: BattleminorargsEnum
 BATTLEMINORARGS__PAD: BattleminorargsEnum
 BATTLEMINORARGS__UNK: BattleminorargsEnum

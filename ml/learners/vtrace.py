@@ -21,14 +21,13 @@ from ml.func import (
     rnad_v_trace,
 )
 from ml.learners.func import (
-    calculate_explained_variance,
     calculate_r2,
     collect_gradient_telemetry_data,
     collect_loss_value_telemetry_data,
     collect_policy_stats_telemetry_data,
 )
 from ml.learners.rnad import NerdConfig
-from ml.utils import Params, breakpoint_if_nonfinite, breakpoint_w_func
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
 
@@ -140,11 +139,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = (
-            batch.actor.rewards.hp_rewards / 100
-            + batch.actor.rewards.fainted_rewards / 10
-            + batch.actor.rewards.win_rewards
-        )
+        rewards = batch.actor.rewards.fainted_rewards
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]

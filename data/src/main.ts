@@ -219,23 +219,37 @@ const customScrapingFunctions: {
         return terrains.map((t) => terrainMap[t.toLowerCase()] || t);
     },
     battleMajorArgs: (content: string, file: string): string[] => {
-        if (content.includes("interface BattleMajorArgs")) {
-            const interfaceMatch = content.match(
+        if (
+            content.includes("interface BattleMajorArgs") ||
+            content.includes("interface BattleProgressArgs")
+        ) {
+            const majorArgsMatch = content.match(
                 /interface\s+BattleMajorArgs\s*{[\s\S]*?}/,
             );
-            if (interfaceMatch) {
-                const interfaceContent = interfaceMatch[0];
-                const argMatches =
-                    interfaceContent.match(/['"]?\|(\w+)\|['"]?:/g) || [];
-                return [
-                    "turn",
-                    ...argMatches.map((match) =>
+            const progressArgsMatch = content.match(
+                /interface\s+BattleProgressArgs\s*{[\s\S]*?}/,
+            );
+
+            const extractArgs = (interfaceMatch: any[]) => {
+                if (interfaceMatch) {
+                    const interfaceContent = interfaceMatch[0];
+                    const argMatches =
+                        interfaceContent.match(/['"]?\|(\w+)\|['"]?:/g) || [];
+                    return argMatches.map((match: string) =>
                         match
                             .replace(/['"]?\|(\w+)\|['"]?:/, "$1")
                             .toLowerCase(),
-                    ),
-                ];
-            }
+                    );
+                }
+                return [];
+            };
+
+            const majorArgs = majorArgsMatch ? extractArgs(majorArgsMatch) : [];
+            const progressArgs = progressArgsMatch
+                ? extractArgs(progressArgsMatch)
+                : [];
+
+            return ["turn", ...majorArgs, ...progressArgs];
         }
         return [];
     },
@@ -499,11 +513,14 @@ function formatData(data: GenData) {
 }
 
 function standardize(values: string[], extraTokens?: string[]) {
+    const sortedValues = Array.from(new Set(values)).sort((a, b) =>
+        a.localeCompare(b),
+    );
     return Object.fromEntries(
-        [
-            ...(extraTokens ?? []),
-            ...Array.from(values).sort((a, b) => a.localeCompare(b)),
-        ].map((value, index) => [value, index]),
+        [...(extraTokens ?? []), ...sortedValues].map((value, index) => [
+            value,
+            index,
+        ]),
     );
 }
 

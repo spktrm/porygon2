@@ -29,11 +29,17 @@ export class Tracker {
     hpDiffs: number[];
     faintedDiffs: number[];
     turnsWithoutChange: number;
+    fibs: number[];
 
     constructor() {
         this.hpDiffs = [0];
         this.faintedDiffs = [0];
         this.turnsWithoutChange = 0;
+
+        this.fibs = [
+            0.03509312, 0.10527936, 0.21055872, 0.3509312, 0.5263968,
+            0.73695553,
+        ];
     }
 
     update1(battle: Battle) {
@@ -79,6 +85,9 @@ export class Tracker {
         this.faintedDiffs.push(aliveDiff);
         const faintedReward =
             (this.faintedDiffs.at(-1) ?? 0) - (this.faintedDiffs.at(-2) ?? 0);
+        const faintedFibReward =
+            Math.sign(faintedReward) *
+            this.fibs[5 - Math.min(aliveTotal1, aliveTotal2)];
 
         // // Calculate HP totals for both sides
         const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
@@ -98,7 +107,7 @@ export class Tracker {
         }
         this.hpDiffs.push(hpDiff);
 
-        return { faintedReward, hpReward };
+        return { faintedReward, hpReward, faintedFibReward };
     }
 
     reset() {

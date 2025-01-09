@@ -73,26 +73,6 @@ export interface FeatureMovesetMap {
 
 export const FeatureMoveset: FeatureMovesetMap;
 
-export interface FeatureTurnContextMap {
-  VALID: 0;
-  IS_MY_TURN: 1;
-  ACTION: 2;
-  MOVE: 3;
-  SWITCH_COUNTER: 4;
-  MOVE_COUNTER: 5;
-  TURN: 6;
-}
-
-export const FeatureTurnContext: FeatureTurnContextMap;
-
-export interface FeatureWeatherMap {
-  WEATHER_ID: 0;
-  MIN_DURATION: 1;
-  MAX_DURATION: 2;
-}
-
-export const FeatureWeather: FeatureWeatherMap;
-
 export interface EdgeTypesMap {
   EDGE_TYPE_NONE: 0;
   MOVE_EDGE: 1;
@@ -119,34 +99,53 @@ export interface EdgeFromTypesMap {
 
 export const EdgeFromTypes: EdgeFromTypesMap;
 
-export interface FeatureEdgeMap {
-  TURN_ORDER_VALUE: 0;
+export interface FeatureAbsoluteEdgeMap {
+  EDGE_TURN_ORDER_VALUE: 0;
   EDGE_TYPE_TOKEN: 1;
-  MAJOR_ARG: 2;
-  MINOR_ARG: 3;
-  ACTION_TOKEN: 4;
-  ITEM_TOKEN: 5;
-  ABILITY_TOKEN: 6;
-  FROM_TYPE_TOKEN: 7;
-  FROM_SOURCE_TOKEN: 8;
-  DAMAGE_RATIO: 9;
-  HEAL_RATIO: 10;
-  EFFECT_TOKEN: 11;
-  BOOST_ATK_VALUE: 12;
-  BOOST_DEF_VALUE: 13;
-  BOOST_SPA_VALUE: 14;
-  BOOST_SPD_VALUE: 15;
-  BOOST_SPE_VALUE: 16;
-  BOOST_ACCURACY_VALUE: 17;
-  BOOST_EVASION_VALUE: 18;
-  STATUS_TOKEN: 19;
-  EDGE_AFFECTING_SIDE: 20;
-  PLAYER_ID: 21;
-  REQUEST_COUNT: 22;
-  EDGE_VALID: 23;
-  EDGE_INDEX: 24;
-  TURN_VALUE: 25;
+  EDGE_WEATHER_ID: 2;
+  EDGE_WEATHER_MIN_DURATION: 3;
+  EDGE_WEATHER_MAX_DURATION: 4;
+  EDGE_TERRAIN_ID: 5;
+  EDGE_TERRAIN_MIN_DURATION: 6;
+  EDGE_TERRAIN_MAX_DURATION: 7;
+  EDGE_PSEUDOWEATHER_ID: 8;
+  EDGE_PSEUDOWEATHER_MIN_DURATION: 9;
+  EDGE_PSEUDOWEATHER_MAX_DURATION: 10;
+  EDGE_REQUEST_COUNT: 11;
+  EDGE_VALID: 12;
+  EDGE_INDEX: 13;
+  EDGE_TURN_VALUE: 14;
 }
 
-export const FeatureEdge: FeatureEdgeMap;
+export const FeatureAbsoluteEdge: FeatureAbsoluteEdgeMap;
+
+export interface FeatureRelativeEdgeMap {
+  EDGE_MAJOR_ARG: 0;
+  EDGE_MINOR_ARG0: 1;
+  EDGE_MINOR_ARG1: 2;
+  EDGE_MINOR_ARG2: 3;
+  EDGE_MINOR_ARG3: 4;
+  EDGE_ACTION_TOKEN: 5;
+  EDGE_ITEM_TOKEN: 6;
+  EDGE_ABILITY_TOKEN: 7;
+  EDGE_FROM_TYPE_TOKEN: 8;
+  EDGE_FROM_SOURCE_TOKEN: 9;
+  EDGE_DAMAGE_RATIO: 10;
+  EDGE_HEAL_RATIO: 11;
+  EDGE_EFFECT_TOKEN: 12;
+  EDGE_BOOST_ATK_VALUE: 13;
+  EDGE_BOOST_DEF_VALUE: 14;
+  EDGE_BOOST_SPA_VALUE: 15;
+  EDGE_BOOST_SPD_VALUE: 16;
+  EDGE_BOOST_SPE_VALUE: 17;
+  EDGE_BOOST_ACCURACY_VALUE: 18;
+  EDGE_BOOST_EVASION_VALUE: 19;
+  EDGE_STATUS_TOKEN: 20;
+  EDGE_SIDECONDITIONS0: 21;
+  EDGE_SIDECONDITIONS1: 22;
+  EDGE_TOXIC_SPIKES: 23;
+  EDGE_SPIKES: 24;
+}
+
+export const FeatureRelativeEdge: FeatureRelativeEdgeMap;
 

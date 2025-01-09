@@ -24,7 +24,7 @@ function getRandomOneIndex(arr: number[]): number {
 }
 
 export const GetRandomAction: EvalActionFnType = ({ player }) => {
-    const legalActions = StateHandler.getLegalActions(
+    const { legalActions } = StateHandler.getLegalActions(
         player.privateBattle.request,
     );
     const legalIndices = legalActions.toBinaryVector();

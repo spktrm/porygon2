@@ -26,9 +26,10 @@ from rlenv.protos.enums_pb2 import (
 from rlenv.protos.features_pb2 import (
     EdgeFromTypes,
     EdgeTypes,
-    FeatureEdge,
+    FeatureAbsoluteEdge,
     FeatureEntity,
     FeatureMoveset,
+    FeatureRelativeEdge,
     MovesetActionType,
 )
 from rlenv.protos.state_pb2 import State
@@ -62,10 +63,11 @@ NUM_EDGE_FROM_TYPES = len(EdgeFromTypes.keys())
 NUM_EDGE_TYPES = len(EdgeTypes.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
 NUM_MOVE_FIELDS = len(FeatureMoveset.keys())
-NUM_EDGE_FIELDS = len(FeatureEdge.keys())
+NUM_RELATIVE_EDGE_FIELDS = len(FeatureRelativeEdge.keys())
+NUM_ABSOLUTE_EDGE_FIELDS = len(FeatureAbsoluteEdge.keys())
 NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
 
-NUM_HISTORY = 32
+NUM_HISTORY = 16
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
@@ -95,7 +97,6 @@ MAX_BOOST_VALUE = 13
 
 
 ENTITY_MAX_VALUES = {
-    FeatureEntity.ENTITY_SIDE: 2,
     FeatureEntity.ENTITY_LEVEL: 100,
     FeatureEntity.ENTITY_HP_RATIO: 31,
     FeatureEntity.ENTITY_GENDER: NUM_GENDERS,
@@ -117,20 +118,32 @@ ENTITY_MAX_VALUES = {
     FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
 }
 
-EDGE_MAX_VALUES = {
-    FeatureEdge.MAJOR_ARG: NUM_MAJOR_ARGS,
-    FeatureEdge.MINOR_ARG: NUM_MINOR_ARGS,
-    FeatureEdge.FROM_SOURCE_TOKEN: NUM_EFFECTS,
-    FeatureEdge.FROM_TYPE_TOKEN: NUM_EDGE_FROM_TYPES,
-    FeatureEdge.EDGE_TYPE_TOKEN: NUM_EDGE_TYPES,
-    FeatureEdge.DAMAGE_RATIO: 31,
-    FeatureEdge.HEAL_RATIO: 31,
-    FeatureEdge.STATUS_TOKEN: NUM_STATUS,
-    FeatureEdge.BOOST_ATK_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_DEF_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_SPA_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_SPD_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_SPE_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
-    FeatureEdge.BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+RELATIVE_EDGE_MAX_VALUES = {
+    FeatureRelativeEdge.EDGE_MAJOR_ARG: NUM_MAJOR_ARGS,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN: NUM_EDGE_FROM_TYPES,
+    FeatureRelativeEdge.EDGE_DAMAGE_RATIO: 31,
+    FeatureRelativeEdge.EDGE_HEAL_RATIO: 31,
+    FeatureRelativeEdge.EDGE_STATUS_TOKEN: NUM_STATUS,
+    FeatureRelativeEdge.EDGE_BOOST_ATK_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_DEF_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_SPA_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_SPD_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_SPE_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+    FeatureRelativeEdge.EDGE_SPIKES: 3,
+    FeatureRelativeEdge.EDGE_TOXIC_SPIKES: 2,
+}
+
+
+ABSOLUTE_EDGE_MAX_VALUES = {
+    FeatureAbsoluteEdge.EDGE_WEATHER_ID: NUM_WEATHER,
+    FeatureAbsoluteEdge.EDGE_WEATHER_MAX_DURATION: 9,
+    FeatureAbsoluteEdge.EDGE_WEATHER_MIN_DURATION: 9,
+    FeatureAbsoluteEdge.EDGE_TERRAIN_ID: NUM_TERRAIN,
+    FeatureAbsoluteEdge.EDGE_TERRAIN_MAX_DURATION: 9,
+    FeatureAbsoluteEdge.EDGE_TERRAIN_MIN_DURATION: 9,
+    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_ID: NUM_PSEUDOWEATHER,
+    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MAX_DURATION: 9,
+    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MIN_DURATION: 9,
 }
