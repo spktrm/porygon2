@@ -14,7 +14,7 @@ def get_most_recent_file(dir_path):
     files = [
         os.path.join(dir_path, f)
         for f in os.listdir(dir_path)
-        if os.path.isfile(os.path.join(dir_path, f))
+        if os.path.isfile(os.path.join(dir_path, f)) and f.startswith("ckpt")
     ]
 
     if not files:

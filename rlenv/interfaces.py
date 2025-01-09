@@ -35,16 +35,14 @@ class EnvStep:
 
 @chex.dataclass(frozen=True)
 class HistoryContainer:
-    edges: chex.Array = ()
     entities: chex.Array = ()
-    side_conditions: chex.Array = ()
-    field: chex.Array = ()
+    relative_edges: chex.Array = ()
+    absolute_edges: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
 class HistoryStep:
     major_history: HistoryContainer = HistoryContainer()
-    minor_history: HistoryContainer = HistoryContainer()
 
 
 @chex.dataclass(frozen=True)

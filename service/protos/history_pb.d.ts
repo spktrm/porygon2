@@ -4,25 +4,20 @@
 import * as jspb from "google-protobuf";
 
 export class History extends jspb.Message {
-  getEdges(): Uint8Array | string;
-  getEdges_asU8(): Uint8Array;
-  getEdges_asB64(): string;
-  setEdges(value: Uint8Array | string): void;
+  getAbsoluteedge(): Uint8Array | string;
+  getAbsoluteedge_asU8(): Uint8Array;
+  getAbsoluteedge_asB64(): string;
+  setAbsoluteedge(value: Uint8Array | string): void;
+
+  getRelativeedges(): Uint8Array | string;
+  getRelativeedges_asU8(): Uint8Array;
+  getRelativeedges_asB64(): string;
+  setRelativeedges(value: Uint8Array | string): void;
 
   getEntities(): Uint8Array | string;
   getEntities_asU8(): Uint8Array;
   getEntities_asB64(): string;
   setEntities(value: Uint8Array | string): void;
-
-  getSideconditions(): Uint8Array | string;
-  getSideconditions_asU8(): Uint8Array;
-  getSideconditions_asB64(): string;
-  setSideconditions(value: Uint8Array | string): void;
-
-  getField(): Uint8Array | string;
-  getField_asU8(): Uint8Array;
-  getField_asB64(): string;
-  setField(value: Uint8Array | string): void;
 
   getLength(): number;
   setLength(value: number): void;
@@ -39,10 +34,9 @@ export class History extends jspb.Message {
 
 export namespace History {
   export type AsObject = {
-    edges: Uint8Array | string,
+    absoluteedge: Uint8Array | string,
+    relativeedges: Uint8Array | string,
     entities: Uint8Array | string,
-    sideconditions: Uint8Array | string,
-    field: Uint8Array | string,
     length: number,
   }
 }

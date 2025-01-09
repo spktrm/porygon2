@@ -12,6 +12,7 @@ message Rewards {
     float faintedReward = 3;
     float switchReward = 4;
     float longevityReward = 5;
+    float faintedFibReward = 6;
 }
 
 message Heuristics {
@@ -36,11 +37,10 @@ message Info {
 message State {
     Info info = 1;
     bytes legalActions = 2;
-    history.History majorHistory = 3;
+    history.History history = 3;
     bytes moveset = 4;
     bytes team = 5;
     string key = 6;
-    history.History minorHistory = 7;
 }
 
 message Trajectory {

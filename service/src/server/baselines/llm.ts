@@ -4,9 +4,10 @@ import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
 
 export const GetLLMAction: EvalActionFnType = ({ player }) => {
-    const legalMask = StateHandler.getLegalActions(player.privateBattle.request)
-        .toBinaryVector()
-        .map((x) => !!x);
+    const { legalActions } = StateHandler.getLegalActions(
+        player.privateBattle.request,
+    );
+    const legalMask = legalActions.toBinaryVector().map((x) => !!x);
 
     const llmState = new LLMState();
     llmState.setLegalmaskList(legalMask);

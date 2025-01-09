@@ -68,22 +68,6 @@ class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_MOVE_ID: _ClassVar[FeatureMoveset]
     MOVESET_SPECIES_ID: _ClassVar[FeatureMoveset]
 
-class FeatureTurnContext(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    VALID: _ClassVar[FeatureTurnContext]
-    IS_MY_TURN: _ClassVar[FeatureTurnContext]
-    ACTION: _ClassVar[FeatureTurnContext]
-    MOVE: _ClassVar[FeatureTurnContext]
-    SWITCH_COUNTER: _ClassVar[FeatureTurnContext]
-    MOVE_COUNTER: _ClassVar[FeatureTurnContext]
-    TURN: _ClassVar[FeatureTurnContext]
-
-class FeatureWeather(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    WEATHER_ID: _ClassVar[FeatureWeather]
-    MIN_DURATION: _ClassVar[FeatureWeather]
-    MAX_DURATION: _ClassVar[FeatureWeather]
-
 class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     EDGE_TYPE_NONE: _ClassVar[EdgeTypes]
@@ -106,34 +90,51 @@ class EdgeFromTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EDGE_FROM_TERRAIN: _ClassVar[EdgeFromTypes]
     EDGE_FROM_PSEUDOWEATHER: _ClassVar[EdgeFromTypes]
 
-class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class FeatureAbsoluteEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    TURN_ORDER_VALUE: _ClassVar[FeatureEdge]
-    EDGE_TYPE_TOKEN: _ClassVar[FeatureEdge]
-    MAJOR_ARG: _ClassVar[FeatureEdge]
-    MINOR_ARG: _ClassVar[FeatureEdge]
-    ACTION_TOKEN: _ClassVar[FeatureEdge]
-    ITEM_TOKEN: _ClassVar[FeatureEdge]
-    ABILITY_TOKEN: _ClassVar[FeatureEdge]
-    FROM_TYPE_TOKEN: _ClassVar[FeatureEdge]
-    FROM_SOURCE_TOKEN: _ClassVar[FeatureEdge]
-    DAMAGE_RATIO: _ClassVar[FeatureEdge]
-    HEAL_RATIO: _ClassVar[FeatureEdge]
-    EFFECT_TOKEN: _ClassVar[FeatureEdge]
-    BOOST_ATK_VALUE: _ClassVar[FeatureEdge]
-    BOOST_DEF_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPA_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPD_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPE_VALUE: _ClassVar[FeatureEdge]
-    BOOST_ACCURACY_VALUE: _ClassVar[FeatureEdge]
-    BOOST_EVASION_VALUE: _ClassVar[FeatureEdge]
-    STATUS_TOKEN: _ClassVar[FeatureEdge]
-    EDGE_AFFECTING_SIDE: _ClassVar[FeatureEdge]
-    PLAYER_ID: _ClassVar[FeatureEdge]
-    REQUEST_COUNT: _ClassVar[FeatureEdge]
-    EDGE_VALID: _ClassVar[FeatureEdge]
-    EDGE_INDEX: _ClassVar[FeatureEdge]
-    TURN_VALUE: _ClassVar[FeatureEdge]
+    EDGE_TURN_ORDER_VALUE: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_TYPE_TOKEN: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_WEATHER_ID: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_WEATHER_MIN_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_WEATHER_MAX_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_TERRAIN_ID: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_TERRAIN_MIN_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_TERRAIN_MAX_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_PSEUDOWEATHER_ID: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_PSEUDOWEATHER_MIN_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_PSEUDOWEATHER_MAX_DURATION: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_REQUEST_COUNT: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_VALID: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_INDEX: _ClassVar[FeatureAbsoluteEdge]
+    EDGE_TURN_VALUE: _ClassVar[FeatureAbsoluteEdge]
+
+class FeatureRelativeEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    EDGE_MAJOR_ARG: _ClassVar[FeatureRelativeEdge]
+    EDGE_MINOR_ARG0: _ClassVar[FeatureRelativeEdge]
+    EDGE_MINOR_ARG1: _ClassVar[FeatureRelativeEdge]
+    EDGE_MINOR_ARG2: _ClassVar[FeatureRelativeEdge]
+    EDGE_MINOR_ARG3: _ClassVar[FeatureRelativeEdge]
+    EDGE_ACTION_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_ITEM_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_ABILITY_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_DAMAGE_RATIO: _ClassVar[FeatureRelativeEdge]
+    EDGE_HEAL_RATIO: _ClassVar[FeatureRelativeEdge]
+    EDGE_EFFECT_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_ATK_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_DEF_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_SPA_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_SPD_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_SPE_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_ACCURACY_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_BOOST_EVASION_VALUE: _ClassVar[FeatureRelativeEdge]
+    EDGE_STATUS_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_SIDECONDITIONS0: _ClassVar[FeatureRelativeEdge]
+    EDGE_SIDECONDITIONS1: _ClassVar[FeatureRelativeEdge]
+    EDGE_TOXIC_SPIKES: _ClassVar[FeatureRelativeEdge]
+    EDGE_SPIKES: _ClassVar[FeatureRelativeEdge]
 ENTITY_SPECIES: FeatureEntity
 ENTITY_ITEM: FeatureEntity
 ENTITY_ITEM_EFFECT: FeatureEntity
@@ -189,16 +190,6 @@ MOVESET_ACTION_TYPE: FeatureMoveset
 MOVESET_EST_DAMAGE: FeatureMoveset
 MOVESET_MOVE_ID: FeatureMoveset
 MOVESET_SPECIES_ID: FeatureMoveset
-VALID: FeatureTurnContext
-IS_MY_TURN: FeatureTurnContext
-ACTION: FeatureTurnContext
-MOVE: FeatureTurnContext
-SWITCH_COUNTER: FeatureTurnContext
-MOVE_COUNTER: FeatureTurnContext
-TURN: FeatureTurnContext
-WEATHER_ID: FeatureWeather
-MIN_DURATION: FeatureWeather
-MAX_DURATION: FeatureWeather
 EDGE_TYPE_NONE: EdgeTypes
 MOVE_EDGE: EdgeTypes
 SWITCH_EDGE: EdgeTypes
@@ -215,29 +206,43 @@ EDGE_FROM_STATUS: EdgeFromTypes
 EDGE_FROM_WEATHER: EdgeFromTypes
 EDGE_FROM_TERRAIN: EdgeFromTypes
 EDGE_FROM_PSEUDOWEATHER: EdgeFromTypes
-TURN_ORDER_VALUE: FeatureEdge
-EDGE_TYPE_TOKEN: FeatureEdge
-MAJOR_ARG: FeatureEdge
-MINOR_ARG: FeatureEdge
-ACTION_TOKEN: FeatureEdge
-ITEM_TOKEN: FeatureEdge
-ABILITY_TOKEN: FeatureEdge
-FROM_TYPE_TOKEN: FeatureEdge
-FROM_SOURCE_TOKEN: FeatureEdge
-DAMAGE_RATIO: FeatureEdge
-HEAL_RATIO: FeatureEdge
-EFFECT_TOKEN: FeatureEdge
-BOOST_ATK_VALUE: FeatureEdge
-BOOST_DEF_VALUE: FeatureEdge
-BOOST_SPA_VALUE: FeatureEdge
-BOOST_SPD_VALUE: FeatureEdge
-BOOST_SPE_VALUE: FeatureEdge
-BOOST_ACCURACY_VALUE: FeatureEdge
-BOOST_EVASION_VALUE: FeatureEdge
-STATUS_TOKEN: FeatureEdge
-EDGE_AFFECTING_SIDE: FeatureEdge
-PLAYER_ID: FeatureEdge
-REQUEST_COUNT: FeatureEdge
-EDGE_VALID: FeatureEdge
-EDGE_INDEX: FeatureEdge
-TURN_VALUE: FeatureEdge
+EDGE_TURN_ORDER_VALUE: FeatureAbsoluteEdge
+EDGE_TYPE_TOKEN: FeatureAbsoluteEdge
+EDGE_WEATHER_ID: FeatureAbsoluteEdge
+EDGE_WEATHER_MIN_DURATION: FeatureAbsoluteEdge
+EDGE_WEATHER_MAX_DURATION: FeatureAbsoluteEdge
+EDGE_TERRAIN_ID: FeatureAbsoluteEdge
+EDGE_TERRAIN_MIN_DURATION: FeatureAbsoluteEdge
+EDGE_TERRAIN_MAX_DURATION: FeatureAbsoluteEdge
+EDGE_PSEUDOWEATHER_ID: FeatureAbsoluteEdge
+EDGE_PSEUDOWEATHER_MIN_DURATION: FeatureAbsoluteEdge
+EDGE_PSEUDOWEATHER_MAX_DURATION: FeatureAbsoluteEdge
+EDGE_REQUEST_COUNT: FeatureAbsoluteEdge
+EDGE_VALID: FeatureAbsoluteEdge
+EDGE_INDEX: FeatureAbsoluteEdge
+EDGE_TURN_VALUE: FeatureAbsoluteEdge
+EDGE_MAJOR_ARG: FeatureRelativeEdge
+EDGE_MINOR_ARG0: FeatureRelativeEdge
+EDGE_MINOR_ARG1: FeatureRelativeEdge
+EDGE_MINOR_ARG2: FeatureRelativeEdge
+EDGE_MINOR_ARG3: FeatureRelativeEdge
+EDGE_ACTION_TOKEN: FeatureRelativeEdge
+EDGE_ITEM_TOKEN: FeatureRelativeEdge
+EDGE_ABILITY_TOKEN: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN: FeatureRelativeEdge
+EDGE_DAMAGE_RATIO: FeatureRelativeEdge
+EDGE_HEAL_RATIO: FeatureRelativeEdge
+EDGE_EFFECT_TOKEN: FeatureRelativeEdge
+EDGE_BOOST_ATK_VALUE: FeatureRelativeEdge
+EDGE_BOOST_DEF_VALUE: FeatureRelativeEdge
+EDGE_BOOST_SPA_VALUE: FeatureRelativeEdge
+EDGE_BOOST_SPD_VALUE: FeatureRelativeEdge
+EDGE_BOOST_SPE_VALUE: FeatureRelativeEdge
+EDGE_BOOST_ACCURACY_VALUE: FeatureRelativeEdge
+EDGE_BOOST_EVASION_VALUE: FeatureRelativeEdge
+EDGE_STATUS_TOKEN: FeatureRelativeEdge
+EDGE_SIDECONDITIONS0: FeatureRelativeEdge
+EDGE_SIDECONDITIONS1: FeatureRelativeEdge
+EDGE_TOXIC_SPIKES: FeatureRelativeEdge
+EDGE_SPIKES: FeatureRelativeEdge

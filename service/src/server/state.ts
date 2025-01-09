@@ -3,6 +3,7 @@ import {
     Args,
     BattleMajorArgName,
     BattleMinorArgName,
+    BattleProgressArgName,
     KWArgs,
     PokemonIdent,
     Protocol,
@@ -23,12 +24,12 @@ import {
     WeatherEnum,
 } from "../../protos/enums_pb";
 import {
-    EdgeTypes,
-    FeatureEdge,
-    FeatureEdgeMap,
+    FeatureAbsoluteEdge,
+    FeatureAbsoluteEdgeMap,
     FeatureEntity,
     FeatureMoveset,
-    FeatureWeather,
+    FeatureRelativeEdge,
+    FeatureRelativeEdgeMap,
     MovesetActionType,
 } from "../../protos/features_pb";
 import {
@@ -37,14 +38,11 @@ import {
     EnumMappings,
     Mappings,
     MoveIndex,
-    numPokemonFields,
+    numPokemonFields as numPokemonFeatures,
     numMovesetFields,
     numMoveFields,
-    numVolatiles,
     NUM_HISTORY,
-    numSideConditions,
-    numWeatherFields,
-    numTypes,
+    jsonDatum,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -58,10 +56,54 @@ import { GetMoveDamange } from "./baselines/max_dmg";
 import { GetHeuristicAction } from "./baselines/heuristic";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
-type MajorArgNames = RemovePipes<BattleMajorArgName> | "turn";
+type MajorArgNames =
+    | RemovePipes<BattleMajorArgName>
+    | RemovePipes<BattleProgressArgName>;
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const sanitizeKeyCache = new Map<string, string>();
+
+function int16ArrayToBitIndices(arr: Int16Array): number[] {
+    const indices: number[] = [];
+
+    for (let i = 0; i < arr.length; i++) {
+        let num = arr[i];
+
+        // Process each of the 16 bits in the int16 value
+        for (let bitPosition = 0; bitPosition < 16; bitPosition++) {
+            // Check if the least significant bit is 1
+            if ((num & 1) !== 0) {
+                indices.push(i * 16 + bitPosition); // Calculate the bit index
+            }
+
+            // Right shift the number to check the next bit
+            num >>>= 1;
+        }
+    }
+
+    return indices;
+}
+
+function bigIntToInt16Array(value: bigint): Int16Array {
+    // Determine the number of 16-bit chunks needed to store the BigInt
+    const bitSize = value.toString(2).length; // Number of bits in the BigInt
+    const chunkCount = Math.ceil(bitSize / 16);
+
+    // Create an Int16Array to store the chunks
+    const result = new Int16Array(chunkCount);
+
+    // Mask to extract 16 bits
+    const mask = BigInt(0xffff);
+
+    for (let i = 0; i < chunkCount; i++) {
+        // Extract the lower 16 bits
+        result[i] = Number(value & mask);
+        // Shift the BigInt to the right by 16 bits
+        value >>= BigInt(16);
+    }
+
+    return result;
+}
 
 function hashArrayToInt32(numbers: number[]): number {
     if (numbers.length !== 4)
@@ -137,7 +179,7 @@ export function concatenateArrays<T extends TypedArray>(arrays: T[]): T {
 const POKEMON_ARRAY_CONSTRUCTOR = Int16Array;
 
 function getBlankPokemonArr() {
-    return new POKEMON_ARRAY_CONSTRUCTOR(numPokemonFields);
+    return new POKEMON_ARRAY_CONSTRUCTOR(numPokemonFeatures);
 }
 
 function getUnkPokemon(n?: number) {
@@ -276,118 +318,158 @@ function getArrayFromPokemon(candidate: Pokemon | null, playerIndex: number) {
             movePps[moveIndex];
     }
 
-    const volatiles = new OneDBoolean(numVolatiles, POKEMON_ARRAY_CONSTRUCTOR);
+    let volatiles = BigInt(0b0);
     for (const [key] of Object.entries({
         ...pokemon.volatiles,
         ...candidate.volatiles,
     })) {
         const index = IndexValueFromEnum("Volatilestatus", key);
-        volatiles.set(index, true);
+        volatiles |= BigInt(1) << BigInt(index);
     }
-    dataArr.set(volatiles.buffer, FeatureEntity.ENTITY_VOLATILES0);
+    dataArr.set(bigIntToInt16Array(volatiles), FeatureEntity.ENTITY_VOLATILES0);
 
     dataArr[FeatureEntity.ENTITY_SIDE] = pokemon.side.n ^ playerIndex;
 
-    dataArr[FeatureEntity.ENTITY_BOOST_ATK_VALUE] = pokemon.boosts.atk ?? 0;
-    dataArr[FeatureEntity.ENTITY_BOOST_DEF_VALUE] = pokemon.boosts.def ?? 0;
-    dataArr[FeatureEntity.ENTITY_BOOST_SPA_VALUE] = pokemon.boosts.spa ?? 0;
-    dataArr[FeatureEntity.ENTITY_BOOST_SPD_VALUE] = pokemon.boosts.spd ?? 0;
-    dataArr[FeatureEntity.ENTITY_BOOST_SPE_VALUE] = pokemon.boosts.spe ?? 0;
+    dataArr[FeatureEntity.ENTITY_BOOST_ATK_VALUE] =
+        (pokemon.boosts.atk ?? 0) + 6;
+    dataArr[FeatureEntity.ENTITY_BOOST_DEF_VALUE] =
+        (pokemon.boosts.def ?? 0) + 6;
+    dataArr[FeatureEntity.ENTITY_BOOST_SPA_VALUE] =
+        (pokemon.boosts.spa ?? 0) + 6;
+    dataArr[FeatureEntity.ENTITY_BOOST_SPD_VALUE] =
+        (pokemon.boosts.spd ?? 0) + 6;
+    dataArr[FeatureEntity.ENTITY_BOOST_SPE_VALUE] =
+        (pokemon.boosts.spe ?? 0) + 6;
     dataArr[FeatureEntity.ENTITY_BOOST_EVASION_VALUE] =
-        pokemon.boosts.evasion ?? 0;
+        (pokemon.boosts.evasion ?? 0) + 6;
     dataArr[FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE] =
-        pokemon.boosts.accuracy ?? 0;
+        (pokemon.boosts.accuracy ?? 0) + 6;
 
-    const typeChanged = new OneDBoolean(numTypes, POKEMON_ARRAY_CONSTRUCTOR);
+    let typeChanged = BigInt(0b0);
     const typechangeVolatile =
         pokemon.volatiles.typechange ?? candidate.volatiles.typechange;
     if (typechangeVolatile) {
         if (typechangeVolatile.apparentType) {
             for (const type of typechangeVolatile.apparentType.split("/")) {
                 const index = IndexValueFromEnum("Types", type);
-                typeChanged.set(index, true);
+                typeChanged |= BigInt(1) << BigInt(index);
             }
         }
     }
-    dataArr.set(typeChanged.buffer, FeatureEntity.ENTITY_TYPECHANGE0);
+    dataArr.set(
+        bigIntToInt16Array(typeChanged),
+        FeatureEntity.ENTITY_TYPECHANGE0,
+    );
 
     return dataArr;
 }
 
-const numEdgeFeatures = Object.keys(FeatureEdge).length;
+const numRelativeEdgeFeatures = Object.keys(FeatureRelativeEdge).length;
+const numAbsoluteEdgeFeatures = Object.keys(FeatureAbsoluteEdge).length;
 
 class Edge {
     player: Player;
 
     entityData: Int16Array;
-    edgeData: Int16Array;
-    sideData: Uint8Array;
-    fieldData: Uint8Array;
+    relativeEdgeData: Int16Array;
+    absoluteEdgeData: Int16Array;
 
     constructor(player: Player) {
         this.player = player;
 
-        this.edgeData = new Int16Array(numEdgeFeatures);
-        this.entityData = new Int16Array(2 * numPokemonFields);
-        this.sideData = new Uint8Array(2 * numSideConditions);
-        this.fieldData = new Uint8Array(numWeatherFields);
+        this.entityData = new Int16Array(2 * numPokemonFeatures);
+        this.relativeEdgeData = new Int16Array(2 * numRelativeEdgeFeatures);
+        this.absoluteEdgeData = new Int16Array(numAbsoluteEdgeFeatures);
 
-        this.updateSideConditionData();
+        this.updateSideData();
         this.updateFieldData();
     }
 
     clone() {
         const edge = new Edge(this.player);
-        edge.edgeData.set(this.edgeData);
+        edge.relativeEdgeData.set(this.relativeEdgeData);
         edge.entityData.set(this.entityData);
         return edge;
     }
 
-    setPoke1FromData(data: Int16Array) {
-        this.entityData.set(data);
+    setPokeFromData(data: Int16Array, offset: number) {
+        this.entityData.set(data, offset);
     }
 
-    setPoke1(poke1: Pokemon | null) {
+    setPoke(poke: Pokemon | null) {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error();
         }
-        const data = getArrayFromPokemon(poke1, playerIndex);
-        this.setPoke1FromData(data);
-        if (poke1 !== null) {
-            this.setFeature(
-                FeatureEdge.EDGE_AFFECTING_SIDE,
-                poke1.side.n ^ playerIndex,
+        if (poke !== null) {
+            const data = getArrayFromPokemon(poke, playerIndex);
+            const isMySide = (poke.side.n ^ playerIndex) === 0;
+            const offset = isMySide ? 0 : numPokemonFeatures;
+            this.setPokeFromData(data, offset);
+        }
+    }
+
+    updateSideData() {
+        const playerIndex = this.player.getPlayerIndex()!;
+
+        for (const side of this.player.publicBattle.sides) {
+            const isMySide = (side.n ^ playerIndex) === 0;
+            const entityOffset = isMySide ? 0 : numPokemonFeatures;
+            const sideConditionOffset =
+                (isMySide ? 0 : numRelativeEdgeFeatures) +
+                FeatureRelativeEdge.EDGE_SIDECONDITIONS0;
+            this.updateEntityData(side.active, entityOffset, playerIndex);
+            this.updateSideConditionData(
+                side,
+                sideConditionOffset,
+                playerIndex,
             );
         }
     }
 
-    setPoke2FromData(data: Int16Array) {
-        this.entityData.set(data, numPokemonFields);
+    updateEntityData(
+        activePokemon: (Pokemon | null)[],
+        entityOffset: number,
+        playerIndex: number,
+    ) {
+        const onlyActive = activePokemon[0];
+        const activePokemonBuffer =
+            onlyActive === null
+                ? nullPokemon
+                : getArrayFromPokemon(onlyActive, playerIndex);
+        this.entityData.set(activePokemonBuffer, entityOffset);
     }
 
-    setPoke2(poke2: Pokemon | null) {
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error();
+    updateSideConditionData(
+        side: Side,
+        relativeEdgeOffset: number,
+        playerIndex: number,
+    ) {
+        let sideConditionBuffer = BigInt(0b0);
+        for (const [id] of Object.entries(side.sideConditions)) {
+            const featureIndex = IndexValueFromEnum<SideconditionEnumMap>(
+                "Sidecondition",
+                id,
+            );
+            sideConditionBuffer |= BigInt(1) << BigInt(featureIndex);
         }
-        const data = getArrayFromPokemon(poke2, playerIndex);
-        this.setPoke2FromData(data);
-    }
-
-    updateSideConditionData() {
-        const playerIndex = this.player.getPlayerIndex()!;
-        for (const side of this.player.publicBattle.sides) {
-            const { n, sideConditions } = side;
-            const sideconditionOffset =
-                n === playerIndex ? numSideConditions : 0;
-            for (const [id, { level }] of Object.entries(sideConditions)) {
-                const featureIndex = IndexValueFromEnum<SideconditionEnumMap>(
-                    "Sidecondition",
-                    id,
-                );
-                this.sideData[featureIndex + sideconditionOffset] = level;
-            }
+        this.relativeEdgeData.set(
+            bigIntToInt16Array(sideConditionBuffer),
+            relativeEdgeOffset,
+        );
+        if (side.sideConditions.spikes) {
+            this.setRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_SPIKES,
+                side.n ^ playerIndex,
+                side.sideConditions.spikes.level,
+            );
+        }
+        if (side.sideConditions.toxicspikes) {
+            this.setRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_TOXIC_SPIKES,
+                side.n ^ playerIndex,
+                side.sideConditions.toxicspikes.level,
+            );
         }
     }
 
@@ -399,47 +481,82 @@ class Edge {
                   WEATHERS[field.weatherState.id as never],
               )
             : WeatherEnum.WEATHER__NULL;
-        this.fieldData[FeatureWeather.WEATHER_ID] = weatherIndex;
-        this.fieldData[FeatureWeather.MAX_DURATION] =
+
+        this.absoluteEdgeData[FeatureAbsoluteEdge.EDGE_WEATHER_ID] =
+            weatherIndex;
+        this.absoluteEdgeData[FeatureAbsoluteEdge.EDGE_WEATHER_MAX_DURATION] =
             field.weatherState.maxDuration;
-        this.fieldData[FeatureWeather.MIN_DURATION] =
+        this.absoluteEdgeData[FeatureAbsoluteEdge.EDGE_WEATHER_MIN_DURATION] =
             field.weatherState.minDuration;
     }
 
-    setFeature(index: FeatureEdgeMap[keyof FeatureEdgeMap], value: number) {
-        if (index === undefined) {
+    setRelativeEdgeFeature(
+        featureIndex: FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+        sideIndex: number,
+        value: number,
+    ) {
+        if (featureIndex === undefined) {
             throw new Error("Index cannot be undefined");
         }
         if (value === undefined) {
             throw new Error("Value cannot be undefined");
         }
-        this.edgeData[index] = value;
+        const index =
+            featureIndex + (sideIndex === 0 ? 0 : numRelativeEdgeFeatures);
+        this.relativeEdgeData[index] = value;
     }
 
-    getFeature(index: FeatureEdgeMap[keyof FeatureEdgeMap]) {
-        return this.edgeData[index];
+    setAbsoluteEdgeFeature(
+        featureIndex: FeatureAbsoluteEdgeMap[keyof FeatureAbsoluteEdgeMap],
+
+        value: number,
+    ) {
+        if (featureIndex === undefined) {
+            throw new Error("Index cannot be undefined");
+        }
+        if (value === undefined) {
+            throw new Error("Value cannot be undefined");
+        }
+
+        this.absoluteEdgeData[featureIndex] = value;
     }
 
-    addMinorArg(argName: MinorArgNames) {
-        const index = IndexValueFromEnum("BattleMinorArg", argName);
-        this.setFeature(FeatureEdge.MINOR_ARG, index);
+    getRelativeEdgeFeature(
+        featureIndex: FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+        sideIndex: number,
+    ) {
+        const index =
+            featureIndex + (sideIndex === 0 ? 0 : numRelativeEdgeFeatures);
+        return this.relativeEdgeData.at(index);
     }
 
-    addMajorArg(argName: MajorArgNames) {
+    addMajorArg(argName: MajorArgNames, sideIndex: number) {
         const index = IndexValueFromEnum("BattleMajorArg", argName);
-        this.setFeature(FeatureEdge.MAJOR_ARG, index);
+        this.setRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_MAJOR_ARG,
+            sideIndex,
+            index,
+        );
     }
 
-    updateEdgeFromOf(effect: Partial<Effect>) {
+    updateEdgeFromOf(effect: Partial<Effect>, sideIndex: number) {
         const { effectType } = effect;
         if (effectType) {
             const fromTypeToken =
                 EffecttypesEnum[
                     `EFFECTTYPES_${effectType.toUpperCase()}` as keyof EffecttypesEnumMap
                 ];
-            this.setFeature(FeatureEdge.FROM_TYPE_TOKEN, fromTypeToken);
+            this.setRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN,
+                sideIndex,
+                fromTypeToken,
+            );
             const fromSourceToken = getEffectToken(effect);
-            this.setFeature(FeatureEdge.FROM_SOURCE_TOKEN, fromSourceToken);
+            this.setRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN,
+                sideIndex,
+                fromSourceToken,
+            );
         }
     }
 }
@@ -454,51 +571,254 @@ function getEffectToken(effect: Partial<Effect>): number {
 }
 
 class EdgeBuffer {
+    player: Player;
+
     entityData: Int16Array;
-    edgeData: Int16Array;
-    sideData: Uint8Array;
-    fieldData: Uint8Array;
+    relativeEdgeData: Int16Array;
+    absoluteEdgeData: Int16Array;
 
     entityCursor: number;
-    edgeCursor: number;
-    sideCursor: number;
-    fieldCursor: number;
+    relativeEdgeCursor: number;
+    absoluteEdgeCursor: number;
+
+    prevEntityCursor: number;
+    prevRelativeEdgeCursor: number;
+    prevAbsoluteEdgeCursor: number;
 
     numEdges: number;
     maxEdges: number;
 
-    constructor() {
+    constructor(player: Player) {
+        this.player = player;
+
         const MAX_TURNS = 1000;
 
         const maxEdges = NUM_HISTORY * MAX_TURNS;
         this.maxEdges = maxEdges;
 
-        this.edgeData = new Int16Array(maxEdges * numEdgeFeatures);
-        this.entityData = new Int16Array(maxEdges * 2 * numPokemonFields);
-        this.sideData = new Uint8Array(maxEdges * 2 * numSideConditions);
-        this.fieldData = new Uint8Array(maxEdges * numWeatherFields);
+        this.entityData = new Int16Array(maxEdges * 2 * numPokemonFeatures);
+        this.relativeEdgeData = new Int16Array(
+            maxEdges * 2 * numRelativeEdgeFeatures,
+        );
+        this.absoluteEdgeData = new Int16Array(
+            maxEdges * numAbsoluteEdgeFeatures,
+        );
 
-        const cursorStart = maxEdges - NUM_HISTORY;
-        this.edgeCursor = cursorStart * numEdgeFeatures;
-        this.entityCursor = cursorStart * 2 * numPokemonFields;
-        this.sideCursor = cursorStart * 2 * numSideConditions;
-        this.fieldCursor = cursorStart * numWeatherFields;
+        this.entityCursor = 0;
+        this.relativeEdgeCursor = 0;
+        this.absoluteEdgeCursor = 0;
+
+        this.prevEntityCursor = 0;
+        this.prevRelativeEdgeCursor = 0;
+        this.prevAbsoluteEdgeCursor = 0;
 
         this.numEdges = 0;
     }
 
+    updateLatestEntityData(
+        activePokemon: (Pokemon | null)[],
+        entityOffset: number,
+        playerIndex: number,
+    ) {
+        const onlyActive = activePokemon[0];
+        const activePokemonBuffer =
+            onlyActive === null
+                ? nullPokemon
+                : getArrayFromPokemon(onlyActive, playerIndex);
+        this.entityData.set(activePokemonBuffer, entityOffset);
+    }
+    updateLatestSideConditionData(
+        side: Side,
+        relativeEdgeOffset: number,
+        playerIndex: number,
+    ) {
+        let sideConditionBuffer = BigInt(0b0);
+        for (const [id] of Object.entries(side.sideConditions)) {
+            const featureIndex = IndexValueFromEnum<SideconditionEnumMap>(
+                "Sidecondition",
+                id,
+            );
+            sideConditionBuffer |= BigInt(1) << BigInt(featureIndex);
+        }
+        this.relativeEdgeData.set(
+            bigIntToInt16Array(sideConditionBuffer),
+            relativeEdgeOffset,
+        );
+        if (side.sideConditions.spikes) {
+            this.setLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_SPIKES,
+                side.n ^ playerIndex,
+                side.sideConditions.spikes.level,
+            );
+        }
+        if (side.sideConditions.toxicspikes) {
+            this.setLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_TOXIC_SPIKES,
+                side.n ^ playerIndex,
+                side.sideConditions.toxicspikes.level,
+            );
+        }
+    }
+
+    updateLatestFieldData() {
+        const field = this.player.publicBattle.field;
+        const weatherIndex = field.weatherState.id
+            ? IndexValueFromEnum(
+                  "Weather",
+                  WEATHERS[field.weatherState.id as never],
+              )
+            : WeatherEnum.WEATHER__NULL;
+
+        this.absoluteEdgeData[
+            this.prevAbsoluteEdgeCursor + FeatureAbsoluteEdge.EDGE_WEATHER_ID
+        ] = weatherIndex;
+        this.absoluteEdgeData[
+            this.prevAbsoluteEdgeCursor +
+                FeatureAbsoluteEdge.EDGE_WEATHER_MAX_DURATION
+        ] = field.weatherState.maxDuration;
+        this.absoluteEdgeData[
+            this.prevAbsoluteEdgeCursor +
+                FeatureAbsoluteEdge.EDGE_WEATHER_MIN_DURATION
+        ] = field.weatherState.minDuration;
+    }
+
+    updateLatestSideData() {
+        const playerIndex = this.player.getPlayerIndex()!;
+
+        for (const side of this.player.publicBattle.sides) {
+            const entityOffset =
+                this.prevEntityCursor +
+                ((side.n ^ playerIndex) === 0 ? 0 : numPokemonFeatures);
+            const sideConditionOffset =
+                this.prevRelativeEdgeCursor +
+                ((side.n ^ playerIndex) === 0 ? 0 : numRelativeEdgeFeatures) +
+                FeatureRelativeEdge.EDGE_SIDECONDITIONS0;
+            this.updateLatestEntityData(side.active, entityOffset, playerIndex);
+            this.updateLatestSideConditionData(
+                side,
+                sideConditionOffset,
+                playerIndex,
+            );
+        }
+    }
+
+    setLatestRelativeEdgeFeature(
+        featureIndex: FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+        sideIndex: number,
+        value: number,
+    ) {
+        if (featureIndex === undefined) {
+            throw new Error("Index cannot be undefined");
+        }
+        if (value === undefined) {
+            throw new Error("Value cannot be undefined");
+        }
+        const index =
+            this.prevRelativeEdgeCursor +
+            featureIndex +
+            (sideIndex === 0 ? 0 : numRelativeEdgeFeatures);
+        this.relativeEdgeData[index] = value;
+    }
+
+    getLatestRelativeEdgeFeature(
+        featureIndex: FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+        sideIndex: number,
+    ) {
+        const index =
+            this.prevRelativeEdgeCursor +
+            featureIndex +
+            (sideIndex === 0 ? 0 : numRelativeEdgeFeatures);
+        return this.relativeEdgeData.at(index);
+    }
+
+    updateLatestMinorArgs(
+        argName: MinorArgNames,
+        sideIndex: number,
+        precision: number = 16,
+    ) {
+        this.updateLatestSideData();
+        this.updateLatestFieldData();
+
+        const index = IndexValueFromEnum("BattleMinorArg", argName);
+        const featureIndex = {
+            0: FeatureRelativeEdge.EDGE_MINOR_ARG0,
+            1: FeatureRelativeEdge.EDGE_MINOR_ARG1,
+            2: FeatureRelativeEdge.EDGE_MINOR_ARG2,
+            3: FeatureRelativeEdge.EDGE_MINOR_ARG3,
+        }[Math.floor(index / precision)];
+        if (featureIndex === undefined) {
+            throw new Error();
+        }
+        const currentValue = this.getLatestRelativeEdgeFeature(
+            featureIndex,
+            sideIndex,
+        )!;
+        const newValue = currentValue | (1 << index % precision);
+        this.setLatestRelativeEdgeFeature(featureIndex, sideIndex, newValue);
+    }
+
+    updateLatestMajorArg(argName: MajorArgNames, sideIndex: number) {
+        const index = IndexValueFromEnum("BattleMajorArg", argName);
+        this.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_MAJOR_ARG,
+            sideIndex,
+            index,
+        );
+    }
+
+    setLatestAbsoluteEdgeFeature(
+        featureIndex: FeatureAbsoluteEdgeMap[keyof FeatureAbsoluteEdgeMap],
+        value: number,
+    ) {
+        if (featureIndex === undefined) {
+            throw new Error("Index cannot be undefined");
+        }
+        if (value === undefined) {
+            throw new Error("Value cannot be undefined");
+        }
+        const index = this.prevAbsoluteEdgeCursor + featureIndex;
+        this.absoluteEdgeData[index] = value;
+    }
+
+    updateLatestEdgeFromOf(effect: Partial<Effect>, sideIndex: number) {
+        const { effectType } = effect;
+        if (effectType) {
+            const fromTypeToken =
+                EffecttypesEnum[
+                    `EFFECTTYPES_${effectType.toUpperCase()}` as keyof EffecttypesEnumMap
+                ];
+            this.setLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN,
+                sideIndex,
+                fromTypeToken,
+            );
+            const fromSourceToken = getEffectToken(effect);
+            this.setLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN,
+                sideIndex,
+                fromSourceToken,
+            );
+        }
+    }
+
     addEdge(edge: Edge) {
-        this.edgeData.set(edge.edgeData, this.edgeCursor);
-        this.edgeCursor -= numEdgeFeatures;
-
         this.entityData.set(edge.entityData, this.entityCursor);
-        this.entityCursor -= 2 * numPokemonFields;
+        this.relativeEdgeData.set(
+            edge.relativeEdgeData,
+            this.relativeEdgeCursor,
+        );
+        this.absoluteEdgeData.set(
+            edge.absoluteEdgeData,
+            this.absoluteEdgeCursor,
+        );
 
-        this.sideData.set(edge.sideData, this.sideCursor);
-        this.sideCursor -= 2 * numSideConditions;
+        this.prevEntityCursor = this.entityCursor;
+        this.prevRelativeEdgeCursor = this.relativeEdgeCursor;
+        this.prevAbsoluteEdgeCursor = this.absoluteEdgeCursor;
 
-        this.fieldData.set(edge.fieldData, this.fieldCursor);
-        this.fieldCursor -= numWeatherFields;
+        this.entityCursor += 2 * numPokemonFeatures;
+        this.relativeEdgeCursor += 2 * numRelativeEdgeFeatures;
+        this.absoluteEdgeCursor += numAbsoluteEdgeFeatures;
 
         this.numEdges += 1;
     }
@@ -506,37 +826,191 @@ class EdgeBuffer {
     getHistory(numHistory: number = NUM_HISTORY) {
         const history = new History();
         const width = Math.max(1, Math.min(this.numEdges, numHistory));
-        const trueWidth = width + 1;
-        history.setEdges(
-            new Uint8Array(
-                this.edgeData.slice(
-                    this.edgeCursor + numEdgeFeatures,
-                    this.edgeCursor + trueWidth * numEdgeFeatures,
-                ).buffer,
-            ),
-        );
         history.setEntities(
             new Uint8Array(
                 this.entityData.slice(
-                    this.entityCursor + 2 * numPokemonFields,
-                    this.entityCursor + trueWidth * 2 * numPokemonFields,
+                    this.entityCursor - width * 2 * numPokemonFeatures,
+                    this.entityCursor,
                 ).buffer,
             ),
         );
-        history.setSideconditions(
-            this.sideData.slice(
-                this.sideCursor + 2 * numSideConditions,
-                this.sideCursor + trueWidth * 2 * numSideConditions,
+        history.setRelativeedges(
+            new Uint8Array(
+                this.relativeEdgeData.slice(
+                    this.relativeEdgeCursor -
+                        width * 2 * numRelativeEdgeFeatures,
+                    this.relativeEdgeCursor,
+                ).buffer,
             ),
         );
-        history.setField(
-            this.fieldData.slice(
-                this.fieldCursor + numWeatherFields,
-                this.fieldCursor + trueWidth * numWeatherFields,
+        history.setAbsoluteedge(
+            new Uint8Array(
+                this.absoluteEdgeData.slice(
+                    this.absoluteEdgeCursor - width * numAbsoluteEdgeFeatures,
+                    this.absoluteEdgeCursor,
+                ).buffer,
             ),
         );
         history.setLength(width);
         return history;
+    }
+
+    static toReadableHistory(history: History) {
+        const historyItems = [];
+        const historyLength = history.getLength() ?? 0;
+        const historyEntities = new Int16Array(
+            history.getEntities_asU8().buffer,
+        );
+        const historyRelativeEdges = new Int16Array(
+            history.getRelativeedges_asU8().buffer,
+        );
+        const historyAbsoluteEdges = new Int16Array(
+            history.getAbsoluteedge_asU8().buffer,
+        );
+
+        const entityArrayToObject = (array: Int16Array) => {
+            const volatilesFlat = array.slice(
+                FeatureEntity.ENTITY_VOLATILES0,
+                FeatureEntity.ENTITY_VOLATILES8 + 1,
+            );
+            const volatilesIndices = int16ArrayToBitIndices(volatilesFlat);
+
+            const typechangeFlat = array.slice(
+                FeatureEntity.ENTITY_TYPECHANGE0,
+                FeatureEntity.ENTITY_TYPECHANGE1 + 1,
+            );
+            const typechangeIndices = int16ArrayToBitIndices(typechangeFlat);
+
+            const moveIndicies = Array.from(
+                array.slice(
+                    FeatureEntity.ENTITY_MOVEID0,
+                    FeatureEntity.ENTITY_MOVEID3 + 1,
+                ),
+            );
+
+            return {
+                species:
+                    jsonDatum["species"][array[FeatureEntity.ENTITY_SPECIES]],
+                item: jsonDatum["items"][array[FeatureEntity.ENTITY_ITEM]],
+                ability:
+                    jsonDatum["abilities"][array[FeatureEntity.ENTITY_ABILITY]],
+                moves: moveIndicies.map((index) => jsonDatum["Actions"][index]),
+                volatiles: volatilesIndices.map(
+                    (index) => jsonDatum["volatileStatus"][index],
+                ),
+                typechange: typechangeIndices.map(
+                    (index) => jsonDatum["typechart"][index],
+                ),
+            };
+        };
+
+        const relativeArrayToObject = (array: Int16Array) => {
+            const minorArgsFlat = array.slice(
+                FeatureRelativeEdge.EDGE_MINOR_ARG0,
+                FeatureRelativeEdge.EDGE_MINOR_ARG3 + 1,
+            );
+            const minorArgIndices = int16ArrayToBitIndices(minorArgsFlat);
+
+            const sideConditionsFlat = array.slice(
+                FeatureRelativeEdge.EDGE_SIDECONDITIONS0,
+                FeatureRelativeEdge.EDGE_SIDECONDITIONS1 + 1,
+            );
+            const sideConditionIndices =
+                int16ArrayToBitIndices(sideConditionsFlat);
+
+            return {
+                majorArg:
+                    jsonDatum["battleMajorArgs"][
+                        array[FeatureRelativeEdge.EDGE_MAJOR_ARG]
+                    ],
+                minorArgs: minorArgIndices.map(
+                    (index) => jsonDatum["battleMinorArgs"][index],
+                ),
+                action: jsonDatum["Actions"][
+                    array[FeatureRelativeEdge.EDGE_ACTION_TOKEN]
+                ],
+                damage: array[FeatureRelativeEdge.EDGE_DAMAGE_RATIO] / 31,
+                heal: array[FeatureRelativeEdge.EDGE_HEAL_RATIO] / 31,
+                sideConditions: sideConditionIndices.map(
+                    (index) => jsonDatum["sideCondition"][index],
+                ),
+                from_source:
+                    jsonDatum["Effect"][
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN]
+                    ],
+                boosts: {
+                    EDGE_BOOST_ATK_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_ATK_VALUE],
+                    EDGE_BOOST_DEF_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_DEF_VALUE],
+                    EDGE_BOOST_SPA_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_SPA_VALUE],
+                    EDGE_BOOST_SPD_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_SPD_VALUE],
+                    EDGE_BOOST_SPE_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_SPE_VALUE],
+                    EDGE_BOOST_ACCURACY_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_ACCURACY_VALUE],
+                    EDGE_BOOST_EVASION_VALUE:
+                        array[FeatureRelativeEdge.EDGE_BOOST_EVASION_VALUE],
+                },
+            };
+        };
+
+        const absoluteArrayToObject = (array: Int16Array) => {
+            return {
+                turnOrder: array[FeatureAbsoluteEdge.EDGE_TURN_ORDER_VALUE],
+                requestCount: array[FeatureAbsoluteEdge.EDGE_REQUEST_COUNT],
+                weatherId:
+                    jsonDatum["weather"][
+                        array[FeatureAbsoluteEdge.EDGE_WEATHER_ID]
+                    ],
+            };
+        };
+
+        for (
+            let historyIndex = 0;
+            historyIndex < historyLength;
+            historyIndex++
+        ) {
+            const stepEntities = historyEntities.slice(
+                historyIndex * 2 * numPokemonFeatures,
+                (historyIndex + 1) * 2 * numPokemonFeatures,
+            );
+            const stepEntity0 = stepEntities.slice(0, numPokemonFeatures);
+            const stepEntity1 = stepEntities.slice(
+                numPokemonFeatures,
+                2 * numPokemonFeatures,
+            );
+            const stepRelativeEdges = historyRelativeEdges.slice(
+                historyIndex * 2 * numRelativeEdgeFeatures,
+                (historyIndex + 1) * 2 * numRelativeEdgeFeatures,
+            );
+            const stepRelativeEdge0 = stepRelativeEdges.slice(
+                0,
+                numRelativeEdgeFeatures,
+            );
+            const stepRelativeEdge1 = stepRelativeEdges.slice(
+                numRelativeEdgeFeatures,
+                2 * numRelativeEdgeFeatures,
+            );
+            const stepAbsoluteEdge = historyAbsoluteEdges.slice(
+                historyIndex * numAbsoluteEdgeFeatures,
+                (historyIndex + 1) * numAbsoluteEdgeFeatures,
+            );
+            historyItems.push({
+                entites: [
+                    entityArrayToObject(stepEntity0),
+                    entityArrayToObject(stepEntity1),
+                ],
+                relativeEdges: [
+                    relativeArrayToObject(stepRelativeEdge0),
+                    relativeArrayToObject(stepRelativeEdge1),
+                ],
+                absoluteEdge: absoluteArrayToObject(stepAbsoluteEdge),
+            });
+        }
+        return historyItems;
     }
 }
 export class EventHandler implements Protocol.Handler {
@@ -544,23 +1018,17 @@ export class EventHandler implements Protocol.Handler {
 
     currHp: Map<string, number>;
     actives: Map<ID, PokemonIdent>;
-    actionWindow: { [k: number]: number[] };
     turnOrder: number;
     turnNum: number;
 
-    majorEdgeBuffer: EdgeBuffer;
-    minorEdgeBuffer: EdgeBuffer;
+    edgeBuffer: EdgeBuffer;
 
     constructor(player: Player) {
         this.player = player;
         this.currHp = new Map();
         this.actives = new Map();
-        this.actionWindow = {
-            0: [],
-            1: [],
-        };
-        this.majorEdgeBuffer = new EdgeBuffer();
-        this.minorEdgeBuffer = new EdgeBuffer();
+
+        this.edgeBuffer = new EdgeBuffer(player);
         this.turnOrder = 0;
         this.turnNum = 0;
     }
@@ -617,35 +1085,42 @@ export class EventHandler implements Protocol.Handler {
     }
 
     _preprocessEdge(edge: Edge) {
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex !== undefined) {
-            edge.setFeature(FeatureEdge.PLAYER_ID, playerIndex);
-        }
-        edge.setFeature(FeatureEdge.REQUEST_COUNT, this.player.requestCount);
-        edge.setFeature(FeatureEdge.EDGE_VALID, 1);
-        edge.setFeature(FeatureEdge.EDGE_INDEX, this.majorEdgeBuffer.numEdges);
-        edge.setFeature(FeatureEdge.TURN_ORDER_VALUE, this.turnOrder);
+        edge.setAbsoluteEdgeFeature(
+            FeatureAbsoluteEdge.EDGE_REQUEST_COUNT,
+            this.player.requestCount,
+        );
+        edge.setAbsoluteEdgeFeature(FeatureAbsoluteEdge.EDGE_VALID, 1);
+        edge.setAbsoluteEdgeFeature(
+            FeatureAbsoluteEdge.EDGE_INDEX,
+            this.edgeBuffer.numEdges,
+        );
+        edge.setAbsoluteEdgeFeature(
+            FeatureAbsoluteEdge.EDGE_TURN_ORDER_VALUE,
+            this.turnOrder,
+        );
         this.turnOrder += 1;
-        edge.setFeature(FeatureEdge.TURN_VALUE, this.turnNum);
+        edge.setAbsoluteEdgeFeature(
+            FeatureAbsoluteEdge.EDGE_TURN_VALUE,
+            this.turnNum,
+        );
         return edge;
     }
 
-    addMajorEdge(edge: Edge) {
+    addEdge(edge: Edge) {
         const preprocessedEdge = this._preprocessEdge(edge);
-        this.majorEdgeBuffer.addEdge(preprocessedEdge);
-    }
-
-    addMinorEdge(edge: Edge) {
-        const preprocessedEdge = this._preprocessEdge(edge);
-        this.minorEdgeBuffer.addEdge(preprocessedEdge);
+        this.edgeBuffer.addEdge(preprocessedEdge);
     }
 
     "|move|"(args: Args["|move|"]) {
-        const [argName, poke1Ident, moveId, poke2Ident] = args;
+        const [argName, poke1Ident, moveId] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        this.actionWindow[poke1.side.n].push(0);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const move = this.getMove(moveId);
         const actionIndex = IndexValueFromEnum<typeof ActionsEnum>(
@@ -653,17 +1128,14 @@ export class EventHandler implements Protocol.Handler {
             `move_${move.id}`,
         );
 
-        const poke2 = this.getPokemon(poke2Ident as PokemonIdent);
-
         const edge = new Edge(this.player);
-        edge.addMajorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setPoke2(poke2);
-
-        edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.MOVE_EDGE);
-
-        this.addMajorEdge(edge);
+        edge.addMajorArg(argName, relativePlayerIndex);
+        edge.setRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_ACTION_TOKEN,
+            relativePlayerIndex,
+            actionIndex,
+        );
+        this.addEdge(edge);
     }
 
     "|drag|"(args: Args["|drag|"]) {
@@ -677,24 +1149,27 @@ export class EventHandler implements Protocol.Handler {
     handleSwitch(args: Args["|switch|" | "|drag|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
-        const actionIndex = IndexValueFromEnum<typeof ActionsEnum>(
-            "Actions",
-            `switch_${poke1.species.baseSpecies.toLowerCase()}`,
-        );
-
-        if (argName === "switch") {
-            this.actionWindow[poke1.side.n].push(1);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+
+        const actionIndex = IndexValueFromEnum<typeof ActionsEnum>(
+            "Actions",
+            `switch_${poke.species.baseSpecies.toLowerCase()}`,
+        );
+
         const edge = new Edge(this.player);
-        edge.addMajorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
-
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.SWITCH_EDGE);
-
-        this.addMajorEdge(edge);
+        edge.addMajorArg(argName, relativePlayerIndex);
+        edge.setRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_ACTION_TOKEN,
+            relativePlayerIndex,
+            actionIndex,
+        );
+        this.addEdge(edge);
     }
 
     "|cant|"(args: Args["|cant|"]) {
@@ -702,7 +1177,13 @@ export class EventHandler implements Protocol.Handler {
 
         const edge = new Edge(this.player);
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         if (moveId) {
             const move = this.getMove(moveId);
@@ -710,330 +1191,329 @@ export class EventHandler implements Protocol.Handler {
                 "Actions",
                 `move_${move.id}`,
             );
-            edge.setFeature(FeatureEdge.ACTION_TOKEN, actionIndex);
+            edge.setRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_ACTION_TOKEN,
+                relativePlayerIndex,
+                actionIndex,
+            );
         }
 
         const condition = this.getCondition(conditionId);
 
-        edge.addMajorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.CANT_EDGE);
-        edge.updateEdgeFromOf(condition);
+        edge.addMajorArg(argName, relativePlayerIndex);
+        edge.updateEdgeFromOf(condition, relativePlayerIndex);
 
-        this.addMajorEdge(edge);
+        this.addEdge(edge);
     }
 
     "|faint|"(args: Args["|faint|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
-
         const edge = new Edge(this.player);
 
-        edge.addMajorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        this.addMajorEdge(edge);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+
+        edge.addMajorArg(argName, relativePlayerIndex);
+        this.addEdge(edge);
     }
 
     "|-fail|"(args: Args["|-fail|"], kwArgs: KWArgs["|-fail|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-block|"(args: Args["|-block|"], kwArgs: KWArgs["|-block|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-notarget|"(args: Args["|-notarget|"]) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
-
-        if (poke1Ident) {
-            const poke1 = this.getPokemon(poke1Ident)!;
-            edge.setPoke1(poke1);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-
-        this.addMinorEdge(edge);
+        if (poke1Ident !== undefined) {
+            const poke = this.getPokemon(poke1Ident)!;
+            const relativePlayerIndex = poke.side.n ^ playerIndex;
+            this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        } else {
+            for (const relativePlayerIndex of [0, 1]) {
+                this.edgeBuffer.updateLatestMinorArgs(
+                    argName,
+                    relativePlayerIndex,
+                );
+            }
+        }
     }
 
     "|-miss|"(args: Args["|-miss|"], kwArgs: KWArgs["|-miss|"]) {
-        const [argName, poke1Ident] = args;
+        const [argName, poke1Ident, poke2Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke2Ident ?? poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-damage|"(args: Args["|-damage|"], kwArgs: KWArgs["|-damage|"]) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
-
-        const poke1 = this.getPokemon(poke1Ident)!;
-        const true1Ident = poke1.originalIdent;
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+        const trueIdent = poke.originalIdent;
 
         if (kwArgs.from) {
             const fromEffect = this.getCondition(kwArgs.from);
-            edge.updateEdgeFromOf(fromEffect);
+            this.edgeBuffer.updateLatestEdgeFromOf(
+                fromEffect,
+                relativePlayerIndex,
+            );
         }
-
-        if (!this.currHp.has(true1Ident)) {
-            this.currHp.set(true1Ident, 1);
-        }
-        const prevHp = this.currHp.get(true1Ident) ?? 1;
-        const currHp = poke1.hp / poke1.maxhp;
-        const diffRatio = currHp - prevHp;
-        this.currHp.set(true1Ident, currHp);
-
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(
-            FeatureEdge.DAMAGE_RATIO,
-            Math.abs(Math.floor(31 * diffRatio)),
-        );
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-
-        this.addMinorEdge(edge);
-    }
-
-    "|-heal|"(args: Args["|-heal|"], kwArgs: KWArgs["|-heal|"]) {
-        const [argName, poke1Ident] = args;
-
-        const edge = new Edge(this.player);
-
-        const poke1 = this.getPokemon(poke1Ident)!;
-        const trueIdent = poke1.originalIdent;
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        const fromEffect = this.getCondition(kwArgs.from);
 
         if (!this.currHp.has(trueIdent)) {
             this.currHp.set(trueIdent, 1);
         }
         const prevHp = this.currHp.get(trueIdent) ?? 1;
-        const currHp = poke1.hp / poke1.maxhp;
+        const currHp = poke.hp / poke.maxhp;
         const diffRatio = currHp - prevHp;
         this.currHp.set(trueIdent, currHp);
 
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(
-            FeatureEdge.HEAL_RATIO,
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_DAMAGE_RATIO,
+            relativePlayerIndex,
             Math.abs(Math.floor(31 * diffRatio)),
         );
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
+    }
 
-        this.addMinorEdge(edge);
+    "|-heal|"(args: Args["|-heal|"], kwArgs: KWArgs["|-heal|"]) {
+        const [argName, poke1Ident] = args;
+
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+        const trueIdent = poke.originalIdent;
+
+        if (kwArgs.from) {
+            const fromEffect = this.getCondition(kwArgs.from);
+            this.edgeBuffer.updateLatestEdgeFromOf(
+                fromEffect,
+                relativePlayerIndex,
+            );
+        }
+
+        if (!this.currHp.has(trueIdent)) {
+            this.currHp.set(trueIdent, 1);
+        }
+        const prevHp = this.currHp.get(trueIdent) ?? 1;
+        const currHp = poke.hp / poke.maxhp;
+        const diffRatio = currHp - prevHp;
+        this.currHp.set(trueIdent, currHp);
+
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_HEAL_RATIO,
+            relativePlayerIndex,
+            Math.abs(Math.floor(31 * diffRatio)),
+        );
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {
         const [argName, poke1Ident, statusId] = args;
 
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
+
         const fromEffect = this.getCondition(kwArgs.from);
         const statusToken = IndexValueFromEnum("Status", statusId);
 
-        const poke1 = this.getPokemon(poke1Ident)!;
-
-        const edge = new Edge(this.player);
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.updateEdgeFromOf(fromEffect);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(FeatureEdge.STATUS_TOKEN, statusToken);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_STATUS_TOKEN,
+            relativePlayerIndex,
+            statusToken,
+        );
     }
 
     "|-curestatus|"(args: Args["|-curestatus|"]) {
         const [argName, poke1Ident, statusId] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const statusIndex = IndexValueFromEnum("Status", statusId);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(FeatureEdge.STATUS_TOKEN, statusIndex);
+        const statusToken = IndexValueFromEnum("Status", statusId);
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_STATUS_TOKEN,
+            relativePlayerIndex,
+            statusToken,
+        );
     }
 
     "|-cureteam|"(args: Args["|-cureteam|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     static getStatBoostEdgeFeatureIndex(
         stat: BoostID,
-    ): FeatureEdgeMap[`BOOST_${Uppercase<BoostID>}_VALUE`] {
-        return FeatureEdge[
-            `BOOST_${stat.toLocaleUpperCase()}_VALUE` as `BOOST_${Uppercase<BoostID>}_VALUE`
+    ): FeatureRelativeEdgeMap[`EDGE_BOOST_${Uppercase<BoostID>}_VALUE`] {
+        return FeatureRelativeEdge[
+            `EDGE_BOOST_${stat.toLocaleUpperCase()}_VALUE` as `EDGE_BOOST_${Uppercase<BoostID>}_VALUE`
         ];
     }
 
-    "|-boost|"(args: Args["|-boost|"], kwArgs: KWArgs["|-boost|"]) {
+    "|-boost|"(args: Args["|-boost|"]) {
         const [argName, poke1Ident, stat, value] = args;
-
-        const poke1 = this.getPokemon(poke1Ident)!;
 
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
 
-        const edge = new Edge(this.player);
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(featureIndex, parseInt(value));
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            featureIndex,
+            relativePlayerIndex,
+            parseInt(value),
+        );
     }
 
-    "|-unboost|"(args: Args["|-unboost|"], kwArgs: KWArgs["|-unboost|"]) {
+    "|-unboost|"(args: Args["|-unboost|"]) {
         const [argName, poke1Ident, stat, value] = args;
-
-        const poke1 = this.getPokemon(poke1Ident)!;
 
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
 
-        const edge = new Edge(this.player);
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(featureIndex, -parseInt(value));
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            featureIndex,
+            relativePlayerIndex,
+            -parseInt(value),
+        );
     }
 
     "|-setboost|"(args: Args["|-setboost|"], kwArgs: KWArgs["|-setboost|"]) {
         const [argName, poke1Ident, stat, value] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
-
         const featureIndex = EventHandler.getStatBoostEdgeFeatureIndex(stat);
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(featureIndex, parseInt(value));
-        edge.updateEdgeFromOf(fromEffect);
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            featureIndex,
+            relativePlayerIndex,
+            parseInt(value),
+        );
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-swapboost|"(args: Args["|-swapboost|"], kwArgs: KWArgs["|-swapboost|"]) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-invertboost|"(
@@ -1042,23 +1522,18 @@ export class EventHandler implements Protocol.Handler {
     ) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-clearboost|"(
@@ -1067,23 +1542,18 @@ export class EventHandler implements Protocol.Handler {
     ) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-clearnegativeboost|"(
@@ -1092,23 +1562,18 @@ export class EventHandler implements Protocol.Handler {
     ) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setPoke1(poke1);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-copyboost|"() {}
@@ -1118,76 +1583,65 @@ export class EventHandler implements Protocol.Handler {
 
         const fromEffect = this.getCondition(weatherId);
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
-        edge.updateEdgeFromOf(fromEffect);
-
-        this.addMinorEdge(edge);
+        const weatherIndex =
+            weatherId === "none"
+                ? WeatherEnum.WEATHER__NULL
+                : IndexValueFromEnum("Weather", weatherId);
+        for (const relativePlayerIndex of [0, 1]) {
+            this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+            this.edgeBuffer.updateLatestEdgeFromOf(
+                fromEffect,
+                relativePlayerIndex,
+            );
+        }
+        this.edgeBuffer.setLatestAbsoluteEdgeFeature(
+            FeatureAbsoluteEdge.EDGE_WEATHER_ID,
+            weatherIndex,
+        );
     }
 
-    "|-fieldstart|"(
-        args: Args["|-fieldstart|"],
-        kwArgs: KWArgs["|-fieldstart|"],
-    ) {
-        const [argName] = args;
-
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-
-        if (kwArgs.of) {
-            /* empty */
-        }
-
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
-
-        this.addMinorEdge(edge);
+    "|-fieldstart|"() {
+        // kwArgs: KWArgs["|-fieldstart|"], // args: Args["|-fieldstart|"],
+        // const [argName] = args;
     }
 
-    "|-fieldend|"(args: Args["|-fieldend|"], kwArgs: KWArgs["|-fieldend|"]) {
-        const [argName] = args;
-
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-
-        if (kwArgs.of) {
-            /* empty */
-        }
-
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, 2);
-
-        this.addMinorEdge(edge);
+    "|-fieldend|"() {
+        // args: Args["|-fieldend|"], kwArgs: KWArgs["|-fieldend|"]
+        // const [argName] = args;
     }
 
     "|-sidestart|"(args: Args["|-sidestart|"]) {
         const [argName, sideId, conditionId] = args;
 
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
         const side = this.getSide(sideId);
+        const relativePlayerIndex = side.n ^ playerIndex;
+
         const fromEffect = this.getCondition(conditionId);
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, side.n);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-sideend|"(args: Args["|-sideend|"]) {
         const [argName, sideId, conditionId] = args;
 
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
         const side = this.getSide(sideId);
+        const relativePlayerIndex = side.n ^ playerIndex;
+
         const fromEffect = this.getCondition(conditionId);
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_AFFECTING_SIDE, side.n);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-swapsideconditions|"() {}
@@ -1195,145 +1649,157 @@ export class EventHandler implements Protocol.Handler {
     "|-start|"(args: Args["|-start|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-end|"(args: Args["|-end|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-crit|"(args: Args["|-crit|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-supereffective|"(args: Args["|-supereffective|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-resisted|"(args: Args["|-resisted|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        const edge = new Edge(this.player);
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-immune|"(args: Args["|-immune|"], kwArgs: KWArgs["|-immune|"]) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
-
-        const edge = new Edge(this.player);
-
         const fromEffect = this.getCondition(kwArgs.from);
 
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
         }
 
-        edge.addMinorArg(argName);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-item|"(args: Args["|-item|"], kwArgs: KWArgs["|-item|"]) {
         const [argName, poke1Ident, itemId] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const itemIndex = IndexValueFromEnum("Items", itemId);
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-
-        if (kwArgs.of) {
-            const poke2 = this.getPokemon(kwArgs.of)!;
-            edge.setPoke2(poke2);
-        }
-
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.ITEM_TOKEN, itemIndex);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-        edge.addMinorArg(argName);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_ITEM_TOKEN,
+            relativePlayerIndex,
+            itemIndex,
+        );
     }
 
     "|-enditem|"(args: Args["|-enditem|"], kwArgs: KWArgs["|-enditem|"]) {
         const [argName, poke1Ident, itemId] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const itemIndex = IndexValueFromEnum("Items", itemId);
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.ITEM_TOKEN, itemIndex);
-        edge.updateEdgeFromOf(fromEffect);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.addMinorArg(argName);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_ITEM_TOKEN,
+            relativePlayerIndex,
+            itemIndex,
+        );
     }
 
     "|-ability|"(args: Args["|-ability|"], kwArgs: KWArgs["|-ability|"]) {
         const [argName, poke1Ident, abilityId] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const abilityIndex = IndexValueFromEnum("Ability", abilityId);
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.ABILITY_TOKEN, abilityIndex);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-        edge.addMinorArg(argName);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
+        this.edgeBuffer.setLatestRelativeEdgeFeature(
+            FeatureRelativeEdge.EDGE_ABILITY_TOKEN,
+            relativePlayerIndex,
+            abilityIndex,
+        );
     }
 
     "|-endability|"(
@@ -1342,16 +1808,18 @@ export class EventHandler implements Protocol.Handler {
     ) {
         const [argName, poke1Ident] = args;
 
-        const poke1 = this.getPokemon(poke1Ident)!;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
 
-        const edge = new Edge(this.player);
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.updateEdgeFromOf(fromEffect);
-        edge.addMinorArg(argName);
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
     }
 
     "|-transform|"() {}
@@ -1369,92 +1837,92 @@ export class EventHandler implements Protocol.Handler {
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
         const [argName, poke1Ident] = args;
 
-        const edge = new Edge(this.player);
-
-        if (poke1Ident) {
-            const poke1 = this.getPokemon(poke1Ident)!;
-
-            edge.setPoke1(poke1);
-        }
-
         const fromEffect = this.getCondition(kwArgs.from);
 
-        edge.updateEdgeFromOf(fromEffect);
-        edge.addMinorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
+        if (poke1Ident) {
+            const playerIndex = this.player.getPlayerIndex();
+            if (playerIndex === undefined) {
+                throw new Error();
+            }
 
-        this.addMinorEdge(edge);
+            const poke = this.getPokemon(poke1Ident)!;
+            const relativePlayerIndex = poke.side.n ^ playerIndex;
+
+            this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+            this.edgeBuffer.updateLatestEdgeFromOf(
+                fromEffect,
+                relativePlayerIndex,
+            );
+        }
     }
 
     "|-mustrecharge|"(args: Args["|-mustrecharge|"]) {
         const [argName, poke1Ident] = args;
-        const poke1 = this.getPokemon(poke1Ident)!;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-prepare|"(args: Args["|-prepare|"]) {
         const [argName, poke1Ident] = args;
-        const poke1 = this.getPokemon(poke1Ident)!;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
     "|-hitcount|"(args: Args["|-hitcount|"]) {
         const [argName, poke1Ident] = args;
-        const poke1 = this.getPokemon(poke1Ident)!;
 
-        const edge = new Edge(this.player);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
 
-        edge.setPoke1(poke1);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EFFECT_EDGE);
-        edge.addMinorArg(argName);
+        const poke = this.getPokemon(poke1Ident)!;
+        const relativePlayerIndex = poke.side.n ^ playerIndex;
 
-        this.addMinorEdge(edge);
+        this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
     }
 
-    "|done|"() {}
+    "|done|"(args: Args["|done|"]) {
+        const [argName] = args;
+
+        const edge = new Edge(this.player);
+        for (const relativePlayerIndex of [0, 1])
+            edge.addMajorArg(argName, relativePlayerIndex);
+        if (this.turnOrder > 0) {
+            this.addEdge(edge);
+        }
+    }
 
     "|start|"() {
-        const edge = new Edge(this.player);
-        edge.addMajorArg("turn");
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
-
         this.turnOrder = 0;
-        this.addMajorEdge(edge);
     }
 
     "|turn|"(args: Args["|turn|"]) {
-        const [argName, turnNum] = args;
-
-        const edge = new Edge(this.player);
-        edge.addMajorArg(argName);
-        edge.setFeature(FeatureEdge.EDGE_TYPE_TOKEN, EdgeTypes.EDGE_TYPE_START);
+        const turnNum = (args.at(1) ?? "").toString();
 
         this.turnOrder = 0;
         this.turnNum = parseInt(turnNum);
-        this.addMajorEdge(edge);
     }
 
     reset() {
         this.currHp = new Map();
         this.actives = new Map();
-        this.actionWindow = {
-            0: [],
-            1: [],
-        };
     }
 }
 
@@ -1465,8 +1933,12 @@ export class StateHandler {
         this.player = player;
     }
 
-    static getLegalActions(request?: AnyObject | null): OneDBoolean {
+    static getLegalActions(request?: AnyObject | null): {
+        legalActions: OneDBoolean;
+        isStruggling: boolean;
+    } {
         const legalActions = new OneDBoolean(10, Uint8Array);
+        let isStruggling = false;
 
         if (request === undefined || request === null) {
             for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
@@ -1500,6 +1972,9 @@ export class StateHandler {
 
                 for (let j = 1; j <= possibleMoves.length; j++) {
                     const currentMove = possibleMoves[j - 1];
+                    if (currentMove.id === "struggle") {
+                        isStruggling = true;
+                    }
                     if (!currentMove.disabled) {
                         const moveIndex = j as 1 | 2 | 3 | 4;
                         legalActions.set(-1 + moveIndex, true);
@@ -1541,10 +2016,10 @@ export class StateHandler {
                 }
             }
         }
-        return legalActions;
+        return { legalActions, isStruggling };
     }
 
-    getSideMoveset(side: Side) {
+    getSideMoveset(side: Side, isStruggling: boolean) {
         const movesetArr = new Int16Array(numMovesetFields);
 
         let offset = 0;
@@ -1562,56 +2037,79 @@ export class StateHandler {
 
         const attacker = mySide.active[0];
         const defender = oppSide.active[0];
+        let numMoves = 0;
 
         if (active !== null) {
-            const moveSlots = active.moveSlots.slice(0, 4);
-            if (active.moveSlots.length > 4) {
-                /* empty */
-            }
-            for (const move of moveSlots) {
-                const { id, ppUsed } = move;
+            if (isStruggling) {
                 movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
                     IndexValueFromEnum<typeof ActionsEnum>(
                         "Actions",
-                        `move_${id}`,
+                        `move_struggle`,
                     );
                 movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
                     MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = ppUsed;
                 movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
                     side.n ^ playerIndex;
-                if ("disabled" in move) {
-                    movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
-                        move.disabled ? 0 : 1;
-                } else {
-                    movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 1;
-                }
-                if (attacker !== null && defender !== null) {
-                    try {
-                        const moveDamage = GetMoveDamange({
-                            battle: this.player.privateBattle,
-                            attacker,
-                            defender,
-                            moveId: id,
-                        });
-                        movesetArr[offset + FeatureMoveset.MOVESET_EST_DAMAGE] =
-                            moveDamage;
-                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    } catch (err) {
-                        /* empty */
-                    }
-                } else {
-                    movesetArr[offset + FeatureMoveset.MOVESET_EST_DAMAGE] = 0;
-                }
-
                 movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                    IndexValueFromEnum("Move", id);
+                    IndexValueFromEnum("Move", "struggle");
                 movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
                     SpeciesEnum.SPECIES__NULL;
                 offset += numMoveFields;
+                numMoves += 1;
+            } else {
+                const moveSlots = active.moveSlots.slice(0, 4);
+                if (active.moveSlots.length > 4) {
+                    /* empty */
+                }
+                for (const move of moveSlots) {
+                    const { id, ppUsed } = move;
+                    movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
+                        IndexValueFromEnum<typeof ActionsEnum>(
+                            "Actions",
+                            `move_${id}`,
+                        );
+                    movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
+                        MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
+                    movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = ppUsed;
+                    movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
+                        side.n ^ playerIndex;
+                    if ("disabled" in move) {
+                        movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
+                            move.disabled ? 0 : 1;
+                    } else {
+                        movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 1;
+                    }
+                    if (attacker !== null && defender !== null) {
+                        try {
+                            const moveDamage = GetMoveDamange({
+                                battle: this.player.privateBattle,
+                                attacker,
+                                defender,
+                                moveId: id,
+                            });
+                            movesetArr[
+                                offset + FeatureMoveset.MOVESET_EST_DAMAGE
+                            ] = moveDamage;
+                            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                        } catch (err) {
+                            /* empty */
+                        }
+                    } else {
+                        movesetArr[
+                            offset + FeatureMoveset.MOVESET_EST_DAMAGE
+                        ] = 0;
+                    }
+
+                    movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
+                        IndexValueFromEnum("Move", id);
+                    movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
+                        SpeciesEnum.SPECIES__NULL;
+                    offset += numMoveFields;
+                    numMoves += 1;
+                }
             }
             for (
-                let remainingIndex = moveSlots.length;
+                let remainingIndex = numMoves;
                 remainingIndex < 4;
                 remainingIndex++
             ) {
@@ -1703,15 +2201,21 @@ export class StateHandler {
         return movesetArr;
     }
 
-    getMoveset(): Uint8Array {
+    getMoveset(isStruggling: boolean): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         const movesets = [];
 
         if (playerIndex !== undefined) {
             const mySide = this.player.privateBattle.sides[playerIndex];
             const oppSide = this.player.privateBattle.sides[1 - playerIndex];
-            for (const side of [mySide, oppSide]) {
-                const moveset = this.getSideMoveset(side);
+            for (const [relativeSideIndex, side] of [
+                mySide,
+                oppSide,
+            ].entries()) {
+                const moveset = this.getSideMoveset(
+                    side,
+                    relativeSideIndex === 0 ? isStruggling : false,
+                );
                 movesets.push(moveset);
             }
         }
@@ -1770,12 +2274,8 @@ export class StateHandler {
         return concatenateArrays(team);
     }
 
-    getMajorHistory(numHistory: number = NUM_HISTORY) {
-        return this.player.eventHandler.majorEdgeBuffer.getHistory(numHistory);
-    }
-
-    getMinorHistory(numHistory: number = NUM_HISTORY) {
-        return this.player.eventHandler.minorEdgeBuffer.getHistory(numHistory);
+    getHistory(numHistory: number = NUM_HISTORY) {
+        return this.player.eventHandler.edgeBuffer.getHistory(numHistory);
     }
 
     getRewards() {
@@ -1843,7 +2343,7 @@ export class StateHandler {
         const actionIndex = action.getValue();
 
         if (actionIndex < 0) {
-            const legalActions = StateHandler.getLegalActions(
+            const { legalActions } = StateHandler.getLegalActions(
                 this.player.privateBattle.request,
             );
             const validIndices = legalActions
@@ -1905,16 +2405,15 @@ export class StateHandler {
         const info = this.getInfo();
         state.setInfo(info);
 
-        const legalActions = StateHandler.getLegalActions(
+        const { legalActions, isStruggling } = StateHandler.getLegalActions(
             this.player.privateBattle.request,
         );
         state.setLegalactions(legalActions.buffer);
 
-        const majorHistory = this.getMajorHistory(numHistory);
-        state.setMajorhistory(majorHistory);
-
-        const minorHistory = this.getMinorHistory(numHistory);
-        state.setMinorhistory(minorHistory);
+        const history = this.getHistory(numHistory);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // const readableHistory = EdgeBuffer.toReadableHistory(history);
+        state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -1923,7 +2422,7 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setTeam(new Uint8Array(privateTeam.buffer));
-        state.setMoveset(this.getMoveset());
+        state.setMoveset(this.getMoveset(isStruggling));
 
         return state;
     }

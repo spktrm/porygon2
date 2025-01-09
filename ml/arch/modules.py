@@ -1,3 +1,4 @@
+import functools
 from enum import Enum, auto
 from typing import Any, Callable, List, Optional, Sequence
 
@@ -8,6 +9,13 @@ import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
+
+from rlenv.data import (
+    ABSOLUTE_EDGE_MAX_VALUES,
+    ENTITY_MAX_VALUES,
+    RELATIVE_EDGE_MAX_VALUES,
+)
+from rlenv.protos.features_pb2 import FeatureEntity
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -674,7 +682,7 @@ class BinaryEncoder:
         values = np.arange(total_values, dtype=int)[:, None]
         powers_of_two = 2 ** np.arange(self.num_bits - 1, -1, -1, dtype=int)
         vectors = (values & powers_of_two) > 0
-        return vectors.astype(int)
+        return vectors.astype(float)
 
     def __call__(self, indices: chex.Array):
         """
@@ -758,3 +766,49 @@ class MergeEmbeddings(nn.Module):
     def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
         embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
         return SumEmbeddings(self.output_size)(embeddings)
+
+
+def one_hot_concat_jax(
+    array: jnp.ndarray, feature_indices: jnp.ndarray, max_vals: np.ndarray
+) -> jnp.ndarray:
+    sum_offsets = np.cumsum(np.concatenate(([0], max_vals), axis=-1))
+    tokens = array[feature_indices]
+    indices = tokens + sum_offsets[:-1]
+    return jnp.matmul(
+        jnp.ones((len(indices),), jnp.float32),
+        indices[:, jnp.newaxis] == jnp.arange(sum_offsets[-1]),
+    )
+
+
+one_hot_encode_entity = functools.partial(
+    one_hot_concat_jax,
+    feature_indices=np.array(list(sorted(ENTITY_MAX_VALUES.keys()))),
+    max_vals=np.array(list(sorted(ENTITY_MAX_VALUES.values()))),
+)
+
+one_hot_encode_relative_edge = functools.partial(
+    one_hot_concat_jax,
+    feature_indices=np.array(list(RELATIVE_EDGE_MAX_VALUES.keys())),
+    max_vals=np.array(list(RELATIVE_EDGE_MAX_VALUES.values())),
+)
+
+one_hot_encode_absolute_edge = functools.partial(
+    one_hot_concat_jax,
+    feature_indices=np.array(list(sorted(ABSOLUTE_EDGE_MAX_VALUES.keys()))),
+    max_vals=np.array(list(sorted(ABSOLUTE_EDGE_MAX_VALUES.values()))),
+)
+
+
+def feature_encode_entity(entity: chex.Array):
+    entity_boosts = entity[
+        FeatureEntity.ENTITY_BOOST_ATK_VALUE : FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE
+        + 1
+    ]
+    return jnp.concatenate(
+        (
+            entity[FeatureEntity.ENTITY_HP_RATIO]
+            / ENTITY_MAX_VALUES[FeatureEntity.ENTITY_HP_RATIO],
+            entity[FeatureEntity.ENTITY_LEVEL] / 100,
+            (entity_boosts - 6) / 6,
+        )
+    )

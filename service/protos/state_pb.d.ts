@@ -21,6 +21,9 @@ export class Rewards extends jspb.Message {
   getLongevityreward(): number;
   setLongevityreward(value: number): void;
 
+  getFaintedfibreward(): number;
+  setFaintedfibreward(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Rewards.AsObject;
   static toObject(includeInstance: boolean, msg: Rewards): Rewards.AsObject;
@@ -38,6 +41,7 @@ export namespace Rewards {
     faintedreward: number,
     switchreward: number,
     longevityreward: number,
+    faintedfibreward: number,
   }
 }
 
@@ -140,10 +144,10 @@ export class State extends jspb.Message {
   getLegalactions_asB64(): string;
   setLegalactions(value: Uint8Array | string): void;
 
-  hasMajorhistory(): boolean;
-  clearMajorhistory(): void;
-  getMajorhistory(): history_pb.History | undefined;
-  setMajorhistory(value?: history_pb.History): void;
+  hasHistory(): boolean;
+  clearHistory(): void;
+  getHistory(): history_pb.History | undefined;
+  setHistory(value?: history_pb.History): void;
 
   getMoveset(): Uint8Array | string;
   getMoveset_asU8(): Uint8Array;
@@ -157,11 +161,6 @@ export class State extends jspb.Message {
 
   getKey(): string;
   setKey(value: string): void;
-
-  hasMinorhistory(): boolean;
-  clearMinorhistory(): void;
-  getMinorhistory(): history_pb.History | undefined;
-  setMinorhistory(value?: history_pb.History): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
@@ -177,11 +176,10 @@ export namespace State {
   export type AsObject = {
     info?: Info.AsObject,
     legalactions: Uint8Array | string,
-    majorhistory?: history_pb.History.AsObject,
+    history?: history_pb.History.AsObject,
     moveset: Uint8Array | string,
     team: Uint8Array | string,
     key: string,
-    minorhistory?: history_pb.History.AsObject,
   }
 }
 

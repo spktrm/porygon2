@@ -187,7 +187,8 @@ proto.rlenv.Rewards.toObject = function(includeInstance, msg) {
     hpreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
     faintedreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
     switchreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
-    longevityreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
+    longevityreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0),
+    faintedfibreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0)
   };
 
   if (includeInstance) {
@@ -243,6 +244,10 @@ proto.rlenv.Rewards.deserializeBinaryFromReader = function(msg, reader) {
     case 5:
       var value = /** @type {number} */ (reader.readFloat());
       msg.setLongevityreward(value);
+      break;
+    case 6:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setFaintedfibreward(value);
       break;
     default:
       reader.skipField();
@@ -305,6 +310,13 @@ proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeFloat(
       5,
+      f
+    );
+  }
+  f = message.getFaintedfibreward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      6,
       f
     );
   }
@@ -398,6 +410,24 @@ proto.rlenv.Rewards.prototype.getLongevityreward = function() {
  */
 proto.rlenv.Rewards.prototype.setLongevityreward = function(value) {
   return jspb.Message.setProto3FloatField(this, 5, value);
+};
+
+
+/**
+ * optional float faintedFibReward = 6;
+ * @return {number}
+ */
+proto.rlenv.Rewards.prototype.getFaintedfibreward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 6, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Rewards} returns this
+ */
+proto.rlenv.Rewards.prototype.setFaintedfibreward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 6, value);
 };
 
 
@@ -1067,11 +1097,10 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
   var f, obj = {
     info: (f = msg.getInfo()) && proto.rlenv.Info.toObject(includeInstance, f),
     legalactions: msg.getLegalactions_asB64(),
-    majorhistory: (f = msg.getMajorhistory()) && history_pb.History.toObject(includeInstance, f),
+    history: (f = msg.getHistory()) && history_pb.History.toObject(includeInstance, f),
     moveset: msg.getMoveset_asB64(),
     team: msg.getTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 6, ""),
-    minorhistory: (f = msg.getMinorhistory()) && history_pb.History.toObject(includeInstance, f)
+    key: jspb.Message.getFieldWithDefault(msg, 6, "")
   };
 
   if (includeInstance) {
@@ -1120,7 +1149,7 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 3:
       var value = new history_pb.History;
       reader.readMessage(value,history_pb.History.deserializeBinaryFromReader);
-      msg.setMajorhistory(value);
+      msg.setHistory(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -1133,11 +1162,6 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 6:
       var value = /** @type {string} */ (reader.readString());
       msg.setKey(value);
-      break;
-    case 7:
-      var value = new history_pb.History;
-      reader.readMessage(value,history_pb.History.deserializeBinaryFromReader);
-      msg.setMinorhistory(value);
       break;
     default:
       reader.skipField();
@@ -1183,7 +1207,7 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getMajorhistory();
+  f = message.getHistory();
   if (f != null) {
     writer.writeMessage(
       3,
@@ -1210,14 +1234,6 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
     writer.writeString(
       6,
       f
-    );
-  }
-  f = message.getMinorhistory();
-  if (f != null) {
-    writer.writeMessage(
-      7,
-      f,
-      history_pb.History.serializeBinaryToWriter
     );
   }
 };
@@ -1303,10 +1319,10 @@ proto.rlenv.State.prototype.setLegalactions = function(value) {
 
 
 /**
- * optional history.History majorHistory = 3;
+ * optional history.History history = 3;
  * @return {?proto.history.History}
  */
-proto.rlenv.State.prototype.getMajorhistory = function() {
+proto.rlenv.State.prototype.getHistory = function() {
   return /** @type{?proto.history.History} */ (
     jspb.Message.getWrapperField(this, history_pb.History, 3));
 };
@@ -1316,7 +1332,7 @@ proto.rlenv.State.prototype.getMajorhistory = function() {
  * @param {?proto.history.History|undefined} value
  * @return {!proto.rlenv.State} returns this
 */
-proto.rlenv.State.prototype.setMajorhistory = function(value) {
+proto.rlenv.State.prototype.setHistory = function(value) {
   return jspb.Message.setWrapperField(this, 3, value);
 };
 
@@ -1325,8 +1341,8 @@ proto.rlenv.State.prototype.setMajorhistory = function(value) {
  * Clears the message field making it undefined.
  * @return {!proto.rlenv.State} returns this
  */
-proto.rlenv.State.prototype.clearMajorhistory = function() {
-  return this.setMajorhistory(undefined);
+proto.rlenv.State.prototype.clearHistory = function() {
+  return this.setHistory(undefined);
 };
 
 
@@ -1334,7 +1350,7 @@ proto.rlenv.State.prototype.clearMajorhistory = function() {
  * Returns whether this field is set.
  * @return {boolean}
  */
-proto.rlenv.State.prototype.hasMajorhistory = function() {
+proto.rlenv.State.prototype.hasHistory = function() {
   return jspb.Message.getField(this, 3) != null;
 };
 
@@ -1438,43 +1454,6 @@ proto.rlenv.State.prototype.getKey = function() {
  */
 proto.rlenv.State.prototype.setKey = function(value) {
   return jspb.Message.setProto3StringField(this, 6, value);
-};
-
-
-/**
- * optional history.History minorHistory = 7;
- * @return {?proto.history.History}
- */
-proto.rlenv.State.prototype.getMinorhistory = function() {
-  return /** @type{?proto.history.History} */ (
-    jspb.Message.getWrapperField(this, history_pb.History, 7));
-};
-
-
-/**
- * @param {?proto.history.History|undefined} value
- * @return {!proto.rlenv.State} returns this
-*/
-proto.rlenv.State.prototype.setMinorhistory = function(value) {
-  return jspb.Message.setWrapperField(this, 7, value);
-};
-
-
-/**
- * Clears the message field making it undefined.
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.clearMinorhistory = function() {
-  return this.setMinorhistory(undefined);
-};
-
-
-/**
- * Returns whether this field is set.
- * @return {boolean}
- */
-proto.rlenv.State.prototype.hasMinorhistory = function() {
-  return jspb.Message.getField(this, 7) != null;
 };
 
 

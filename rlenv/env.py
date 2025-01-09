@@ -4,10 +4,11 @@ import numpy as np
 
 from rlenv.data import (
     EX_STATE,
-    NUM_EDGE_FIELDS,
+    NUM_ABSOLUTE_EDGE_FIELDS,
     NUM_ENTITY_FIELDS,
     NUM_HISTORY,
     NUM_MOVE_FIELDS,
+    NUM_RELATIVE_EDGE_FIELDS,
 )
 from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
 from rlenv.protos.history_pb2 import History
@@ -18,21 +19,20 @@ from rlenv.utils import padnstack
 def get_history(history: History, padding_length: int = NUM_HISTORY):
     history_length = history.length
 
-    edges = np.frombuffer(history.edges, dtype=np.int16).reshape(
-        (history_length, NUM_EDGE_FIELDS)
-    )
     entities = np.frombuffer(history.entities, dtype=np.int16).reshape(
         (history_length, 2, NUM_ENTITY_FIELDS)
     )
-    side_conditions = np.frombuffer(history.sideConditions, dtype=np.uint8).reshape(
-        (history_length, 2, -1)
+    relative_edges = np.frombuffer(history.relativeEdges, dtype=np.int16).reshape(
+        (history_length, 2, NUM_RELATIVE_EDGE_FIELDS)
     )
-    field = np.frombuffer(history.field, dtype=np.uint8).reshape((history_length, -1))
+    absolute_edges = np.frombuffer(history.absoluteEdge, dtype=np.int16).reshape(
+        (history_length, NUM_ABSOLUTE_EDGE_FIELDS)
+    )
+
     return HistoryContainer(
-        edges=padnstack(edges, padding_length).astype(int),
         entities=padnstack(entities, padding_length).astype(int),
-        side_conditions=padnstack(side_conditions, padding_length).astype(int),
-        field=padnstack(field, padding_length).astype(int),
+        relative_edges=padnstack(relative_edges, padding_length).astype(int),
+        absolute_edges=padnstack(absolute_edges, padding_length).astype(int),
     )
 
 
@@ -45,8 +45,7 @@ def get_legal_mask(state: State):
 def process_state(state: State):
     player_index = int(state.info.playerIndex)
 
-    major_history_step = get_history(state.majorHistory, NUM_HISTORY)
-    minor_history_step = get_history(state.minorHistory, NUM_HISTORY)
+    history_step = get_history(state.history, NUM_HISTORY)
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
@@ -93,8 +92,7 @@ def process_state(state: State):
         heuristic_action=np.array(heuristics.heuristicAction).astype(int),
     )
     history_step = HistoryStep(
-        major_history=major_history_step,
-        minor_history=minor_history_step,
+        major_history=history_step,
     )
 
     return env_step, history_step

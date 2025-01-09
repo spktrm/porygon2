@@ -16,7 +16,7 @@ def block_all(xs):
 def main():
     config = get_model_cfg()
     network = get_model(config)
-    ex_step = get_ex_step()
+    ex, hx = get_ex_step()
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -26,14 +26,14 @@ def main():
         params = step["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, ex_step)
+        params = network.init(key, ex, hx)
 
     apply_fn = network.apply
-    output = apply_fn(params, ex_step)
+    output = apply_fn(params, ex, hx)
 
     with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
         # Run the operations to be profiled
-        output = apply_fn(params, ex_step)
+        output = apply_fn(params, ex, hx)
         block_all(output)
 
 
