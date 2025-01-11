@@ -387,10 +387,10 @@ class TransformerEncoder(nn.Module):
             self_attn_mask = self_attn_mask & ca_mask
 
         def encoder_layer(x: chex.Array):
-            x_ln = layer_norm(x)
-            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
-            x_ln = layer_norm(x)
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
             mha = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -401,9 +401,17 @@ class TransformerEncoder(nn.Module):
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
-            x_ln = layer_norm(x)
-            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ffn))
             return x
 
         for _ in range(self.num_layers):
@@ -448,10 +456,10 @@ class TransformerDecoder(nn.Module):
             cross_attn_mask = cross_attn_mask & ca_mask
 
         def decoder_layer(x: chex.Array, y: chex.Array):
-            x_ln = layer_norm(x)
-            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
-            x_ln = layer_norm(x)
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
             ca = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -462,9 +470,17 @@ class TransformerDecoder(nn.Module):
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=y, value=y, mask=ca_mask)
             x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
-            x_ln = layer_norm(x)
-            mlp = SwiGLU(self.resblocks_hidden_size)(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
+                (self.resblocks_hidden_size, self.model_size),
+                use_layer_norm=False,
+                activate_first=False,
+                use_spectral_linear=self.use_spectral_linear,
+            )(x_ln)
+            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ffn))
             return x
 
         for _ in range(self.num_layers):
@@ -756,7 +772,21 @@ class SumEmbeddings(nn.Module):
 
     @nn.compact
     def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
-        return sum([nn.Dense(self.output_size)(x) for x in embeddings])
+        # Sum the transformed embeddings using parameter weights
+        weights = [
+            self.param(
+                f"weight_{i}",
+                nn.initializers.lecun_normal(),
+                (embedding.shape[-1], self.output_size),
+            )
+            for i, embedding in enumerate(embeddings)
+        ]
+        transformed_embeddings = [jnp.dot(x, w) for x, w in zip(embeddings, weights)]
+        summed_embeddings = sum(transformed_embeddings)
+
+        # Add a single bias at the end
+        bias = self.param("bias", nn.initializers.zeros, (self.output_size,))
+        return summed_embeddings + bias
 
 
 class MergeEmbeddings(nn.Module):
@@ -766,6 +796,28 @@ class MergeEmbeddings(nn.Module):
     def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
         embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
         return SumEmbeddings(self.output_size)(embeddings)
+
+
+class GruResBlock(nn.Module):
+    model_size: int
+    hidden_size: int = None
+    num_layers: int = 2
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: chex.Array):
+        model_size = x.shape[-1]
+        hidden_size = self.hidden_size or model_size
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
+                (hidden_size, model_size), use_layer_norm=False, activate_first=False
+            )(x_ln)
+            x, _ = nn.GRUCell(model_size)(x, nn.relu(ffn))
+        return x
 
 
 def one_hot_concat_jax(
@@ -806,9 +858,11 @@ def feature_encode_entity(entity: chex.Array):
     ]
     return jnp.concatenate(
         (
-            entity[FeatureEntity.ENTITY_HP_RATIO]
-            / ENTITY_MAX_VALUES[FeatureEntity.ENTITY_HP_RATIO],
-            entity[FeatureEntity.ENTITY_LEVEL] / 100,
+            (
+                entity[FeatureEntity.ENTITY_HP_RATIO]
+                / ENTITY_MAX_VALUES[FeatureEntity.ENTITY_HP_RATIO]
+            )[None],
+            (entity[FeatureEntity.ENTITY_LEVEL] / 100)[None],
             (entity_boosts - 6) / 6,
         )
     )

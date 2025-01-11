@@ -49,40 +49,18 @@ def get_model_cfg():
     cfg.encoder = ConfigDict()
     cfg.encoder.entity_size = entity_size
     cfg.encoder.vector_size = vector_size
-    cfg.encoder.entity_encoder = ConfigDict()
-    cfg.encoder.move_encoder = ConfigDict()
-    cfg.encoder.edge_encoder = ConfigDict()
-    cfg.encoder.side_condition_encoder = ConfigDict()
-    cfg.encoder.field_encoder = ConfigDict()
-    cfg.encoder.timestep_transformer_decoder = ConfigDict()
-    cfg.encoder.timestep_transformer_encoder = ConfigDict()
-    cfg.encoder.entity_timestep_transformer_decoder = ConfigDict()
-    cfg.encoder.entity_transformer_encoder = ConfigDict()
-    cfg.encoder.action_entity_transformer_decoder = ConfigDict()
 
-    cfg.encoder.entity_encoder.entity_size = entity_size
-    cfg.encoder.edge_encoder.entity_size = entity_size
-    cfg.encoder.move_encoder.entity_size = entity_size
-    cfg.encoder.side_condition_encoder.entity_size = entity_size // 4
-    cfg.encoder.field_encoder.entity_size = entity_size // 4
+    cfg.encoder.timestep_transformer_encoder = ConfigDict()
+    cfg.encoder.entity_transformer_encoder = ConfigDict()
+    cfg.encoder.entity_timestep_transformer_decoder = ConfigDict()
+    cfg.encoder.action_entity_transformer_decoder = ConfigDict()
 
     num_transformer_layers = 1
     num_transformer_heads = 2
-    transformer_hidden_size_scale = 0.5
+    transformer_hidden_size_scale = 4
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
     transformer_key_value_scale = 0.5
     transformer_key_value_size = int(transformer_key_value_scale * entity_size)
-
-    cfg.encoder.timestep_transformer_decoder.num_layers = num_transformer_layers
-    cfg.encoder.timestep_transformer_decoder.key_size = transformer_key_value_size
-    cfg.encoder.timestep_transformer_decoder.value_size = transformer_key_value_size
-    cfg.encoder.timestep_transformer_decoder.model_size = entity_size
-    cfg.encoder.timestep_transformer_decoder.num_heads = num_transformer_heads
-    cfg.encoder.timestep_transformer_decoder.use_layer_norm = use_layer_norm
-    cfg.encoder.timestep_transformer_decoder.use_spectral_linear = use_spectral_linear
-    cfg.encoder.timestep_transformer_decoder.resblocks_hidden_size = (
-        transformer_hidden_size
-    )
 
     cfg.encoder.timestep_transformer_encoder.num_layers = num_transformer_layers
     cfg.encoder.timestep_transformer_encoder.key_size = transformer_key_value_size
@@ -92,6 +70,17 @@ def get_model_cfg():
     cfg.encoder.timestep_transformer_encoder.use_layer_norm = use_layer_norm
     cfg.encoder.timestep_transformer_encoder.use_spectral_linear = use_spectral_linear
     cfg.encoder.timestep_transformer_encoder.resblocks_hidden_size = (
+        transformer_hidden_size
+    )
+
+    cfg.encoder.entity_transformer_encoder.num_layers = num_transformer_layers
+    cfg.encoder.entity_transformer_encoder.key_size = transformer_key_value_size
+    cfg.encoder.entity_transformer_encoder.value_size = transformer_key_value_size
+    cfg.encoder.entity_transformer_encoder.model_size = entity_size
+    cfg.encoder.entity_transformer_encoder.num_heads = num_transformer_heads
+    cfg.encoder.entity_transformer_encoder.use_layer_norm = use_layer_norm
+    cfg.encoder.entity_transformer_encoder.use_spectral_linear = use_spectral_linear
+    cfg.encoder.entity_transformer_encoder.resblocks_hidden_size = (
         transformer_hidden_size
     )
 
@@ -109,17 +98,6 @@ def get_model_cfg():
         use_spectral_linear
     )
     cfg.encoder.entity_timestep_transformer_decoder.resblocks_hidden_size = (
-        transformer_hidden_size
-    )
-
-    cfg.encoder.entity_transformer_encoder.num_layers = num_transformer_layers
-    cfg.encoder.entity_transformer_encoder.key_size = transformer_key_value_size
-    cfg.encoder.entity_transformer_encoder.value_size = transformer_key_value_size
-    cfg.encoder.entity_transformer_encoder.model_size = entity_size
-    cfg.encoder.entity_transformer_encoder.num_heads = num_transformer_heads
-    cfg.encoder.entity_transformer_encoder.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_transformer_encoder.use_spectral_linear = use_spectral_linear
-    cfg.encoder.entity_transformer_encoder.resblocks_hidden_size = (
         transformer_hidden_size
     )
 

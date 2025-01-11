@@ -38,17 +38,15 @@ class PolicyHead(nn.Module):
     def __call__(
         self,
         action_embeddings: chex.Array,
-        env_step: EnvStep,
+        mask: chex.Array,
     ):
-        legal = env_step.legal
-
-        action_embeddings = self.transformer(action_embeddings, legal)
+        action_embeddings = self.transformer(action_embeddings, mask)
         logits = jax.vmap(self.logits)(action_embeddings)
         logits = logits.reshape(-1)
-        logits = logits - logits.mean(where=legal)
+        logits = logits - logits.mean(where=mask)
 
-        policy = legal_policy(logits, legal)
-        log_policy = legal_log_policy(logits, legal)
+        policy = legal_policy(logits, mask)
+        log_policy = legal_log_policy(logits, mask)
 
         return logits, policy, log_policy
 
@@ -62,13 +60,11 @@ class ValueHead(nn.Module):
 
     def __call__(
         self,
-        action_embeddings: chex.Array,
-        env_step: EnvStep,
+        entity_embeddings: chex.Array,
+        mask: chex.Array,
     ):
-        legal = env_step.legal
-
-        action_embeddings = self.transformer(action_embeddings, legal)
-        logits = jax.vmap(self.logits)(action_embeddings)
+        entity_embeddings = self.transformer(entity_embeddings, mask)
+        logits = jax.vmap(self.logits)(entity_embeddings)
         logits = logits.reshape(-1)
 
-        return logits.mean(where=legal, keepdims=True)
+        return logits.mean(where=mask, keepdims=True)
