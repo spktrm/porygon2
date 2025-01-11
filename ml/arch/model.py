@@ -35,13 +35,15 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        action_embeddings = self.encoder(env_step, history_step)
+        entity_embeddings, entity_mask, action_embeddings = self.encoder(
+            env_step, history_step
+        )
 
         # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(action_embeddings, env_step)
+        logit, pi, log_pi = self.policy_head(action_embeddings, env_step.legal)
 
         # Apply the value head
-        v = self.value_head(action_embeddings, env_step)
+        v = self.value_head(entity_embeddings, entity_mask)
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)

@@ -18,6 +18,7 @@ from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v_huber,
+    get_loss_v_mse,
     rnad_v_trace,
 )
 from ml.learners.func import (
@@ -164,7 +165,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             has_played_list.append(jax.lax.stop_gradient(has_played))
             v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v_huber(
+        loss_v = get_loss_v_mse(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,
@@ -178,7 +179,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
             axis=-1
         )
-        ratio = policy_ratio
+        ratio = jnp.ones_like(policy_ratio)
         ratio = ratio * (batch.env.legal.sum(axis=-1) > 1)
 
         is_vector = jnp.expand_dims(ratio, axis=-1)

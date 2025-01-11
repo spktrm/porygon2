@@ -245,7 +245,7 @@ function getArrayFromPokemon(candidate: Pokemon | null, playerIndex: number) {
             const correctUsed = ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
 
             moveIds.push(idValue);
-            movePps.push(Math.floor((1023 * correctUsed) / maxPP));
+            movePps.push(Math.floor((31 * correctUsed) / maxPP));
         }
     }
     let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
@@ -2040,6 +2040,7 @@ export class StateHandler {
         let numMoves = 0;
 
         if (active !== null) {
+            const baseSpecies = active.species.baseSpecies.toLowerCase();
             if (isStruggling) {
                 movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
                     IndexValueFromEnum<typeof ActionsEnum>(
@@ -2053,7 +2054,10 @@ export class StateHandler {
                 movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
                     IndexValueFromEnum("Move", "struggle");
                 movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    SpeciesEnum.SPECIES__NULL;
+                    IndexValueFromEnum<typeof SpeciesEnum>(
+                        "Species",
+                        baseSpecies,
+                    );
                 offset += numMoveFields;
                 numMoves += 1;
             } else {
@@ -2063,6 +2067,10 @@ export class StateHandler {
                 }
                 for (const move of moveSlots) {
                     const { id, ppUsed } = move;
+                    const maxPP = active.side.battle.gens.dex.moves.get(id).pp;
+                    const correctUsed =
+                        ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
+
                     movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
                         IndexValueFromEnum<typeof ActionsEnum>(
                             "Actions",
@@ -2070,7 +2078,8 @@ export class StateHandler {
                         );
                     movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
                         MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                    movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = ppUsed;
+                    movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] =
+                        Math.floor((31 * correctUsed) / maxPP);
                     movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
                         side.n ^ playerIndex;
                     if ("disabled" in move) {
@@ -2103,7 +2112,10 @@ export class StateHandler {
                     movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
                         IndexValueFromEnum("Move", id);
                     movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                        SpeciesEnum.SPECIES__NULL;
+                        IndexValueFromEnum<typeof SpeciesEnum>(
+                            "Species",
+                            baseSpecies,
+                        );
                     offset += numMoveFields;
                     numMoves += 1;
                 }
