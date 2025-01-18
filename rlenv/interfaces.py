@@ -49,6 +49,7 @@ class HistoryStep:
 class ActorStep:
     action: chex.Array = ()
     policy: chex.Array = ()
+    log_policy: chex.Array = ()
 
     # rewards
     rewards: RewardStep = RewardStep()
@@ -67,6 +68,3 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
-    offline_logit: chex.Array = ()
-    offline_pi: chex.Array = ()
-    offline_log_pi: chex.Array = ()

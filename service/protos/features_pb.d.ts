@@ -69,6 +69,7 @@ export interface FeatureMovesetMap {
   MOVESET_EST_DAMAGE: 5;
   MOVESET_MOVE_ID: 6;
   MOVESET_SPECIES_ID: 7;
+  MOVESET_ENTITY_INDEX: 8;
 }
 
 export const FeatureMoveset: FeatureMovesetMap;

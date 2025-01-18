@@ -67,7 +67,7 @@ NUM_RELATIVE_EDGE_FIELDS = len(FeatureRelativeEdge.keys())
 NUM_ABSOLUTE_EDGE_FIELDS = len(FeatureAbsoluteEdge.keys())
 NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
 
-NUM_HISTORY = 16
+NUM_HISTORY = 8
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
@@ -98,6 +98,8 @@ MAX_BOOST_VALUE = 13
 
 ENTITY_MAX_VALUES = {
     FeatureEntity.ENTITY_LEVEL: 100,
+    FeatureEntity.ENTITY_ACTIVE: 2,
+    FeatureEntity.ENTITY_SIDE: 2,
     FeatureEntity.ENTITY_HP_RATIO: 31,
     FeatureEntity.ENTITY_GENDER: NUM_GENDERS,
     FeatureEntity.ENTITY_STATUS: NUM_STATUS,
@@ -108,7 +110,6 @@ ENTITY_MAX_VALUES = {
     FeatureEntity.ENTITY_TOXIC_TURNS: 8,
     FeatureEntity.ENTITY_SLEEP_TURNS: 4,
     FeatureEntity.ENTITY_FAINTED: 2,
-    FeatureEntity.ENTITY_ACTIVE: 2,
     FeatureEntity.ENTITY_BOOST_ATK_VALUE: MAX_BOOST_VALUE,
     FeatureEntity.ENTITY_BOOST_DEF_VALUE: MAX_BOOST_VALUE,
     FeatureEntity.ENTITY_BOOST_SPA_VALUE: MAX_BOOST_VALUE,
@@ -147,3 +148,5 @@ ABSOLUTE_EDGE_MAX_VALUES = {
     FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MAX_DURATION: 9,
     FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MIN_DURATION: 9,
 }
+
+ACTION_STRINGS = {v: k[8:] for k, v in ActionsEnum.items()}

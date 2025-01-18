@@ -34,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 3
+    clip: float = 10_000
 
 
 @chex.dataclass(frozen=True)
@@ -355,21 +355,15 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
 
         loss_norm = get_average_logit_value(pred.logit, batch.env.legal, valid)
 
-        loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
+        loss_entropy = get_loss_entropy(pred.pi, valid)
 
         loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
 
         move_entropy = get_loss_entropy(
-            pred.pi[..., :4],
-            pred.log_pi[..., :4],
-            batch.env.legal[..., :4],
-            valid & batch.env.legal[..., :4].any(axis=-1),
+            pred.pi[..., :4], valid & batch.env.legal[..., :4].any(axis=-1)
         )
         switch_entropy = get_loss_entropy(
-            pred.pi[..., 4:],
-            pred.log_pi[..., 4:],
-            batch.env.legal[..., 4:],
-            valid & batch.env.legal[..., 4:].any(axis=-1),
+            pred.pi[..., 4:], valid & batch.env.legal[..., 4:].any(axis=-1)
         )
 
         logs["loss_v"] = loss_v

@@ -67,6 +67,7 @@ class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_EST_DAMAGE: _ClassVar[FeatureMoveset]
     MOVESET_MOVE_ID: _ClassVar[FeatureMoveset]
     MOVESET_SPECIES_ID: _ClassVar[FeatureMoveset]
+    MOVESET_ENTITY_INDEX: _ClassVar[FeatureMoveset]
 
 class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -190,6 +191,7 @@ MOVESET_ACTION_TYPE: FeatureMoveset
 MOVESET_EST_DAMAGE: FeatureMoveset
 MOVESET_MOVE_ID: FeatureMoveset
 MOVESET_SPECIES_ID: FeatureMoveset
+MOVESET_ENTITY_INDEX: FeatureMoveset
 EDGE_TYPE_NONE: EdgeTypes
 MOVE_EDGE: EdgeTypes
 SWITCH_EDGE: EdgeTypes

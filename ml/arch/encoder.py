@@ -9,6 +9,7 @@ from ml_collections import ConfigDict
 from ml.arch.modules import (
     MLP,
     BinaryEncoder,
+    MergeEmbeddings,
     PretrainedEmbedding,
     SumEmbeddings,
     TransformerDecoder,
@@ -34,7 +35,7 @@ ABILITY_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/abilities.npy")
 ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy")
 MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy")
 
-# Initialize a binary encoder for specific features.
+# # Initialize a binary encoder for specific features.
 HEX_ENCODER = BinaryEncoder(num_bits=16)
 
 
@@ -108,24 +109,23 @@ class Encoder(nn.Module):
         items_embedding = nn.Embed(NUM_ITEMS, **embed_kwargs)
         actions_embedding = nn.Embed(NUM_ACTIONS, **embed_kwargs)
         effects_embedding = nn.Embed(NUM_EFFECTS, **embed_kwargs)
-        side_embedding = nn.Embed(2, **embed_kwargs)
 
         # Initialize aggregation modules for combining feature embeddings.
         entity_aggregate = SumEmbeddings(entity_size)
+        entity_mlp = MLP((entity_size,))
+
         relative_edge_aggregate = SumEmbeddings(entity_size)
+        relative_edge_mlp = MLP((entity_size,))
+
         absolute_edge_aggregate = SumEmbeddings(entity_size)
-        timestep_aggregate = MLP((entity_size,))
+        absolute_edge_mlp = MLP((entity_size,))
+
+        timestep_mlp = MergeEmbeddings(entity_size)
+
         action_aggregate = SumEmbeddings(entity_size)
+        action_mlp = MLP((entity_size,))
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
-            """
-            Encode features of an entity, including species, ability, item, and moves.
-            """
-            # Process move-related features.
-            moveset_embedding = actions_embedding(
-                entity[FeatureEntity.ENTITY_MOVEID0 : FeatureEntity.ENTITY_MOVEID3 + 1]
-            ).sum(0)
-
             # Encode volatile and type-change indices using the binary encoder.
             volatiles_indices = entity[
                 FeatureEntity.ENTITY_VOLATILES0 : FeatureEntity.ENTITY_VOLATILES8 + 1
@@ -143,7 +143,8 @@ class Encoder(nn.Module):
 
             # Perform one-hot encoding for the entity and aggregate embeddings.
             one_hot_encoded = one_hot_encode_entity(entity)
-            embeddings = [
+
+            encodings = [
                 SPECIES_ONEHOT(entity[FeatureEntity.ENTITY_SPECIES]),
                 ABILITY_ONEHOT(entity[FeatureEntity.ENTITY_ABILITY]),
                 ITEM_ONEHOT(entity[FeatureEntity.ENTITY_ITEM]),
@@ -153,14 +154,18 @@ class Encoder(nn.Module):
                 typechange_encoding,
             ]
 
-            embedding = (
-                entity_aggregate(embeddings)
-                + species_embedding(entity[FeatureEntity.ENTITY_SPECIES])
-                + abilities_embedding(entity[FeatureEntity.ENTITY_ABILITY])
-                + items_embedding(entity[FeatureEntity.ENTITY_ITEM])
-                + side_embedding(entity[FeatureEntity.ENTITY_SIDE])
-                + moveset_embedding
-            )
+            embeddings = [
+                species_embedding(entity[FeatureEntity.ENTITY_SPECIES]),
+                abilities_embedding(entity[FeatureEntity.ENTITY_ABILITY]),
+                items_embedding(entity[FeatureEntity.ENTITY_ITEM]),
+                actions_embedding(entity[FeatureEntity.ENTITY_MOVEID0]),
+                actions_embedding(entity[FeatureEntity.ENTITY_MOVEID1]),
+                actions_embedding(entity[FeatureEntity.ENTITY_MOVEID2]),
+                actions_embedding(entity[FeatureEntity.ENTITY_MOVEID3]),
+            ]
+
+            embedding = entity_aggregate(encodings=encodings, embeddings=embeddings)
+            embedding = entity_mlp(embedding)
 
             # Apply mask to filter out invalid entities.
             mask = get_entity_mask(entity)
@@ -169,9 +174,6 @@ class Encoder(nn.Module):
             return embedding, mask
 
         def _encode_relative_edge(relative_edge: chex.Array) -> chex.Array:
-            """
-            Encode features of a relative edge using various embeddings and encodings.
-            """
             # Encode minor arguments and side conditions using the binary encoder.
             minor_args_indices = relative_edge[
                 FeatureRelativeEdge.EDGE_MINOR_ARG0 : FeatureRelativeEdge.EDGE_MINOR_ARG3
@@ -193,7 +195,7 @@ class Encoder(nn.Module):
             one_hot_encoded = one_hot_encode_relative_edge(relative_edge)
 
             # Aggregate embeddings for the relative edge.
-            embeddings = [
+            encodings = [
                 ABILITY_ONEHOT(relative_edge[FeatureRelativeEdge.EDGE_ABILITY_TOKEN]),
                 ITEM_ONEHOT(relative_edge[FeatureRelativeEdge.EDGE_ITEM_TOKEN]),
                 minor_args_encoding,
@@ -201,19 +203,21 @@ class Encoder(nn.Module):
                 one_hot_encoded,
             ]
 
-            embedding = (
-                relative_edge_aggregate(embeddings)
-                + items_embedding(relative_edge[FeatureRelativeEdge.EDGE_ITEM_TOKEN])
-                + abilities_embedding(
+            embeddings = [
+                items_embedding(relative_edge[FeatureRelativeEdge.EDGE_ITEM_TOKEN]),
+                abilities_embedding(
                     relative_edge[FeatureRelativeEdge.EDGE_ABILITY_TOKEN]
-                )
-                + actions_embedding(
-                    relative_edge[FeatureRelativeEdge.EDGE_ACTION_TOKEN]
-                )
-                + effects_embedding(
+                ),
+                actions_embedding(relative_edge[FeatureRelativeEdge.EDGE_ACTION_TOKEN]),
+                effects_embedding(
                     relative_edge[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN]
-                )
+                ),
+            ]
+
+            embedding = relative_edge_aggregate(
+                encodings=encodings, embeddings=embeddings
             )
+            embedding = relative_edge_mlp(embedding)
 
             # Apply mask to filter out invalid edges.
             mask = get_edge_mask(relative_edge)
@@ -239,14 +243,15 @@ class Encoder(nn.Module):
             )
 
             # Aggregate embeddings for the absolute edge.
-            embeddings = [
+            encodings = [
                 one_hot_encode_absolute_edge(absolute_edge),
                 HEX_ENCODER(turn),
                 HEX_ENCODER(request_count),
                 HEX_ENCODER(absolute_edge[FeatureAbsoluteEdge.EDGE_TURN_ORDER_VALUE]),
             ]
 
-            embedding = absolute_edge_aggregate(embeddings)
+            embedding = absolute_edge_aggregate(encodings=encodings, embeddings=None)
+            embedding = absolute_edge_mlp(embedding)
 
             # Apply mask to filter out invalid edges.
             mask = get_edge_mask(absolute_edge)
@@ -277,16 +282,14 @@ class Encoder(nn.Module):
             )
 
             # Combine all embeddings for the timestep.
-            timestep_embeddings = jnp.concatenate(
-                [
-                    entity_embeddings[0],
-                    entity_embeddings[1],
-                    relative_edge_embeddings[0],
-                    relative_edge_embeddings[1],
-                    absolute_edge_embedding,
-                ]
-            )
-            timestep_embedding = timestep_aggregate(timestep_embeddings)
+            timestep_embeddings = [
+                entity_embeddings[0],
+                entity_embeddings[1],
+                relative_edge_embeddings[0],
+                relative_edge_embeddings[1],
+                absolute_edge_embedding,
+            ]
+            timestep_embedding = timestep_mlp(embeddings=timestep_embeddings)
 
             # Apply mask to the timestep embeddings.
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
@@ -309,13 +312,15 @@ class Encoder(nn.Module):
             )
 
         # Encode actions for the current environment step.
-        def _encode_action(move: chex.Array, legal: chex.Array) -> chex.Array:
+        def _encode_action(
+            move: chex.Array, legal: chex.Array, action_entity: chex.Array
+        ) -> chex.Array:
             """
             Encode features of a move, including its type, species, and action ID.
             """
-            one_hot_encoded = [
+            encodings = [
                 MOVE_ONEHOT(move[FeatureMoveset.MOVESET_MOVE_ID]),
-                SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
+                # SPECIES_ONEHOT(move[FeatureMoveset.MOVESET_SPECIES_ID]),
                 jnp.concatenate(
                     (
                         # jax.nn.one_hot(legal, 2),
@@ -329,9 +334,13 @@ class Encoder(nn.Module):
                 ),
             ]
 
-            embedding = action_aggregate(one_hot_encoded) + actions_embedding(
-                move[FeatureMoveset.MOVESET_ACTION_ID]
-            )
+            embeddings = [
+                actions_embedding(move[FeatureMoveset.MOVESET_ACTION_ID]),
+                action_entity,
+            ]
+
+            embedding = action_aggregate(encodings=encodings, embeddings=embeddings)
+            embedding = action_mlp(embedding)
 
             # Apply mask to the move embeddings.
             mask = get_move_mask(move)
@@ -349,11 +358,6 @@ class Encoder(nn.Module):
             history_step.major_history
         )
 
-        # Process action embeddings from the environment step.
-        action_embeddings, _ = jax.vmap(_encode_action)(
-            env_step.moveset[0], env_step.legal.astype(int)
-        )
-
         # Compute contextual embeddings for timesteps using a transformer.
         contextual_timestep_embeddings = TransformerEncoder(
             **self.cfg.timestep_transformer_encoder.to_dict()
@@ -364,28 +368,39 @@ class Encoder(nn.Module):
             **self.cfg.entity_transformer_encoder.to_dict()
         )(entity_embeddings, valid_entity_mask)
 
-        # Decode entity embeddings using timestep embeddings for additional context.
-        contextual_entity_embeddings = TransformerDecoder(
-            **self.cfg.entity_timestep_transformer_decoder.to_dict()
-        )(
+        action_entities = jnp.take(
             contextual_entity_embeddings,
+            env_step.moveset[0, ..., FeatureMoveset.MOVESET_ENTITY_INDEX],
+            axis=0,
+        )
+        action_embeddings, _ = jax.vmap(_encode_action)(
+            env_step.moveset[0], env_step.legal.astype(int), action_entities
+        )
+        contextual_action_embeddings = TransformerEncoder(
+            **self.cfg.action_transformer_encoder.to_dict()
+        )(action_embeddings, env_step.legal)
+
+        # Decode entity embeddings using timestep embeddings for additional context.
+        contextual_action_timestep_embeddings = TransformerDecoder(
+            **self.cfg.action_timestep_transformer_decoder.to_dict()
+        )(
+            contextual_action_embeddings,
             contextual_timestep_embeddings,
-            valid_entity_mask,
+            env_step.legal,
             valid_timestep_mask,
         )
 
-        # Decode action embeddings using entity embeddings for context.
-        contextual_action_embeddings = TransformerDecoder(
+        contextual_action_entity_embeddings = TransformerDecoder(
             **self.cfg.action_entity_transformer_decoder.to_dict()
         )(
-            action_embeddings,
+            contextual_action_embeddings,
             contextual_entity_embeddings,
             env_step.legal,
             valid_entity_mask,
         )
 
-        return (
-            contextual_entity_embeddings,
-            valid_entity_mask,
-            contextual_action_embeddings,
+        contextual_action_embeddings = (
+            contextual_action_timestep_embeddings + contextual_action_entity_embeddings
         )
+
+        return contextual_action_embeddings

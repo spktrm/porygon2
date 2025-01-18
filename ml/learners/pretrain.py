@@ -180,7 +180,7 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
             jnp.square(pred.logit).mean(axis=-1, where=batch.env.legal), valid
         )
 
-        loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
+        loss_entropy = get_loss_entropy(pred.pi, valid)
 
         heuristic_target = jax.nn.one_hot(
             batch.env.heuristic_action.clip(min=0), pred.logit.shape[-1]
@@ -200,14 +200,10 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
 
         move_entropy = get_loss_entropy(
             pred.pi[..., :4],
-            pred.log_pi[..., :4],
-            batch.env.legal[..., :4],
             valid & batch.env.legal[..., :4].any(axis=-1),
         )
         switch_entropy = get_loss_entropy(
             pred.pi[..., 4:],
-            pred.log_pi[..., 4:],
-            batch.env.legal[..., 4:],
             valid & batch.env.legal[..., 4:].any(axis=-1),
         )
 

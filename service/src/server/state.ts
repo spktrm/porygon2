@@ -2039,6 +2039,16 @@ export class StateHandler {
         const defender = oppSide.active[0];
         let numMoves = 0;
 
+        const entitiesSorted = [...side.team]
+            .sort((a, b) => +!a.isActive() - +!b.isActive())
+            .map((entity) => {
+                const baseSpecies = entity.species.baseSpecies.toLowerCase();
+                return IndexValueFromEnum<typeof SpeciesEnum>(
+                    "Species",
+                    baseSpecies,
+                );
+            });
+
         if (active !== null) {
             const baseSpecies = active.species.baseSpecies.toLowerCase();
             if (isStruggling) {
@@ -2053,11 +2063,14 @@ export class StateHandler {
                     side.n ^ playerIndex;
                 movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
                     IndexValueFromEnum("Move", "struggle");
+                const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
+                    "Species",
+                    baseSpecies,
+                );
                 movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    IndexValueFromEnum<typeof SpeciesEnum>(
-                        "Species",
-                        baseSpecies,
-                    );
+                    speciesIndex;
+                movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
+                    entitiesSorted.indexOf(speciesIndex) ?? 0;
                 offset += numMoveFields;
                 numMoves += 1;
             } else {
@@ -2111,11 +2124,14 @@ export class StateHandler {
 
                     movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
                         IndexValueFromEnum("Move", id);
+                    const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
+                        "Species",
+                        baseSpecies,
+                    );
                     movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                        IndexValueFromEnum<typeof SpeciesEnum>(
-                            "Species",
-                            baseSpecies,
-                        );
+                        speciesIndex;
+                    movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
+                        entitiesSorted.indexOf(speciesIndex) ?? 0;
                     offset += numMoveFields;
                     numMoves += 1;
                 }
@@ -2174,11 +2190,14 @@ export class StateHandler {
                         "Actions",
                         `switch_${baseSpecies}`,
                     );
+                const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
+                    "Species",
+                    baseSpecies,
+                );
                 movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    IndexValueFromEnum<typeof SpeciesEnum>(
-                        "Species",
-                        baseSpecies,
-                    );
+                    speciesIndex;
+                movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
+                    entitiesSorted.indexOf(speciesIndex) ?? 0;
                 movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
                     pokemon.isActive() || pokemon.fainted ? 0 : 1;
             }
