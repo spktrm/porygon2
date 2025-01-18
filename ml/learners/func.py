@@ -3,11 +3,14 @@ from typing import Any, Dict
 import chex
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax.training import train_state
 
 from ml.func import get_average_logit_value, get_loss_entropy, renormalize
+from rlenv.data import ACTION_STRINGS
 from rlenv.interfaces import TimeStep
+from rlenv.protos.features_pb2 import FeatureMoveset
 
 
 def conditional_breakpoint(pred):
@@ -18,6 +21,36 @@ def conditional_breakpoint(pred):
         jax.debug.breakpoint()
 
     jax.lax.cond(pred, true_fn, false_fn)
+
+
+def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
+    valid_mask = batch.env.valid.reshape(-1)
+
+    actions_available = batch.env.moveset[..., 0, :, FeatureMoveset.MOVESET_ACTION_ID]
+    actions_index = np.eye(actions_available.shape[-1])[batch.actor.action]
+
+    actions = (actions_available * actions_index).sum(axis=-1).reshape(-1)
+    probabilities = (batch.actor.policy * actions_index).sum(axis=-1).reshape(-1)
+
+    # Find unique actions and their indices
+    unique_actions, inverse_indices = np.unique(actions, return_inverse=True)
+
+    # One-hot encode the actions
+    one_hot = np.eye(len(unique_actions))[inverse_indices]
+
+    # Aggregate probabilities for each action
+    sum_probs = np.sum(
+        one_hot * probabilities[..., None], axis=0, where=valid_mask[..., None]
+    )
+    count_probs = np.sum(one_hot, axis=0, where=valid_mask[..., None])
+
+    # Compute the mean probabilities
+    mean_probs = sum_probs / np.where(count_probs == 0, 1, count_probs)
+
+    unique_actions = unique_actions.astype(int)
+    mean_probs = mean_probs.astype(float)
+
+    return {ACTION_STRINGS[k]: v for k, v in zip(unique_actions, mean_probs)}
 
 
 @jax.jit
@@ -54,12 +87,12 @@ def collect_gradient_telemetry_data(grads: chex.ArrayTree) -> Dict[str, Any]:
     logs = dict(
         gradient_norm=optax.global_norm(grads),
     )
-    for module_name in ["encoder", "policy_head", "value_head"]:
-        for key, value in grads["params"][module_name].items():
-            logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
-                lambda a, b: jnp.maximum(a, b),
-                jax.tree.map(lambda x: jnp.abs(x).max(), value),
-            )
+    # for module_name in ["encoder", "policy_head", "value_head"]:
+    #     for key, value in grads["params"][module_name].items():
+    #         logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
+    #             lambda a, b: jnp.maximum(a, b),
+    #             jax.tree.map(lambda x: jnp.abs(x).max(), value),
+    #         )
     return logs
 
 
@@ -95,20 +128,12 @@ def collect_policy_stats_telemetry_data(
 ) -> dict[str, Any]:
     move_mask = legal_mask[..., :4]
     move_mask_sum = move_mask.sum(axis=-1)
-    move_entropy = get_loss_entropy(
-        policy[..., :4],
-        log_policy[..., :4],
-        move_mask,
-        state_mask & (move_mask_sum > 1),
-    )
+    move_entropy = get_loss_entropy(policy[..., :4], state_mask & (move_mask_sum > 1))
 
     switch_mask = legal_mask[..., 4:]
     switch_mask_sum = switch_mask.sum(axis=-1)
     switch_entropy = get_loss_entropy(
-        policy[..., 4:],
-        log_policy[..., 4:],
-        switch_mask,
-        state_mask & (switch_mask_sum > 1),
+        policy[..., 4:], state_mask & (switch_mask_sum > 1)
     )
 
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)

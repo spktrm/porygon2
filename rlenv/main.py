@@ -6,12 +6,13 @@ from typing import Callable, List, Sequence, Tuple
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 import numpy as np
 import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model
+from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -273,12 +274,13 @@ class BatchCollectorV2:
         network: nn.Module,
         batch_size: int,
         env_constructor: BatchEnvironment = BatchTwoPlayerEnvironment,
+        finetune: bool = False,
     ):
         self.game: BatchEnvironment = env_constructor(batch_size)
         self.network = network
         self.finetuning = FineTuning()
         self.batch_size = batch_size
-        self.key = jax.random.key(42)
+        self.finetune = finetune
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
         """Apply a batch of `actions` to a parallel list of `states`."""
@@ -292,16 +294,19 @@ class BatchCollectorV2:
             self.network.apply, (None, 0, 0), 0
         )
         output = rollout(params, env_steps, history_step)
-        return output.pi
+        finetuned_pi = self.finetuning._threshold(output.pi, env_steps.legal)
+        return jnp.where(self.finetune, finetuned_pi, output.pi), output.log_pi
 
     def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
         env_step = as_jax_arr(env_step)
         history_step = as_jax_arr(history_step)
-        pi = self._network_jit_apply(params, env_step, history_step)
+        pi, log_pi = self._network_jit_apply(params, env_step, history_step)
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
-        return action, ActorStep(action=action, policy=pi, rewards=())
+        return action, ActorStep(
+            action=action, policy=pi, log_policy=log_pi, rewards=()
+        )
 
     def collect_batch_trajectory(
         self, params: Params, resolution: int = 32
@@ -329,6 +334,7 @@ class BatchCollectorV2:
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
+                    log_policy=actor_step.log_policy,
                     rewards=env_step.rewards,
                 ),
             )
@@ -366,7 +372,9 @@ class SingleTrajectoryTrainingBatchCollector(BatchCollectorV2):
 
 class EvalBatchCollector(BatchCollectorV2):
     def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(network, batch_size, BatchSinglePlayerEnvironment)
+        super().__init__(
+            network, batch_size, BatchSinglePlayerEnvironment, finetune=True
+        )
 
 
 def main():
@@ -378,7 +386,7 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_dummy_model()
+    network = get_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 

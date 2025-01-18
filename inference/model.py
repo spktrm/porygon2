@@ -43,14 +43,14 @@ class InferenceModel:
 
     def predict(self, env_step: EnvStep, history_step: HistoryStep):
         output = self._network_jit_apply(env_step, history_step)
-        pi = self.finetuning._threshold(output.pi, env_step.legal)
+        finetuned_pi = self.finetuning._threshold(output.pi, env_step.legal)
         action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(pi.shape[-1]), p=x),
+            lambda x: self.np_rng.choice(range(finetuned_pi.shape[-1]), p=x),
             axis=-1,
-            arr=output.pi,
+            arr=finetuned_pi,
         )
         return PredictionResponse(
-            pi=output.pi.flatten().tolist(),
+            pi=finetuned_pi.flatten().tolist(),
             logit=output.logit.flatten().tolist(),
             v=output.v.item(),
             action=action.item(),

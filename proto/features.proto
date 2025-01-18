@@ -64,6 +64,7 @@ enum FeatureMoveset {
     MOVESET_EST_DAMAGE = 5;    
     MOVESET_MOVE_ID = 6;
     MOVESET_SPECIES_ID = 7;
+    MOVESET_ENTITY_INDEX = 8;
 }
 
 enum EdgeTypes {
