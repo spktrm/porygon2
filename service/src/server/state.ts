@@ -46,13 +46,12 @@ import {
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
-import { ID } from "@pkmn/types";
+import { ID, MoveTarget } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { History } from "../../protos/history_pb";
 import { OneDBoolean, TypedArray } from "./utils";
 import { Player } from "./player";
 import { DRAW_TURNS } from "./game";
-import { GetMoveDamange } from "./baselines/max_dmg";
 import { GetHeuristicAction } from "./baselines/heuristic";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
@@ -591,9 +590,7 @@ class EdgeBuffer {
     constructor(player: Player) {
         this.player = player;
 
-        const MAX_TURNS = 1000;
-
-        const maxEdges = NUM_HISTORY * MAX_TURNS;
+        const maxEdges = 2000;
         this.maxEdges = maxEdges;
 
         this.entityData = new Int16Array(maxEdges * 2 * numPokemonFeatures);
@@ -2019,239 +2016,89 @@ export class StateHandler {
         return { legalActions, isStruggling };
     }
 
-    getSideMoveset(side: Side, isStruggling: boolean) {
-        const movesetArr = new Int16Array(numMovesetFields);
+    getMoveset(): Uint8Array {
+        const request = this.player.getRequest() as AnyObject;
 
-        let offset = 0;
+        const active = (request?.active ??
+            [])[0] as Protocol.MoveRequest["active"][0];
+        const activeMoves = (active ?? {})?.moves ?? [];
+        const switches = (request?.side?.pokemon ??
+            []) as Protocol.Request.SideInfo["pokemon"];
 
-        const active = side.active[0];
+        const actionBuffer = new Int16Array(numMovesetFields);
+        let bufferOffset = 0;
 
-        const battle = this.player.privateBattle;
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error("PlayerIndex is not defined");
-        }
-
-        const mySide = battle.sides[playerIndex];
-        const oppSide = battle.sides[1 - playerIndex];
-
-        const attacker = mySide.active[0];
-        const defender = oppSide.active[0];
-        let numMoves = 0;
-
-        const entitiesSorted = [...side.team]
-            .sort((a, b) => +!a.isActive() - +!b.isActive())
-            .map((entity) => {
-                const baseSpecies = entity.species.baseSpecies.toLowerCase();
-                return IndexValueFromEnum<typeof SpeciesEnum>(
-                    "Species",
-                    baseSpecies,
-                );
-            });
-
-        if (active !== null) {
-            const baseSpecies = active.species.baseSpecies.toLowerCase();
-            if (isStruggling) {
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                    IndexValueFromEnum<typeof ActionsEnum>(
-                        "Actions",
-                        `move_struggle`,
-                    );
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                    MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
-                    side.n ^ playerIndex;
-                movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                    IndexValueFromEnum("Move", "struggle");
-                const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
-                    "Species",
-                    baseSpecies,
-                );
-                movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    speciesIndex;
-                movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
-                    entitiesSorted.indexOf(speciesIndex) ?? 0;
-                offset += numMoveFields;
-                numMoves += 1;
-            } else {
-                const moveSlots = active.moveSlots.slice(0, 4);
-                if (active.moveSlots.length > 4) {
-                    /* empty */
-                }
-                for (const move of moveSlots) {
-                    const { id, ppUsed } = move;
-                    const maxPP = active.side.battle.gens.dex.moves.get(id).pp;
-                    const correctUsed =
-                        ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
-
-                    movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                        IndexValueFromEnum<typeof ActionsEnum>(
-                            "Actions",
-                            `move_${id}`,
-                        );
-                    movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                        MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                    movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] =
-                        Math.floor((31 * correctUsed) / maxPP);
-                    movesetArr[offset + FeatureMoveset.MOVESET_SIDE] =
-                        side.n ^ playerIndex;
-                    if ("disabled" in move) {
-                        movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
-                            move.disabled ? 0 : 1;
-                    } else {
-                        movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 1;
-                    }
-                    if (attacker !== null && defender !== null) {
-                        try {
-                            const moveDamage = GetMoveDamange({
-                                battle: this.player.privateBattle,
-                                attacker,
-                                defender,
-                                moveId: id,
-                            });
-                            movesetArr[
-                                offset + FeatureMoveset.MOVESET_EST_DAMAGE
-                            ] = moveDamage;
-                            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                        } catch (err) {
-                            /* empty */
-                        }
-                    } else {
-                        movesetArr[
-                            offset + FeatureMoveset.MOVESET_EST_DAMAGE
-                        ] = 0;
-                    }
-
-                    movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                        IndexValueFromEnum("Move", id);
-                    const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
-                        "Species",
-                        baseSpecies,
-                    );
-                    movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                        speciesIndex;
-                    movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
-                        entitiesSorted.indexOf(speciesIndex) ?? 0;
-                    offset += numMoveFields;
-                    numMoves += 1;
-                }
+        const assignActionBuffer = (index: number, value: number) => {
+            actionBuffer[bufferOffset + index] = value;
+        };
+        const pushMoveAction = (
+            action:
+                | { name: "Recharge"; id: "recharge" }
+                | { name: Protocol.MoveName; id: ID }
+                | {
+                      name: Protocol.MoveName;
+                      id: ID;
+                      pp: number;
+                      maxpp: number;
+                      target: MoveTarget;
+                      disabled?: boolean;
+                  },
+        ) => {
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_ACTION_ID,
+                IndexValueFromEnum("Actions", `move_${action.id}`),
+            );
+            if ("pp" in action) {
+                const ppUsed = (31 * (action.maxpp - action.pp)) / action.pp;
+                assignActionBuffer(FeatureMoveset.MOVESET_PPUSED, ppUsed);
             }
-            for (
-                let remainingIndex = numMoves;
-                remainingIndex < 4;
-                remainingIndex++
-            ) {
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                    MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                    ActionsEnum.ACTIONS_MOVE__UNK;
-                movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = 0;
-                movesetArr[offset + FeatureMoveset.MOVESET_SIDE] = side.n;
-                movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 1;
-                movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                    MovesEnum.MOVES__UNK;
-                movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    SpeciesEnum.SPECIES__NULL;
-                offset += numMoveFields;
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_MOVE_ID,
+                IndexValueFromEnum("Move", action.id),
+            );
+        };
+        const pushSwitchAction = (action: Protocol.Request.Pokemon) => {
+            let member = this.player.privateBattle.getPokemon(action.ident);
+            if (member === null) {
+                const activeIdent = (action.ident.slice(0, 2) +
+                    "a" +
+                    action.ident.slice(2)) as PokemonIdent;
+                member = this.player.privateBattle.getPokemon(activeIdent);
             }
-        } else {
-            for (let remainingIndex = 0; remainingIndex < 4; remainingIndex++) {
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                    MovesetActionType.MOVESET_ACTION_TYPE_MOVE;
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                    ActionsEnum.ACTIONS_MOVE__NULL;
-                movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = 0;
-                movesetArr[offset + FeatureMoveset.MOVESET_SIDE] = side.n;
-                movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 0;
-                movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                    MovesEnum.MOVES__NULL;
-                movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    SpeciesEnum.SPECIES__NULL;
-                offset += numMoveFields;
+            if (member === null) {
+                throw new Error();
             }
+            const species = member.species.baseSpecies.toLowerCase();
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_ACTION_ID,
+                IndexValueFromEnum("Actions", `switch_${species}`),
+            );
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_SPECIES_ID,
+                IndexValueFromEnum("Species", species),
+            );
+        };
+
+        for (const action of activeMoves) {
+            pushMoveAction(action);
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_ACTION_TYPE,
+                MovesetActionType.MOVESET_ACTION_TYPE_MOVE,
+            );
+            bufferOffset += numMoveFields;
         }
-
-        for (
-            let remainingIndex = 0;
-            remainingIndex < side.totalPokemon;
-            remainingIndex++
-        ) {
-            const pokemon = side.team[remainingIndex];
-            if (pokemon === undefined) {
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                    ActionsEnum.ACTIONS_SWITCH__UNK;
-                movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    SpeciesEnum.SPECIES__UNK;
-                movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 1;
-            } else {
-                const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
-                movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                    IndexValueFromEnum<typeof ActionsEnum>(
-                        "Actions",
-                        `switch_${baseSpecies}`,
-                    );
-                const speciesIndex = IndexValueFromEnum<typeof SpeciesEnum>(
-                    "Species",
-                    baseSpecies,
-                );
-                movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                    speciesIndex;
-                movesetArr[offset + FeatureMoveset.MOVESET_ENTITY_INDEX] =
-                    entitiesSorted.indexOf(speciesIndex) ?? 0;
-                movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] =
-                    pokemon.isActive() || pokemon.fainted ? 0 : 1;
-            }
-            movesetArr[offset + FeatureMoveset.MOVESET_SIDE] = side.n;
-            movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                MovesetActionType.MOVESET_ACTION_TYPE_SWITCH;
-            movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = 0;
-            movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                MovesEnum.MOVES__NULL;
-            offset += numMoveFields;
+        bufferOffset += (4 - activeMoves.length) * numMoveFields;
+        for (const action of switches) {
+            pushSwitchAction(action);
+            assignActionBuffer(
+                FeatureMoveset.MOVESET_ACTION_TYPE,
+                MovesetActionType.MOVESET_ACTION_TYPE_SWITCH,
+            );
+            bufferOffset += numMoveFields;
         }
+        bufferOffset += (6 - activeMoves.length) * numMoveFields;
 
-        for (
-            let remainingIndex = side.totalPokemon;
-            remainingIndex < 6;
-            remainingIndex++
-        ) {
-            movesetArr[offset + FeatureMoveset.MOVESET_ACTION_TYPE] =
-                MovesetActionType.MOVESET_ACTION_TYPE_SWITCH;
-            movesetArr[offset + FeatureMoveset.MOVESET_ACTION_ID] =
-                ActionsEnum.ACTIONS_SWITCH__NULL;
-            movesetArr[offset + FeatureMoveset.MOVESET_PPUSED] = 0;
-            movesetArr[offset + FeatureMoveset.MOVESET_SIDE] = side.n;
-            movesetArr[offset + FeatureMoveset.MOVESET_LEGAL] = 0;
-            movesetArr[offset + FeatureMoveset.MOVESET_MOVE_ID] =
-                MovesEnum.MOVES__NULL;
-            movesetArr[offset + FeatureMoveset.MOVESET_SPECIES_ID] =
-                SpeciesEnum.SPECIES__NULL;
-            offset += numMoveFields;
-        }
-
-        return movesetArr;
-    }
-
-    getMoveset(isStruggling: boolean): Uint8Array {
-        const playerIndex = this.player.getPlayerIndex();
-        const movesets = [];
-
-        if (playerIndex !== undefined) {
-            const mySide = this.player.privateBattle.sides[playerIndex];
-            const oppSide = this.player.privateBattle.sides[1 - playerIndex];
-            for (const [relativeSideIndex, side] of [
-                mySide,
-                oppSide,
-            ].entries()) {
-                const moveset = this.getSideMoveset(
-                    side,
-                    relativeSideIndex === 0 ? isStruggling : false,
-                );
-                movesets.push(moveset);
-            }
-        }
-
-        return new Uint8Array(concatenateArrays(movesets).buffer);
+        return new Uint8Array(actionBuffer.buffer);
     }
 
     getPrivateTeam(playerIndex: number): Int16Array {
@@ -2436,7 +2283,7 @@ export class StateHandler {
         const info = this.getInfo();
         state.setInfo(info);
 
-        const { legalActions, isStruggling } = StateHandler.getLegalActions(
+        const { legalActions } = StateHandler.getLegalActions(
             this.player.privateBattle.request,
         );
         state.setLegalactions(legalActions.buffer);
@@ -2453,7 +2300,7 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setTeam(new Uint8Array(privateTeam.buffer));
-        state.setMoveset(this.getMoveset(isStruggling));
+        state.setMoveset(this.getMoveset());
 
         return state;
     }

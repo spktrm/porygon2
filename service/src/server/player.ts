@@ -199,7 +199,7 @@ export class Player extends BattleStreams.BattlePlayer {
         }
     }
 
-    getRequest() {
+    getRequest(): Protocol.Request {
         return this.privateBattle.request!;
     }
 
