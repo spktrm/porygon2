@@ -34,7 +34,7 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array):
+def layer_norm(array: chex.Array, axis: int = -1):
     return nn.RMSNorm()(array)
 
 
@@ -331,8 +331,6 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = softcap(attn_logits)
-
         attn_logits = attn_logits / np.sqrt(key_size).astype(key.dtype)
 
         if mask is not None:
@@ -409,7 +407,7 @@ class TransformerEncoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
+            x = x + mha
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -420,7 +418,7 @@ class TransformerEncoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ffn))
+            x = x + ffn
             x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -449,7 +447,6 @@ class TransformerDecoder(nn.Module):
         y_mask: chex.Array = None,
         ca_mask: chex.Array = None,
     ):
-
         if x_mask is None:
             x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
@@ -474,7 +471,7 @@ class TransformerDecoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=y, value=y, mask=ca_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
+            x = x + ca
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -485,7 +482,7 @@ class TransformerDecoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ffn))
+            x = x + ffn
             x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -503,20 +500,19 @@ class PercieverIO(nn.Module):
     @nn.compact
     def __call__(
         self,
-        inputs: chex.Array,
-        outputs: chex.Array,
-        input_mask: chex.Array,
-        output_mask: chex.Array,
+        x: chex.Array,
+        y: chex.Array,
+        x_mask: chex.Array,
+        y_mask: chex.Array,
     ):
-
         latents = self.param(
             "latent",
-            nn.initializers.lecun_normal(),
+            nn.initializers.truncated_normal(0.02),
             (self.num_latents, self.latent_dim),
         )
 
         encoder = TransformerDecoder(
-            key_size=inputs.shape[-1],
+            key_size=x.shape[-1],
             value_size=self.latent_dim,
             model_size=self.latent_dim,
             num_layers=1,
@@ -537,18 +533,18 @@ class PercieverIO(nn.Module):
 
         decoder = TransformerDecoder(
             key_size=self.latent_dim,
-            value_size=outputs.shape[-1],
-            model_size=outputs.shape[-1],
+            value_size=y.shape[-1],
+            model_size=y.shape[-1],
             num_layers=1,
             num_heads=self.num_heads,
             use_layer_norm=self.use_layer_norm,
-            resblocks_hidden_size=self.resblocks_hidden_size or 4 * outputs.shape[-1],
+            resblocks_hidden_size=self.resblocks_hidden_size or 4 * y.shape[-1],
         )
 
-        latents = encoder(latents, inputs, None, input_mask)
+        latents = encoder(latents, x, None, x_mask)
         for _ in range(self.num_layers):
             latents = process(latents)
-        return decoder(outputs, latents, output_mask, None)
+        return decoder(y, latents, y_mask, None)
 
 
 class MLP(nn.Module):
@@ -823,15 +819,16 @@ class SumEmbeddings(nn.Module):
         # Sum the transformed embeddings using parameter weights
 
         bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
-        output = bias
+
+        output = jnp.zeros_like(bias)
 
         def _transform_encoding(encoding: chex.Array, index: int):
-            weight = self.param(
-                f"weight_{index}",
-                nn.initializers.lecun_normal(),
-                (encoding.shape[-1], self.output_size),
-            )
-            return jnp.dot(encoding, weight)
+            return nn.Dense(
+                self.output_size,
+                kernel_init=nn.initializers.lecun_normal(),
+                name=f"weight_{index}",
+                use_bias=False,
+            )(encoding)
 
         if encodings is not None and len(encodings) > 0:
             transformed_encodings = [
@@ -842,7 +839,7 @@ class SumEmbeddings(nn.Module):
         if embeddings is not None and len(embeddings) > 0:
             output = output + sum(embeddings)
 
-        return output
+        return layer_norm(output + bias)
 
 
 class SequenceToVector(nn.Module):
@@ -910,22 +907,29 @@ def one_hot_concat_jax(
     )
 
 
+sorted_entity_keys = list(sorted(ENTITY_MAX_VALUES.keys()))
 one_hot_encode_entity = functools.partial(
     one_hot_concat_jax,
-    feature_indices=np.array(list(sorted(ENTITY_MAX_VALUES.keys()))),
-    max_vals=np.array(list(sorted(ENTITY_MAX_VALUES.values()))),
+    feature_indices=np.array(sorted_entity_keys),
+    max_vals=np.array([ENTITY_MAX_VALUES[key] for key in sorted_entity_keys]),
 )
 
+sorted_relative_edge_keys = list(sorted(RELATIVE_EDGE_MAX_VALUES.keys()))
 one_hot_encode_relative_edge = functools.partial(
     one_hot_concat_jax,
-    feature_indices=np.array(list(RELATIVE_EDGE_MAX_VALUES.keys())),
-    max_vals=np.array(list(RELATIVE_EDGE_MAX_VALUES.values())),
+    feature_indices=np.array(sorted_relative_edge_keys),
+    max_vals=np.array(
+        [RELATIVE_EDGE_MAX_VALUES[key] for key in sorted_relative_edge_keys]
+    ),
 )
 
+sorted_absolute_edge_keys = list(sorted(ABSOLUTE_EDGE_MAX_VALUES.keys()))
 one_hot_encode_absolute_edge = functools.partial(
     one_hot_concat_jax,
-    feature_indices=np.array(list(sorted(ABSOLUTE_EDGE_MAX_VALUES.keys()))),
-    max_vals=np.array(list(sorted(ABSOLUTE_EDGE_MAX_VALUES.values()))),
+    feature_indices=np.array(sorted_absolute_edge_keys),
+    max_vals=np.array(
+        [ABSOLUTE_EDGE_MAX_VALUES[key] for key in sorted_absolute_edge_keys]
+    ),
 )
 
 

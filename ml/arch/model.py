@@ -11,8 +11,7 @@ from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
-from ml.arch.heads import PolicyHead
-from ml.arch.modules import SequenceToVector
+from ml.arch.heads import PolicyHead, ValueHead
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
@@ -27,8 +26,7 @@ class Model(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.policy_head = PolicyHead(self.cfg.policy_head)
-        # self.value_head = ValueHead(self.cfg.value_head)
-        self.value_head = SequenceToVector(self.cfg.value_head.seq2vec)
+        self.value_head = ValueHead(self.cfg.value_head)
 
     def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
         """
@@ -37,13 +35,15 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        action_embeddings = self.encoder(env_step, history_step)
+        entity_embeddings, entity_mask, action_embeddings = self.encoder(
+            env_step, history_step
+        )
 
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(action_embeddings, env_step.legal)
 
         # Apply the value head
-        v = self.value_head(action_embeddings, env_step.legal)
+        v = self.value_head(entity_embeddings, entity_mask)
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)

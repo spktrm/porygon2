@@ -67,7 +67,7 @@ NUM_RELATIVE_EDGE_FIELDS = len(FeatureRelativeEdge.keys())
 NUM_ABSOLUTE_EDGE_FIELDS = len(FeatureAbsoluteEdge.keys())
 NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
 
-NUM_HISTORY = 8
+NUM_HISTORY = 32
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
@@ -132,7 +132,7 @@ RELATIVE_EDGE_MAX_VALUES = {
     FeatureRelativeEdge.EDGE_BOOST_SPE_VALUE: MAX_BOOST_VALUE,
     FeatureRelativeEdge.EDGE_BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
     FeatureRelativeEdge.EDGE_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_SPIKES: 3,
+    FeatureRelativeEdge.EDGE_SPIKES: 4,
     FeatureRelativeEdge.EDGE_TOXIC_SPIKES: 2,
 }
 
