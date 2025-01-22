@@ -133,7 +133,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.rewards.fainted_rewards / 6
+        rewards = batch.actor.rewards.hp_rewards / 6 + batch.actor.rewards.win_rewards
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -151,7 +151,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
-                eta=0.2,
+                eta=0.05,
                 gamma=config.gamma,
             )
             v_target_list.append(jax.lax.stop_gradient(v_target_))
@@ -175,7 +175,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         ratio = policy_ratio
         ratio = ratio * (batch.env.legal.sum(axis=-1) > 1)
 
-        is_vector = jnp.expand_dims(ratio, axis=-1)
+        is_vector = jax.lax.stop_gradient(jnp.expand_dims(ratio, axis=-1))
         importance_sampling_correction = [is_vector] * config.num_players
 
         loss_nerd = get_loss_nerd(
