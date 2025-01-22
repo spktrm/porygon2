@@ -31,7 +31,8 @@ async function worker(gameId: number, playerIds: number[]) {
             const action = new Action();
             action.setValue(-1);
             game.tasks.submitResult(rqid, action);
-        } else {
+        }
+        if (rqid >= 10) {
             writeFileSync("../rlenv/ex", gameState.getState_asU8());
             game.reset();
             exit(0);

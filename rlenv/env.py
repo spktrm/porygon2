@@ -49,7 +49,7 @@ def process_state(state: State):
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
-        .reshape(2, -1, NUM_MOVE_FIELDS)
+        .reshape(10, NUM_MOVE_FIELDS)
         .astype(int)
     )
     team = (
