@@ -16,7 +16,6 @@ var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
 goog.exportSymbol('proto.EdgeFromTypes', null, global);
-goog.exportSymbol('proto.EdgeTypes', null, global);
 goog.exportSymbol('proto.FeatureAbsoluteEdge', null, global);
 goog.exportSymbol('proto.FeatureEntity', null, global);
 goog.exportSymbol('proto.FeatureMoveset', null, global);
@@ -99,18 +98,6 @@ proto.FeatureMoveset = {
 /**
  * @enum {number}
  */
-proto.EdgeTypes = {
-  EDGE_TYPE_NONE: 0,
-  MOVE_EDGE: 1,
-  SWITCH_EDGE: 2,
-  EFFECT_EDGE: 3,
-  CANT_EDGE: 4,
-  EDGE_TYPE_START: 5
-};
-
-/**
- * @enum {number}
- */
 proto.EdgeFromTypes = {
   EDGE_FROM_NONE: 0,
   EDGE_FROM_ITEM: 1,
@@ -157,23 +144,33 @@ proto.FeatureRelativeEdge = {
   EDGE_ACTION_TOKEN: 5,
   EDGE_ITEM_TOKEN: 6,
   EDGE_ABILITY_TOKEN: 7,
-  EDGE_FROM_TYPE_TOKEN: 8,
-  EDGE_FROM_SOURCE_TOKEN: 9,
-  EDGE_DAMAGE_RATIO: 10,
-  EDGE_HEAL_RATIO: 11,
-  EDGE_EFFECT_TOKEN: 12,
-  EDGE_BOOST_ATK_VALUE: 13,
-  EDGE_BOOST_DEF_VALUE: 14,
-  EDGE_BOOST_SPA_VALUE: 15,
-  EDGE_BOOST_SPD_VALUE: 16,
-  EDGE_BOOST_SPE_VALUE: 17,
-  EDGE_BOOST_ACCURACY_VALUE: 18,
-  EDGE_BOOST_EVASION_VALUE: 19,
-  EDGE_STATUS_TOKEN: 20,
-  EDGE_SIDECONDITIONS0: 21,
-  EDGE_SIDECONDITIONS1: 22,
-  EDGE_TOXIC_SPIKES: 23,
-  EDGE_SPIKES: 24
+  EDGE_NUM_FROM_TYPES: 8,
+  EDGE_FROM_TYPE_TOKEN0: 9,
+  EDGE_FROM_TYPE_TOKEN1: 10,
+  EDGE_FROM_TYPE_TOKEN2: 11,
+  EDGE_FROM_TYPE_TOKEN3: 12,
+  EDGE_FROM_TYPE_TOKEN4: 13,
+  EDGE_NUM_FROM_SOURCES: 14,
+  EDGE_FROM_SOURCE_TOKEN0: 15,
+  EDGE_FROM_SOURCE_TOKEN1: 16,
+  EDGE_FROM_SOURCE_TOKEN2: 17,
+  EDGE_FROM_SOURCE_TOKEN3: 18,
+  EDGE_FROM_SOURCE_TOKEN4: 19,
+  EDGE_DAMAGE_RATIO: 20,
+  EDGE_HEAL_RATIO: 21,
+  EDGE_EFFECT_TOKEN: 22,
+  EDGE_BOOST_ATK_VALUE: 23,
+  EDGE_BOOST_DEF_VALUE: 24,
+  EDGE_BOOST_SPA_VALUE: 25,
+  EDGE_BOOST_SPD_VALUE: 26,
+  EDGE_BOOST_SPE_VALUE: 27,
+  EDGE_BOOST_ACCURACY_VALUE: 28,
+  EDGE_BOOST_EVASION_VALUE: 29,
+  EDGE_STATUS_TOKEN: 30,
+  EDGE_SIDECONDITIONS0: 31,
+  EDGE_SIDECONDITIONS1: 32,
+  EDGE_TOXIC_SPIKES: 33,
+  EDGE_SPIKES: 34
 };
 
 goog.object.extend(exports, proto);

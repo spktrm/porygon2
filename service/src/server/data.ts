@@ -125,7 +125,7 @@ export const numPokemonFields = Object.keys(FeatureEntity).length;
 export const numMoveFields = Object.keys(FeatureMoveset).length;
 export const numMovesetFields = 10 * numMoveFields;
 
-export const NUM_HISTORY = 1;
+export const NUM_HISTORY = 32;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {

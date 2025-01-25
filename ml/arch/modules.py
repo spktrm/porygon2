@@ -470,7 +470,7 @@ class TransformerDecoder(nn.Module):
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=y, value=y, mask=ca_mask)
+            )(query=x_ln, key=y, value=y, mask=cross_attn_mask)
             x = x + ca
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
@@ -839,7 +839,7 @@ class SumEmbeddings(nn.Module):
         if embeddings is not None and len(embeddings) > 0:
             output = output + sum(embeddings)
 
-        return layer_norm(output + bias)
+        return output + bias
 
 
 class SequenceToVector(nn.Module):

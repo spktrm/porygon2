@@ -69,15 +69,6 @@ class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_SPECIES_ID: _ClassVar[FeatureMoveset]
     MOVESET_ENTITY_INDEX: _ClassVar[FeatureMoveset]
 
-class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    EDGE_TYPE_NONE: _ClassVar[EdgeTypes]
-    MOVE_EDGE: _ClassVar[EdgeTypes]
-    SWITCH_EDGE: _ClassVar[EdgeTypes]
-    EFFECT_EDGE: _ClassVar[EdgeTypes]
-    CANT_EDGE: _ClassVar[EdgeTypes]
-    EDGE_TYPE_START: _ClassVar[EdgeTypes]
-
 class EdgeFromTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     EDGE_FROM_NONE: _ClassVar[EdgeFromTypes]
@@ -119,8 +110,18 @@ class FeatureRelativeEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EDGE_ACTION_TOKEN: _ClassVar[FeatureRelativeEdge]
     EDGE_ITEM_TOKEN: _ClassVar[FeatureRelativeEdge]
     EDGE_ABILITY_TOKEN: _ClassVar[FeatureRelativeEdge]
-    EDGE_FROM_TYPE_TOKEN: _ClassVar[FeatureRelativeEdge]
-    EDGE_FROM_SOURCE_TOKEN: _ClassVar[FeatureRelativeEdge]
+    EDGE_NUM_FROM_TYPES: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN0: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN1: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN2: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN3: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_TYPE_TOKEN4: _ClassVar[FeatureRelativeEdge]
+    EDGE_NUM_FROM_SOURCES: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN0: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN1: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN2: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN3: _ClassVar[FeatureRelativeEdge]
+    EDGE_FROM_SOURCE_TOKEN4: _ClassVar[FeatureRelativeEdge]
     EDGE_DAMAGE_RATIO: _ClassVar[FeatureRelativeEdge]
     EDGE_HEAL_RATIO: _ClassVar[FeatureRelativeEdge]
     EDGE_EFFECT_TOKEN: _ClassVar[FeatureRelativeEdge]
@@ -192,12 +193,6 @@ MOVESET_EST_DAMAGE: FeatureMoveset
 MOVESET_MOVE_ID: FeatureMoveset
 MOVESET_SPECIES_ID: FeatureMoveset
 MOVESET_ENTITY_INDEX: FeatureMoveset
-EDGE_TYPE_NONE: EdgeTypes
-MOVE_EDGE: EdgeTypes
-SWITCH_EDGE: EdgeTypes
-EFFECT_EDGE: EdgeTypes
-CANT_EDGE: EdgeTypes
-EDGE_TYPE_START: EdgeTypes
 EDGE_FROM_NONE: EdgeFromTypes
 EDGE_FROM_ITEM: EdgeFromTypes
 EDGE_FROM_EFFECT: EdgeFromTypes
@@ -231,8 +226,18 @@ EDGE_MINOR_ARG3: FeatureRelativeEdge
 EDGE_ACTION_TOKEN: FeatureRelativeEdge
 EDGE_ITEM_TOKEN: FeatureRelativeEdge
 EDGE_ABILITY_TOKEN: FeatureRelativeEdge
-EDGE_FROM_TYPE_TOKEN: FeatureRelativeEdge
-EDGE_FROM_SOURCE_TOKEN: FeatureRelativeEdge
+EDGE_NUM_FROM_TYPES: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN0: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN1: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN2: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN3: FeatureRelativeEdge
+EDGE_FROM_TYPE_TOKEN4: FeatureRelativeEdge
+EDGE_NUM_FROM_SOURCES: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN0: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN1: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN2: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN3: FeatureRelativeEdge
+EDGE_FROM_SOURCE_TOKEN4: FeatureRelativeEdge
 EDGE_DAMAGE_RATIO: FeatureRelativeEdge
 EDGE_HEAL_RATIO: FeatureRelativeEdge
 EDGE_EFFECT_TOKEN: FeatureRelativeEdge
