@@ -33,7 +33,7 @@ from rlenv.interfaces import ModelOutput, TimeStep
 class NerdConfig:
     """Nerd related params."""
 
-    beta: float = 2
+    beta: float = 3
     clip: float = 10_000
 
 

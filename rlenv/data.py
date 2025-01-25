@@ -25,7 +25,6 @@ from rlenv.protos.enums_pb2 import (
 )
 from rlenv.protos.features_pb2 import (
     EdgeFromTypes,
-    EdgeTypes,
     FeatureAbsoluteEdge,
     FeatureEntity,
     FeatureMoveset,
@@ -60,14 +59,13 @@ NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
 NUM_EDGE_FROM_TYPES = len(EdgeFromTypes.keys())
-NUM_EDGE_TYPES = len(EdgeTypes.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
 NUM_MOVE_FIELDS = len(FeatureMoveset.keys())
 NUM_RELATIVE_EDGE_FIELDS = len(FeatureRelativeEdge.keys())
 NUM_ABSOLUTE_EDGE_FIELDS = len(FeatureAbsoluteEdge.keys())
 NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
 
-NUM_HISTORY = 1
+NUM_HISTORY = 32
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
@@ -121,7 +119,6 @@ ENTITY_MAX_VALUES = {
 
 RELATIVE_EDGE_MAX_VALUES = {
     FeatureRelativeEdge.EDGE_MAJOR_ARG: NUM_MAJOR_ARGS,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN: NUM_EDGE_FROM_TYPES,
     FeatureRelativeEdge.EDGE_DAMAGE_RATIO: 31,
     FeatureRelativeEdge.EDGE_HEAL_RATIO: 31,
     FeatureRelativeEdge.EDGE_STATUS_TOKEN: NUM_STATUS,
@@ -134,6 +131,11 @@ RELATIVE_EDGE_MAX_VALUES = {
     FeatureRelativeEdge.EDGE_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
     FeatureRelativeEdge.EDGE_SPIKES: 4,
     FeatureRelativeEdge.EDGE_TOXIC_SPIKES: 2,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0: NUM_EDGE_FROM_TYPES,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN1: NUM_EDGE_FROM_TYPES,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN2: NUM_EDGE_FROM_TYPES,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN3: NUM_EDGE_FROM_TYPES,
+    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN4: NUM_EDGE_FROM_TYPES,
 }
 
 

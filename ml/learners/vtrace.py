@@ -153,7 +153,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
-                eta=0.05,
+                eta=0.2,
                 gamma=config.gamma,
             )
             v_target_list.append(jax.lax.stop_gradient(v_target_))
@@ -171,7 +171,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         ) / 2
         logs.update({"value_function_r2": jnp.maximum(explained_variance, 0)})
 
-        policy_ratio = (action_oh * jnp.exp(pred.log_pi - batch.actor.log_policy)).sum(
+        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
             axis=-1
         )
         ratio = policy_ratio

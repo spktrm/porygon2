@@ -61,6 +61,7 @@ type MajorArgNames =
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const sanitizeKeyCache = new Map<string, string>();
+const MAX_16BIT_UNSIGNED = 65535;
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
     const indices: number[] = [];
@@ -545,17 +546,54 @@ class Edge {
                 EffecttypesEnum[
                     `EFFECTTYPES_${effectType.toUpperCase()}` as keyof EffecttypesEnumMap
                 ];
-            this.setRelativeEdgeFeature(
-                FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN,
-                sideIndex,
-                fromTypeToken,
-            );
             const fromSourceToken = getEffectToken(effect);
-            this.setRelativeEdgeFeature(
-                FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN,
+
+            const numFromTypes =
+                this.getRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_TYPES,
+                    sideIndex,
+                ) ?? 0;
+            const numFromSources =
+                this.getRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_SOURCES,
+                    sideIndex,
+                ) ?? 0;
+            const prevFromType = this.getRelativeEdgeFeature(
+                (FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0 +
+                    numFromTypes) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
                 sideIndex,
-                fromSourceToken,
             );
+            const prevFromSource = this.getRelativeEdgeFeature(
+                (FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0 +
+                    numFromSources) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                sideIndex,
+            );
+            if (prevFromType !== fromTypeToken && numFromTypes < 5) {
+                this.setRelativeEdgeFeature(
+                    (FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0 +
+                        numFromTypes) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    sideIndex,
+                    fromTypeToken,
+                );
+                this.setRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_TYPES,
+                    sideIndex,
+                    numFromTypes + 1,
+                );
+            }
+            if (prevFromSource !== fromSourceToken && numFromSources < 5) {
+                this.setRelativeEdgeFeature(
+                    (FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0 +
+                        numFromSources) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    sideIndex,
+                    fromSourceToken,
+                );
+                this.setRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_SOURCES,
+                    sideIndex,
+                    numFromSources + 1,
+                );
+            }
         }
     }
 }
@@ -590,7 +628,7 @@ class EdgeBuffer {
     constructor(player: Player) {
         this.player = player;
 
-        const maxEdges = 2000;
+        const maxEdges = 4000;
         this.maxEdges = maxEdges;
 
         this.entityData = new Int16Array(maxEdges * 2 * numPokemonFeatures);
@@ -784,17 +822,54 @@ class EdgeBuffer {
                 EffecttypesEnum[
                     `EFFECTTYPES_${effectType.toUpperCase()}` as keyof EffecttypesEnumMap
                 ];
-            this.setLatestRelativeEdgeFeature(
-                FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN,
-                sideIndex,
-                fromTypeToken,
-            );
             const fromSourceToken = getEffectToken(effect);
-            this.setLatestRelativeEdgeFeature(
-                FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN,
+
+            const numFromTypes =
+                this.getLatestRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_TYPES,
+                    sideIndex,
+                ) ?? 0;
+            const numFromSources =
+                this.getLatestRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_SOURCES,
+                    sideIndex,
+                ) ?? 0;
+            const prevFromType = this.getLatestRelativeEdgeFeature(
+                (FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0 +
+                    numFromTypes) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
                 sideIndex,
-                fromSourceToken,
             );
+            const prevFromSource = this.getLatestRelativeEdgeFeature(
+                (FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0 +
+                    numFromSources) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                sideIndex,
+            );
+            if (prevFromType !== fromTypeToken && numFromTypes < 5) {
+                this.setLatestRelativeEdgeFeature(
+                    (FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0 +
+                        numFromTypes) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    sideIndex,
+                    fromTypeToken,
+                );
+                this.setLatestRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_TYPES,
+                    sideIndex,
+                    numFromTypes + 1,
+                );
+            }
+            if (prevFromSource !== fromSourceToken && numFromSources < 5) {
+                this.setLatestRelativeEdgeFeature(
+                    (FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0 +
+                        numFromSources) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    sideIndex,
+                    fromSourceToken,
+                );
+                this.setLatestRelativeEdgeFeature(
+                    FeatureRelativeEdge.EDGE_NUM_FROM_SOURCES,
+                    sideIndex,
+                    numFromSources + 1,
+                );
+            }
         }
     }
 
@@ -931,10 +1006,23 @@ class EdgeBuffer {
                 sideConditions: sideConditionIndices.map(
                     (index) => jsonDatum["sideCondition"][index],
                 ),
-                from_source:
+                from_source: [
                     jsonDatum["Effect"][
-                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN]
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0]
                     ],
+                    jsonDatum["Effect"][
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN1]
+                    ],
+                    jsonDatum["Effect"][
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN2]
+                    ],
+                    jsonDatum["Effect"][
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN3]
+                    ],
+                    jsonDatum["Effect"][
+                        array[FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN4]
+                    ],
+                ],
                 boosts: {
                     EDGE_BOOST_ATK_VALUE:
                         array[FeatureRelativeEdge.EDGE_BOOST_ATK_VALUE],
@@ -1010,10 +1098,11 @@ class EdgeBuffer {
         return historyItems;
     }
 }
+
 export class EventHandler implements Protocol.Handler {
     readonly player: Player;
 
-    currHp: Map<string, number>;
+    prevHp: Map<string, number>;
     actives: Map<ID, PokemonIdent>;
     turnOrder: number;
     turnNum: number;
@@ -1022,7 +1111,7 @@ export class EventHandler implements Protocol.Handler {
 
     constructor(player: Player) {
         this.player = player;
-        this.currHp = new Map();
+        this.prevHp = new Map();
         this.actives = new Map();
 
         this.edgeBuffer = new EdgeBuffer(player);
@@ -1313,19 +1402,27 @@ export class EventHandler implements Protocol.Handler {
             );
         }
 
-        if (!this.currHp.has(trueIdent)) {
-            this.currHp.set(trueIdent, 1);
+        if (!this.prevHp.has(trueIdent)) {
+            this.prevHp.set(trueIdent, 1);
         }
-        const prevHp = this.currHp.get(trueIdent) ?? 1;
+        const prevHp = this.prevHp.get(trueIdent) ?? 1;
         const currHp = poke.hp / poke.maxhp;
         const diffRatio = currHp - prevHp;
-        this.currHp.set(trueIdent, currHp);
+        this.prevHp.set(trueIdent, currHp);
+        const addedDamageToken = Math.abs(
+            Math.floor(MAX_16BIT_UNSIGNED * diffRatio),
+        );
 
         this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        const currentDamageToken =
+            this.edgeBuffer.getLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_DAMAGE_RATIO,
+                relativePlayerIndex,
+            ) ?? 0;
         this.edgeBuffer.setLatestRelativeEdgeFeature(
             FeatureRelativeEdge.EDGE_DAMAGE_RATIO,
             relativePlayerIndex,
-            Math.abs(Math.floor(31 * diffRatio)),
+            Math.min(MAX_16BIT_UNSIGNED, currentDamageToken + addedDamageToken),
         );
     }
 
@@ -1349,19 +1446,27 @@ export class EventHandler implements Protocol.Handler {
             );
         }
 
-        if (!this.currHp.has(trueIdent)) {
-            this.currHp.set(trueIdent, 1);
+        if (!this.prevHp.has(trueIdent)) {
+            this.prevHp.set(trueIdent, 1);
         }
-        const prevHp = this.currHp.get(trueIdent) ?? 1;
+        const prevHp = this.prevHp.get(trueIdent) ?? 1;
         const currHp = poke.hp / poke.maxhp;
         const diffRatio = currHp - prevHp;
-        this.currHp.set(trueIdent, currHp);
+        this.prevHp.set(trueIdent, currHp);
+        const addedHealToken = Math.abs(
+            Math.floor(MAX_16BIT_UNSIGNED * diffRatio),
+        );
 
         this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
+        const currentHealToken =
+            this.edgeBuffer.getLatestRelativeEdgeFeature(
+                FeatureRelativeEdge.EDGE_HEAL_RATIO,
+                relativePlayerIndex,
+            ) ?? 0;
         this.edgeBuffer.setLatestRelativeEdgeFeature(
             FeatureRelativeEdge.EDGE_HEAL_RATIO,
             relativePlayerIndex,
-            Math.abs(Math.floor(31 * diffRatio)),
+            Math.min(MAX_16BIT_UNSIGNED, currentHealToken + addedHealToken),
         );
     }
 
@@ -1788,10 +1893,16 @@ export class EventHandler implements Protocol.Handler {
         const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const abilityIndex = IndexValueFromEnum("Ability", abilityId);
-        const fromEffect = this.getCondition(kwArgs.from);
+
+        if (kwArgs.from) {
+            const fromEffect = this.getCondition(kwArgs.from);
+            this.edgeBuffer.updateLatestEdgeFromOf(
+                fromEffect,
+                relativePlayerIndex,
+            );
+        }
 
         this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
-        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, relativePlayerIndex);
         this.edgeBuffer.setLatestRelativeEdgeFeature(
             FeatureRelativeEdge.EDGE_ABILITY_TOKEN,
             relativePlayerIndex,
@@ -1918,7 +2029,7 @@ export class EventHandler implements Protocol.Handler {
     }
 
     reset() {
-        this.currHp = new Map();
+        this.prevHp = new Map();
         this.actives = new Map();
     }
 }

@@ -67,15 +67,6 @@ enum FeatureMoveset {
     MOVESET_ENTITY_INDEX = 8;
 }
 
-enum EdgeTypes {
-    EDGE_TYPE_NONE = 0;
-    MOVE_EDGE = 1;
-    SWITCH_EDGE = 2;
-    EFFECT_EDGE = 3;
-    CANT_EDGE = 4;
-    EDGE_TYPE_START = 5;
-}
-
 enum EdgeFromTypes {
     EDGE_FROM_NONE = 0;
     EDGE_FROM_ITEM = 1;
@@ -87,6 +78,44 @@ enum EdgeFromTypes {
     EDGE_FROM_WEATHER = 7;
     EDGE_FROM_TERRAIN = 8;
     EDGE_FROM_PSEUDOWEATHER = 9;
+}
+
+enum FeatureRelativeEdge {
+    EDGE_MAJOR_ARG = 0; // Major argument index
+    EDGE_MINOR_ARG0 = 1; // bits 0-15 as 64-bit binary
+    EDGE_MINOR_ARG1 = 2; // bits 16-31 as 64-bit binary
+    EDGE_MINOR_ARG2 = 3; // bits 32-47 as 64-bit binary
+    EDGE_MINOR_ARG3 = 4; // bits 48-63 as 64-bit binary
+    EDGE_ACTION_TOKEN = 5; // Represents the action taken
+    EDGE_ITEM_TOKEN = 6; // Represents the item used
+    EDGE_ABILITY_TOKEN = 7; // Represents the ability used
+    EDGE_NUM_FROM_TYPES = 8; // Represents the number of types
+    EDGE_FROM_TYPE_TOKEN0 = 9; // Represents the type of the move or action
+    EDGE_FROM_TYPE_TOKEN1 = 10; // Represents the type of the move or action
+    EDGE_FROM_TYPE_TOKEN2 = 11; // Represents the type of the move or action
+    EDGE_FROM_TYPE_TOKEN3 = 12; // Represents the type of the move or action
+    EDGE_FROM_TYPE_TOKEN4 = 13; // Represents the type of the move or action
+    EDGE_NUM_FROM_SOURCES = 14; // Represents the number of sources
+    EDGE_FROM_SOURCE_TOKEN0 = 15; // Represents the source of the move or action
+    EDGE_FROM_SOURCE_TOKEN1 = 16; // Represents the source of the move or action
+    EDGE_FROM_SOURCE_TOKEN2 = 17; // Represents the source of the move or action
+    EDGE_FROM_SOURCE_TOKEN3 = 18; // Represents the source of the move or action
+    EDGE_FROM_SOURCE_TOKEN4 = 19; // Represents the source of the move or action
+    EDGE_DAMAGE_RATIO = 20; // floor(1024 * hpRatio)
+    EDGE_HEAL_RATIO = 21; // floor(1024 * hpRatio)
+    EDGE_EFFECT_TOKEN = 22; // Represents the effect applied
+    EDGE_BOOST_ATK_VALUE = 23; // Boost to Attack stat
+    EDGE_BOOST_DEF_VALUE = 24; // Boost to Defense stat
+    EDGE_BOOST_SPA_VALUE = 25; // Boost to Special Attack stat
+    EDGE_BOOST_SPD_VALUE = 26; // Boost to Special Defense stat
+    EDGE_BOOST_SPE_VALUE = 27; // Boost to Speed stat
+    EDGE_BOOST_ACCURACY_VALUE = 28; // Boost to Accuracy stat
+    EDGE_BOOST_EVASION_VALUE = 29; // Boost to Evasion stat
+    EDGE_STATUS_TOKEN = 30; // Represents the status condition
+    EDGE_SIDECONDITIONS0 = 31; // Stored as 32-bit binary
+    EDGE_SIDECONDITIONS1 = 32; // Stored as 32-bit binary
+    EDGE_TOXIC_SPIKES = 33; // Number of Toxic Spikes layers
+    EDGE_SPIKES = 34; // Number of Spikes layers
 }
 
 enum FeatureAbsoluteEdge {
@@ -105,33 +134,4 @@ enum FeatureAbsoluteEdge {
     EDGE_VALID = 12;
     EDGE_INDEX = 13;
     EDGE_TURN_VALUE = 14;
-}
-
-// Indices of an Int8Array
-enum FeatureRelativeEdge {
-    EDGE_MAJOR_ARG = 0; // Major argument index
-    EDGE_MINOR_ARG0 = 1; // bits 0-15 as 64-bit binary
-    EDGE_MINOR_ARG1 = 2; // bits 16-31 as 64-bit binary
-    EDGE_MINOR_ARG2 = 3; // bits 32-47 as 64-bit binary
-    EDGE_MINOR_ARG3 = 4; // bits 48-63 as 64-bit binary
-    EDGE_ACTION_TOKEN = 5; // Represents the action taken
-    EDGE_ITEM_TOKEN = 6; // Represents the item used
-    EDGE_ABILITY_TOKEN = 7; // Represents the ability used
-    EDGE_FROM_TYPE_TOKEN = 8; // Represents the type of the move or action
-    EDGE_FROM_SOURCE_TOKEN = 9; // Represents the source of the move or action
-    EDGE_DAMAGE_RATIO = 10; // floor(31 * hpRatio)
-    EDGE_HEAL_RATIO = 11; // floor(31 * hpRatio)
-    EDGE_EFFECT_TOKEN = 12; // Represents the effect applied
-    EDGE_BOOST_ATK_VALUE = 13; // Boost to Attack stat
-    EDGE_BOOST_DEF_VALUE = 14; // Boost to Defense stat
-    EDGE_BOOST_SPA_VALUE = 15; // Boost to Special Attack stat
-    EDGE_BOOST_SPD_VALUE = 16; // Boost to Special Defense stat
-    EDGE_BOOST_SPE_VALUE = 17; // Boost to Speed stat
-    EDGE_BOOST_ACCURACY_VALUE = 18; // Boost to Accuracy stat
-    EDGE_BOOST_EVASION_VALUE = 19; // Boost to Evasion stat
-    EDGE_STATUS_TOKEN = 20; // Represents the status condition
-    EDGE_SIDECONDITIONS0 = 21; // Stored as 32-bit binary
-    EDGE_SIDECONDITIONS1 = 22; // Stored as 32-bit binary
-    EDGE_TOXIC_SPIKES = 23; // Number of Toxic Spikes layers
-    EDGE_SPIKES = 24; // Number of Spikes layers
 }
