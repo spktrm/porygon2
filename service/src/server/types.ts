@@ -1,4 +1,4 @@
-import { Action } from "../../protos/servicev2_pb";
+import { Action } from "../../protos/service_pb";
 import { Player } from "./player";
 
 export type Rqid = number;

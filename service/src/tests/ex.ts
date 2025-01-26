@@ -1,6 +1,6 @@
 import { MessagePort } from "worker_threads";
 import { Game } from "../server/game";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { AsyncQueue } from "../server/utils";
 import { writeFileSync } from "fs";
 import { exit } from "process";

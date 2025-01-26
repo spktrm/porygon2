@@ -5,7 +5,7 @@ import {
     ClientMessage,
     GameState,
     ServerMessage,
-} from "../../protos/servicev2_pb";
+} from "../../protos/service_pb";
 import pino from "pino";
 
 class GameWorker {

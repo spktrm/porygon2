@@ -4,15 +4,15 @@
 import * as jspb from "google-protobuf";
 
 export class History extends jspb.Message {
-  getAbsoluteedge(): Uint8Array | string;
-  getAbsoluteedge_asU8(): Uint8Array;
-  getAbsoluteedge_asB64(): string;
-  setAbsoluteedge(value: Uint8Array | string): void;
+  getAbsoluteEdge(): Uint8Array | string;
+  getAbsoluteEdge_asU8(): Uint8Array;
+  getAbsoluteEdge_asB64(): string;
+  setAbsoluteEdge(value: Uint8Array | string): void;
 
-  getRelativeedges(): Uint8Array | string;
-  getRelativeedges_asU8(): Uint8Array;
-  getRelativeedges_asB64(): string;
-  setRelativeedges(value: Uint8Array | string): void;
+  getRelativeEdges(): Uint8Array | string;
+  getRelativeEdges_asU8(): Uint8Array;
+  getRelativeEdges_asB64(): string;
+  setRelativeEdges(value: Uint8Array | string): void;
 
   getEntities(): Uint8Array | string;
   getEntities_asU8(): Uint8Array;
@@ -34,8 +34,8 @@ export class History extends jspb.Message {
 
 export namespace History {
   export type AsObject = {
-    absoluteedge: Uint8Array | string,
-    relativeedges: Uint8Array | string,
+    absoluteEdge: Uint8Array | string,
+    relativeEdges: Uint8Array | string,
     entities: Uint8Array | string,
     length: number,
   }

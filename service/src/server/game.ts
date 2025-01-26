@@ -3,7 +3,7 @@ import { BattleStreams, Teams } from "@pkmn/sim";
 import { Player, Tracker } from "./player";
 import { TaskQueueSystem } from "./utils";
 import { recvFnType, sendFnType } from "./types";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { MessagePort } from "worker_threads";
 import { EVAL_GAME_ID_OFFSET } from "./data";
 import { getEvalAction } from "./eval";
@@ -123,12 +123,12 @@ export class Game {
             const state = player.createState();
 
             const rewards = state.getInfo()!.getRewards()!;
-            rewards.setHpreward(hpReward);
-            rewards.setFaintedreward(faintedReward);
+            rewards.setHpReward(hpReward);
+            rewards.setFaintedReward(faintedReward);
 
             gameState.setState(state.serializeBinary());
             const playerId =
-                this.playerIds[+state.getInfo()!.getPlayerindex()] ?? 1;
+                this.playerIds[+state.getInfo()!.getPlayerIndex()] ?? 1;
             let rqid = -1;
             if (!state.getInfo()!.getDone()) {
                 rqid = this.tasks.createJob();

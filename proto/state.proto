@@ -2,53 +2,53 @@ syntax = "proto3";
 
 package rlenv;
 
-import "history.proto";
 import "enums.proto";
+import "history.proto";
 
 
 message Rewards {
-    float winReward = 1;
-    float hpReward = 2;
-    float faintedReward = 3;
-    float switchReward = 4;
-    float longevityReward = 5;
-    float faintedFibReward = 6;
+  float win_reward = 1;
+  float hp_reward = 2;
+  float fainted_reward = 3;
+  float switch_reward = 4;
+  float longevity_reward = 5;
+  float fainted_fib_reward = 6;
 }
 
 message Heuristics {
-    int32 heuristicAction = 1;
+  int32 heuristic_action = 1;
 }
 
 message Info {
-    int32 gameId = 1;
-    bool done = 2;
-    bool playerIndex = 3;
-    int32 turn = 4;
-    float ts = 5;
-    float drawRatio = 6;
-    int32 workerIndex = 7;
-    Rewards rewards = 8;
-    int32 seed = 9;
-    bool draw = 10;
-    Heuristics heuristics = 11;
-    int32 requestCount = 12;
+  int32 game_id = 1;
+  bool done = 2;
+  bool player_index = 3;
+  int32 turn = 4;
+  float ts = 5;
+  float draw_ratio = 6;
+  int32 worker_index = 7;
+  Rewards rewards = 8;
+  int32 seed = 9;
+  bool draw = 10;
+  Heuristics heuristics = 11;
+  int32 request_count = 12;
 }
 
 message State {
-    Info info = 1;
-    bytes legalActions = 2;
-    history.History history = 3;
-    bytes moveset = 4;
-    bytes team = 5;
-    string key = 6;
+  Info info = 1;
+  bytes legal_actions = 2;
+  history.History history = 3;
+  bytes moveset = 4;
+  bytes team = 5;
+  string key = 6;
 }
 
 message Trajectory {
-    repeated State states = 1;
-    repeated int32 actions = 2;
-    repeated int32 rewards = 3;
+  repeated State states = 1;
+  repeated int32 actions = 2;
+  repeated int32 rewards = 3;
 }
 
 message Dataset {
-    repeated Trajectory trajectories = 1;
+  repeated Trajectory trajectories = 1;
 }

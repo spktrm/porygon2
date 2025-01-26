@@ -4,6 +4,11 @@
 echo "Generating messages and enums protos..."
 python proto/scripts/make_enums.py
 
+protolint --fix proto/
+if [ $? -ne 0 ]; then
+  echo "Protolint has fixed some things!"
+fi
+
 # Navigate to the server directory and run the TypeScript compilation script
 echo "Compiling Protobuf files for TypeScript..."
 cd service

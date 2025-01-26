@@ -9,8 +9,9 @@ def toid(string: str) -> str:
 
 
 def generate_enum(title: str, data: dict[str, int], use_toid: bool = True):
+    to_id_fn = toid if use_toid else lambda x: x
     data_lines = [
-        f"\t{title.upper()}_{((toid if use_toid else lambda x:x)(key)).upper()} = {value};"
+        f"\t_{to_id_fn(key).upper()} = {value};"
         for idx, (key, value) in enumerate(data.items())
     ]
     assert len(set(data.keys())) == len(set(data.values())), title

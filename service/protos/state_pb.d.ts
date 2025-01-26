@@ -2,27 +2,27 @@
 // file: state.proto
 
 import * as jspb from "google-protobuf";
-import * as history_pb from "./history_pb";
 import * as enums_pb from "./enums_pb";
+import * as history_pb from "./history_pb";
 
 export class Rewards extends jspb.Message {
-  getWinreward(): number;
-  setWinreward(value: number): void;
+  getWinReward(): number;
+  setWinReward(value: number): void;
 
-  getHpreward(): number;
-  setHpreward(value: number): void;
+  getHpReward(): number;
+  setHpReward(value: number): void;
 
-  getFaintedreward(): number;
-  setFaintedreward(value: number): void;
+  getFaintedReward(): number;
+  setFaintedReward(value: number): void;
 
-  getSwitchreward(): number;
-  setSwitchreward(value: number): void;
+  getSwitchReward(): number;
+  setSwitchReward(value: number): void;
 
-  getLongevityreward(): number;
-  setLongevityreward(value: number): void;
+  getLongevityReward(): number;
+  setLongevityReward(value: number): void;
 
-  getFaintedfibreward(): number;
-  setFaintedfibreward(value: number): void;
+  getFaintedFibReward(): number;
+  setFaintedFibReward(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Rewards.AsObject;
@@ -36,18 +36,18 @@ export class Rewards extends jspb.Message {
 
 export namespace Rewards {
   export type AsObject = {
-    winreward: number,
-    hpreward: number,
-    faintedreward: number,
-    switchreward: number,
-    longevityreward: number,
-    faintedfibreward: number,
+    winReward: number,
+    hpReward: number,
+    faintedReward: number,
+    switchReward: number,
+    longevityReward: number,
+    faintedFibReward: number,
   }
 }
 
 export class Heuristics extends jspb.Message {
-  getHeuristicaction(): number;
-  setHeuristicaction(value: number): void;
+  getHeuristicAction(): number;
+  setHeuristicAction(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Heuristics.AsObject;
@@ -61,19 +61,19 @@ export class Heuristics extends jspb.Message {
 
 export namespace Heuristics {
   export type AsObject = {
-    heuristicaction: number,
+    heuristicAction: number,
   }
 }
 
 export class Info extends jspb.Message {
-  getGameid(): number;
-  setGameid(value: number): void;
+  getGameId(): number;
+  setGameId(value: number): void;
 
   getDone(): boolean;
   setDone(value: boolean): void;
 
-  getPlayerindex(): boolean;
-  setPlayerindex(value: boolean): void;
+  getPlayerIndex(): boolean;
+  setPlayerIndex(value: boolean): void;
 
   getTurn(): number;
   setTurn(value: number): void;
@@ -81,11 +81,11 @@ export class Info extends jspb.Message {
   getTs(): number;
   setTs(value: number): void;
 
-  getDrawratio(): number;
-  setDrawratio(value: number): void;
+  getDrawRatio(): number;
+  setDrawRatio(value: number): void;
 
-  getWorkerindex(): number;
-  setWorkerindex(value: number): void;
+  getWorkerIndex(): number;
+  setWorkerIndex(value: number): void;
 
   hasRewards(): boolean;
   clearRewards(): void;
@@ -103,8 +103,8 @@ export class Info extends jspb.Message {
   getHeuristics(): Heuristics | undefined;
   setHeuristics(value?: Heuristics): void;
 
-  getRequestcount(): number;
-  setRequestcount(value: number): void;
+  getRequestCount(): number;
+  setRequestCount(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
@@ -118,18 +118,18 @@ export class Info extends jspb.Message {
 
 export namespace Info {
   export type AsObject = {
-    gameid: number,
+    gameId: number,
     done: boolean,
-    playerindex: boolean,
+    playerIndex: boolean,
     turn: number,
     ts: number,
-    drawratio: number,
-    workerindex: number,
+    drawRatio: number,
+    workerIndex: number,
     rewards?: Rewards.AsObject,
     seed: number,
     draw: boolean,
     heuristics?: Heuristics.AsObject,
-    requestcount: number,
+    requestCount: number,
   }
 }
 
@@ -139,10 +139,10 @@ export class State extends jspb.Message {
   getInfo(): Info | undefined;
   setInfo(value?: Info): void;
 
-  getLegalactions(): Uint8Array | string;
-  getLegalactions_asU8(): Uint8Array;
-  getLegalactions_asB64(): string;
-  setLegalactions(value: Uint8Array | string): void;
+  getLegalActions(): Uint8Array | string;
+  getLegalActions_asU8(): Uint8Array;
+  getLegalActions_asB64(): string;
+  setLegalActions(value: Uint8Array | string): void;
 
   hasHistory(): boolean;
   clearHistory(): void;
@@ -175,7 +175,7 @@ export class State extends jspb.Message {
 export namespace State {
   export type AsObject = {
     info?: Info.AsObject,
-    legalactions: Uint8Array | string,
+    legalActions: Uint8Array | string,
     history?: history_pb.History.AsObject,
     moveset: Uint8Array | string,
     team: Uint8Array | string,

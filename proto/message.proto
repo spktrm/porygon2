@@ -5,14 +5,15 @@ package rlenv;
 import "action.proto";
 
 
-enum WorkerMessageType {
-    START = 0;
-    ACTION = 1;
+enum WorkerMessageTypeEnum {
+  WORKER_MESSAGE_TYPE_ENUM___UNSPECIFIED = 0;
+  WORKER_MESSAGE_TYPE_ENUM__START = 1;
+  WORKER_MESSAGE_TYPE_ENUM__ACTION = 2;
 }
 
 message WorkerMessage {
-  int32 workerIndex = 1;
-  WorkerMessageType messageType = 2;
+  int32 worker_index = 1;
+  WorkerMessageTypeEnum message_type = 2;
   Action action = 3;
-  int32 gameId = 4;
+  int32 game_id = 4;
 }
