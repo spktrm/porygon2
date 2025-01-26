@@ -18,7 +18,7 @@ from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import as_jax_arr, get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
-from rlenv.protos.servicev2_pb2 import (
+from rlenv.protos.service_pb2 import (
     Action,
     ClientMessage,
     ConnectMessage,
@@ -164,7 +164,7 @@ class TwoPlayerEnvironment:
         # Perform the step and add the resulting state along with the player back into the queue
         state = await player._step(action)
         if not self.is_done():
-            self.dones[int(state.info.playerIndex)] = state.info.done
+            self.dones[int(state.info.player_index)] = state.info.done
         if not state.info.done:
             await self.state_queue.put((player, state))
         if self.is_done():

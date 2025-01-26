@@ -24,12 +24,12 @@ from rlenv.protos.enums_pb2 import (
     WeatherEnum,
 )
 from rlenv.protos.features_pb2 import (
-    EdgeFromTypes,
-    FeatureAbsoluteEdge,
-    FeatureEntity,
-    FeatureMoveset,
-    FeatureRelativeEdge,
-    MovesetActionType,
+    AbsoluteEdgeFeature,
+    EdgeFromTypesEnum,
+    EntityFeature,
+    MovesetActionTypeEnum,
+    MovesetFeature,
+    RelativeEdgeFeature,
 )
 from rlenv.protos.state_pb2 import State
 
@@ -51,41 +51,41 @@ NUM_TERRAIN = len(TerrainEnum.keys())
 NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
 NUM_ACTIONS = len(ActionsEnum.keys())
-NUM_ACTION_TYPES = len(MovesetActionType.keys())
+NUM_ACTION_TYPES = len(MovesetActionTypeEnum.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
 NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
-NUM_EDGE_FROM_TYPES = len(EdgeFromTypes.keys())
+NUM_EDGE_FROM_TYPES = len(EdgeFromTypesEnum.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
-NUM_MOVE_FIELDS = len(FeatureMoveset.keys())
-NUM_RELATIVE_EDGE_FIELDS = len(FeatureRelativeEdge.keys())
-NUM_ABSOLUTE_EDGE_FIELDS = len(FeatureAbsoluteEdge.keys())
-NUM_ENTITY_FIELDS = len(FeatureEntity.keys())
+NUM_MOVE_FIELDS = len(MovesetFeature.keys())
+NUM_RELATIVE_EDGE_FIELDS = len(RelativeEdgeFeature.keys())
+NUM_ABSOLUTE_EDGE_FIELDS = len(AbsoluteEdgeFeature.keys())
+NUM_ENTITY_FIELDS = len(EntityFeature.keys())
 
 NUM_HISTORY = 32
 
-SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_SPIKES
-TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_TOXICSPIKES
+SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
+TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
 
 MOVESET_ID_FEATURE_IDXS = jnp.array(
     [
-        FeatureEntity.ENTITY_MOVEID0,
-        FeatureEntity.ENTITY_MOVEID1,
-        FeatureEntity.ENTITY_MOVEID2,
-        FeatureEntity.ENTITY_MOVEID3,
+        EntityFeature.ENTITY_FEATURE__MOVEID0,
+        EntityFeature.ENTITY_FEATURE__MOVEID1,
+        EntityFeature.ENTITY_FEATURE__MOVEID2,
+        EntityFeature.ENTITY_FEATURE__MOVEID3,
     ],
     dtype=jnp.int32,
 )
 
 MOVESET_PP_FEATURE_IDXS = jnp.array(
     [
-        FeatureEntity.ENTITY_MOVEPP0,
-        FeatureEntity.ENTITY_MOVEPP1,
-        FeatureEntity.ENTITY_MOVEPP2,
-        FeatureEntity.ENTITY_MOVEPP3,
+        EntityFeature.ENTITY_FEATURE__MOVEPP0,
+        EntityFeature.ENTITY_FEATURE__MOVEPP1,
+        EntityFeature.ENTITY_FEATURE__MOVEPP2,
+        EntityFeature.ENTITY_FEATURE__MOVEPP3,
     ],
     dtype=jnp.int32,
 )
@@ -95,60 +95,60 @@ MAX_BOOST_VALUE = 13
 
 
 ENTITY_MAX_VALUES = {
-    FeatureEntity.ENTITY_LEVEL: 100,
-    FeatureEntity.ENTITY_ACTIVE: 2,
-    FeatureEntity.ENTITY_SIDE: 2,
-    FeatureEntity.ENTITY_HP_RATIO: 31,
-    FeatureEntity.ENTITY_GENDER: NUM_GENDERS,
-    FeatureEntity.ENTITY_STATUS: NUM_STATUS,
-    FeatureEntity.ENTITY_ITEM_EFFECT: NUM_ITEM_EFFECTS,
-    FeatureEntity.ENTITY_BEING_CALLED_BACK: 2,
-    FeatureEntity.ENTITY_TRAPPED: 2,
-    FeatureEntity.ENTITY_NEWLY_SWITCHED: 2,
-    FeatureEntity.ENTITY_TOXIC_TURNS: 8,
-    FeatureEntity.ENTITY_SLEEP_TURNS: 4,
-    FeatureEntity.ENTITY_FAINTED: 2,
-    FeatureEntity.ENTITY_BOOST_ATK_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_DEF_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_SPA_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_SPD_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_SPE_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
-    FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__LEVEL: 100,
+    EntityFeature.ENTITY_FEATURE__ACTIVE: 2,
+    EntityFeature.ENTITY_FEATURE__SIDE: 2,
+    EntityFeature.ENTITY_FEATURE__HP_RATIO: 31,
+    EntityFeature.ENTITY_FEATURE__GENDER: NUM_GENDERS,
+    EntityFeature.ENTITY_FEATURE__STATUS: NUM_STATUS,
+    EntityFeature.ENTITY_FEATURE__ITEM_EFFECT: NUM_ITEM_EFFECTS,
+    EntityFeature.ENTITY_FEATURE__BEING_CALLED_BACK: 2,
+    EntityFeature.ENTITY_FEATURE__TRAPPED: 2,
+    EntityFeature.ENTITY_FEATURE__NEWLY_SWITCHED: 2,
+    EntityFeature.ENTITY_FEATURE__TOXIC_TURNS: 8,
+    EntityFeature.ENTITY_FEATURE__SLEEP_TURNS: 4,
+    EntityFeature.ENTITY_FEATURE__FAINTED: 2,
+    EntityFeature.ENTITY_FEATURE__BOOST_ATK_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_DEF_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_SPA_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_SPD_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_SPE_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
+    EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
 }
 
 RELATIVE_EDGE_MAX_VALUES = {
-    FeatureRelativeEdge.EDGE_MAJOR_ARG: NUM_MAJOR_ARGS,
-    FeatureRelativeEdge.EDGE_DAMAGE_RATIO: 31,
-    FeatureRelativeEdge.EDGE_HEAL_RATIO: 31,
-    FeatureRelativeEdge.EDGE_STATUS_TOKEN: NUM_STATUS,
-    FeatureRelativeEdge.EDGE_BOOST_ATK_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_DEF_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_SPA_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_SPD_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_SPE_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
-    FeatureRelativeEdge.EDGE_SPIKES: 4,
-    FeatureRelativeEdge.EDGE_TOXIC_SPIKES: 2,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0: NUM_EDGE_FROM_TYPES,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN1: NUM_EDGE_FROM_TYPES,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN2: NUM_EDGE_FROM_TYPES,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN3: NUM_EDGE_FROM_TYPES,
-    FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN4: NUM_EDGE_FROM_TYPES,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG: NUM_MAJOR_ARGS,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO: 31,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO: 31,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN: NUM_STATUS,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ATK_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_DEF_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPA_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPD_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPE_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES: 4,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: 2,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0: NUM_EDGE_FROM_TYPES,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN1: NUM_EDGE_FROM_TYPES,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN2: NUM_EDGE_FROM_TYPES,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN3: NUM_EDGE_FROM_TYPES,
+    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN4: NUM_EDGE_FROM_TYPES,
 }
 
 
 ABSOLUTE_EDGE_MAX_VALUES = {
-    FeatureAbsoluteEdge.EDGE_WEATHER_ID: NUM_WEATHER,
-    FeatureAbsoluteEdge.EDGE_WEATHER_MAX_DURATION: 9,
-    FeatureAbsoluteEdge.EDGE_WEATHER_MIN_DURATION: 9,
-    FeatureAbsoluteEdge.EDGE_TERRAIN_ID: NUM_TERRAIN,
-    FeatureAbsoluteEdge.EDGE_TERRAIN_MAX_DURATION: 9,
-    FeatureAbsoluteEdge.EDGE_TERRAIN_MIN_DURATION: 9,
-    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_ID: NUM_PSEUDOWEATHER,
-    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MAX_DURATION: 9,
-    FeatureAbsoluteEdge.EDGE_PSEUDOWEATHER_MIN_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID: NUM_WEATHER,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_ID: NUM_TERRAIN,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID: NUM_PSEUDOWEATHER,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION: 9,
+    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION: 9,
 }
 
 ACTION_STRINGS = {v: k[8:] for k, v in ActionsEnum.items()}

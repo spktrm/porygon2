@@ -10,7 +10,7 @@ from flax.training import train_state
 from ml.func import get_average_logit_value, get_loss_entropy, renormalize
 from rlenv.data import ACTION_STRINGS
 from rlenv.interfaces import TimeStep
-from rlenv.protos.features_pb2 import FeatureMoveset
+from rlenv.protos.features_pb2 import MovesetFeature
 
 
 def conditional_breakpoint(pred):
@@ -26,7 +26,9 @@ def conditional_breakpoint(pred):
 def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     valid_mask = batch.env.valid.reshape(-1)
 
-    actions_available = batch.env.moveset[..., 0, :, FeatureMoveset.MOVESET_ACTION_ID]
+    actions_available = batch.env.moveset[
+        ..., 0, :, MovesetFeature.MOVESET_FEATURE__ACTION_ID
+    ]
     actions_index = np.eye(actions_available.shape[-1])[batch.actor.action]
 
     actions = (actions_available * actions_index).sum(axis=-1).reshape(-1)
