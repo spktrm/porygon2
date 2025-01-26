@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rhistory.proto\x12\x07history\"X\n\x07History\x12\x14\n\x0c\x61\x62soluteEdge\x18\x01 \x01(\x0c\x12\x15\n\rrelativeEdges\x18\x02 \x01(\x0c\x12\x10\n\x08\x65ntities\x18\x03 \x01(\x0c\x12\x0e\n\x06length\x18\x04 \x01(\x05\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rhistory.proto\x12\x07history\"Z\n\x07History\x12\x15\n\rabsolute_edge\x18\x01 \x01(\x0c\x12\x16\n\x0erelative_edges\x18\x02 \x01(\x0c\x12\x10\n\x08\x65ntities\x18\x03 \x01(\x0c\x12\x0e\n\x06length\x18\x04 \x01(\x05\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,5 +32,5 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'history_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_HISTORY']._serialized_start=26
-  _globals['_HISTORY']._serialized_end=114
+  _globals['_HISTORY']._serialized_end=116
 # @@protoc_insertion_point(module_scope)

@@ -5,6 +5,7 @@ import { PokemonIdent } from "@pkmn/protocol";
 import { IndexValueFromEnum } from "../server/state";
 import { Dataset, Trajectory } from "../../protos/state_pb";
 import { join } from "path";
+import { ActionsEnum } from "../../protos/enums_pb";
 
 class OfflineStream extends ObjectReadWriteStream<string> {
     constructor() {
@@ -83,7 +84,7 @@ async function processReplay(filePath: string) {
                         const nextSwitchIdent = getNextSwitch(nextChunk, i);
                         // console.log(nextSwitchIdent);
                         const label = IndexValueFromEnum(
-                            "Actions",
+                            ActionsEnum,
                             `switch_${nextSwitchIdent}`,
                         );
                         // console.log(label);
@@ -95,7 +96,7 @@ async function processReplay(filePath: string) {
                     }
                 } else {
                     const label = IndexValueFromEnum(
-                        "Actions",
+                        ActionsEnum,
                         `move_${nextInput.split(" ").at(-1)}`,
                     );
                     // console.log(label);

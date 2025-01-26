@@ -5,7 +5,7 @@ import { inspect } from "util";
 import { Player } from "../server/player";
 import { ObjectReadWriteStream } from "@pkmn/streams";
 import { recvFnType, sendFnType } from "../server/types";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { TaskQueueSystem } from "../server/utils";
 import { request } from "https";
 

@@ -1,6 +1,6 @@
 import { MessagePort, parentPort, workerData } from "worker_threads";
 import { Game } from "./game";
-import { ClientMessage, Action } from "../../protos/servicev2_pb";
+import { ClientMessage, Action } from "../../protos/service_pb";
 
 export class GameWorker {
     private port: MessagePort;

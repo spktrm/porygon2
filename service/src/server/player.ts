@@ -8,7 +8,7 @@ import { BattleStreams } from "@pkmn/sim";
 import { recvFnType, sendFnType } from "./types";
 import { EventHandler, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
-import { Action } from "../../protos/servicev2_pb";
+import { Action } from "../../protos/service_pb";
 
 const generations = new Generations(Dex);
 

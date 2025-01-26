@@ -69,8 +69,8 @@ proto.history.History.prototype.toObject = function(opt_includeInstance) {
  */
 proto.history.History.toObject = function(includeInstance, msg) {
   var f, obj = {
-    absoluteedge: msg.getAbsoluteedge_asB64(),
-    relativeedges: msg.getRelativeedges_asB64(),
+    absoluteEdge: msg.getAbsoluteEdge_asB64(),
+    relativeEdges: msg.getRelativeEdges_asB64(),
     entities: msg.getEntities_asB64(),
     length: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
@@ -111,11 +111,11 @@ proto.history.History.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setAbsoluteedge(value);
+      msg.setAbsoluteEdge(value);
       break;
     case 2:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setRelativeedges(value);
+      msg.setRelativeEdges(value);
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -154,14 +154,14 @@ proto.history.History.prototype.serializeBinary = function() {
  */
 proto.history.History.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getAbsoluteedge_asU8();
+  f = message.getAbsoluteEdge_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       1,
       f
     );
   }
-  f = message.getRelativeedges_asU8();
+  f = message.getRelativeEdges_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       2,
@@ -186,35 +186,35 @@ proto.history.History.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional bytes absoluteEdge = 1;
+ * optional bytes absolute_edge = 1;
  * @return {!(string|Uint8Array)}
  */
-proto.history.History.prototype.getAbsoluteedge = function() {
+proto.history.History.prototype.getAbsoluteEdge = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 1, ""));
 };
 
 
 /**
- * optional bytes absoluteEdge = 1;
- * This is a type-conversion wrapper around `getAbsoluteedge()`
+ * optional bytes absolute_edge = 1;
+ * This is a type-conversion wrapper around `getAbsoluteEdge()`
  * @return {string}
  */
-proto.history.History.prototype.getAbsoluteedge_asB64 = function() {
+proto.history.History.prototype.getAbsoluteEdge_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getAbsoluteedge()));
+      this.getAbsoluteEdge()));
 };
 
 
 /**
- * optional bytes absoluteEdge = 1;
+ * optional bytes absolute_edge = 1;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getAbsoluteedge()`
+ * This is a type-conversion wrapper around `getAbsoluteEdge()`
  * @return {!Uint8Array}
  */
-proto.history.History.prototype.getAbsoluteedge_asU8 = function() {
+proto.history.History.prototype.getAbsoluteEdge_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getAbsoluteedge()));
+      this.getAbsoluteEdge()));
 };
 
 
@@ -222,41 +222,41 @@ proto.history.History.prototype.getAbsoluteedge_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.history.History} returns this
  */
-proto.history.History.prototype.setAbsoluteedge = function(value) {
+proto.history.History.prototype.setAbsoluteEdge = function(value) {
   return jspb.Message.setProto3BytesField(this, 1, value);
 };
 
 
 /**
- * optional bytes relativeEdges = 2;
+ * optional bytes relative_edges = 2;
  * @return {!(string|Uint8Array)}
  */
-proto.history.History.prototype.getRelativeedges = function() {
+proto.history.History.prototype.getRelativeEdges = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
 /**
- * optional bytes relativeEdges = 2;
- * This is a type-conversion wrapper around `getRelativeedges()`
+ * optional bytes relative_edges = 2;
+ * This is a type-conversion wrapper around `getRelativeEdges()`
  * @return {string}
  */
-proto.history.History.prototype.getRelativeedges_asB64 = function() {
+proto.history.History.prototype.getRelativeEdges_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getRelativeedges()));
+      this.getRelativeEdges()));
 };
 
 
 /**
- * optional bytes relativeEdges = 2;
+ * optional bytes relative_edges = 2;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getRelativeedges()`
+ * This is a type-conversion wrapper around `getRelativeEdges()`
  * @return {!Uint8Array}
  */
-proto.history.History.prototype.getRelativeedges_asU8 = function() {
+proto.history.History.prototype.getRelativeEdges_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getRelativeedges()));
+      this.getRelativeEdges()));
 };
 
 
@@ -264,7 +264,7 @@ proto.history.History.prototype.getRelativeedges_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.history.History} returns this
  */
-proto.history.History.prototype.setRelativeedges = function(value) {
+proto.history.History.prototype.setRelativeEdges = function(value) {
   return jspb.Message.setProto3BytesField(this, 2, value);
 };
 

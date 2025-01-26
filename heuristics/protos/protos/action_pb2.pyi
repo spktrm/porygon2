@@ -5,13 +5,13 @@ from typing import ClassVar as _ClassVar, Optional as _Optional
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Action(_message.Message):
-    __slots__ = ("key", "index", "text", "gameId")
+    __slots__ = ("key", "index", "text", "game_id")
     KEY_FIELD_NUMBER: _ClassVar[int]
     INDEX_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
-    GAMEID_FIELD_NUMBER: _ClassVar[int]
+    GAME_ID_FIELD_NUMBER: _ClassVar[int]
     key: str
     index: int
     text: str
-    gameId: int
-    def __init__(self, key: _Optional[str] = ..., index: _Optional[int] = ..., text: _Optional[str] = ..., gameId: _Optional[int] = ...) -> None: ...
+    game_id: int
+    def __init__(self, key: _Optional[str] = ..., index: _Optional[int] = ..., text: _Optional[str] = ..., game_id: _Optional[int] = ...) -> None: ...

@@ -18,11 +18,12 @@ const PS_DIRECTORY = "ps/";
 const BATCH_SIZE = 128;
 const PARENT_DATA_DIR = `data`;
 
+const UNSPECIFIED_TOKEN = "_UNSPECIFIED";
 const PAD_TOKEN = "_PAD";
 const UNK_TOKEN = "_UNK";
 const NULL_TOKEN = "_NULL";
 const SWITCH_TOKEN = "_SWITCH";
-const EXTRA_TOKENS = [NULL_TOKEN, PAD_TOKEN, UNK_TOKEN];
+const EXTRA_TOKENS = [UNSPECIFIED_TOKEN, NULL_TOKEN, PAD_TOKEN, UNK_TOKEN];
 
 type CustomScrapingFunction = (content: string, file: string) => string[];
 
@@ -512,15 +513,12 @@ function formatData(data: GenData) {
     };
 }
 
-function standardize(values: string[], extraTokens?: string[]) {
+function standardize(values: string[], extraTokens: string[] = EXTRA_TOKENS) {
     const sortedValues = Array.from(new Set(values)).sort((a, b) =>
         a.localeCompare(b),
     );
     return Object.fromEntries(
-        [...(extraTokens ?? []), ...sortedValues].map((value, index) => [
-            value,
-            index,
-        ]),
+        [...extraTokens, ...sortedValues].map((value, index) => [value, index]),
     );
 }
 
@@ -581,12 +579,12 @@ async function scrapeRepo() {
 
     data["Effect"] = standardize(
         [
-            ...genData.abilities.map((x) => `ability_${x.id}`),
-            ...genData.items.map((x) => `item_${x.id}`),
-            ...genData.moves.map((x) => `move_${x.id}`),
-            ...[...keywords.status].map((x) => `status_${x}`),
-            ...[...keywords.weather].map((x) => `weather_${x}`),
-            ...conditions.map((x) => `condition_${x}`),
+            ...genData.abilities.map((x) => x.id),
+            ...genData.items.map((x) => x.id),
+            ...genData.moves.map((x) => x.id),
+            ...keywords.status,
+            ...keywords.weather,
+            ...conditions,
         ],
         EXTRA_TOKENS,
     );

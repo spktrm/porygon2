@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-message LLMState {
-    repeated bool legalMask = 1;
-    string request = 2;
-    string log = 3;
-    string myTeam = 4;
-    string oppTeam = 5;
-}
