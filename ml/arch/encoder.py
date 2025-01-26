@@ -14,7 +14,6 @@ from ml.arch.modules import (
     TransformerDecoder,
     TransformerEncoder,
     feature_encode_entity,
-    l2_normalize,
 )
 from rlenv.data import (
     ABSOLUTE_EDGE_MAX_VALUES,
