@@ -59,7 +59,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
             }
             gameState.setRqid(rqid);
             gameState.setPlayerId(playerId);
-            const response = await fetch("http://127.0.0.1:8080/predict", {
+            const response = await fetch("http://127.0.0.1:8001/predict", {
                 method: "POST",
                 body: state.serializeBinary(),
             });

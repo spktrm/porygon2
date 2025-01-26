@@ -60,21 +60,23 @@ def get_move_mask(move: chex.Array) -> chex.Array:
 
 
 def one_hot_encode_entity_feature(entity: chex.Array, feature_index: int):
-    return jax.nn.one_hot(entity[feature_index], ENTITY_MAX_VALUES[feature_index])
+    max_value = ENTITY_MAX_VALUES[feature_index]
+    return jax.nn.one_hot(entity[feature_index].clip(max=max_value), max_value)
 
 
 def one_hot_encode_relative_edge_feature(edge: chex.Array, feature_index: int):
-    return jax.nn.one_hot(edge[feature_index], RELATIVE_EDGE_MAX_VALUES[feature_index])
+    max_value = RELATIVE_EDGE_MAX_VALUES[feature_index]
+    return jax.nn.one_hot(edge[feature_index].clip(max=max_value), max_value)
 
 
 def one_hot_encode_relative_edge_boost_feature(edge: chex.Array, feature_index: int):
-    return jax.nn.one_hot(
-        edge[feature_index], RELATIVE_EDGE_MAX_VALUES[feature_index] + 6
-    )
+    max_value = RELATIVE_EDGE_MAX_VALUES[feature_index] + 6
+    return jax.nn.one_hot(edge[feature_index].clip(max=max_value), max_value)
 
 
 def one_hot_encode_absolute_edge_feature(edge: chex.Array, feature_index: int):
-    return jax.nn.one_hot(edge[feature_index], ABSOLUTE_EDGE_MAX_VALUES[feature_index])
+    max_value = ABSOLUTE_EDGE_MAX_VALUES[feature_index]
+    return jax.nn.one_hot(edge[feature_index].clip(max=max_value), max_value)
 
 
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:

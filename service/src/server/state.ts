@@ -61,7 +61,7 @@ type MajorArgNames =
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const sanitizeKeyCache = new Map<string, string>();
-const MAX_16BIT_UNSIGNED = 65535;
+const MAX_16BIT_SIGNED = 32767;
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
     const indices: number[] = [];
@@ -836,12 +836,18 @@ class EdgeBuffer {
                 ) ?? 0;
             const prevFromType = this.getLatestRelativeEdgeFeature(
                 (FeatureRelativeEdge.EDGE_FROM_TYPE_TOKEN0 +
-                    numFromTypes) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    Math.max(
+                        0,
+                        numFromTypes - 1,
+                    )) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
                 sideIndex,
             );
             const prevFromSource = this.getLatestRelativeEdgeFeature(
                 (FeatureRelativeEdge.EDGE_FROM_SOURCE_TOKEN0 +
-                    numFromSources) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
+                    Math.max(
+                        0,
+                        numFromSources - 1,
+                    )) as FeatureRelativeEdgeMap[keyof FeatureRelativeEdgeMap],
                 sideIndex,
             );
             if (prevFromType !== fromTypeToken && numFromTypes < 5) {
@@ -1001,8 +1007,12 @@ class EdgeBuffer {
                 action: jsonDatum["Actions"][
                     array[FeatureRelativeEdge.EDGE_ACTION_TOKEN]
                 ],
-                damage: array[FeatureRelativeEdge.EDGE_DAMAGE_RATIO] / 31,
-                heal: array[FeatureRelativeEdge.EDGE_HEAL_RATIO] / 31,
+                damage:
+                    array[FeatureRelativeEdge.EDGE_DAMAGE_RATIO] /
+                    MAX_16BIT_SIGNED,
+                heal:
+                    array[FeatureRelativeEdge.EDGE_HEAL_RATIO] /
+                    MAX_16BIT_SIGNED,
                 sideConditions: sideConditionIndices.map(
                     (index) => jsonDatum["sideCondition"][index],
                 ),
@@ -1373,7 +1383,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke2Ident ?? poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident ?? poke2Ident)!;
         const relativePlayerIndex = poke.side.n ^ playerIndex;
 
         const fromEffect = this.getCondition(kwArgs.from);
@@ -1410,7 +1420,7 @@ export class EventHandler implements Protocol.Handler {
         const diffRatio = currHp - prevHp;
         this.prevHp.set(trueIdent, currHp);
         const addedDamageToken = Math.abs(
-            Math.floor(MAX_16BIT_UNSIGNED * diffRatio),
+            Math.floor(MAX_16BIT_SIGNED * diffRatio),
         );
 
         this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
@@ -1422,7 +1432,7 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer.setLatestRelativeEdgeFeature(
             FeatureRelativeEdge.EDGE_DAMAGE_RATIO,
             relativePlayerIndex,
-            Math.min(MAX_16BIT_UNSIGNED, currentDamageToken + addedDamageToken),
+            Math.min(MAX_16BIT_SIGNED, currentDamageToken + addedDamageToken),
         );
     }
 
@@ -1454,7 +1464,7 @@ export class EventHandler implements Protocol.Handler {
         const diffRatio = currHp - prevHp;
         this.prevHp.set(trueIdent, currHp);
         const addedHealToken = Math.abs(
-            Math.floor(MAX_16BIT_UNSIGNED * diffRatio),
+            Math.floor(MAX_16BIT_SIGNED * diffRatio),
         );
 
         this.edgeBuffer.updateLatestMinorArgs(argName, relativePlayerIndex);
@@ -1466,7 +1476,7 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer.setLatestRelativeEdgeFeature(
             FeatureRelativeEdge.EDGE_HEAL_RATIO,
             relativePlayerIndex,
-            Math.min(MAX_16BIT_UNSIGNED, currentHealToken + addedHealToken),
+            Math.min(MAX_16BIT_SIGNED, currentHealToken + addedHealToken),
         );
     }
 
