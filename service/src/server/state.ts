@@ -2262,7 +2262,7 @@ export class StateHandler {
             }
             assignActionBuffer(
                 MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-                IndexValueFromEnum(ActionsEnum, `move_${action.id}`),
+                IndexValueFromEnum(MovesEnum, action.id),
             );
         };
         const pushSwitchAction = (action: Protocol.Request.Pokemon) => {

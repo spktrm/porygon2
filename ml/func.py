@@ -466,9 +466,7 @@ def get_loss_nerd(
         assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
-        adv_pi = (adv_pi - adv_pi.mean(where=legal_actions)) / (
-            adv_pi.std(where=legal_actions) + 1e-8
-        )
+
         adv_pi = jnp.minimum(
             ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
         )  # importance sampling correction

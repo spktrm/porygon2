@@ -79,7 +79,7 @@ export class Tracker {
                 (count, pokemon) => count + +(pokemon.hp > 0),
                 0,
             );
-            return aliveInTeam;
+            return aliveInTeam / side.pokemon.length;
         });
         const aliveDiff = aliveTotal1 - aliveTotal2;
         this.faintedDiffs.push(aliveDiff);
@@ -95,7 +95,7 @@ export class Tracker {
                 (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
                 0,
             );
-            return hpInTeam;
+            return hpInTeam / side.pokemon.length;
         });
 
         const hpDiff = hpTotal1 - hpTotal2;

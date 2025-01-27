@@ -173,7 +173,7 @@ class ActorCriticConfig:
     # The "speed" at which `params_target` is following `params`.
     target_network_avg: float = 1e-3
 
-    gamma: float = 0.99
+    gamma: float = 1.0
     c_vtrace: float = 1.0
     rho_vtrace: float = np.inf
 
