@@ -16,7 +16,7 @@ from rlenv.data import (
     ENTITY_MAX_VALUES,
     RELATIVE_EDGE_MAX_VALUES,
 )
-from rlenv.protos.features_pb2 import FeatureEntity
+from rlenv.protos.features_pb2 import EntityFeature
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -935,16 +935,16 @@ one_hot_encode_absolute_edge = functools.partial(
 
 def feature_encode_entity(entity: chex.Array):
     entity_boosts = entity[
-        FeatureEntity.ENTITY_BOOST_ATK_VALUE : FeatureEntity.ENTITY_BOOST_ACCURACY_VALUE
+        EntityFeature.ENTITY_FEATURE__BOOST_ATK_VALUE : EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE
         + 1
     ]
     return jnp.concatenate(
         (
             (
-                entity[FeatureEntity.ENTITY_HP_RATIO]
-                / ENTITY_MAX_VALUES[FeatureEntity.ENTITY_HP_RATIO]
+                entity[EntityFeature.ENTITY_FEATURE__HP_RATIO]
+                / ENTITY_MAX_VALUES[EntityFeature.ENTITY_FEATURE__HP_RATIO]
             )[None],
-            (entity[FeatureEntity.ENTITY_LEVEL] / 100)[None],
+            (entity[EntityFeature.ENTITY_FEATURE__LEVEL] / 100)[None],
             (entity_boosts - 6) / 6,
         )
     )

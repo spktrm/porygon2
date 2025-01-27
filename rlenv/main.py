@@ -1,6 +1,7 @@
 import asyncio
 import functools
 from abc import ABC, abstractmethod
+import pickle
 from typing import Callable, List, Sequence, Tuple
 
 import chex
@@ -15,7 +16,7 @@ from tqdm import tqdm
 from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
-from ml.utils import Params
+from ml.utils import Params, breakpoint_if_nonfinite
 from rlenv.env import as_jax_arr, get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.service_pb2 import (
@@ -397,6 +398,9 @@ def main():
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
+        with open("rlenv/ex_batch", "wb") as f:
+            pickle.dump(batch, f)
+        break
         collect_batch_telemetry_data(batch)
 
         training_progress.update(batch.env.valid.sum())

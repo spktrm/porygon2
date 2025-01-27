@@ -50,14 +50,11 @@ def get_move_mask(move: chex.Array) -> chex.Array:
     Generate a mask to filter valid moves based on move identifiers.
     """
     action_id_token = astype(move[MovesetFeature.MOVESET_FEATURE__ACTION_ID], jnp.int32)
-    return (
-        jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__MOVE__NULL)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__SWITCH__NULL)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__MOVE__PAD)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__SWITCH__PAD)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM___UNSPECIFIED)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__MOVE__UNSPECIFIED)
-        & jnp.not_equal(action_id_token, ActionsEnum.ACTIONS_ENUM__SWITCH__UNSPECIFIED)
+    return ~(
+        (action_id_token == ActionsEnum.ACTIONS_ENUM__MOVE__NULL)
+        | (action_id_token == ActionsEnum.ACTIONS_ENUM__SWITCH__NULL)
+        | (action_id_token == ActionsEnum.ACTIONS_ENUM__MOVE__PAD)
+        | (action_id_token == ActionsEnum.ACTIONS_ENUM__SWITCH__PAD)
     )
 
 
@@ -96,10 +93,9 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
     Generate a mask to identify valid entities based on species tokens.
     """
     species_token = astype(entity[EntityFeature.ENTITY_FEATURE__SPECIES], jnp.int32)
-    return ~jnp.logical_or(
-        jnp.equal(species_token, SpeciesEnum.SPECIES_ENUM___NULL),
-        jnp.equal(species_token, SpeciesEnum.SPECIES_ENUM___PAD),
-        jnp.equal(species_token, SpeciesEnum.SPECIES_ENUM___UNSPECIFIED),
+    return ~(
+        (species_token == SpeciesEnum.SPECIES_ENUM___NULL)
+        | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
     )
 
 
@@ -552,10 +548,10 @@ class Encoder(nn.Module):
             Encode all timesteps in the history container.
             """
             turn_offset = history_container.absolute_edges[
-                ..., AbsoluteEdgeFeature.EDGE_TURN_VALUE
+                ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE
             ].max(0)
             request_count_offset = history_container.absolute_edges[
-                ..., AbsoluteEdgeFeature.EDGE_REQUEST_COUNT
+                ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT
             ].max(0)
             return jax.vmap(_encode_timestep, in_axes=(0, None, None))(
                 history_container, turn_offset, request_count_offset
