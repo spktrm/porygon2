@@ -52,9 +52,14 @@ def process_state(state: State):
         .reshape(10, NUM_MOVE_FIELDS)
         .astype(int)
     )
-    team = (
-        np.frombuffer(state.team, dtype=np.int16)
-        .reshape(2, 6, NUM_ENTITY_FIELDS)
+    private_team = (
+        np.frombuffer(state.private_team, dtype=np.int16)
+        .reshape(12, NUM_ENTITY_FIELDS)
+        .astype(int)
+    )
+    public_team = (
+        np.frombuffer(state.public_team, dtype=np.int16)
+        .reshape(12, NUM_ENTITY_FIELDS)
         .astype(int)
     )
 
@@ -85,7 +90,8 @@ def process_state(state: State):
         turn=np.array(state.info.turn, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
-        team=team.astype(int),
+        private_team=private_team.astype(int),
+        public_team=public_team.astype(int),
         moveset=moveset.astype(int),
         seed_hash=np.array(state.info.seed).astype(int),
         request_count=np.array(state.info.request_count).astype(int),

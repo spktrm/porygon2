@@ -1099,8 +1099,9 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
     legalActions: msg.getLegalActions_asB64(),
     history: (f = msg.getHistory()) && history_pb.History.toObject(includeInstance, f),
     moveset: msg.getMoveset_asB64(),
-    team: msg.getTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 6, "")
+    publicTeam: msg.getPublicTeam_asB64(),
+    privateTeam: msg.getPrivateTeam_asB64(),
+    key: jspb.Message.getFieldWithDefault(msg, 7, "")
   };
 
   if (includeInstance) {
@@ -1157,9 +1158,13 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setTeam(value);
+      msg.setPublicTeam(value);
       break;
     case 6:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setPrivateTeam(value);
+      break;
+    case 7:
       var value = /** @type {string} */ (reader.readString());
       msg.setKey(value);
       break;
@@ -1222,17 +1227,24 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getTeam_asU8();
+  f = message.getPublicTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       5,
       f
     );
   }
+  f = message.getPrivateTeam_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      6,
+      f
+    );
+  }
   f = message.getKey();
   if (f.length > 0) {
     writer.writeString(
-      6,
+      7,
       f
     );
   }
@@ -1398,35 +1410,35 @@ proto.rlenv.State.prototype.setMoveset = function(value) {
 
 
 /**
- * optional bytes team = 5;
+ * optional bytes public_team = 5;
  * @return {!(string|Uint8Array)}
  */
-proto.rlenv.State.prototype.getTeam = function() {
+proto.rlenv.State.prototype.getPublicTeam = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes team = 5;
- * This is a type-conversion wrapper around `getTeam()`
+ * optional bytes public_team = 5;
+ * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {string}
  */
-proto.rlenv.State.prototype.getTeam_asB64 = function() {
+proto.rlenv.State.prototype.getPublicTeam_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getTeam()));
+      this.getPublicTeam()));
 };
 
 
 /**
- * optional bytes team = 5;
+ * optional bytes public_team = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getTeam()`
+ * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {!Uint8Array}
  */
-proto.rlenv.State.prototype.getTeam_asU8 = function() {
+proto.rlenv.State.prototype.getPublicTeam_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getTeam()));
+      this.getPublicTeam()));
 };
 
 
@@ -1434,17 +1446,59 @@ proto.rlenv.State.prototype.getTeam_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.rlenv.State} returns this
  */
-proto.rlenv.State.prototype.setTeam = function(value) {
+proto.rlenv.State.prototype.setPublicTeam = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
 };
 
 
 /**
- * optional string key = 6;
+ * optional bytes private_team = 6;
+ * @return {!(string|Uint8Array)}
+ */
+proto.rlenv.State.prototype.getPrivateTeam = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+};
+
+
+/**
+ * optional bytes private_team = 6;
+ * This is a type-conversion wrapper around `getPrivateTeam()`
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getPrivateTeam_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getPrivateTeam()));
+};
+
+
+/**
+ * optional bytes private_team = 6;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getPrivateTeam()`
+ * @return {!Uint8Array}
+ */
+proto.rlenv.State.prototype.getPrivateTeam_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getPrivateTeam()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setPrivateTeam = function(value) {
+  return jspb.Message.setProto3BytesField(this, 6, value);
+};
+
+
+/**
+ * optional string key = 7;
  * @return {string}
  */
 proto.rlenv.State.prototype.getKey = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
 };
 
 
@@ -1453,7 +1507,7 @@ proto.rlenv.State.prototype.getKey = function() {
  * @return {!proto.rlenv.State} returns this
  */
 proto.rlenv.State.prototype.setKey = function(value) {
-  return jspb.Message.setProto3StringField(this, 6, value);
+  return jspb.Message.setProto3StringField(this, 7, value);
 };
 
 

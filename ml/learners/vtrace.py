@@ -27,7 +27,7 @@ from ml.learners.func import (
     collect_policy_stats_telemetry_data,
 )
 from ml.learners.rnad import NerdConfig
-from ml.utils import Params, breakpoint_if_nonfinite
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
 
@@ -38,7 +38,7 @@ class VtraceConfig(ActorCriticConfig):
     target_network_avg: float = 1e-2
 
     nerd: NerdConfig = NerdConfig()
-    clip_gradient: float = 10
+    clip_gradient: float = 1
 
 
 def get_config():
@@ -133,7 +133,11 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.rewards.hp_rewards + batch.actor.rewards.fainted_rewards
+        rewards = (
+            batch.actor.rewards.hp_rewards
+            + batch.actor.rewards.fainted_rewards
+            + batch.actor.rewards.win_rewards
+        )
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -151,7 +155,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
-                eta=0.2,
+                eta=0.02,
                 gamma=config.gamma,
             )
             v_target_list.append(jax.lax.stop_gradient(v_target_))

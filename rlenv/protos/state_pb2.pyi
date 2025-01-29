@@ -58,20 +58,22 @@ class Info(_message.Message):
     def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
-    __slots__ = ("info", "legal_actions", "history", "moveset", "team", "key")
+    __slots__ = ("info", "legal_actions", "history", "moveset", "public_team", "private_team", "key")
     INFO_FIELD_NUMBER: _ClassVar[int]
     LEGAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
     HISTORY_FIELD_NUMBER: _ClassVar[int]
     MOVESET_FIELD_NUMBER: _ClassVar[int]
-    TEAM_FIELD_NUMBER: _ClassVar[int]
+    PUBLIC_TEAM_FIELD_NUMBER: _ClassVar[int]
+    PRIVATE_TEAM_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
     info: Info
     legal_actions: bytes
     history: _history_pb2.History
     moveset: bytes
-    team: bytes
+    public_team: bytes
+    private_team: bytes
     key: str
-    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legal_actions: _Optional[bytes] = ..., history: _Optional[_Union[_history_pb2.History, _Mapping]] = ..., moveset: _Optional[bytes] = ..., team: _Optional[bytes] = ..., key: _Optional[str] = ...) -> None: ...
+    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legal_actions: _Optional[bytes] = ..., history: _Optional[_Union[_history_pb2.History, _Mapping]] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., key: _Optional[str] = ...) -> None: ...
 
 class Trajectory(_message.Message):
     __slots__ = ("states", "actions", "rewards")

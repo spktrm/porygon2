@@ -16,10 +16,10 @@ var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
 goog.exportSymbol('proto.AbsoluteEdgeFeature', null, global);
-goog.exportSymbol('proto.EdgeFromTypesEnum', null, global);
 goog.exportSymbol('proto.EntityFeature', null, global);
 goog.exportSymbol('proto.MovesetActionTypeEnum', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
+goog.exportSymbol('proto.MovesetHasPPEnum', null, global);
 goog.exportSymbol('proto.RelativeEdgeFeature', null, global);
 /**
  * @enum {number}
@@ -70,7 +70,12 @@ proto.EntityFeature = {
   ENTITY_FEATURE__VOLATILES8: 42,
   ENTITY_FEATURE__SIDE: 43,
   ENTITY_FEATURE__TYPECHANGE0: 44,
-  ENTITY_FEATURE__TYPECHANGE1: 45
+  ENTITY_FEATURE__TYPECHANGE1: 45,
+  ENTITY_FEATURE__ACTION_ID0: 46,
+  ENTITY_FEATURE__ACTION_ID1: 47,
+  ENTITY_FEATURE__ACTION_ID2: 48,
+  ENTITY_FEATURE__ACTION_ID3: 49,
+  ENTITY_FEATURE__NUM_MOVES: 50
 };
 
 /**
@@ -85,33 +90,25 @@ proto.MovesetActionTypeEnum = {
 /**
  * @enum {number}
  */
-proto.MovesetFeature = {
-  MOVESET_FEATURE___UNSPECIFIED: 0,
-  MOVESET_FEATURE__ACTION_ID: 1,
-  MOVESET_FEATURE__PPUSED: 2,
-  MOVESET_FEATURE__LEGAL: 3,
-  MOVESET_FEATURE__SIDE: 4,
-  MOVESET_FEATURE__ACTION_TYPE: 5,
-  MOVESET_FEATURE__EST_DAMAGE: 6,
-  MOVESET_FEATURE__MOVE_ID: 7,
-  MOVESET_FEATURE__SPECIES_ID: 8,
-  MOVESET_FEATURE__ENTITY_INDEX: 9
+proto.MovesetHasPPEnum = {
+  MOVESET_HAS_PP_ENUM___UNSPECIFIED: 0,
+  MOVESET_HAS_PP_ENUM__YES: 1,
+  MOVESET_HAS_PP_ENUM__NO: 2
 };
 
 /**
  * @enum {number}
  */
-proto.EdgeFromTypesEnum = {
-  EDGE_FROM_TYPES_ENUM__FROM_UNSPECIFIED: 0,
-  EDGE_FROM_TYPES_ENUM__FROM_ITEM: 1,
-  EDGE_FROM_TYPES_ENUM__FROM_EFFECT: 2,
-  EDGE_FROM_TYPES_ENUM__FROM_MOVE: 3,
-  EDGE_FROM_TYPES_ENUM__FROM_ABILITY: 4,
-  EDGE_FROM_TYPES_ENUM__FROM_SIDECONDITION: 5,
-  EDGE_FROM_TYPES_ENUM__FROM_STATUS: 6,
-  EDGE_FROM_TYPES_ENUM__FROM_WEATHER: 7,
-  EDGE_FROM_TYPES_ENUM__FROM_TERRAIN: 8,
-  EDGE_FROM_TYPES_ENUM__FROM_PSEUDOWEATHER: 9
+proto.MovesetFeature = {
+  MOVESET_FEATURE___UNSPECIFIED: 0,
+  MOVESET_FEATURE__ACTION_ID: 1,
+  MOVESET_FEATURE__PP_RATIO: 2,
+  MOVESET_FEATURE__MOVE_ID: 3,
+  MOVESET_FEATURE__SPECIES_ID: 4,
+  MOVESET_FEATURE__PP: 5,
+  MOVESET_FEATURE__MAXPP: 6,
+  MOVESET_FEATURE__HAS_PP: 7,
+  MOVESET_FEATURE__ACTION_TYPE: 8
 };
 
 /**
@@ -153,7 +150,8 @@ proto.RelativeEdgeFeature = {
   RELATIVE_EDGE_FEATURE__SIDECONDITIONS0: 32,
   RELATIVE_EDGE_FEATURE__SIDECONDITIONS1: 33,
   RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: 34,
-  RELATIVE_EDGE_FEATURE__SPIKES: 35
+  RELATIVE_EDGE_FEATURE__SPIKES: 35,
+  RELATIVE_EDGE_FEATURE__MOVE_TOKEN: 36
 };
 
 /**

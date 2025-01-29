@@ -89,12 +89,12 @@ def collect_gradient_telemetry_data(grads: chex.ArrayTree) -> Dict[str, Any]:
     logs = dict(
         gradient_norm=optax.global_norm(grads),
     )
-    # for module_name in ["encoder", "policy_head", "value_head"]:
-    #     for key, value in grads["params"][module_name].items():
-    #         logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
-    #             lambda a, b: jnp.maximum(a, b),
-    #             jax.tree.map(lambda x: jnp.abs(x).max(), value),
-    #         )
+    for module_name in ["encoder", "policy_head", "value_head"]:
+        for key, value in grads["params"][module_name].items():
+            logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
+                lambda a, b: jnp.maximum(a, b),
+                jax.tree.map(lambda x: jnp.abs(x).max(), value),
+            )
     return logs
 
 

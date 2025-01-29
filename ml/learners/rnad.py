@@ -34,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 10_000
+    clip: float = 100
 
 
 @chex.dataclass(frozen=True)

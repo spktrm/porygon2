@@ -1,7 +1,7 @@
 import asyncio
 import functools
-from abc import ABC, abstractmethod
 import pickle
+from abc import ABC, abstractmethod
 from typing import Callable, List, Sequence, Tuple
 
 import chex
@@ -16,7 +16,7 @@ from tqdm import tqdm
 from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
-from ml.utils import Params, breakpoint_if_nonfinite
+from ml.utils import Params
 from rlenv.env import as_jax_arr, get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.service_pb2 import (

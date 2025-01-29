@@ -39,8 +39,9 @@ message State {
   bytes legal_actions = 2;
   history.History history = 3;
   bytes moveset = 4;
-  bytes team = 5;
-  string key = 6;
+  bytes public_team = 5;
+  bytes private_team = 6;
+  string key = 7;
 }
 
 message Trajectory {

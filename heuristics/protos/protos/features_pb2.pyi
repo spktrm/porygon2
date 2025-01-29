@@ -52,6 +52,11 @@ class EntityFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_FEATURE__SIDE: _ClassVar[EntityFeature]
     ENTITY_FEATURE__TYPECHANGE0: _ClassVar[EntityFeature]
     ENTITY_FEATURE__TYPECHANGE1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID2: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID3: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__NUM_MOVES: _ClassVar[EntityFeature]
 
 class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -59,31 +64,23 @@ class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_ACTION_TYPE_ENUM__MOVE: _ClassVar[MovesetActionTypeEnum]
     MOVESET_ACTION_TYPE_ENUM__SWITCH: _ClassVar[MovesetActionTypeEnum]
 
+class MovesetHasPPEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MOVESET_HAS_PP_ENUM___UNSPECIFIED: _ClassVar[MovesetHasPPEnum]
+    MOVESET_HAS_PP_ENUM__YES: _ClassVar[MovesetHasPPEnum]
+    MOVESET_HAS_PP_ENUM__NO: _ClassVar[MovesetHasPPEnum]
+
 class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     MOVESET_FEATURE___UNSPECIFIED: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__ACTION_ID: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__PPUSED: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__LEGAL: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__SIDE: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__EST_DAMAGE: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__PP_RATIO: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__MOVE_ID: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__SPECIES_ID: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__ENTITY_INDEX: _ClassVar[MovesetFeature]
-
-class EdgeFromTypesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    EDGE_FROM_TYPES_ENUM__FROM_UNSPECIFIED: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_ITEM: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_EFFECT: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_MOVE: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_ABILITY: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_SIDECONDITION: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_STATUS: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_WEATHER: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_TERRAIN: _ClassVar[EdgeFromTypesEnum]
-    EDGE_FROM_TYPES_ENUM__FROM_PSEUDOWEATHER: _ClassVar[EdgeFromTypesEnum]
+    MOVESET_FEATURE__PP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__MAXPP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__HAS_PP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
 
 class RelativeEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -123,6 +120,7 @@ class RelativeEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     RELATIVE_EDGE_FEATURE__SIDECONDITIONS1: _ClassVar[RelativeEdgeFeature]
     RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: _ClassVar[RelativeEdgeFeature]
     RELATIVE_EDGE_FEATURE__SPIKES: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MOVE_TOKEN: _ClassVar[RelativeEdgeFeature]
 
 class AbsoluteEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -188,29 +186,26 @@ ENTITY_FEATURE__VOLATILES8: EntityFeature
 ENTITY_FEATURE__SIDE: EntityFeature
 ENTITY_FEATURE__TYPECHANGE0: EntityFeature
 ENTITY_FEATURE__TYPECHANGE1: EntityFeature
+ENTITY_FEATURE__ACTION_ID0: EntityFeature
+ENTITY_FEATURE__ACTION_ID1: EntityFeature
+ENTITY_FEATURE__ACTION_ID2: EntityFeature
+ENTITY_FEATURE__ACTION_ID3: EntityFeature
+ENTITY_FEATURE__NUM_MOVES: EntityFeature
 MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum
+MOVESET_HAS_PP_ENUM___UNSPECIFIED: MovesetHasPPEnum
+MOVESET_HAS_PP_ENUM__YES: MovesetHasPPEnum
+MOVESET_HAS_PP_ENUM__NO: MovesetHasPPEnum
 MOVESET_FEATURE___UNSPECIFIED: MovesetFeature
 MOVESET_FEATURE__ACTION_ID: MovesetFeature
-MOVESET_FEATURE__PPUSED: MovesetFeature
-MOVESET_FEATURE__LEGAL: MovesetFeature
-MOVESET_FEATURE__SIDE: MovesetFeature
-MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
-MOVESET_FEATURE__EST_DAMAGE: MovesetFeature
+MOVESET_FEATURE__PP_RATIO: MovesetFeature
 MOVESET_FEATURE__MOVE_ID: MovesetFeature
 MOVESET_FEATURE__SPECIES_ID: MovesetFeature
-MOVESET_FEATURE__ENTITY_INDEX: MovesetFeature
-EDGE_FROM_TYPES_ENUM__FROM_UNSPECIFIED: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_ITEM: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_EFFECT: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_MOVE: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_ABILITY: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_SIDECONDITION: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_STATUS: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_WEATHER: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_TERRAIN: EdgeFromTypesEnum
-EDGE_FROM_TYPES_ENUM__FROM_PSEUDOWEATHER: EdgeFromTypesEnum
+MOVESET_FEATURE__PP: MovesetFeature
+MOVESET_FEATURE__MAXPP: MovesetFeature
+MOVESET_FEATURE__HAS_PP: MovesetFeature
+MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
 RELATIVE_EDGE_FEATURE___UNSPECIFIED: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MAJOR_ARG: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MINOR_ARG0: RelativeEdgeFeature
@@ -247,6 +242,7 @@ RELATIVE_EDGE_FEATURE__SIDECONDITIONS0: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__SIDECONDITIONS1: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__SPIKES: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MOVE_TOKEN: RelativeEdgeFeature
 ABSOLUTE_EDGE_FEATURE___UNSPECIFIED: AbsoluteEdgeFeature
 ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE: AbsoluteEdgeFeature
 ABSOLUTE_EDGE_FEATURE__TYPE_TOKEN: AbsoluteEdgeFeature

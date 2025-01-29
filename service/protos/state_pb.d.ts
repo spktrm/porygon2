@@ -154,10 +154,15 @@ export class State extends jspb.Message {
   getMoveset_asB64(): string;
   setMoveset(value: Uint8Array | string): void;
 
-  getTeam(): Uint8Array | string;
-  getTeam_asU8(): Uint8Array;
-  getTeam_asB64(): string;
-  setTeam(value: Uint8Array | string): void;
+  getPublicTeam(): Uint8Array | string;
+  getPublicTeam_asU8(): Uint8Array;
+  getPublicTeam_asB64(): string;
+  setPublicTeam(value: Uint8Array | string): void;
+
+  getPrivateTeam(): Uint8Array | string;
+  getPrivateTeam_asU8(): Uint8Array;
+  getPrivateTeam_asB64(): string;
+  setPrivateTeam(value: Uint8Array | string): void;
 
   getKey(): string;
   setKey(value: string): void;
@@ -178,7 +183,8 @@ export namespace State {
     legalActions: Uint8Array | string,
     history?: history_pb.History.AsObject,
     moveset: Uint8Array | string,
-    team: Uint8Array | string,
+    publicTeam: Uint8Array | string,
+    privateTeam: Uint8Array | string,
     key: string,
   }
 }
