@@ -22,11 +22,12 @@ class EnvStep:
     player_id: chex.Array = ()
     seed_hash: chex.Array = ()
     request_count: chex.Array = ()
+    public_team: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()
     legal: chex.Array = ()
-    team: chex.Array = ()
+    private_team: chex.Array = ()
     heuristic_action: chex.Array = ()
 
     # Reward

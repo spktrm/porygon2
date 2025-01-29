@@ -1,6 +1,6 @@
 import functools
 from enum import Enum, auto
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import chex
 import flax.linen as nn
@@ -813,14 +813,10 @@ class SumEmbeddings(nn.Module):
     output_size: int
 
     @nn.compact
-    def __call__(
-        self, encodings: List[chex.Array] = None, embeddings: List[chex.Array] = None
-    ) -> jnp.ndarray:
+    def __call__(self, encodings: List[chex.Array]) -> jnp.ndarray:
         # Sum the transformed embeddings using parameter weights
 
         bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
-
-        output = jnp.zeros_like(bias)
 
         def _transform_encoding(encoding: chex.Array, index: int):
             return nn.Dense(
@@ -830,16 +826,11 @@ class SumEmbeddings(nn.Module):
                 use_bias=False,
             )(encoding)
 
-        if encodings is not None and len(encodings) > 0:
-            transformed_encodings = [
-                _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
-            ]
-            output = output + sum(transformed_encodings)
+        transformed_encodings = [
+            _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
+        ]
 
-        if embeddings is not None and len(embeddings) > 0:
-            output = output + sum(embeddings)
-
-        return output + bias
+        return sum(transformed_encodings) + bias
 
 
 class SequenceToVector(nn.Module):
@@ -895,56 +886,12 @@ class GruResBlock(nn.Module):
         return x
 
 
-def one_hot_concat_jax(
-    array: jnp.ndarray, feature_indices: jnp.ndarray, max_vals: np.ndarray
-) -> jnp.ndarray:
-    sum_offsets = np.cumsum(np.concatenate(([0], max_vals), axis=-1))
-    tokens = array[feature_indices]
-    indices = tokens + sum_offsets[:-1]
+def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> jnp.ndarray:
+    sum_offsets = np.cumsum([0] + [offset for _, offset in one_hot_encoded])
+    indices = jnp.stack(
+        [idx + offset for (idx, _), offset in zip(one_hot_encoded, sum_offsets[:-1])]
+    )
     return jnp.matmul(
         jnp.ones((len(indices),), jnp.float32),
         indices[:, jnp.newaxis] == jnp.arange(sum_offsets[-1]),
-    )
-
-
-sorted_entity_keys = list(sorted(ENTITY_MAX_VALUES.keys()))
-one_hot_encode_entity = functools.partial(
-    one_hot_concat_jax,
-    feature_indices=np.array(sorted_entity_keys),
-    max_vals=np.array([ENTITY_MAX_VALUES[key] for key in sorted_entity_keys]),
-)
-
-sorted_relative_edge_keys = list(sorted(RELATIVE_EDGE_MAX_VALUES.keys()))
-one_hot_encode_relative_edge = functools.partial(
-    one_hot_concat_jax,
-    feature_indices=np.array(sorted_relative_edge_keys),
-    max_vals=np.array(
-        [RELATIVE_EDGE_MAX_VALUES[key] for key in sorted_relative_edge_keys]
-    ),
-)
-
-sorted_absolute_edge_keys = list(sorted(ABSOLUTE_EDGE_MAX_VALUES.keys()))
-one_hot_encode_absolute_edge = functools.partial(
-    one_hot_concat_jax,
-    feature_indices=np.array(sorted_absolute_edge_keys),
-    max_vals=np.array(
-        [ABSOLUTE_EDGE_MAX_VALUES[key] for key in sorted_absolute_edge_keys]
-    ),
-)
-
-
-def feature_encode_entity(entity: chex.Array):
-    entity_boosts = entity[
-        EntityFeature.ENTITY_FEATURE__BOOST_ATK_VALUE : EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE
-        + 1
-    ]
-    return jnp.concatenate(
-        (
-            (
-                entity[EntityFeature.ENTITY_FEATURE__HP_RATIO]
-                / ENTITY_MAX_VALUES[EntityFeature.ENTITY_FEATURE__HP_RATIO]
-            )[None],
-            (entity[EntityFeature.ENTITY_FEATURE__LEVEL] / 100)[None],
-            (entity_boosts - 6) / 6,
-        )
     )

@@ -3,7 +3,7 @@ import flax.linen as nn
 import jax
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, TransformerEncoder
+from ml.arch.modules import Logits, Resnet, TransformerEncoder
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -32,11 +32,11 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
-        self.pool_weights = Logits(**self.cfg.logits.to_dict())
-        self.value_logits = Logits(**self.cfg.logits.to_dict())
+        self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(self, embeddings: chex.Array, mask: chex.Array):
         embeddings = self.encoder(embeddings, mask)
-        scores = legal_policy(self.pool_weights(embeddings).reshape(-1), mask)
-        weighted_embedding = scores @ embeddings
-        return self.value_logits(weighted_embedding).reshape(-1)
+
+        logits = jax.vmap(self.logits)(embeddings)
+
+        return logits.reshape(-1).mean(where=mask).reshape(-1)
