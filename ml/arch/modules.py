@@ -407,7 +407,7 @@ class TransformerEncoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
-            x = x + mha
+            x, _ = nn.GRUCell(self.model_size)(x, mha)
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -418,7 +418,7 @@ class TransformerEncoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x = x + ffn
+            x, _ = nn.GRUCell(self.model_size)(x, ffn)
             x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -471,7 +471,7 @@ class TransformerDecoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=y, value=y, mask=cross_attn_mask)
-            x = x + ca
+            x, _ = nn.GRUCell(self.model_size)(x, ca)
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -482,7 +482,7 @@ class TransformerDecoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x = x + ffn
+            x, _ = nn.GRUCell(self.model_size)(x, ffn)
             x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
         return x

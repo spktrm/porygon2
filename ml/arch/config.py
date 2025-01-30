@@ -40,7 +40,7 @@ def add_name_recursive(cfg, path=None):
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 512
+    entity_size = 256
     vector_size = 1024
 
     use_layer_norm = True
@@ -59,7 +59,7 @@ def get_model_cfg():
 
     num_transformer_layers = 1
     num_transformer_heads = 4
-    transformer_hidden_size_scale = 4
+    transformer_hidden_size_scale = 1
 
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
     transformer_key_value_scale = 1 / num_transformer_heads
@@ -140,7 +140,8 @@ def get_model_cfg():
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
-    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits1 = ConfigDict()
+    cfg.value_head.logits2 = ConfigDict()
 
     cfg.value_head.transformer.num_layers = num_transformer_layers
     cfg.value_head.transformer.key_size = transformer_key_value_size
@@ -151,9 +152,13 @@ def get_model_cfg():
     cfg.value_head.transformer.use_spectral_linear = use_spectral_linear
     cfg.value_head.transformer.resblocks_hidden_size = transformer_hidden_size
 
-    cfg.value_head.logits.num_logits = 1
-    cfg.value_head.logits.num_linear_layers = 2
-    cfg.value_head.logits.use_layer_norm = use_layer_norm
+    cfg.value_head.logits1.num_logits = 4
+    cfg.value_head.logits1.num_linear_layers = 2
+    cfg.value_head.logits1.use_layer_norm = use_layer_norm
+
+    cfg.value_head.logits2.num_logits = 1
+    cfg.value_head.logits2.num_linear_layers = 2
+    cfg.value_head.logits2.use_layer_norm = use_layer_norm
 
     return cfg
 

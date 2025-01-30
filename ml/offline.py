@@ -29,7 +29,6 @@ class TrainState(train_state.TrainState):
 
     params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    learner_steps: int = 0
     actor_steps: int = 0
 
 
@@ -125,7 +124,7 @@ def val_step(state: TrainState, batch: Tuple[EnvStep, chex.Array, chex.Array]):
 
 
 def save(state: TrainState):
-    with open(os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb") as f:
+    with open(os.path.abspath(f"ckpts/ckpt_{state.step:08}"), "wb") as f:
         pickle.dump(
             dict(
                 params=state.params,
@@ -175,7 +174,6 @@ def main():
             wandb.log(logs)
             ti += 1
 
-        state = state.replace(learner_steps=state.learner_steps + 1)
         save(state)
 
         for batch in tqdm(

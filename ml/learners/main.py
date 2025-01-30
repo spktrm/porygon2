@@ -64,7 +64,7 @@ def main():
 
     state = learner.create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         state = learner.load(state, latest_ckpt)
 
@@ -86,9 +86,7 @@ def main():
         logs: dict
         winrates = {}
 
-        time_to_eval = (
-            state.learner_steps % (eval_freq // learner_config.num_eval_games) == 0
-        )
+        time_to_eval = state.step % (eval_freq // learner_config.num_eval_games) == 0
         if time_to_eval and learner_config.do_eval:
             winrates = evaluate(evaluation_collector, state)
 
@@ -103,7 +101,7 @@ def main():
         wandb.log({**logs, **winrates})
         train_progress.update(1)
 
-        if state.learner_steps % save_freq == 0 and state.learner_steps > 0:
+        if state.step % save_freq == 0 and state.step > 0:
             learner.save(state)
 
     print("done")
