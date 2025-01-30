@@ -7,6 +7,9 @@ from ml.arch.modules import Logits, Resnet, TransformerEncoder
 from ml.func import legal_log_policy, legal_policy
 
 
+import jax.numpy as jnp
+
+
 class PolicyHead(nn.Module):
     cfg: ConfigDict
 
@@ -32,11 +35,18 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
-        self.logits = Logits(**self.cfg.logits.to_dict())
+        self.logits1 = Logits(**self.cfg.logits1.to_dict())
+        self.logits2 = Logits(**self.cfg.logits2.to_dict())
 
     def __call__(self, embeddings: chex.Array, mask: chex.Array):
         embeddings = self.encoder(embeddings, mask)
 
-        logits = jax.vmap(self.logits)(embeddings)
+        weights = jnp.where(mask[..., None], self.logits1(embeddings), -1e9)
+        scores = jax.nn.softmax(weights, axis=0)
 
-        return logits.reshape(-1).mean(where=mask).reshape(-1)
+        weighted_embeddings = scores.T @ embeddings
+        state_embedding = weighted_embeddings.reshape(-1)
+
+        logits = self.logits2(state_embedding)
+
+        return logits.reshape(-1)

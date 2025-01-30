@@ -2256,6 +2256,7 @@ export class StateHandler {
         const assignActionBuffer = (index: number, value: number) => {
             actionBuffer[bufferOffset + index] = value;
         };
+
         const pushMoveAction = (
             action:
                 | { name: "Recharge"; id: "recharge" }
@@ -2300,7 +2301,16 @@ export class StateHandler {
                 MovesetFeature.MOVESET_FEATURE__MOVE_ID,
                 IndexValueFromEnum(MovesEnum, action.id),
             );
+            assignActionBuffer(
+                MovesetFeature.MOVESET_FEATURE__SPECIES_ID,
+                SpeciesEnum.SPECIES_ENUM___UNSPECIFIED,
+            );
+            assignActionBuffer(
+                MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+                MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
+            );
         };
+
         const pushSwitchAction = (action: Protocol.Request.Pokemon) => {
             let member = this.player.privateBattle.getPokemon(action.ident);
             if (member === null) {
@@ -2318,23 +2328,13 @@ export class StateHandler {
                 IndexValueFromEnum(ActionsEnum, `switch_${species}`),
             );
             assignActionBuffer(
+                MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+                MovesEnum.MOVES_ENUM___UNSPECIFIED,
+            );
+            assignActionBuffer(
                 MovesetFeature.MOVESET_FEATURE__SPECIES_ID,
                 IndexValueFromEnum(SpeciesEnum, species),
             );
-        };
-
-        for (const action of activeMoves) {
-            pushMoveAction(action);
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-                MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
-            );
-
-            bufferOffset += numMoveFields;
-        }
-        bufferOffset += (4 - activeMoves.length) * numMoveFields;
-        for (const action of switches) {
-            pushSwitchAction(action);
             assignActionBuffer(
                 MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
                 MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
@@ -2343,6 +2343,15 @@ export class StateHandler {
                 MovesetFeature.MOVESET_FEATURE__HAS_PP,
                 MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
             );
+        };
+
+        for (const action of activeMoves) {
+            pushMoveAction(action);
+            bufferOffset += numMoveFields;
+        }
+        bufferOffset += (4 - activeMoves.length) * numMoveFields;
+        for (const action of switches) {
+            pushSwitchAction(action);
             bufferOffset += numMoveFields;
         }
         bufferOffset += (6 - activeMoves.length) * numMoveFields;
@@ -2569,7 +2578,7 @@ export class StateHandler {
 
         const history = this.getHistory(numHistory);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readableHistory = EdgeBuffer.toReadableHistory(history);
+        // const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2579,12 +2588,12 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());

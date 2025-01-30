@@ -11,7 +11,7 @@ from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep, HistoryStep
+from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -42,7 +42,7 @@ class InferenceModel:
         return self.network.apply(self.params, env_step, history_step)
 
     def predict(self, env_step: EnvStep, history_step: HistoryStep):
-        output = self._network_jit_apply(env_step, history_step)
+        output: ModelOutput = self._network_jit_apply(env_step, history_step)
         finetuned_pi = self.finetuning._threshold(output.pi, env_step.legal)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(finetuned_pi.shape[-1]), p=x),
@@ -50,7 +50,8 @@ class InferenceModel:
             arr=finetuned_pi,
         )
         return PredictionResponse(
-            pi=finetuned_pi.flatten().tolist(),
+            pi=output.pi.flatten().tolist(),
+            log_pi=output.log_pi.flatten().tolist(),
             logit=output.logit.flatten().tolist(),
             v=output.v.item(),
             action=action.item(),

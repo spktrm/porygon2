@@ -248,18 +248,10 @@ class Encoder(nn.Module):
 
         # Initialize aggregation modules for combining feature embeddings.
         entity_aggregate = SumEmbeddings(entity_size)
-        entity_mlp = MLP((entity_size,))
-
         relative_edge_aggregate = SumEmbeddings(entity_size)
-        relative_edge_mlp = MLP((entity_size,))
-
         absolute_edge_aggregate = SumEmbeddings(entity_size)
-        absolute_edge_mlp = MLP((entity_size,))
-
-        timestep_aggregate = MLP((entity_size,))
-
+        timestep_aggregate = SumEmbeddings(entity_size)
         action_aggregate = SumEmbeddings(entity_size)
-        action_mlp = MLP((entity_size,))
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
             # Encode volatile and type-change indices using the binary encoder.
@@ -378,7 +370,6 @@ class Encoder(nn.Module):
             ]
 
             embedding = entity_aggregate(embeddings)
-            embedding = entity_mlp(embedding)
 
             # Apply mask to filter out invalid entities.
             mask = get_entity_mask(entity)
@@ -532,7 +523,6 @@ class Encoder(nn.Module):
             ]
 
             embedding = relative_edge_aggregate(embeddings)
-            embedding = relative_edge_mlp(embedding)
 
             # Apply mask to filter out invalid edges.
             mask = get_edge_mask(relative_edge)
@@ -613,7 +603,6 @@ class Encoder(nn.Module):
             ]
 
             embedding = absolute_edge_aggregate(embeddings)
-            embedding = absolute_edge_mlp(embedding)
 
             # Apply mask to filter out invalid edges.
             mask = get_edge_mask(absolute_edge)
@@ -644,16 +633,13 @@ class Encoder(nn.Module):
             )
 
             # Combine all embeddings for the timestep.
-            timestep_embeddings = jnp.concatenate(
-                [
-                    entity_embeddings[0],
-                    entity_embeddings[1],
-                    relative_edge_embeddings[0],
-                    relative_edge_embeddings[1],
-                    absolute_edge_embedding,
-                ],
-                axis=-1,
-            )
+            timestep_embeddings = [
+                entity_embeddings[0],
+                entity_embeddings[1],
+                relative_edge_embeddings[0],
+                relative_edge_embeddings[1],
+                absolute_edge_embedding,
+            ]
             timestep_embedding = timestep_aggregate(timestep_embeddings)
 
             # Apply mask to the timestep embeddings.
@@ -710,7 +696,6 @@ class Encoder(nn.Module):
             ]
 
             embedding = action_aggregate(embeddings)
-            embedding = action_mlp(embedding)
 
             # Apply mask to the move embeddings.
             mask = get_move_mask(action)
