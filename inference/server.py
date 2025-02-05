@@ -8,6 +8,7 @@ from model import InferenceModel
 
 from inference.interfaces import PredictionResponse
 from rlenv.env import process_state
+from rlenv.protos.features_pb2 import MovesetFeature
 from rlenv.protos.state_pb2 import State
 
 app = FastAPI()
@@ -30,9 +31,14 @@ async def predict(request: Request):
     response = await run_in_threadpool(model.predict, ex, hx)
     pprint(state.info)
 
-    pprint_nparray(np.array(ex.moveset[0, :, 0]))
+    pprint_nparray(np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__ACTION_ID]))
+    pprint_nparray(np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__MOVE_ID]))
+    pprint_nparray(
+        np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__SPECIES_ID])
+    )
     pprint_nparray(np.array(response.pi))
     pprint_nparray(np.array(response.logit))
+    pprint_nparray(np.array(response.log_pi))
     pprint_nparray(np.array(response.v))
     pprint_nparray(np.array(response.action))
 
@@ -41,4 +47,4 @@ async def predict(request: Request):
 
 # Example usage
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

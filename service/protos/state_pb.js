@@ -15,10 +15,10 @@ var jspb = require('google-protobuf');
 var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
-var history_pb = require('./history_pb.js');
-goog.object.extend(proto, history_pb);
 var enums_pb = require('./enums_pb.js');
 goog.object.extend(proto, enums_pb);
+var history_pb = require('./history_pb.js');
+goog.object.extend(proto, history_pb);
 goog.exportSymbol('proto.rlenv.Dataset', null, global);
 goog.exportSymbol('proto.rlenv.Heuristics', null, global);
 goog.exportSymbol('proto.rlenv.Info', null, global);
@@ -183,11 +183,11 @@ proto.rlenv.Rewards.prototype.toObject = function(opt_includeInstance) {
  */
 proto.rlenv.Rewards.toObject = function(includeInstance, msg) {
   var f, obj = {
-    winreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 1, 0.0),
-    hpreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
-    faintedreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
-    switchreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
-    longevityreward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
+    winReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 1, 0.0),
+    hpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
+    faintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
+    scaledFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
+    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
   };
 
   if (includeInstance) {
@@ -226,23 +226,23 @@ proto.rlenv.Rewards.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setWinreward(value);
+      msg.setWinReward(value);
       break;
     case 2:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setHpreward(value);
+      msg.setHpReward(value);
       break;
     case 3:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setFaintedreward(value);
+      msg.setFaintedReward(value);
       break;
     case 4:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setSwitchreward(value);
+      msg.setScaledFaintedReward(value);
       break;
     case 5:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setLongevityreward(value);
+      msg.setScaledHpReward(value);
       break;
     default:
       reader.skipField();
@@ -273,35 +273,35 @@ proto.rlenv.Rewards.prototype.serializeBinary = function() {
  */
 proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getWinreward();
+  f = message.getWinReward();
   if (f !== 0.0) {
     writer.writeFloat(
       1,
       f
     );
   }
-  f = message.getHpreward();
+  f = message.getHpReward();
   if (f !== 0.0) {
     writer.writeFloat(
       2,
       f
     );
   }
-  f = message.getFaintedreward();
+  f = message.getFaintedReward();
   if (f !== 0.0) {
     writer.writeFloat(
       3,
       f
     );
   }
-  f = message.getSwitchreward();
+  f = message.getScaledFaintedReward();
   if (f !== 0.0) {
     writer.writeFloat(
       4,
       f
     );
   }
-  f = message.getLongevityreward();
+  f = message.getScaledHpReward();
   if (f !== 0.0) {
     writer.writeFloat(
       5,
@@ -312,10 +312,10 @@ proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional float winReward = 1;
+ * optional float win_reward = 1;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getWinreward = function() {
+proto.rlenv.Rewards.prototype.getWinReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 1, 0.0));
 };
 
@@ -324,16 +324,16 @@ proto.rlenv.Rewards.prototype.getWinreward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setWinreward = function(value) {
+proto.rlenv.Rewards.prototype.setWinReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 1, value);
 };
 
 
 /**
- * optional float hpReward = 2;
+ * optional float hp_reward = 2;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getHpreward = function() {
+proto.rlenv.Rewards.prototype.getHpReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 2, 0.0));
 };
 
@@ -342,16 +342,16 @@ proto.rlenv.Rewards.prototype.getHpreward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setHpreward = function(value) {
+proto.rlenv.Rewards.prototype.setHpReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 2, value);
 };
 
 
 /**
- * optional float faintedReward = 3;
+ * optional float fainted_reward = 3;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getFaintedreward = function() {
+proto.rlenv.Rewards.prototype.getFaintedReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 3, 0.0));
 };
 
@@ -360,16 +360,16 @@ proto.rlenv.Rewards.prototype.getFaintedreward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setFaintedreward = function(value) {
+proto.rlenv.Rewards.prototype.setFaintedReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 3, value);
 };
 
 
 /**
- * optional float switchReward = 4;
+ * optional float scaled_fainted_reward = 4;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getSwitchreward = function() {
+proto.rlenv.Rewards.prototype.getScaledFaintedReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 4, 0.0));
 };
 
@@ -378,16 +378,16 @@ proto.rlenv.Rewards.prototype.getSwitchreward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setSwitchreward = function(value) {
+proto.rlenv.Rewards.prototype.setScaledFaintedReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 4, value);
 };
 
 
 /**
- * optional float longevityReward = 5;
+ * optional float scaled_hp_reward = 5;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getLongevityreward = function() {
+proto.rlenv.Rewards.prototype.getScaledHpReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 5, 0.0));
 };
 
@@ -396,7 +396,7 @@ proto.rlenv.Rewards.prototype.getLongevityreward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setLongevityreward = function(value) {
+proto.rlenv.Rewards.prototype.setScaledHpReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 5, value);
 };
 
@@ -433,7 +433,7 @@ proto.rlenv.Heuristics.prototype.toObject = function(opt_includeInstance) {
  */
 proto.rlenv.Heuristics.toObject = function(includeInstance, msg) {
   var f, obj = {
-    heuristicaction: jspb.Message.getFieldWithDefault(msg, 1, 0)
+    heuristicAction: jspb.Message.getFieldWithDefault(msg, 1, 0)
   };
 
   if (includeInstance) {
@@ -472,7 +472,7 @@ proto.rlenv.Heuristics.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {number} */ (reader.readInt32());
-      msg.setHeuristicaction(value);
+      msg.setHeuristicAction(value);
       break;
     default:
       reader.skipField();
@@ -503,7 +503,7 @@ proto.rlenv.Heuristics.prototype.serializeBinary = function() {
  */
 proto.rlenv.Heuristics.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getHeuristicaction();
+  f = message.getHeuristicAction();
   if (f !== 0) {
     writer.writeInt32(
       1,
@@ -514,10 +514,10 @@ proto.rlenv.Heuristics.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional int32 heuristicAction = 1;
+ * optional int32 heuristic_action = 1;
  * @return {number}
  */
-proto.rlenv.Heuristics.prototype.getHeuristicaction = function() {
+proto.rlenv.Heuristics.prototype.getHeuristicAction = function() {
   return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
@@ -526,7 +526,7 @@ proto.rlenv.Heuristics.prototype.getHeuristicaction = function() {
  * @param {number} value
  * @return {!proto.rlenv.Heuristics} returns this
  */
-proto.rlenv.Heuristics.prototype.setHeuristicaction = function(value) {
+proto.rlenv.Heuristics.prototype.setHeuristicAction = function(value) {
   return jspb.Message.setProto3IntField(this, 1, value);
 };
 
@@ -563,18 +563,18 @@ proto.rlenv.Info.prototype.toObject = function(opt_includeInstance) {
  */
 proto.rlenv.Info.toObject = function(includeInstance, msg) {
   var f, obj = {
-    gameid: jspb.Message.getFieldWithDefault(msg, 1, 0),
+    gameId: jspb.Message.getFieldWithDefault(msg, 1, 0),
     done: jspb.Message.getBooleanFieldWithDefault(msg, 2, false),
-    playerindex: jspb.Message.getBooleanFieldWithDefault(msg, 3, false),
+    playerIndex: jspb.Message.getBooleanFieldWithDefault(msg, 3, false),
     turn: jspb.Message.getFieldWithDefault(msg, 4, 0),
     ts: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0),
-    drawratio: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
-    workerindex: jspb.Message.getFieldWithDefault(msg, 7, 0),
+    drawRatio: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
+    workerIndex: jspb.Message.getFieldWithDefault(msg, 7, 0),
     rewards: (f = msg.getRewards()) && proto.rlenv.Rewards.toObject(includeInstance, f),
     seed: jspb.Message.getFieldWithDefault(msg, 9, 0),
     draw: jspb.Message.getBooleanFieldWithDefault(msg, 10, false),
     heuristics: (f = msg.getHeuristics()) && proto.rlenv.Heuristics.toObject(includeInstance, f),
-    requestcount: jspb.Message.getFieldWithDefault(msg, 12, 0)
+    requestCount: jspb.Message.getFieldWithDefault(msg, 12, 0)
   };
 
   if (includeInstance) {
@@ -613,7 +613,7 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {number} */ (reader.readInt32());
-      msg.setGameid(value);
+      msg.setGameId(value);
       break;
     case 2:
       var value = /** @type {boolean} */ (reader.readBool());
@@ -621,7 +621,7 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 3:
       var value = /** @type {boolean} */ (reader.readBool());
-      msg.setPlayerindex(value);
+      msg.setPlayerIndex(value);
       break;
     case 4:
       var value = /** @type {number} */ (reader.readInt32());
@@ -633,11 +633,11 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 6:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setDrawratio(value);
+      msg.setDrawRatio(value);
       break;
     case 7:
       var value = /** @type {number} */ (reader.readInt32());
-      msg.setWorkerindex(value);
+      msg.setWorkerIndex(value);
       break;
     case 8:
       var value = new proto.rlenv.Rewards;
@@ -659,7 +659,7 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 12:
       var value = /** @type {number} */ (reader.readInt32());
-      msg.setRequestcount(value);
+      msg.setRequestCount(value);
       break;
     default:
       reader.skipField();
@@ -690,7 +690,7 @@ proto.rlenv.Info.prototype.serializeBinary = function() {
  */
 proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getGameid();
+  f = message.getGameId();
   if (f !== 0) {
     writer.writeInt32(
       1,
@@ -704,7 +704,7 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getPlayerindex();
+  f = message.getPlayerIndex();
   if (f) {
     writer.writeBool(
       3,
@@ -725,14 +725,14 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getDrawratio();
+  f = message.getDrawRatio();
   if (f !== 0.0) {
     writer.writeFloat(
       6,
       f
     );
   }
-  f = message.getWorkerindex();
+  f = message.getWorkerIndex();
   if (f !== 0) {
     writer.writeInt32(
       7,
@@ -769,7 +769,7 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
       proto.rlenv.Heuristics.serializeBinaryToWriter
     );
   }
-  f = message.getRequestcount();
+  f = message.getRequestCount();
   if (f !== 0) {
     writer.writeInt32(
       12,
@@ -780,10 +780,10 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional int32 gameId = 1;
+ * optional int32 game_id = 1;
  * @return {number}
  */
-proto.rlenv.Info.prototype.getGameid = function() {
+proto.rlenv.Info.prototype.getGameId = function() {
   return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
@@ -792,7 +792,7 @@ proto.rlenv.Info.prototype.getGameid = function() {
  * @param {number} value
  * @return {!proto.rlenv.Info} returns this
  */
-proto.rlenv.Info.prototype.setGameid = function(value) {
+proto.rlenv.Info.prototype.setGameId = function(value) {
   return jspb.Message.setProto3IntField(this, 1, value);
 };
 
@@ -816,10 +816,10 @@ proto.rlenv.Info.prototype.setDone = function(value) {
 
 
 /**
- * optional bool playerIndex = 3;
+ * optional bool player_index = 3;
  * @return {boolean}
  */
-proto.rlenv.Info.prototype.getPlayerindex = function() {
+proto.rlenv.Info.prototype.getPlayerIndex = function() {
   return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 3, false));
 };
 
@@ -828,7 +828,7 @@ proto.rlenv.Info.prototype.getPlayerindex = function() {
  * @param {boolean} value
  * @return {!proto.rlenv.Info} returns this
  */
-proto.rlenv.Info.prototype.setPlayerindex = function(value) {
+proto.rlenv.Info.prototype.setPlayerIndex = function(value) {
   return jspb.Message.setProto3BooleanField(this, 3, value);
 };
 
@@ -870,10 +870,10 @@ proto.rlenv.Info.prototype.setTs = function(value) {
 
 
 /**
- * optional float drawRatio = 6;
+ * optional float draw_ratio = 6;
  * @return {number}
  */
-proto.rlenv.Info.prototype.getDrawratio = function() {
+proto.rlenv.Info.prototype.getDrawRatio = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 6, 0.0));
 };
 
@@ -882,16 +882,16 @@ proto.rlenv.Info.prototype.getDrawratio = function() {
  * @param {number} value
  * @return {!proto.rlenv.Info} returns this
  */
-proto.rlenv.Info.prototype.setDrawratio = function(value) {
+proto.rlenv.Info.prototype.setDrawRatio = function(value) {
   return jspb.Message.setProto3FloatField(this, 6, value);
 };
 
 
 /**
- * optional int32 workerIndex = 7;
+ * optional int32 worker_index = 7;
  * @return {number}
  */
-proto.rlenv.Info.prototype.getWorkerindex = function() {
+proto.rlenv.Info.prototype.getWorkerIndex = function() {
   return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 7, 0));
 };
 
@@ -900,7 +900,7 @@ proto.rlenv.Info.prototype.getWorkerindex = function() {
  * @param {number} value
  * @return {!proto.rlenv.Info} returns this
  */
-proto.rlenv.Info.prototype.setWorkerindex = function(value) {
+proto.rlenv.Info.prototype.setWorkerIndex = function(value) {
   return jspb.Message.setProto3IntField(this, 7, value);
 };
 
@@ -1016,10 +1016,10 @@ proto.rlenv.Info.prototype.hasHeuristics = function() {
 
 
 /**
- * optional int32 requestCount = 12;
+ * optional int32 request_count = 12;
  * @return {number}
  */
-proto.rlenv.Info.prototype.getRequestcount = function() {
+proto.rlenv.Info.prototype.getRequestCount = function() {
   return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 12, 0));
 };
 
@@ -1028,7 +1028,7 @@ proto.rlenv.Info.prototype.getRequestcount = function() {
  * @param {number} value
  * @return {!proto.rlenv.Info} returns this
  */
-proto.rlenv.Info.prototype.setRequestcount = function(value) {
+proto.rlenv.Info.prototype.setRequestCount = function(value) {
   return jspb.Message.setProto3IntField(this, 12, value);
 };
 
@@ -1066,12 +1066,12 @@ proto.rlenv.State.prototype.toObject = function(opt_includeInstance) {
 proto.rlenv.State.toObject = function(includeInstance, msg) {
   var f, obj = {
     info: (f = msg.getInfo()) && proto.rlenv.Info.toObject(includeInstance, f),
-    legalactions: msg.getLegalactions_asB64(),
-    majorhistory: (f = msg.getMajorhistory()) && history_pb.History.toObject(includeInstance, f),
+    legalActions: msg.getLegalActions_asB64(),
+    history: (f = msg.getHistory()) && history_pb.History.toObject(includeInstance, f),
     moveset: msg.getMoveset_asB64(),
-    team: msg.getTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 6, ""),
-    minorhistory: (f = msg.getMinorhistory()) && history_pb.History.toObject(includeInstance, f)
+    publicTeam: msg.getPublicTeam_asB64(),
+    privateTeam: msg.getPrivateTeam_asB64(),
+    key: jspb.Message.getFieldWithDefault(msg, 7, "")
   };
 
   if (includeInstance) {
@@ -1115,12 +1115,12 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 2:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setLegalactions(value);
+      msg.setLegalActions(value);
       break;
     case 3:
       var value = new history_pb.History;
       reader.readMessage(value,history_pb.History.deserializeBinaryFromReader);
-      msg.setMajorhistory(value);
+      msg.setHistory(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -1128,16 +1128,15 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setTeam(value);
+      msg.setPublicTeam(value);
       break;
     case 6:
-      var value = /** @type {string} */ (reader.readString());
-      msg.setKey(value);
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setPrivateTeam(value);
       break;
     case 7:
-      var value = new history_pb.History;
-      reader.readMessage(value,history_pb.History.deserializeBinaryFromReader);
-      msg.setMinorhistory(value);
+      var value = /** @type {string} */ (reader.readString());
+      msg.setKey(value);
       break;
     default:
       reader.skipField();
@@ -1176,14 +1175,14 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
       proto.rlenv.Info.serializeBinaryToWriter
     );
   }
-  f = message.getLegalactions_asU8();
+  f = message.getLegalActions_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       2,
       f
     );
   }
-  f = message.getMajorhistory();
+  f = message.getHistory();
   if (f != null) {
     writer.writeMessage(
       3,
@@ -1198,26 +1197,25 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getTeam_asU8();
+  f = message.getPublicTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       5,
       f
     );
   }
-  f = message.getKey();
+  f = message.getPrivateTeam_asU8();
   if (f.length > 0) {
-    writer.writeString(
+    writer.writeBytes(
       6,
       f
     );
   }
-  f = message.getMinorhistory();
-  if (f != null) {
-    writer.writeMessage(
+  f = message.getKey();
+  if (f.length > 0) {
+    writer.writeString(
       7,
-      f,
-      history_pb.History.serializeBinaryToWriter
+      f
     );
   }
 };
@@ -1261,35 +1259,35 @@ proto.rlenv.State.prototype.hasInfo = function() {
 
 
 /**
- * optional bytes legalActions = 2;
+ * optional bytes legal_actions = 2;
  * @return {!(string|Uint8Array)}
  */
-proto.rlenv.State.prototype.getLegalactions = function() {
+proto.rlenv.State.prototype.getLegalActions = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
 /**
- * optional bytes legalActions = 2;
- * This is a type-conversion wrapper around `getLegalactions()`
+ * optional bytes legal_actions = 2;
+ * This is a type-conversion wrapper around `getLegalActions()`
  * @return {string}
  */
-proto.rlenv.State.prototype.getLegalactions_asB64 = function() {
+proto.rlenv.State.prototype.getLegalActions_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getLegalactions()));
+      this.getLegalActions()));
 };
 
 
 /**
- * optional bytes legalActions = 2;
+ * optional bytes legal_actions = 2;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getLegalactions()`
+ * This is a type-conversion wrapper around `getLegalActions()`
  * @return {!Uint8Array}
  */
-proto.rlenv.State.prototype.getLegalactions_asU8 = function() {
+proto.rlenv.State.prototype.getLegalActions_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getLegalactions()));
+      this.getLegalActions()));
 };
 
 
@@ -1297,16 +1295,16 @@ proto.rlenv.State.prototype.getLegalactions_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.rlenv.State} returns this
  */
-proto.rlenv.State.prototype.setLegalactions = function(value) {
+proto.rlenv.State.prototype.setLegalActions = function(value) {
   return jspb.Message.setProto3BytesField(this, 2, value);
 };
 
 
 /**
- * optional history.History majorHistory = 3;
+ * optional history.History history = 3;
  * @return {?proto.history.History}
  */
-proto.rlenv.State.prototype.getMajorhistory = function() {
+proto.rlenv.State.prototype.getHistory = function() {
   return /** @type{?proto.history.History} */ (
     jspb.Message.getWrapperField(this, history_pb.History, 3));
 };
@@ -1316,7 +1314,7 @@ proto.rlenv.State.prototype.getMajorhistory = function() {
  * @param {?proto.history.History|undefined} value
  * @return {!proto.rlenv.State} returns this
 */
-proto.rlenv.State.prototype.setMajorhistory = function(value) {
+proto.rlenv.State.prototype.setHistory = function(value) {
   return jspb.Message.setWrapperField(this, 3, value);
 };
 
@@ -1325,8 +1323,8 @@ proto.rlenv.State.prototype.setMajorhistory = function(value) {
  * Clears the message field making it undefined.
  * @return {!proto.rlenv.State} returns this
  */
-proto.rlenv.State.prototype.clearMajorhistory = function() {
-  return this.setMajorhistory(undefined);
+proto.rlenv.State.prototype.clearHistory = function() {
+  return this.setHistory(undefined);
 };
 
 
@@ -1334,7 +1332,7 @@ proto.rlenv.State.prototype.clearMajorhistory = function() {
  * Returns whether this field is set.
  * @return {boolean}
  */
-proto.rlenv.State.prototype.hasMajorhistory = function() {
+proto.rlenv.State.prototype.hasHistory = function() {
   return jspb.Message.getField(this, 3) != null;
 };
 
@@ -1382,35 +1380,35 @@ proto.rlenv.State.prototype.setMoveset = function(value) {
 
 
 /**
- * optional bytes team = 5;
+ * optional bytes public_team = 5;
  * @return {!(string|Uint8Array)}
  */
-proto.rlenv.State.prototype.getTeam = function() {
+proto.rlenv.State.prototype.getPublicTeam = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes team = 5;
- * This is a type-conversion wrapper around `getTeam()`
+ * optional bytes public_team = 5;
+ * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {string}
  */
-proto.rlenv.State.prototype.getTeam_asB64 = function() {
+proto.rlenv.State.prototype.getPublicTeam_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getTeam()));
+      this.getPublicTeam()));
 };
 
 
 /**
- * optional bytes team = 5;
+ * optional bytes public_team = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getTeam()`
+ * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {!Uint8Array}
  */
-proto.rlenv.State.prototype.getTeam_asU8 = function() {
+proto.rlenv.State.prototype.getPublicTeam_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getTeam()));
+      this.getPublicTeam()));
 };
 
 
@@ -1418,17 +1416,59 @@ proto.rlenv.State.prototype.getTeam_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.rlenv.State} returns this
  */
-proto.rlenv.State.prototype.setTeam = function(value) {
+proto.rlenv.State.prototype.setPublicTeam = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
 };
 
 
 /**
- * optional string key = 6;
+ * optional bytes private_team = 6;
+ * @return {!(string|Uint8Array)}
+ */
+proto.rlenv.State.prototype.getPrivateTeam = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+};
+
+
+/**
+ * optional bytes private_team = 6;
+ * This is a type-conversion wrapper around `getPrivateTeam()`
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getPrivateTeam_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getPrivateTeam()));
+};
+
+
+/**
+ * optional bytes private_team = 6;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getPrivateTeam()`
+ * @return {!Uint8Array}
+ */
+proto.rlenv.State.prototype.getPrivateTeam_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getPrivateTeam()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setPrivateTeam = function(value) {
+  return jspb.Message.setProto3BytesField(this, 6, value);
+};
+
+
+/**
+ * optional string key = 7;
  * @return {string}
  */
 proto.rlenv.State.prototype.getKey = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
 };
 
 
@@ -1437,44 +1477,7 @@ proto.rlenv.State.prototype.getKey = function() {
  * @return {!proto.rlenv.State} returns this
  */
 proto.rlenv.State.prototype.setKey = function(value) {
-  return jspb.Message.setProto3StringField(this, 6, value);
-};
-
-
-/**
- * optional history.History minorHistory = 7;
- * @return {?proto.history.History}
- */
-proto.rlenv.State.prototype.getMinorhistory = function() {
-  return /** @type{?proto.history.History} */ (
-    jspb.Message.getWrapperField(this, history_pb.History, 7));
-};
-
-
-/**
- * @param {?proto.history.History|undefined} value
- * @return {!proto.rlenv.State} returns this
-*/
-proto.rlenv.State.prototype.setMinorhistory = function(value) {
-  return jspb.Message.setWrapperField(this, 7, value);
-};
-
-
-/**
- * Clears the message field making it undefined.
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.clearMinorhistory = function() {
-  return this.setMinorhistory(undefined);
-};
-
-
-/**
- * Returns whether this field is set.
- * @return {boolean}
- */
-proto.rlenv.State.prototype.hasMinorhistory = function() {
-  return jspb.Message.getField(this, 7) != null;
+  return jspb.Message.setProto3StringField(this, 7, value);
 };
 
 

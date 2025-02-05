@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package servicev2;
+
+message ClientMessage {
+  int32 player_id = 1;
+  int32 game_id = 2;
+  oneof message_type {
+    ConnectMessage connect = 3;
+    StepMessage step = 4;
+    ResetMessage reset = 5;
+  }
+}
+
+message Action {
+  int32 rqid = 1;
+  int32 value = 2;
+  string text = 3;
+}
+
+message StepMessage {
+  Action action = 1;
+}
+
+message ResetMessage {
+}
+
+message ConnectMessage {
+}
+
+message ServerMessage {
+  oneof message_type {
+    GameState game_state = 1;
+    ErrorMessage error = 2;
+  }
+}
+
+message GameState {
+  int32 player_id = 1;
+  int32 rqid = 2;
+  bytes state = 3;
+}
+
+message ErrorMessage {
+  string error_message = 1;
+}

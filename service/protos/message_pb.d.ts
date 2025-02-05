@@ -5,19 +5,19 @@ import * as jspb from "google-protobuf";
 import * as action_pb from "./action_pb";
 
 export class WorkerMessage extends jspb.Message {
-  getWorkerindex(): number;
-  setWorkerindex(value: number): void;
+  getWorkerIndex(): number;
+  setWorkerIndex(value: number): void;
 
-  getMessagetype(): WorkerMessageTypeMap[keyof WorkerMessageTypeMap];
-  setMessagetype(value: WorkerMessageTypeMap[keyof WorkerMessageTypeMap]): void;
+  getMessageType(): WorkerMessageTypeEnumMap[keyof WorkerMessageTypeEnumMap];
+  setMessageType(value: WorkerMessageTypeEnumMap[keyof WorkerMessageTypeEnumMap]): void;
 
   hasAction(): boolean;
   clearAction(): void;
   getAction(): action_pb.Action | undefined;
   setAction(value?: action_pb.Action): void;
 
-  getGameid(): number;
-  setGameid(value: number): void;
+  getGameId(): number;
+  setGameId(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): WorkerMessage.AsObject;
@@ -31,17 +31,18 @@ export class WorkerMessage extends jspb.Message {
 
 export namespace WorkerMessage {
   export type AsObject = {
-    workerindex: number,
-    messagetype: WorkerMessageTypeMap[keyof WorkerMessageTypeMap],
+    workerIndex: number,
+    messageType: WorkerMessageTypeEnumMap[keyof WorkerMessageTypeEnumMap],
     action?: action_pb.Action.AsObject,
-    gameid: number,
+    gameId: number,
   }
 }
 
-export interface WorkerMessageTypeMap {
-  START: 0;
-  ACTION: 1;
+export interface WorkerMessageTypeEnumMap {
+  WORKER_MESSAGE_TYPE_ENUM___UNSPECIFIED: 0;
+  WORKER_MESSAGE_TYPE_ENUM__START: 1;
+  WORKER_MESSAGE_TYPE_ENUM__ACTION: 2;
 }
 
-export const WorkerMessageType: WorkerMessageTypeMap;
+export const WorkerMessageTypeEnum: WorkerMessageTypeEnumMap;
 

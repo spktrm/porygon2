@@ -14,7 +14,7 @@ def get_most_recent_file(dir_path):
     files = [
         os.path.join(dir_path, f)
         for f in os.listdir(dir_path)
-        if os.path.isfile(os.path.join(dir_path, f))
+        if os.path.isfile(os.path.join(dir_path, f)) and f.startswith("ckpt")
     ]
 
     if not files:
@@ -26,13 +26,17 @@ def get_most_recent_file(dir_path):
     return most_recent_file
 
 
-def breakpoint_if_nonfinite(x):
-    is_finite = jnp.isfinite(x).all()
+def breakpoint_w_func(x, func: callable):
+    func_val = func(x)
 
     def true_fn(x):
-        pass
-
-    def false_fn(x):
         jax.debug.breakpoint()
 
-    jax.lax.cond(is_finite, true_fn, false_fn, x)
+    def false_fn(x):
+        pass
+
+    jax.lax.cond(func_val, true_fn, false_fn, x)
+
+
+def breakpoint_if_nonfinite(x):
+    breakpoint_w_func(x, lambda z: jnp.isfinite(z).all())

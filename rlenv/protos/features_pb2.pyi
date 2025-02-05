@@ -4,299 +4,258 @@ from typing import ClassVar as _ClassVar
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
-class FeatureEntity(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class EntityFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    ENTITY_SPECIES: _ClassVar[FeatureEntity]
-    ENTITY_ITEM: _ClassVar[FeatureEntity]
-    ENTITY_ITEM_EFFECT: _ClassVar[FeatureEntity]
-    ENTITY_ABILITY: _ClassVar[FeatureEntity]
-    ENTITY_GENDER: _ClassVar[FeatureEntity]
-    ENTITY_ACTIVE: _ClassVar[FeatureEntity]
-    ENTITY_FAINTED: _ClassVar[FeatureEntity]
-    ENTITY_HP: _ClassVar[FeatureEntity]
-    ENTITY_MAXHP: _ClassVar[FeatureEntity]
-    ENTITY_STATUS: _ClassVar[FeatureEntity]
-    ENTITY_TOXIC_TURNS: _ClassVar[FeatureEntity]
-    ENTITY_SLEEP_TURNS: _ClassVar[FeatureEntity]
-    ENTITY_BEING_CALLED_BACK: _ClassVar[FeatureEntity]
-    ENTITY_TRAPPED: _ClassVar[FeatureEntity]
-    ENTITY_NEWLY_SWITCHED: _ClassVar[FeatureEntity]
-    ENTITY_LEVEL: _ClassVar[FeatureEntity]
-    ENTITY_MOVEID0: _ClassVar[FeatureEntity]
-    ENTITY_MOVEID1: _ClassVar[FeatureEntity]
-    ENTITY_MOVEID2: _ClassVar[FeatureEntity]
-    ENTITY_MOVEID3: _ClassVar[FeatureEntity]
-    ENTITY_MOVEPP0: _ClassVar[FeatureEntity]
-    ENTITY_MOVEPP1: _ClassVar[FeatureEntity]
-    ENTITY_MOVEPP2: _ClassVar[FeatureEntity]
-    ENTITY_MOVEPP3: _ClassVar[FeatureEntity]
-    ENTITY_HAS_STATUS: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_ATK_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_DEF_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_SPA_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_SPD_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_SPE_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_ACCURACY_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_BOOST_EVASION_VALUE: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES0: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES1: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES2: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES3: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES4: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES5: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES6: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES7: _ClassVar[FeatureEntity]
-    ENTITY_VOLATILES8: _ClassVar[FeatureEntity]
-    ENTITY_SIDE: _ClassVar[FeatureEntity]
-    ENTITY_HP_TOKEN: _ClassVar[FeatureEntity]
+    ENTITY_FEATURE___UNSPECIFIED: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__SPECIES: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ITEM: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ITEM_EFFECT: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ABILITY: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__GENDER: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTIVE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__FAINTED: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__HP: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MAXHP: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__HP_RATIO: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__STATUS: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__TOXIC_TURNS: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__SLEEP_TURNS: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BEING_CALLED_BACK: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__TRAPPED: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__NEWLY_SWITCHED: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__LEVEL: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEID0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEID1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEID2: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEID3: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEPP0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEPP1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEPP2: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__MOVEPP3: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__HAS_STATUS: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_ATK_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_DEF_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_SPA_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_SPD_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_SPE_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_ACCURACY_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__BOOST_EVASION_VALUE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES2: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES3: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES4: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES5: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES6: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES7: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__VOLATILES8: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__SIDE: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__TYPECHANGE0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__TYPECHANGE1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID0: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID1: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID2: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__ACTION_ID3: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__NUM_MOVES: _ClassVar[EntityFeature]
 
-class MovesetActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    MOVESET_ACTION_TYPE_MOVE: _ClassVar[MovesetActionType]
-    MOVESET_ACTION_TYPE_SWITCH: _ClassVar[MovesetActionType]
+    MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: _ClassVar[MovesetActionTypeEnum]
+    MOVESET_ACTION_TYPE_ENUM__MOVE: _ClassVar[MovesetActionTypeEnum]
+    MOVESET_ACTION_TYPE_ENUM__SWITCH: _ClassVar[MovesetActionTypeEnum]
 
-class FeatureMoveset(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class MovesetHasPPEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    MOVESET_ACTION_ID: _ClassVar[FeatureMoveset]
-    MOVESET_PPUSED: _ClassVar[FeatureMoveset]
-    MOVESET_LEGAL: _ClassVar[FeatureMoveset]
-    MOVESET_SIDE: _ClassVar[FeatureMoveset]
-    MOVESET_ACTION_TYPE: _ClassVar[FeatureMoveset]
-    MOVESET_EST_DAMAGE: _ClassVar[FeatureMoveset]
-    MOVESET_MOVE_ID: _ClassVar[FeatureMoveset]
-    MOVESET_SPECIES_ID: _ClassVar[FeatureMoveset]
+    MOVESET_HAS_PP_ENUM___UNSPECIFIED: _ClassVar[MovesetHasPPEnum]
+    MOVESET_HAS_PP_ENUM__YES: _ClassVar[MovesetHasPPEnum]
+    MOVESET_HAS_PP_ENUM__NO: _ClassVar[MovesetHasPPEnum]
 
-class FeatureTurnContext(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    VALID: _ClassVar[FeatureTurnContext]
-    IS_MY_TURN: _ClassVar[FeatureTurnContext]
-    ACTION: _ClassVar[FeatureTurnContext]
-    MOVE: _ClassVar[FeatureTurnContext]
-    SWITCH_COUNTER: _ClassVar[FeatureTurnContext]
-    MOVE_COUNTER: _ClassVar[FeatureTurnContext]
-    TURN: _ClassVar[FeatureTurnContext]
+    MOVESET_FEATURE___UNSPECIFIED: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__ACTION_ID: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__PP_RATIO: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__MOVE_ID: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__SPECIES_ID: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__PP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__MAXPP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__HAS_PP: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
 
-class FeatureWeather(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class RelativeEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    WEATHER_ID: _ClassVar[FeatureWeather]
-    MIN_DURATION: _ClassVar[FeatureWeather]
-    MAX_DURATION: _ClassVar[FeatureWeather]
+    RELATIVE_EDGE_FEATURE___UNSPECIFIED: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MAJOR_ARG: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MINOR_ARG0: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MINOR_ARG1: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MINOR_ARG2: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MINOR_ARG3: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__ACTION_TOKEN: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__ITEM_TOKEN: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__ABILITY_TOKEN: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN1: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN2: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN3: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN4: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__DAMAGE_RATIO: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__HEAL_RATIO: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__EFFECT_TOKEN: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_ATK_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_DEF_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_SPA_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_SPD_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_SPE_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_ACCURACY_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__BOOST_EVASION_VALUE: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__STATUS_TOKEN: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__SIDECONDITIONS0: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__SIDECONDITIONS1: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__SPIKES: _ClassVar[RelativeEdgeFeature]
+    RELATIVE_EDGE_FEATURE__MOVE_TOKEN: _ClassVar[RelativeEdgeFeature]
 
-class FeatureAdditionalInformation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class AbsoluteEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    NUM_FAINTED: _ClassVar[FeatureAdditionalInformation]
-    HP_TOTAL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_PAD: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_UNK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_BUG: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_DARK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_DRAGON: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ELECTRIC: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FAIRY: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FIGHTING: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FIRE: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_FLYING: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GHOST: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GRASS: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_GROUND: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ICE: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_NORMAL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_POISON: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_PSYCHIC: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_ROCK: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_STEEL: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_STELLAR: _ClassVar[FeatureAdditionalInformation]
-    NUM_TYPES_WATER: _ClassVar[FeatureAdditionalInformation]
-    TOTAL_POKEMON: _ClassVar[FeatureAdditionalInformation]
-    WISHING: _ClassVar[FeatureAdditionalInformation]
-    MEMBER0_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER1_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER2_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER3_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER4_HP: _ClassVar[FeatureAdditionalInformation]
-    MEMBER5_HP: _ClassVar[FeatureAdditionalInformation]
-
-class EdgeTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    EDGE_TYPE_NONE: _ClassVar[EdgeTypes]
-    MOVE_EDGE: _ClassVar[EdgeTypes]
-    SWITCH_EDGE: _ClassVar[EdgeTypes]
-    EFFECT_EDGE: _ClassVar[EdgeTypes]
-    CANT_EDGE: _ClassVar[EdgeTypes]
-    EDGE_TYPE_START: _ClassVar[EdgeTypes]
-
-class EdgeFromTypes(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    EDGE_FROM_NONE: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_ITEM: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_EFFECT: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_MOVE: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_ABILITY: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_SIDECONDITION: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_STATUS: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_WEATHER: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_TERRAIN: _ClassVar[EdgeFromTypes]
-    EDGE_FROM_PSEUDOWEATHER: _ClassVar[EdgeFromTypes]
-
-class FeatureEdge(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    TURN_ORDER_VALUE: _ClassVar[FeatureEdge]
-    EDGE_TYPE_TOKEN: _ClassVar[FeatureEdge]
-    MAJOR_ARG: _ClassVar[FeatureEdge]
-    MINOR_ARG: _ClassVar[FeatureEdge]
-    ACTION_TOKEN: _ClassVar[FeatureEdge]
-    ITEM_TOKEN: _ClassVar[FeatureEdge]
-    ABILITY_TOKEN: _ClassVar[FeatureEdge]
-    FROM_TYPE_TOKEN: _ClassVar[FeatureEdge]
-    FROM_SOURCE_TOKEN: _ClassVar[FeatureEdge]
-    DAMAGE_TOKEN: _ClassVar[FeatureEdge]
-    EFFECT_TOKEN: _ClassVar[FeatureEdge]
-    BOOST_ATK_VALUE: _ClassVar[FeatureEdge]
-    BOOST_DEF_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPA_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPD_VALUE: _ClassVar[FeatureEdge]
-    BOOST_SPE_VALUE: _ClassVar[FeatureEdge]
-    BOOST_ACCURACY_VALUE: _ClassVar[FeatureEdge]
-    BOOST_EVASION_VALUE: _ClassVar[FeatureEdge]
-    STATUS_TOKEN: _ClassVar[FeatureEdge]
-    EDGE_AFFECTING_SIDE: _ClassVar[FeatureEdge]
-    PLAYER_ID: _ClassVar[FeatureEdge]
-    REQUEST_COUNT: _ClassVar[FeatureEdge]
-    EDGE_VALID: _ClassVar[FeatureEdge]
-    EDGE_INDEX: _ClassVar[FeatureEdge]
-    TURN_VALUE: _ClassVar[FeatureEdge]
-ENTITY_SPECIES: FeatureEntity
-ENTITY_ITEM: FeatureEntity
-ENTITY_ITEM_EFFECT: FeatureEntity
-ENTITY_ABILITY: FeatureEntity
-ENTITY_GENDER: FeatureEntity
-ENTITY_ACTIVE: FeatureEntity
-ENTITY_FAINTED: FeatureEntity
-ENTITY_HP: FeatureEntity
-ENTITY_MAXHP: FeatureEntity
-ENTITY_STATUS: FeatureEntity
-ENTITY_TOXIC_TURNS: FeatureEntity
-ENTITY_SLEEP_TURNS: FeatureEntity
-ENTITY_BEING_CALLED_BACK: FeatureEntity
-ENTITY_TRAPPED: FeatureEntity
-ENTITY_NEWLY_SWITCHED: FeatureEntity
-ENTITY_LEVEL: FeatureEntity
-ENTITY_MOVEID0: FeatureEntity
-ENTITY_MOVEID1: FeatureEntity
-ENTITY_MOVEID2: FeatureEntity
-ENTITY_MOVEID3: FeatureEntity
-ENTITY_MOVEPP0: FeatureEntity
-ENTITY_MOVEPP1: FeatureEntity
-ENTITY_MOVEPP2: FeatureEntity
-ENTITY_MOVEPP3: FeatureEntity
-ENTITY_HAS_STATUS: FeatureEntity
-ENTITY_BOOST_ATK_VALUE: FeatureEntity
-ENTITY_BOOST_DEF_VALUE: FeatureEntity
-ENTITY_BOOST_SPA_VALUE: FeatureEntity
-ENTITY_BOOST_SPD_VALUE: FeatureEntity
-ENTITY_BOOST_SPE_VALUE: FeatureEntity
-ENTITY_BOOST_ACCURACY_VALUE: FeatureEntity
-ENTITY_BOOST_EVASION_VALUE: FeatureEntity
-ENTITY_VOLATILES0: FeatureEntity
-ENTITY_VOLATILES1: FeatureEntity
-ENTITY_VOLATILES2: FeatureEntity
-ENTITY_VOLATILES3: FeatureEntity
-ENTITY_VOLATILES4: FeatureEntity
-ENTITY_VOLATILES5: FeatureEntity
-ENTITY_VOLATILES6: FeatureEntity
-ENTITY_VOLATILES7: FeatureEntity
-ENTITY_VOLATILES8: FeatureEntity
-ENTITY_SIDE: FeatureEntity
-ENTITY_HP_TOKEN: FeatureEntity
-MOVESET_ACTION_TYPE_MOVE: MovesetActionType
-MOVESET_ACTION_TYPE_SWITCH: MovesetActionType
-MOVESET_ACTION_ID: FeatureMoveset
-MOVESET_PPUSED: FeatureMoveset
-MOVESET_LEGAL: FeatureMoveset
-MOVESET_SIDE: FeatureMoveset
-MOVESET_ACTION_TYPE: FeatureMoveset
-MOVESET_EST_DAMAGE: FeatureMoveset
-MOVESET_MOVE_ID: FeatureMoveset
-MOVESET_SPECIES_ID: FeatureMoveset
-VALID: FeatureTurnContext
-IS_MY_TURN: FeatureTurnContext
-ACTION: FeatureTurnContext
-MOVE: FeatureTurnContext
-SWITCH_COUNTER: FeatureTurnContext
-MOVE_COUNTER: FeatureTurnContext
-TURN: FeatureTurnContext
-WEATHER_ID: FeatureWeather
-MIN_DURATION: FeatureWeather
-MAX_DURATION: FeatureWeather
-NUM_FAINTED: FeatureAdditionalInformation
-HP_TOTAL: FeatureAdditionalInformation
-NUM_TYPES_PAD: FeatureAdditionalInformation
-NUM_TYPES_UNK: FeatureAdditionalInformation
-NUM_TYPES_BUG: FeatureAdditionalInformation
-NUM_TYPES_DARK: FeatureAdditionalInformation
-NUM_TYPES_DRAGON: FeatureAdditionalInformation
-NUM_TYPES_ELECTRIC: FeatureAdditionalInformation
-NUM_TYPES_FAIRY: FeatureAdditionalInformation
-NUM_TYPES_FIGHTING: FeatureAdditionalInformation
-NUM_TYPES_FIRE: FeatureAdditionalInformation
-NUM_TYPES_FLYING: FeatureAdditionalInformation
-NUM_TYPES_GHOST: FeatureAdditionalInformation
-NUM_TYPES_GRASS: FeatureAdditionalInformation
-NUM_TYPES_GROUND: FeatureAdditionalInformation
-NUM_TYPES_ICE: FeatureAdditionalInformation
-NUM_TYPES_NORMAL: FeatureAdditionalInformation
-NUM_TYPES_POISON: FeatureAdditionalInformation
-NUM_TYPES_PSYCHIC: FeatureAdditionalInformation
-NUM_TYPES_ROCK: FeatureAdditionalInformation
-NUM_TYPES_STEEL: FeatureAdditionalInformation
-NUM_TYPES_STELLAR: FeatureAdditionalInformation
-NUM_TYPES_WATER: FeatureAdditionalInformation
-TOTAL_POKEMON: FeatureAdditionalInformation
-WISHING: FeatureAdditionalInformation
-MEMBER0_HP: FeatureAdditionalInformation
-MEMBER1_HP: FeatureAdditionalInformation
-MEMBER2_HP: FeatureAdditionalInformation
-MEMBER3_HP: FeatureAdditionalInformation
-MEMBER4_HP: FeatureAdditionalInformation
-MEMBER5_HP: FeatureAdditionalInformation
-EDGE_TYPE_NONE: EdgeTypes
-MOVE_EDGE: EdgeTypes
-SWITCH_EDGE: EdgeTypes
-EFFECT_EDGE: EdgeTypes
-CANT_EDGE: EdgeTypes
-EDGE_TYPE_START: EdgeTypes
-EDGE_FROM_NONE: EdgeFromTypes
-EDGE_FROM_ITEM: EdgeFromTypes
-EDGE_FROM_EFFECT: EdgeFromTypes
-EDGE_FROM_MOVE: EdgeFromTypes
-EDGE_FROM_ABILITY: EdgeFromTypes
-EDGE_FROM_SIDECONDITION: EdgeFromTypes
-EDGE_FROM_STATUS: EdgeFromTypes
-EDGE_FROM_WEATHER: EdgeFromTypes
-EDGE_FROM_TERRAIN: EdgeFromTypes
-EDGE_FROM_PSEUDOWEATHER: EdgeFromTypes
-TURN_ORDER_VALUE: FeatureEdge
-EDGE_TYPE_TOKEN: FeatureEdge
-MAJOR_ARG: FeatureEdge
-MINOR_ARG: FeatureEdge
-ACTION_TOKEN: FeatureEdge
-ITEM_TOKEN: FeatureEdge
-ABILITY_TOKEN: FeatureEdge
-FROM_TYPE_TOKEN: FeatureEdge
-FROM_SOURCE_TOKEN: FeatureEdge
-DAMAGE_TOKEN: FeatureEdge
-EFFECT_TOKEN: FeatureEdge
-BOOST_ATK_VALUE: FeatureEdge
-BOOST_DEF_VALUE: FeatureEdge
-BOOST_SPA_VALUE: FeatureEdge
-BOOST_SPD_VALUE: FeatureEdge
-BOOST_SPE_VALUE: FeatureEdge
-BOOST_ACCURACY_VALUE: FeatureEdge
-BOOST_EVASION_VALUE: FeatureEdge
-STATUS_TOKEN: FeatureEdge
-EDGE_AFFECTING_SIDE: FeatureEdge
-PLAYER_ID: FeatureEdge
-REQUEST_COUNT: FeatureEdge
-EDGE_VALID: FeatureEdge
-EDGE_INDEX: FeatureEdge
-TURN_VALUE: FeatureEdge
+    ABSOLUTE_EDGE_FEATURE___UNSPECIFIED: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TYPE_TOKEN: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__WEATHER_ID: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TERRAIN_ID: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__VALID: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__INDEX: _ClassVar[AbsoluteEdgeFeature]
+    ABSOLUTE_EDGE_FEATURE__TURN_VALUE: _ClassVar[AbsoluteEdgeFeature]
+ENTITY_FEATURE___UNSPECIFIED: EntityFeature
+ENTITY_FEATURE__SPECIES: EntityFeature
+ENTITY_FEATURE__ITEM: EntityFeature
+ENTITY_FEATURE__ITEM_EFFECT: EntityFeature
+ENTITY_FEATURE__ABILITY: EntityFeature
+ENTITY_FEATURE__GENDER: EntityFeature
+ENTITY_FEATURE__ACTIVE: EntityFeature
+ENTITY_FEATURE__FAINTED: EntityFeature
+ENTITY_FEATURE__HP: EntityFeature
+ENTITY_FEATURE__MAXHP: EntityFeature
+ENTITY_FEATURE__HP_RATIO: EntityFeature
+ENTITY_FEATURE__STATUS: EntityFeature
+ENTITY_FEATURE__TOXIC_TURNS: EntityFeature
+ENTITY_FEATURE__SLEEP_TURNS: EntityFeature
+ENTITY_FEATURE__BEING_CALLED_BACK: EntityFeature
+ENTITY_FEATURE__TRAPPED: EntityFeature
+ENTITY_FEATURE__NEWLY_SWITCHED: EntityFeature
+ENTITY_FEATURE__LEVEL: EntityFeature
+ENTITY_FEATURE__MOVEID0: EntityFeature
+ENTITY_FEATURE__MOVEID1: EntityFeature
+ENTITY_FEATURE__MOVEID2: EntityFeature
+ENTITY_FEATURE__MOVEID3: EntityFeature
+ENTITY_FEATURE__MOVEPP0: EntityFeature
+ENTITY_FEATURE__MOVEPP1: EntityFeature
+ENTITY_FEATURE__MOVEPP2: EntityFeature
+ENTITY_FEATURE__MOVEPP3: EntityFeature
+ENTITY_FEATURE__HAS_STATUS: EntityFeature
+ENTITY_FEATURE__BOOST_ATK_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_DEF_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_SPA_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_SPD_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_SPE_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_ACCURACY_VALUE: EntityFeature
+ENTITY_FEATURE__BOOST_EVASION_VALUE: EntityFeature
+ENTITY_FEATURE__VOLATILES0: EntityFeature
+ENTITY_FEATURE__VOLATILES1: EntityFeature
+ENTITY_FEATURE__VOLATILES2: EntityFeature
+ENTITY_FEATURE__VOLATILES3: EntityFeature
+ENTITY_FEATURE__VOLATILES4: EntityFeature
+ENTITY_FEATURE__VOLATILES5: EntityFeature
+ENTITY_FEATURE__VOLATILES6: EntityFeature
+ENTITY_FEATURE__VOLATILES7: EntityFeature
+ENTITY_FEATURE__VOLATILES8: EntityFeature
+ENTITY_FEATURE__SIDE: EntityFeature
+ENTITY_FEATURE__TYPECHANGE0: EntityFeature
+ENTITY_FEATURE__TYPECHANGE1: EntityFeature
+ENTITY_FEATURE__ACTION_ID0: EntityFeature
+ENTITY_FEATURE__ACTION_ID1: EntityFeature
+ENTITY_FEATURE__ACTION_ID2: EntityFeature
+ENTITY_FEATURE__ACTION_ID3: EntityFeature
+ENTITY_FEATURE__NUM_MOVES: EntityFeature
+MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
+MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
+MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum
+MOVESET_HAS_PP_ENUM___UNSPECIFIED: MovesetHasPPEnum
+MOVESET_HAS_PP_ENUM__YES: MovesetHasPPEnum
+MOVESET_HAS_PP_ENUM__NO: MovesetHasPPEnum
+MOVESET_FEATURE___UNSPECIFIED: MovesetFeature
+MOVESET_FEATURE__ACTION_ID: MovesetFeature
+MOVESET_FEATURE__PP_RATIO: MovesetFeature
+MOVESET_FEATURE__MOVE_ID: MovesetFeature
+MOVESET_FEATURE__SPECIES_ID: MovesetFeature
+MOVESET_FEATURE__PP: MovesetFeature
+MOVESET_FEATURE__MAXPP: MovesetFeature
+MOVESET_FEATURE__HAS_PP: MovesetFeature
+MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
+RELATIVE_EDGE_FEATURE___UNSPECIFIED: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MAJOR_ARG: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MINOR_ARG0: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MINOR_ARG1: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MINOR_ARG2: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MINOR_ARG3: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__ACTION_TOKEN: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__ITEM_TOKEN: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__ABILITY_TOKEN: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN1: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN2: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN3: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN4: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__DAMAGE_RATIO: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__HEAL_RATIO: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__EFFECT_TOKEN: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_ATK_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_DEF_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_SPA_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_SPD_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_SPE_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_ACCURACY_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__BOOST_EVASION_VALUE: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__STATUS_TOKEN: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__SIDECONDITIONS0: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__SIDECONDITIONS1: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__TOXIC_SPIKES: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__SPIKES: RelativeEdgeFeature
+RELATIVE_EDGE_FEATURE__MOVE_TOKEN: RelativeEdgeFeature
+ABSOLUTE_EDGE_FEATURE___UNSPECIFIED: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TYPE_TOKEN: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__WEATHER_ID: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TERRAIN_ID: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__VALID: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__INDEX: AbsoluteEdgeFeature
+ABSOLUTE_EDGE_FEATURE__TURN_VALUE: AbsoluteEdgeFeature

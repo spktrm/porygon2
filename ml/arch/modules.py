@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import chex
 import flax.linen as nn
@@ -8,6 +8,7 @@ import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
+from ml_collections import ConfigDict
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -25,7 +26,7 @@ def activation_fn(array: chex.Array):
     return jax.nn.relu(array)
 
 
-def layer_norm(array: chex.Array):
+def layer_norm(array: chex.Array, axis: int = -1):
     return nn.RMSNorm()(array)
 
 
@@ -237,6 +238,13 @@ def l2_normalize(x: chex.Array, epsilon: float = 1e-6):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
 
 
+def escort_transform(x: chex.Array, mask: chex.Array, p: int = 2, axis: int = -1):
+    abs_x = jnp.power(jnp.abs(x), p)
+    denom = abs_x.sum(axis=axis, where=mask, keepdims=True)
+    denom = jnp.where(denom == 0, 1, denom)
+    return abs_x / denom
+
+
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
 
@@ -315,11 +323,8 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = softcap(attn_logits)
+        attn_logits = attn_logits / np.sqrt(key_size).astype(key.dtype)
 
-        attn_logits = attn_logits * jax.lax.rsqrt(
-            jnp.array(key_size, dtype=jnp.float32)
-        )
         if mask is not None:
             if mask.ndim != attn_logits.ndim:
                 raise ValueError(
@@ -342,7 +347,9 @@ class MultiHeadAttention(nn.Module):
         return final_projection(attn)  # [T', D']
 
 
-def create_attention_mask(mask1: jnp.ndarray, mask2: jnp.ndarray = None) -> jnp.ndarray:
+def create_attention_mask(
+    mask1: jnp.ndarray = None, mask2: jnp.ndarray = None
+) -> jnp.ndarray:
     """Create a combined attention mask for cross-attention."""
     if mask1 is None:
         return None
@@ -378,8 +385,11 @@ class TransformerEncoder(nn.Module):
         if ca_mask is not None:
             self_attn_mask = self_attn_mask & ca_mask
 
-        def encoder_layer(x: chex.Array):
-            x_ln = layer_norm(x)
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
             mha = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -389,19 +399,18 @@ class TransformerEncoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mha))
-            x_ln = layer_norm(x)
-            mlp = MLP(
+            x, _ = nn.GRUCell(self.model_size)(x, mha)
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
                 (self.resblocks_hidden_size, self.model_size),
                 use_layer_norm=False,
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
-            return x
-
-        for _ in range(self.num_layers):
-            x = encoder_layer(x)
+            x, _ = nn.GRUCell(self.model_size)(x, ffn)
             x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -430,7 +439,6 @@ class TransformerDecoder(nn.Module):
         y_mask: chex.Array = None,
         ca_mask: chex.Array = None,
     ):
-
         if x_mask is None:
             x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
 
@@ -441,8 +449,11 @@ class TransformerDecoder(nn.Module):
         if ca_mask is not None:
             cross_attn_mask = cross_attn_mask & ca_mask
 
-        def decoder_layer(x: chex.Array, y: chex.Array):
-            x_ln = layer_norm(x)
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
             ca = MultiHeadAttention(
                 num_heads=self.num_heads,
                 key_size=self.key_size,
@@ -451,23 +462,81 @@ class TransformerDecoder(nn.Module):
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=y, value=y, mask=ca_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(ca))
-            x_ln = layer_norm(x)
-            mlp = MLP(
+            )(query=x_ln, key=y, value=y, mask=cross_attn_mask)
+            x, _ = nn.GRUCell(self.model_size)(x, ca)
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
                 (self.resblocks_hidden_size, self.model_size),
                 use_layer_norm=False,
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, nn.relu(mlp))
-            return x
-
-        for _ in range(self.num_layers):
-            x = decoder_layer(x, y)
+            x, _ = nn.GRUCell(self.model_size)(x, ffn)
             x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
         return x
+
+
+class PercieverIO(nn.Module):
+    num_latents: int
+    latent_dim: int
+
+    num_layers: int = 1
+    num_heads: int = 2
+    use_layer_norm: bool = True
+    resblocks_hidden_size: Optional[int] = None
+
+    @nn.compact
+    def __call__(
+        self,
+        x: chex.Array,
+        y: chex.Array,
+        x_mask: chex.Array,
+        y_mask: chex.Array,
+    ):
+        latents = self.param(
+            "latent",
+            nn.initializers.truncated_normal(0.02),
+            (self.num_latents, self.latent_dim),
+        )
+
+        encoder = TransformerDecoder(
+            key_size=x.shape[-1],
+            value_size=self.latent_dim,
+            model_size=self.latent_dim,
+            num_layers=1,
+            num_heads=self.num_heads,
+            use_layer_norm=self.use_layer_norm,
+            resblocks_hidden_size=self.resblocks_hidden_size or 4 * self.latent_dim,
+        )
+
+        process = TransformerEncoder(
+            key_size=self.latent_dim,
+            value_size=self.latent_dim,
+            model_size=self.latent_dim,
+            num_layers=1,
+            num_heads=self.num_heads,
+            use_layer_norm=self.use_layer_norm,
+            resblocks_hidden_size=self.resblocks_hidden_size or 4 * self.latent_dim,
+        )
+
+        decoder = TransformerDecoder(
+            key_size=self.latent_dim,
+            value_size=y.shape[-1],
+            model_size=y.shape[-1],
+            num_layers=1,
+            num_heads=self.num_heads,
+            use_layer_norm=self.use_layer_norm,
+            resblocks_hidden_size=self.resblocks_hidden_size or 4 * y.shape[-1],
+        )
+
+        latents = encoder(latents, x, None, x_mask)
+        for _ in range(self.num_layers):
+            latents = process(latents)
+        return decoder(y, latents, y_mask, None)
 
 
 class MLP(nn.Module):
@@ -653,13 +722,57 @@ class PretrainedEmbedding:
         return jnp.take(self.embeddings, indices, axis=0)
 
 
+class BinaryEncoder:
+    def __init__(self, num_bits: int, max_encodings: int = None):
+        """
+        Initialize the BinaryEncoder with a specified number of bits.
+
+        Parameters:
+        num_bits (int): The length of the binary vector.
+        """
+        self.num_bits = num_bits
+        self.max_encodings = max_encodings
+
+        self.encodings = jnp.asarray(self._precompute_vectors())
+
+    def _precompute_vectors(self):
+        """
+        Precompute all binary vectors for values in the range [0, 2**num_bits - 1] using numpy operations.
+
+        Returns:
+        numpy.ndarray: A 2D array where each row is a binary vector representing a value.
+        """
+        total_values = self.max_encodings or 2**self.num_bits
+        # Create a range of integers and convert to binary using numpy unpacking
+        values = np.arange(total_values, dtype=int)[:, None]
+        powers_of_two = 2 ** np.arange(self.num_bits - 1, -1, -1, dtype=int)
+        vectors = (values & powers_of_two) > 0
+        return vectors.astype(float)
+
+    def __call__(self, indices: chex.Array):
+        """
+        Encode the given value into a binary vector.
+
+        Parameters:
+        value (int): An integer value in the range [0, 2**num_bits - 1].
+
+        Returns:
+        numpy.ndarray: A binary vector representing the value.
+        """
+
+        return jnp.take(self.encodings, indices, axis=0)
+
+
 class SwiGLU(nn.Module):
+    hidden_size: int = None
+
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
         feature_dim = x.shape[-1]
+        hidden_size = self.hidden_size or feature_dim
 
-        w1 = nn.Dense(feature_dim, use_bias=False)
-        w2 = nn.Dense(feature_dim, use_bias=False)
+        w1 = nn.Dense(hidden_size, use_bias=False)
+        w2 = nn.Dense(hidden_size, use_bias=False)
         w3 = nn.Dense(feature_dim, use_bias=False)
 
         x1 = w1(x)
@@ -669,35 +782,128 @@ class SwiGLU(nn.Module):
         return w3(h)
 
 
-class GRUFeatureCombiner(nn.Module):
-    """
-    A Flax module that uses GRU-like gating to combine N feature vectors.
-
-    Attributes:
-        feature_dim: The target dimension of the combined feature vector.
-    """
-
-    feature_dim: int
-    hidden_dim: int = None
-    num_hidden_dims: int = 1
+class GLU(nn.Module):
+    hidden_size: int = None
 
     @nn.compact
-    def __call__(self, features: List[jnp.ndarray]) -> jnp.ndarray:
-        """
-        Combine feature vectors using GRU-inspired gating.
+    def __call__(self, a: chex.Array, b: chex.Array) -> chex.Array:
+        feature_dim = a.shape[-1]
+        hidden_size = self.hidden_size or feature_dim
 
-        Args:
-            features: A list of tensors of shape (feature_dim_i,), where feature_dim_i can vary.
+        w1 = nn.Dense(hidden_size, use_bias=False)
+        w2 = nn.Dense(hidden_size, use_bias=False)
+        w3 = nn.Dense(feature_dim, use_bias=False)
 
-        Returns:
-            A tensor of shape (feature_dim,), representing the combined feature vector.
-        """
-        concatenated_features = jnp.concatenate(features, axis=-1)
-        hidden_dim = self.hidden_dim or self.feature_dim
-        layer_sizes = (hidden_dim,) * self.num_hidden_dims + (self.feature_dim,)
+        a = w1(a)
+        b = w2(b)
+        h = nn.silu(a) * b
 
-        embedding = nn.Dense(self.feature_dim)(concatenated_features)
-        embedding = MLP(layer_sizes)(embedding)
-        embedding = SwiGLU()(embedding)
+        return w3(h)
 
-        return layer_norm(embedding)
+
+class SumEmbeddings(nn.Module):
+    output_size: int
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, encodings: List[chex.Array]) -> jnp.ndarray:
+        # Sum the transformed embeddings using parameter weights
+
+        num_embeddings = len(encodings)
+
+        bias1 = self.param("bias1", nn.initializers.zeros_init(), (self.output_size,))
+        bias2 = self.param("bias2", nn.initializers.zeros_init(), (self.output_size,))
+
+        def _transform_encoding(encoding: chex.Array, index: int):
+            return nn.Dense(
+                self.output_size,
+                name=f"weight_{index}",
+                use_bias=False,
+            )(encoding)
+
+        transformed_encodings = [
+            _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
+        ]
+
+        output = sum(transformed_encodings) / (num_embeddings**0.5) + bias1
+        if self.use_layer_norm:
+            output = layer_norm(output)
+        output = nn.relu(output)
+
+        weights = nn.Dense(num_embeddings)(output)
+        scores = jax.nn.softmax(weights, axis=-1)
+
+        embeddings = [
+            score * embedding for score, embedding in zip(scores, transformed_encodings)
+        ]
+        output = sum(embeddings) + bias2
+
+        if self.use_layer_norm:
+            output = layer_norm(output)
+        output = nn.relu(output)
+
+        return nn.Dense(self.output_size)(output)
+
+
+class SequenceToVector(nn.Module):
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, sequence: chex.Array, mask: chex.Array):
+        bias = self.param(
+            "pooled_embeddings",
+            nn.initializers.lecun_normal(),
+            (self.cfg.bias.num_latents, self.cfg.bias.entity_size),
+        )
+
+        pooled_embeddings = TransformerDecoder(**self.cfg.decoder.to_dict())(
+            bias, sequence, None, mask
+        )
+        pooled_embeddings = TransformerEncoder(**self.cfg.encoder.to_dict())(
+            pooled_embeddings
+        )
+
+        logit = Logits(**self.cfg.logits.to_dict())(pooled_embeddings.reshape(-1))
+        return logit.reshape(-1)
+
+
+class MergeEmbeddings(nn.Module):
+    output_size: int
+
+    @nn.compact
+    def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
+        embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
+        return SumEmbeddings(self.output_size)(encodings=None, embeddings=embeddings)
+
+
+class GruResBlock(nn.Module):
+    model_size: int
+    hidden_size: int = None
+    num_layers: int = 2
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: chex.Array):
+        model_size = x.shape[-1]
+        hidden_size = self.hidden_size or model_size
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                x_ln = layer_norm(x)
+            else:
+                x_ln = x
+            ffn = MLP(
+                (hidden_size, model_size), use_layer_norm=False, activate_first=False
+            )(x_ln)
+            x, _ = nn.GRUCell(model_size)(x, nn.relu(ffn))
+        return x
+
+
+def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> jnp.ndarray:
+    sum_offsets = np.cumsum([0] + [offset for _, offset in one_hot_encoded])
+    indices = jnp.stack(
+        [idx + offset for (idx, _), offset in zip(one_hot_encoded, sum_offsets[:-1])]
+    )
+    return jnp.matmul(
+        jnp.ones((len(indices),), jnp.float32),
+        indices[:, jnp.newaxis] == jnp.arange(sum_offsets[-1]),
+    )

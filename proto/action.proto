@@ -6,5 +6,5 @@ message Action {
   string key = 1;
   int32 index = 2;
   string text = 3;
-  int32 gameId = 4;
+  int32 game_id = 4;
 }

@@ -2,7 +2,7 @@ import { Player } from "./player";
 import { EVAL_GAME_ID_OFFSET } from "./data";
 import { GetRandomAction } from "./baselines/random";
 import { GetMaxDamageAction } from "./baselines/max_dmg";
-import { Action } from "../../protos/servicev2_pb";
+import { Action } from "../../protos/service_pb";
 import { GetHeuristicAction } from "./baselines/heuristic";
 
 export type evalFuncArgs = {

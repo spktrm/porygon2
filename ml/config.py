@@ -28,7 +28,7 @@ class FineTuning:
     from_learner_steps: int = -1
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
-    policy_threshold: float = 0.01
+    policy_threshold: float = 0.03
     # Rounds the policy probabilities to the "closest"
     # multiple of 1/`self.discretization`.
     # Discretization is disabled for non-positive values.
@@ -164,7 +164,6 @@ class ActorCriticConfig:
     num_players: int = 2
     # The batch size to use when learning/improving parameters.
     batch_size: int = 4
-    minibatch_size: int = 4
     # The learning rate for `params`.
     learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.

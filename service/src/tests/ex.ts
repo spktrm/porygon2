@@ -1,6 +1,6 @@
 import { MessagePort } from "worker_threads";
 import { Game } from "../server/game";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { AsyncQueue } from "../server/utils";
 import { writeFileSync } from "fs";
 import { exit } from "process";
@@ -31,7 +31,8 @@ async function worker(gameId: number, playerIds: number[]) {
             const action = new Action();
             action.setValue(-1);
             game.tasks.submitResult(rqid, action);
-        } else {
+        }
+        if (rqid >= 10) {
             writeFileSync("../rlenv/ex", gameState.getState_asU8());
             game.reset();
             exit(0);

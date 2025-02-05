@@ -6,21 +6,23 @@ from typing import ClassVar as _ClassVar, Mapping as _Mapping, Optional as _Opti
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
-class WorkerMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class WorkerMessageTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    START: _ClassVar[WorkerMessageType]
-    ACTION: _ClassVar[WorkerMessageType]
-START: WorkerMessageType
-ACTION: WorkerMessageType
+    WORKER_MESSAGE_TYPE_ENUM___UNSPECIFIED: _ClassVar[WorkerMessageTypeEnum]
+    WORKER_MESSAGE_TYPE_ENUM__START: _ClassVar[WorkerMessageTypeEnum]
+    WORKER_MESSAGE_TYPE_ENUM__ACTION: _ClassVar[WorkerMessageTypeEnum]
+WORKER_MESSAGE_TYPE_ENUM___UNSPECIFIED: WorkerMessageTypeEnum
+WORKER_MESSAGE_TYPE_ENUM__START: WorkerMessageTypeEnum
+WORKER_MESSAGE_TYPE_ENUM__ACTION: WorkerMessageTypeEnum
 
 class WorkerMessage(_message.Message):
-    __slots__ = ("workerIndex", "messageType", "action", "gameId")
-    WORKERINDEX_FIELD_NUMBER: _ClassVar[int]
-    MESSAGETYPE_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("worker_index", "message_type", "action", "game_id")
+    WORKER_INDEX_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_TYPE_FIELD_NUMBER: _ClassVar[int]
     ACTION_FIELD_NUMBER: _ClassVar[int]
-    GAMEID_FIELD_NUMBER: _ClassVar[int]
-    workerIndex: int
-    messageType: WorkerMessageType
+    GAME_ID_FIELD_NUMBER: _ClassVar[int]
+    worker_index: int
+    message_type: WorkerMessageTypeEnum
     action: _action_pb2.Action
-    gameId: int
-    def __init__(self, workerIndex: _Optional[int] = ..., messageType: _Optional[_Union[WorkerMessageType, str]] = ..., action: _Optional[_Union[_action_pb2.Action, _Mapping]] = ..., gameId: _Optional[int] = ...) -> None: ...
+    game_id: int
+    def __init__(self, worker_index: _Optional[int] = ..., message_type: _Optional[_Union[WorkerMessageTypeEnum, str]] = ..., action: _Optional[_Union[_action_pb2.Action, _Mapping]] = ..., game_id: _Optional[int] = ...) -> None: ...

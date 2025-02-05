@@ -34,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 3
+    clip: float = 10_000
 
 
 @chex.dataclass(frozen=True)
@@ -165,7 +165,6 @@ class TrainState(train_state.TrainState):
     params_prev: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     params_prev_: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    learner_steps: int = 0
     actor_steps: int = 0
 
     alpha: float = 0
@@ -173,7 +172,7 @@ class TrainState(train_state.TrainState):
 
     def step_entropy(self):
         alpha, update_target_net = EntropySchedule.update(
-            self.entropy_schedule, self.learner_steps
+            self.entropy_schedule, self.step
         )
         return self.replace(
             alpha=alpha,
@@ -242,7 +241,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: RNaDConfig):
 
 
 def save(state: TrainState):
-    with open(os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb") as f:
+    with open(os.path.abspath(f"ckpts/ckpt_{state.step:08}"), "wb") as f:
         pickle.dump(
             dict(
                 params=state.params,
@@ -288,9 +287,7 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
 
         logs = {}
 
-        policy_pprocessed = config.finetune(
-            pred.pi, batch.env.legal, state.learner_steps
-        )
+        policy_pprocessed = config.finetune(pred.pi, batch.env.legal, state.step)
 
         # This line creates the reward transform log(pi(a|x)/pi_reg(a|x)).
         # For the stability reasons, reward changes smoothly between iterations.
@@ -350,26 +347,20 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             batch.env.legal,
             importance_sampling_correction,
             clip=config.nerd.clip,
-            threshold=config.nerd.beta,
+            beta=config.nerd.beta,
         )
 
         loss_norm = get_average_logit_value(pred.logit, batch.env.legal, valid)
 
-        loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
+        loss_entropy = get_loss_entropy(pred.pi, valid)
 
         loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
 
         move_entropy = get_loss_entropy(
-            pred.pi[..., :4],
-            pred.log_pi[..., :4],
-            batch.env.legal[..., :4],
-            valid & batch.env.legal[..., :4].any(axis=-1),
+            pred.pi[..., :4], valid & batch.env.legal[..., :4].any(axis=-1)
         )
         switch_entropy = get_loss_entropy(
-            pred.pi[..., 4:],
-            pred.log_pi[..., 4:],
-            batch.env.legal[..., 4:],
-            valid & batch.env.legal[..., 4:].any(axis=-1),
+            pred.pi[..., 4:], valid & batch.env.legal[..., 4:].any(axis=-1)
         )
 
         logs["loss_v"] = loss_v
@@ -393,7 +384,6 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     state = state.apply_gradients(grads=grads, config=config)
     state = state.replace(
         actor_steps=state.actor_steps + batch.env.valid.sum(),
-        learner_steps=state.learner_steps + 1,
     )
 
     logs.update(dict(loss=loss_val))

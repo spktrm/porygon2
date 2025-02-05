@@ -46,7 +46,6 @@ class TrainState(train_state.TrainState):
 
     params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    learner_steps: int = 0
     actor_steps: int = 0
 
 
@@ -78,7 +77,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
 
 
 def save(state: TrainState):
-    with open(os.path.abspath(f"ckpts/ckpt_{state.learner_steps:08}"), "wb") as f:
+    with open(os.path.abspath(f"ckpts/ckpt_{state.step:08}"), "wb") as f:
         pickle.dump(
             dict(
                 params=state.params,
@@ -120,9 +119,7 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
 
         logs = {}
 
-        policy_pprocessed = config.finetune(
-            pred.pi, batch.env.legal, state.learner_steps
-        )
+        policy_pprocessed = config.finetune(pred.pi, batch.env.legal, state.step)
 
         valid = batch.env.valid * (batch.env.legal.sum(axis=-1) > 1)
 
@@ -173,14 +170,14 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
             batch.env.legal,
             importance_sampling_correction,
             clip=config.nerd.clip,
-            threshold=config.nerd.beta,
+            beta=config.nerd.beta,
         )
 
         loss_norm = renormalize(
             jnp.square(pred.logit).mean(axis=-1, where=batch.env.legal), valid
         )
 
-        loss_entropy = get_loss_entropy(pred.pi, pred.log_pi, batch.env.legal, valid)
+        loss_entropy = get_loss_entropy(pred.pi, valid)
 
         heuristic_target = jax.nn.one_hot(
             batch.env.heuristic_action.clip(min=0), pred.logit.shape[-1]
@@ -200,14 +197,10 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
 
         move_entropy = get_loss_entropy(
             pred.pi[..., :4],
-            pred.log_pi[..., :4],
-            batch.env.legal[..., :4],
             valid & batch.env.legal[..., :4].any(axis=-1),
         )
         switch_entropy = get_loss_entropy(
             pred.pi[..., 4:],
-            pred.log_pi[..., 4:],
-            batch.env.legal[..., 4:],
             valid & batch.env.legal[..., 4:].any(axis=-1),
         )
 
@@ -232,7 +225,6 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
     state = state.replace(
         params_target=new_params_target,
         actor_steps=state.actor_steps + batch.env.valid.sum(),
-        learner_steps=state.learner_steps + 1,
     )
 
     valid = batch.env.valid
