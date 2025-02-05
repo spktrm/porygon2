@@ -69,11 +69,10 @@ proto.history.History.prototype.toObject = function(opt_includeInstance) {
  */
 proto.history.History.toObject = function(includeInstance, msg) {
   var f, obj = {
-    edges: msg.getEdges_asB64(),
+    absoluteEdge: msg.getAbsoluteEdge_asB64(),
+    relativeEdges: msg.getRelativeEdges_asB64(),
     entities: msg.getEntities_asB64(),
-    sideconditions: msg.getSideconditions_asB64(),
-    field: msg.getField_asB64(),
-    length: jspb.Message.getFieldWithDefault(msg, 5, 0)
+    length: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
 
   if (includeInstance) {
@@ -112,21 +111,17 @@ proto.history.History.deserializeBinaryFromReader = function(msg, reader) {
     switch (field) {
     case 1:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setEdges(value);
+      msg.setAbsoluteEdge(value);
       break;
     case 2:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setEntities(value);
+      msg.setRelativeEdges(value);
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setSideconditions(value);
+      msg.setEntities(value);
       break;
     case 4:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setField(value);
-      break;
-    case 5:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setLength(value);
       break;
@@ -159,38 +154,31 @@ proto.history.History.prototype.serializeBinary = function() {
  */
 proto.history.History.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getEdges_asU8();
+  f = message.getAbsoluteEdge_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       1,
       f
     );
   }
-  f = message.getEntities_asU8();
+  f = message.getRelativeEdges_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       2,
       f
     );
   }
-  f = message.getSideconditions_asU8();
+  f = message.getEntities_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       3,
       f
     );
   }
-  f = message.getField_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      4,
-      f
-    );
-  }
   f = message.getLength();
   if (f !== 0) {
     writer.writeInt32(
-      5,
+      4,
       f
     );
   }
@@ -198,35 +186,35 @@ proto.history.History.serializeBinaryToWriter = function(message, writer) {
 
 
 /**
- * optional bytes edges = 1;
+ * optional bytes absolute_edge = 1;
  * @return {!(string|Uint8Array)}
  */
-proto.history.History.prototype.getEdges = function() {
+proto.history.History.prototype.getAbsoluteEdge = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 1, ""));
 };
 
 
 /**
- * optional bytes edges = 1;
- * This is a type-conversion wrapper around `getEdges()`
+ * optional bytes absolute_edge = 1;
+ * This is a type-conversion wrapper around `getAbsoluteEdge()`
  * @return {string}
  */
-proto.history.History.prototype.getEdges_asB64 = function() {
+proto.history.History.prototype.getAbsoluteEdge_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getEdges()));
+      this.getAbsoluteEdge()));
 };
 
 
 /**
- * optional bytes edges = 1;
+ * optional bytes absolute_edge = 1;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getEdges()`
+ * This is a type-conversion wrapper around `getAbsoluteEdge()`
  * @return {!Uint8Array}
  */
-proto.history.History.prototype.getEdges_asU8 = function() {
+proto.history.History.prototype.getAbsoluteEdge_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getEdges()));
+      this.getAbsoluteEdge()));
 };
 
 
@@ -234,22 +222,64 @@ proto.history.History.prototype.getEdges_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.history.History} returns this
  */
-proto.history.History.prototype.setEdges = function(value) {
+proto.history.History.prototype.setAbsoluteEdge = function(value) {
   return jspb.Message.setProto3BytesField(this, 1, value);
 };
 
 
 /**
- * optional bytes entities = 2;
+ * optional bytes relative_edges = 2;
  * @return {!(string|Uint8Array)}
  */
-proto.history.History.prototype.getEntities = function() {
+proto.history.History.prototype.getRelativeEdges = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
 /**
- * optional bytes entities = 2;
+ * optional bytes relative_edges = 2;
+ * This is a type-conversion wrapper around `getRelativeEdges()`
+ * @return {string}
+ */
+proto.history.History.prototype.getRelativeEdges_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getRelativeEdges()));
+};
+
+
+/**
+ * optional bytes relative_edges = 2;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getRelativeEdges()`
+ * @return {!Uint8Array}
+ */
+proto.history.History.prototype.getRelativeEdges_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getRelativeEdges()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.history.History} returns this
+ */
+proto.history.History.prototype.setRelativeEdges = function(value) {
+  return jspb.Message.setProto3BytesField(this, 2, value);
+};
+
+
+/**
+ * optional bytes entities = 3;
+ * @return {!(string|Uint8Array)}
+ */
+proto.history.History.prototype.getEntities = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
+};
+
+
+/**
+ * optional bytes entities = 3;
  * This is a type-conversion wrapper around `getEntities()`
  * @return {string}
  */
@@ -260,7 +290,7 @@ proto.history.History.prototype.getEntities_asB64 = function() {
 
 
 /**
- * optional bytes entities = 2;
+ * optional bytes entities = 3;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getEntities()`
@@ -277,100 +307,16 @@ proto.history.History.prototype.getEntities_asU8 = function() {
  * @return {!proto.history.History} returns this
  */
 proto.history.History.prototype.setEntities = function(value) {
-  return jspb.Message.setProto3BytesField(this, 2, value);
-};
-
-
-/**
- * optional bytes sideConditions = 3;
- * @return {!(string|Uint8Array)}
- */
-proto.history.History.prototype.getSideconditions = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
-};
-
-
-/**
- * optional bytes sideConditions = 3;
- * This is a type-conversion wrapper around `getSideconditions()`
- * @return {string}
- */
-proto.history.History.prototype.getSideconditions_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getSideconditions()));
-};
-
-
-/**
- * optional bytes sideConditions = 3;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getSideconditions()`
- * @return {!Uint8Array}
- */
-proto.history.History.prototype.getSideconditions_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getSideconditions()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.history.History} returns this
- */
-proto.history.History.prototype.setSideconditions = function(value) {
   return jspb.Message.setProto3BytesField(this, 3, value);
 };
 
 
 /**
- * optional bytes field = 4;
- * @return {!(string|Uint8Array)}
- */
-proto.history.History.prototype.getField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
-};
-
-
-/**
- * optional bytes field = 4;
- * This is a type-conversion wrapper around `getField()`
- * @return {string}
- */
-proto.history.History.prototype.getField_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getField()));
-};
-
-
-/**
- * optional bytes field = 4;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getField()`
- * @return {!Uint8Array}
- */
-proto.history.History.prototype.getField_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getField()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.history.History} returns this
- */
-proto.history.History.prototype.setField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 4, value);
-};
-
-
-/**
- * optional int32 length = 5;
+ * optional int32 length = 4;
  * @return {number}
  */
 proto.history.History.prototype.getLength = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 5, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 4, 0));
 };
 
 
@@ -379,7 +325,7 @@ proto.history.History.prototype.getLength = function() {
  * @return {!proto.history.History} returns this
  */
 proto.history.History.prototype.setLength = function(value) {
-  return jspb.Message.setProto3IntField(this, 5, value);
+  return jspb.Message.setProto3IntField(this, 4, value);
 };
 
 

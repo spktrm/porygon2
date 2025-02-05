@@ -13,8 +13,8 @@ export class Action extends jspb.Message {
   getText(): string;
   setText(value: string): void;
 
-  getGameid(): number;
-  setGameid(value: number): void;
+  getGameId(): number;
+  setGameId(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
@@ -31,7 +31,7 @@ export namespace Action {
     key: string,
     index: number,
     text: string,
-    gameid: number,
+    gameId: number,
   }
 }
 

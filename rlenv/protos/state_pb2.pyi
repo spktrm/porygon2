@@ -1,5 +1,5 @@
-import history_pb2 as _history_pb2
 import enums_pb2 as _enums_pb2
+import history_pb2 as _history_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -8,70 +8,70 @@ from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Map
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Rewards(_message.Message):
-    __slots__ = ("winReward", "hpReward", "faintedReward", "switchReward", "longevityReward")
-    WINREWARD_FIELD_NUMBER: _ClassVar[int]
-    HPREWARD_FIELD_NUMBER: _ClassVar[int]
-    FAINTEDREWARD_FIELD_NUMBER: _ClassVar[int]
-    SWITCHREWARD_FIELD_NUMBER: _ClassVar[int]
-    LONGEVITYREWARD_FIELD_NUMBER: _ClassVar[int]
-    winReward: float
-    hpReward: float
-    faintedReward: float
-    switchReward: float
-    longevityReward: float
-    def __init__(self, winReward: _Optional[float] = ..., hpReward: _Optional[float] = ..., faintedReward: _Optional[float] = ..., switchReward: _Optional[float] = ..., longevityReward: _Optional[float] = ...) -> None: ...
+    __slots__ = ("win_reward", "hp_reward", "fainted_reward", "scaled_fainted_reward", "scaled_hp_reward")
+    WIN_REWARD_FIELD_NUMBER: _ClassVar[int]
+    HP_REWARD_FIELD_NUMBER: _ClassVar[int]
+    FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
+    SCALED_FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
+    SCALED_HP_REWARD_FIELD_NUMBER: _ClassVar[int]
+    win_reward: float
+    hp_reward: float
+    fainted_reward: float
+    scaled_fainted_reward: float
+    scaled_hp_reward: float
+    def __init__(self, win_reward: _Optional[float] = ..., hp_reward: _Optional[float] = ..., fainted_reward: _Optional[float] = ..., scaled_fainted_reward: _Optional[float] = ..., scaled_hp_reward: _Optional[float] = ...) -> None: ...
 
 class Heuristics(_message.Message):
-    __slots__ = ("heuristicAction",)
-    HEURISTICACTION_FIELD_NUMBER: _ClassVar[int]
-    heuristicAction: int
-    def __init__(self, heuristicAction: _Optional[int] = ...) -> None: ...
+    __slots__ = ("heuristic_action",)
+    HEURISTIC_ACTION_FIELD_NUMBER: _ClassVar[int]
+    heuristic_action: int
+    def __init__(self, heuristic_action: _Optional[int] = ...) -> None: ...
 
 class Info(_message.Message):
-    __slots__ = ("gameId", "done", "playerIndex", "turn", "ts", "drawRatio", "workerIndex", "rewards", "seed", "draw", "heuristics", "requestCount")
-    GAMEID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("game_id", "done", "player_index", "turn", "ts", "draw_ratio", "worker_index", "rewards", "seed", "draw", "heuristics", "request_count")
+    GAME_ID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
-    PLAYERINDEX_FIELD_NUMBER: _ClassVar[int]
+    PLAYER_INDEX_FIELD_NUMBER: _ClassVar[int]
     TURN_FIELD_NUMBER: _ClassVar[int]
     TS_FIELD_NUMBER: _ClassVar[int]
-    DRAWRATIO_FIELD_NUMBER: _ClassVar[int]
-    WORKERINDEX_FIELD_NUMBER: _ClassVar[int]
+    DRAW_RATIO_FIELD_NUMBER: _ClassVar[int]
+    WORKER_INDEX_FIELD_NUMBER: _ClassVar[int]
     REWARDS_FIELD_NUMBER: _ClassVar[int]
     SEED_FIELD_NUMBER: _ClassVar[int]
     DRAW_FIELD_NUMBER: _ClassVar[int]
     HEURISTICS_FIELD_NUMBER: _ClassVar[int]
-    REQUESTCOUNT_FIELD_NUMBER: _ClassVar[int]
-    gameId: int
+    REQUEST_COUNT_FIELD_NUMBER: _ClassVar[int]
+    game_id: int
     done: bool
-    playerIndex: bool
+    player_index: bool
     turn: int
     ts: float
-    drawRatio: float
-    workerIndex: int
+    draw_ratio: float
+    worker_index: int
     rewards: Rewards
     seed: int
     draw: bool
     heuristics: Heuristics
-    requestCount: int
-    def __init__(self, gameId: _Optional[int] = ..., done: bool = ..., playerIndex: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., drawRatio: _Optional[float] = ..., workerIndex: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., requestCount: _Optional[int] = ...) -> None: ...
+    request_count: int
+    def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
-    __slots__ = ("info", "legalActions", "majorHistory", "moveset", "team", "key", "minorHistory")
+    __slots__ = ("info", "legal_actions", "history", "moveset", "public_team", "private_team", "key")
     INFO_FIELD_NUMBER: _ClassVar[int]
-    LEGALACTIONS_FIELD_NUMBER: _ClassVar[int]
-    MAJORHISTORY_FIELD_NUMBER: _ClassVar[int]
+    LEGAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_FIELD_NUMBER: _ClassVar[int]
     MOVESET_FIELD_NUMBER: _ClassVar[int]
-    TEAM_FIELD_NUMBER: _ClassVar[int]
+    PUBLIC_TEAM_FIELD_NUMBER: _ClassVar[int]
+    PRIVATE_TEAM_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
-    MINORHISTORY_FIELD_NUMBER: _ClassVar[int]
     info: Info
-    legalActions: bytes
-    majorHistory: _history_pb2.History
+    legal_actions: bytes
+    history: _history_pb2.History
     moveset: bytes
-    team: bytes
+    public_team: bytes
+    private_team: bytes
     key: str
-    minorHistory: _history_pb2.History
-    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legalActions: _Optional[bytes] = ..., majorHistory: _Optional[_Union[_history_pb2.History, _Mapping]] = ..., moveset: _Optional[bytes] = ..., team: _Optional[bytes] = ..., key: _Optional[str] = ..., minorHistory: _Optional[_Union[_history_pb2.History, _Mapping]] = ...) -> None: ...
+    def __init__(self, info: _Optional[_Union[Info, _Mapping]] = ..., legal_actions: _Optional[bytes] = ..., history: _Optional[_Union[_history_pb2.History, _Mapping]] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., key: _Optional[str] = ...) -> None: ...
 
 class Trajectory(_message.Message):
     __slots__ = ("states", "actions", "rewards")

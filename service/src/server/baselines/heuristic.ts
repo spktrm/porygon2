@@ -1,6 +1,6 @@
 import { AnyObject } from "@pkmn/sim";
 import { Pokemon } from "@pkmn/client";
-import { Action } from "../../../protos/servicev2_pb";
+import { Action } from "../../../protos/service_pb";
 import { EvalActionFnType } from "../eval";
 import { GetMoveDamange } from "./max_dmg";
 

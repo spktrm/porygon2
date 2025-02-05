@@ -25,15 +25,15 @@ _sym_db = _symbol_database.Default()
 from . import action_pb2 as action__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rmessage.proto\x12\x05rlenv\x1a\x0c\x61\x63tion.proto\"\x82\x01\n\rWorkerMessage\x12\x13\n\x0bworkerIndex\x18\x01 \x01(\x05\x12-\n\x0bmessageType\x18\x02 \x01(\x0e\x32\x18.rlenv.WorkerMessageType\x12\x1d\n\x06\x61\x63tion\x18\x03 \x01(\x0b\x32\r.rlenv.Action\x12\x0e\n\x06gameId\x18\x04 \x01(\x05**\n\x11WorkerMessageType\x12\t\n\x05START\x10\x00\x12\n\n\x06\x41\x43TION\x10\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rmessage.proto\x12\x05rlenv\x1a\x0c\x61\x63tion.proto\"\x89\x01\n\rWorkerMessage\x12\x14\n\x0cworker_index\x18\x01 \x01(\x05\x12\x32\n\x0cmessage_type\x18\x02 \x01(\x0e\x32\x1c.rlenv.WorkerMessageTypeEnum\x12\x1d\n\x06\x61\x63tion\x18\x03 \x01(\x0b\x32\r.rlenv.Action\x12\x0f\n\x07game_id\x18\x04 \x01(\x05*\x8e\x01\n\x15WorkerMessageTypeEnum\x12*\n&WORKER_MESSAGE_TYPE_ENUM___UNSPECIFIED\x10\x00\x12#\n\x1fWORKER_MESSAGE_TYPE_ENUM__START\x10\x01\x12$\n WORKER_MESSAGE_TYPE_ENUM__ACTION\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'message_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_WORKERMESSAGETYPE']._serialized_start=171
-  _globals['_WORKERMESSAGETYPE']._serialized_end=213
+  _globals['_WORKERMESSAGETYPEENUM']._serialized_start=179
+  _globals['_WORKERMESSAGETYPEENUM']._serialized_end=321
   _globals['_WORKERMESSAGE']._serialized_start=39
-  _globals['_WORKERMESSAGE']._serialized_end=169
+  _globals['_WORKERMESSAGE']._serialized_end=176
 # @@protoc_insertion_point(module_scope)

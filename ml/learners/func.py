@@ -3,11 +3,14 @@ from typing import Any, Dict
 import chex
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax.training import train_state
 
 from ml.func import get_average_logit_value, get_loss_entropy, renormalize
+from rlenv.data import ACTION_STRINGS
 from rlenv.interfaces import TimeStep
+from rlenv.protos.features_pb2 import MovesetFeature
 
 
 def conditional_breakpoint(pred):
@@ -18,6 +21,38 @@ def conditional_breakpoint(pred):
         jax.debug.breakpoint()
 
     jax.lax.cond(pred, true_fn, false_fn)
+
+
+def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
+    valid_mask = batch.env.valid.reshape(-1)
+
+    actions_available = batch.env.moveset[
+        ..., 0, :, MovesetFeature.MOVESET_FEATURE__ACTION_ID
+    ]
+    actions_index = np.eye(actions_available.shape[-1])[batch.actor.action]
+
+    actions = (actions_available * actions_index).sum(axis=-1).reshape(-1)
+    probabilities = (batch.actor.policy * actions_index).sum(axis=-1).reshape(-1)
+
+    # Find unique actions and their indices
+    unique_actions, inverse_indices = np.unique(actions, return_inverse=True)
+
+    # One-hot encode the actions
+    one_hot = np.eye(len(unique_actions))[inverse_indices]
+
+    # Aggregate probabilities for each action
+    sum_probs = np.sum(
+        one_hot * probabilities[..., None], axis=0, where=valid_mask[..., None]
+    )
+    count_probs = np.sum(one_hot, axis=0, where=valid_mask[..., None])
+
+    # Compute the mean probabilities
+    mean_probs = sum_probs / np.where(count_probs == 0, 1, count_probs)
+
+    unique_actions = unique_actions.astype(int)
+    mean_probs = mean_probs.astype(float)
+
+    return {ACTION_STRINGS[k]: v for k, v in zip(unique_actions, mean_probs)}
 
 
 @jax.jit
@@ -84,6 +119,20 @@ def collect_loss_value_telemetry_data(
     return logs
 
 
+def collect_regularisation_telemetry_data(
+    policy: chex.Array,
+    regularisation_policy: chex.Array,
+    legal_mask: chex.Array,
+    state_mask: chex.Array,
+) -> dict[str, Any]:
+    raw_reg_rewards = regularisation_policy.mean(where=legal_mask)
+    norm_reg_rewards = (policy * regularisation_policy).mean(where=state_mask)
+    return {
+        "raw_reg_rewards": raw_reg_rewards,
+        "norm_reg_rewards": norm_reg_rewards,
+    }
+
+
 def collect_policy_stats_telemetry_data(
     logits: chex.Array,
     policy: chex.Array,
@@ -92,21 +141,33 @@ def collect_policy_stats_telemetry_data(
     state_mask: chex.Array,
     prev_policy: chex.Array,
     ratio: chex.Array,
+    policy_target: chex.Array,
+    adv_pi: chex.Array,
 ) -> dict[str, Any]:
-    move_entropy = get_loss_entropy(
-        policy[..., :4],
-        log_policy[..., :4],
-        legal_mask[..., :4],
-        state_mask & (legal_mask[..., :4].sum(axis=-1) > 1),
-    )
+    move_mask = legal_mask[..., :4]
+    move_mask_sum = move_mask.sum(axis=-1)
+    move_entropy = get_loss_entropy(policy[..., :4], state_mask & (move_mask_sum > 1))
+
+    switch_mask = legal_mask[..., 4:]
+    switch_mask_sum = switch_mask.sum(axis=-1)
     switch_entropy = get_loss_entropy(
-        policy[..., 4:],
-        log_policy[..., 4:],
-        legal_mask[..., 4:],
-        state_mask & (legal_mask[..., 4:].sum(axis=-1) > 1),
+        policy[..., 4:], state_mask & (switch_mask_sum > 1)
     )
+
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)
     kl_div = optax.kl_divergence(log_policy, prev_policy)
+
+    target_mask = legal_mask * state_mask[..., None]
+
+    mean_target = policy_target.mean(where=target_mask)
+    std_target = policy_target.std(where=target_mask)
+    max_target = jnp.where(target_mask, policy_target, -1e9).max()
+    min_target = jnp.where(target_mask, policy_target, 1e9).min()
+
+    mean_adv_pi = adv_pi.mean(where=target_mask)
+    std_adv_pi = adv_pi.std(where=target_mask)
+    max_adv_pi = jnp.where(target_mask, adv_pi, -1e9).max()
+    min_adv_pi = jnp.where(target_mask, adv_pi, 1e9).min()
 
     return {
         "move_entropy": move_entropy,
@@ -114,6 +175,14 @@ def collect_policy_stats_telemetry_data(
         "avg_logit_value": avg_logit_value,
         "kl_div": renormalize(kl_div, state_mask),
         "ratio": renormalize(ratio, state_mask),
+        "mean_policy_target": mean_target,
+        "std_policy_target": std_target,
+        "max_policy_target": max_target,
+        "min_policy_target": min_target,
+        "mean_adv_pi": mean_adv_pi,
+        "std_adv_pi": std_adv_pi,
+        "max_adv_pi": max_adv_pi,
+        "min_adv_pi": min_adv_pi,
     }
 
 
@@ -130,6 +199,41 @@ def calculate_explained_variance(
         / jnp.square(jnp.std(value_target, where=mask))
     )
     return explained_variance
+
+
+def calculate_r2(
+    value_prediction: chex.Array, value_target: chex.Array, mask: chex.Array = None
+) -> chex.Array:
+    """
+    Calculate the R-squared (coefficient of determination) value.
+
+    Args:
+        value_prediction: Predicted values (chex.Array).
+        value_target: True target values (chex.Array).
+        mask: Optional mask to include/exclude certain values (chex.Array, default is None).
+
+    Returns:
+        R-squared value as a chex.Array.
+    """
+    value_prediction = jnp.squeeze(value_prediction)
+    value_target = jnp.squeeze(value_target)
+    if mask is None:
+        mask = jnp.ones_like(value_prediction)
+    else:
+        mask = jnp.squeeze(mask)
+
+    # Calculate residual sum of squares (SS_residual)
+    residuals = value_target - value_prediction
+    ss_residual = jnp.sum(jnp.square(residuals), where=mask)
+
+    # Calculate total sum of squares (SS_total)
+    mean_target = jnp.mean(value_target, where=mask)
+    ss_total = jnp.sum(jnp.square(value_target - mean_target), where=mask)
+
+    # Add epsilon to avoid division by zero
+    epsilon = 1e-8
+    r2 = 1 - (ss_residual / (ss_total + epsilon))
+    return r2
 
 
 def collect_value_stats_telemetry_data(

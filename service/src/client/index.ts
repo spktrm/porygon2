@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import WebSocket from "ws";
@@ -6,11 +5,12 @@ import { inspect } from "util";
 import { Player } from "../server/player";
 import { ObjectReadWriteStream } from "@pkmn/streams";
 import { recvFnType, sendFnType } from "../server/types";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { TaskQueueSystem } from "../server/utils";
+import { request } from "https";
 
-const offline = "localhost";
-const online = "sim.smogon.com";
+const offline = `localhost:8000`;
+const online = "sim3.psim.us";
 
 function stringToUniqueInt(str: string): number {
     let hash = 5381;
@@ -20,8 +20,10 @@ function stringToUniqueInt(str: string): number {
     return hash >>> 0; // Ensure the hash is a positive integer
 }
 
-async function ActionFromResponse(response: Response): Promise<Action> {
-    const { action: actionIndex } = await response.json();
+async function ActionFromResponse(
+    modelOutput: Record<string, any>,
+): Promise<Action> {
+    const { action: actionIndex } = modelOutput;
     const action = new Action();
     action.setValue(actionIndex);
     return action;
@@ -57,11 +59,12 @@ class ClientStream extends ObjectReadWriteStream<string> {
             }
             gameState.setRqid(rqid);
             gameState.setPlayerId(playerId);
-            const response = await fetch("http://127.0.0.1:8080/predict", {
+            const response = await fetch("http://127.0.0.1:8001/predict", {
                 method: "POST",
                 body: state.serializeBinary(),
             });
-            const action = await ActionFromResponse(response);
+            const modelOutput = await response.json();
+            const action = await ActionFromResponse(modelOutput);
             action.setRqid(rqid);
             if (rqid >= 0) this.tasks.submitResult(rqid, action);
             return rqid;
@@ -108,8 +111,7 @@ class Battle {
         const stream = new ClientStream({
             roomId,
             choose: (message: string) => {
-                const toSend = `${this.roomId}|/choose ${message}`;
-                this.ws.send(toSend);
+                this.ws.send(`${this.roomId}|/choose ${message}`);
                 this.prevMessage = message;
             },
         });
@@ -161,7 +163,7 @@ class BattleManager {
 
 class PokemonShowdownBot {
     private ws: WebSocket;
-    private serverUrl: string = `ws://${offline}:8000/showdown/websocket`;
+    private serverUrl: string = `ws://${offline}/showdown/websocket`;
     private username: string = "YourUsername";
     private password: string | undefined = undefined;
     private battleManager: BattleManager;
@@ -204,6 +206,7 @@ class PokemonShowdownBot {
                     if (this.serverUrl.includes(online)) {
                         this.send(`${roomId}|/timer on`);
                     }
+                    // this.send(`${roomId}|glhf`);
                 }
                 await battle.receive(lines.slice(1).join("\n"));
                 if (lines[1].startsWith("|request|")) {
@@ -224,7 +227,6 @@ class PokemonShowdownBot {
 
     private login(challstr: string): void {
         const loginDetails: { [k: string]: any } = {
-            act: "login",
             name: this.username,
             pass: this.password,
             challstr,
@@ -232,7 +234,7 @@ class PokemonShowdownBot {
 
         const requestOptions = {
             hostname: "play.pokemonshowdown.com",
-            path: "/action.php",
+            path: "/api/login",
             method: "POST",
             headers: {
                 "Sec-Fetch-Mode": "cors",
@@ -250,8 +252,7 @@ class PokemonShowdownBot {
             })
             .join("&");
 
-        const https = require("https");
-        const req = https.request(requestOptions, (res: any) => {
+        const req = request(requestOptions, (res: any) => {
             let data = "";
             let payload: { [k: string]: any };
             res.on("data", (chunk: any) => (data += chunk));

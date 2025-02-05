@@ -1,6 +1,6 @@
 import { MessagePort } from "worker_threads";
 import { Game } from "../server/game";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { AsyncQueue } from "../server/utils";
 import { State } from "../../protos/state_pb";
 // import { State } from "../../protos/state_pb";
@@ -27,7 +27,6 @@ async function worker(gameId: number, playerIds: number[]) {
     let infos = [];
     let rewardsCounts = [0, 0];
     let maxMajorEdges = 0;
-    let maxMinorEdges = 0;
 
     while (true) {
         const gameState = await queue.get();
@@ -46,22 +45,17 @@ async function worker(gameId: number, playerIds: number[]) {
             const rewards = info.getRewards()!;
             infos.map((info) => {
                 const rewards = info.getRewards()!;
-                const playerIndex = info.getPlayerindex();
-                rewardsCounts[+playerIndex] += rewards.getFaintedreward();
+                const playerIndex = info.getPlayerIndex();
+                rewardsCounts[+playerIndex] += rewards.getFaintedReward();
             });
 
             const player = (game.players ?? [])[0];
             if (player !== undefined) {
-                const numMajorEdges =
-                    player.eventHandler.majorEdgeBuffer.numEdges;
-                const numMinorEdges =
-                    player.eventHandler.minorEdgeBuffer.numEdges;
+                const numMajorEdges = player.eventHandler.edgeBuffer.numEdges;
 
                 maxMajorEdges = Math.max(maxMajorEdges, numMajorEdges);
-                maxMinorEdges = Math.max(maxMinorEdges, numMinorEdges);
 
                 console.log(maxMajorEdges);
-                console.log(maxMinorEdges);
                 console.log("");
             }
 

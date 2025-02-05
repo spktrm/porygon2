@@ -10,7 +10,7 @@ import {
 } from "@smogon/calc";
 import { Battle, Pokemon } from "@pkmn/client";
 import { EvalActionFnType } from "../eval";
-import { Action } from "../../../protos/servicev2_pb";
+import { Action } from "../../../protos/service_pb";
 
 function fixMoveId(moveId: string) {
     if (moveId.startsWith("hiddenpower")) {

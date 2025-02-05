@@ -3,7 +3,7 @@ import { BattleStreams, Teams } from "@pkmn/sim";
 import { Player, Tracker } from "./player";
 import { TaskQueueSystem } from "./utils";
 import { recvFnType, sendFnType } from "./types";
-import { Action, GameState } from "../../protos/servicev2_pb";
+import { Action, GameState } from "../../protos/service_pb";
 import { MessagePort } from "worker_threads";
 import { EVAL_GAME_ID_OFFSET } from "./data";
 import { getEvalAction } from "./eval";
@@ -26,6 +26,7 @@ export class Game {
     maxPlayers: number;
 
     tracker: Tracker;
+    prevTurn: number;
 
     constructor(gameId: number, workerIndex: number, port: MessagePort) {
         this.gameId = gameId;
@@ -39,6 +40,7 @@ export class Game {
         this.playerIds = [];
 
         this.tracker = new Tracker();
+        this.prevTurn = 0;
     }
 
     addPlayerId(playerId: number) {
@@ -116,19 +118,36 @@ export class Game {
 >player p2 ${JSON.stringify(p2spec)}`);
 
         const battle = stream.battle!;
+        this.tracker.setBattle(battle);
 
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
-            const { faintedReward, hpReward } = this.tracker.update2(battle);
-            const state = player.createState();
 
-            const rewards = state.getInfo()!.getRewards()!;
-            rewards.setHpreward(hpReward);
-            rewards.setFaintedreward(faintedReward);
+            const state = player.createState();
+            const info = state.getInfo()!;
+            const currentTurn = info.getTurn()!;
+
+            if (currentTurn > this.prevTurn) {
+                const rewards = info.getRewards()!;
+                this.tracker.update();
+                const {
+                    faintedReward,
+                    hpReward,
+                    scaledHpReward,
+                    scaledFaintedReward,
+                } = this.tracker.getReward();
+
+                rewards.setHpReward(hpReward);
+                rewards.setFaintedReward(faintedReward);
+                rewards.setScaledHpReward(scaledHpReward);
+                rewards.setScaledFaintedReward(scaledFaintedReward);
+
+                this.prevTurn = currentTurn;
+            }
 
             gameState.setState(state.serializeBinary());
             const playerId =
-                this.playerIds[+state.getInfo()!.getPlayerindex()] ?? 1;
+                this.playerIds[+state.getInfo()!.getPlayerIndex()] ?? 1;
             let rqid = -1;
             if (!state.getInfo()!.getDone()) {
                 rqid = this.tasks.createJob();

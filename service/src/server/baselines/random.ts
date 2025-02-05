@@ -1,4 +1,4 @@
-import { Action } from "../../../protos/servicev2_pb";
+import { Action } from "../../../protos/service_pb";
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
 
@@ -24,7 +24,7 @@ function getRandomOneIndex(arr: number[]): number {
 }
 
 export const GetRandomAction: EvalActionFnType = ({ player }) => {
-    const legalActions = StateHandler.getLegalActions(
+    const { legalActions } = StateHandler.getLegalActions(
         player.privateBattle.request,
     );
     const legalIndices = legalActions.toBinaryVector();
