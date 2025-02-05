@@ -1,16 +1,15 @@
-from functools import partial
 import math
+from functools import partial
 from typing import Dict, Mapping, Tuple
 
 import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from ml_collections import ConfigDict
 import numpy as np
+from ml_collections import ConfigDict
 
 from ml.arch.modules import (
-    MLP,
     BinaryEncoder,
     PretrainedEmbedding,
     SumEmbeddings,
@@ -23,11 +22,8 @@ from rlenv.data import (
     ACTION_MAX_VALUES,
     ENTITY_MAX_VALUES,
     MAX_RATIO_TOKEN,
-    NUM_ABILITIES,
-    NUM_ACTION_TYPES,
     NUM_ACTIONS,
     NUM_EFFECTS,
-    NUM_ITEMS,
     NUM_MOVES,
     NUM_SPECIES,
     RELATIVE_EDGE_MAX_VALUES,
@@ -81,7 +77,7 @@ def _encode_one_hot(
     feature_idx: int,
     max_values: Dict[int, int],
     value_offset: int = 0,
-) -> chex.Array:
+) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
@@ -103,7 +99,7 @@ _encode_one_hot_relative_edge_boost = partial(
 
 def _encode_capped_one_hot(
     entity: chex.Array, feature_idx: int, max_values: Dict[int, int]
-) -> chex.Array:
+) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -123,7 +119,7 @@ _encode_capped_one_hot_absolute_edge = partial(
 
 def _encode_sqrt_one_hot(
     entity: chex.Array, feature_idx: int, max_values: Dict[int, int]
-) -> chex.Array:
+) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -149,7 +145,7 @@ _encode_sqrt_one_hot_absolute_edge = partial(
 
 def _encode_divided_one_hot(
     entity: chex.Array, feature_idx: int, divisor: int, max_values: Dict[int, int]
-) -> chex.Array:
+) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -239,19 +235,23 @@ class Encoder(nn.Module):
             features=entity_size, embedding_init=nn.initializers.lecun_normal()
         )
 
-        # Initialize embeddings for various features.
-        species_embedding = nn.Embed(NUM_SPECIES, **embed_kwargs)
-        abilities_embedding = nn.Embed(NUM_ABILITIES, **embed_kwargs)
-        items_embedding = nn.Embed(NUM_ITEMS, **embed_kwargs)
-        actions_embedding = nn.Embed(NUM_ACTIONS, **embed_kwargs)
-        effects_embedding = nn.Embed(NUM_EFFECTS, **embed_kwargs)
+        species_embedding = nn.Embed(
+            NUM_SPECIES, name="species_embedding", **embed_kwargs
+        )
+        items_embedding = nn.Embed(NUM_SPECIES, name="items_embedding", **embed_kwargs)
+        abilities_embedding = nn.Embed(
+            NUM_SPECIES, name="abilities_embedding", **embed_kwargs
+        )
+        actions_embedding = nn.Embed(
+            NUM_ACTIONS, name="actions_embedding", **embed_kwargs
+        )
 
         # Initialize aggregation modules for combining feature embeddings.
-        entity_aggregate = SumEmbeddings(entity_size)
-        relative_edge_aggregate = SumEmbeddings(entity_size)
-        absolute_edge_aggregate = SumEmbeddings(entity_size)
-        timestep_aggregate = SumEmbeddings(entity_size)
-        action_aggregate = SumEmbeddings(entity_size)
+        entity_combine = SumEmbeddings(entity_size, name="entity_combine")
+        relative_edge_combine = SumEmbeddings(entity_size, name="relative_edge_combine")
+        absolute_edge_combine = SumEmbeddings(entity_size, name="absolute_edge_combine")
+        timestep_combine = SumEmbeddings(entity_size, name="timestep_combine")
+        action_combine = SumEmbeddings(entity_size, name="action_combine")
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
             # Encode volatile and type-change indices using the binary encoder.
@@ -333,43 +333,36 @@ class Encoder(nn.Module):
                     _encode_one_hot_entity_boost(
                         entity, EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE
                     ),
-                    # (entity[EntityFeature.ENTITY_FEATURE__MOVEID0], 0),
-                    # (entity[EntityFeature.ENTITY_FEATURE__MOVEID0], 0),
-                    # (entity[EntityFeature.ENTITY_FEATURE__MOVEID0], 0),
-                    # (entity[EntityFeature.ENTITY_FEATURE__MOVEID0], NUM_MOVES),
                 ]
             )
 
-            def _get_action_embedding(feature_index: int):
-                mask = (entity[feature_index] == ActionsEnum.ACTIONS_ENUM___NULL) | (
-                    entity[feature_index] == ActionsEnum.ACTIONS_ENUM___UNSPECIFIED
-                )
-                return jnp.where(
-                    mask[None],
-                    0,
-                    actions_embedding(entity[feature_index]),
-                )
+            moveset_onehot = one_hot_concat_jax(
+                [
+                    (entity[EntityFeature.ENTITY_FEATURE__MOVEID0], 0),
+                    (entity[EntityFeature.ENTITY_FEATURE__MOVEID1], 0),
+                    (entity[EntityFeature.ENTITY_FEATURE__MOVEID2], 0),
+                    (entity[EntityFeature.ENTITY_FEATURE__MOVEID3], NUM_MOVES),
+                ]
+            ).clip(max=1) / entity[EntityFeature.ENTITY_FEATURE__NUM_MOVES].clip(min=1)
 
-            embeddings = [
-                species_embedding(entity[EntityFeature.ENTITY_FEATURE__SPECIES]),
-                abilities_embedding(entity[EntityFeature.ENTITY_FEATURE__ABILITY]),
-                items_embedding(entity[EntityFeature.ENTITY_FEATURE__ITEM]),
+            species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
+            ability_token = entity[EntityFeature.ENTITY_FEATURE__ABILITY]
+            item_token = entity[EntityFeature.ENTITY_FEATURE__ITEM]
+
+            encoding = [
+                species_embedding(species_token),
+                abilities_embedding(ability_token),
+                items_embedding(item_token),
                 boolean_code,
                 volatiles_encoding,
                 typechange_encoding,
-                SPECIES_ONEHOT(entity[EntityFeature.ENTITY_FEATURE__SPECIES]),
-                ABILITY_ONEHOT(entity[EntityFeature.ENTITY_FEATURE__ABILITY]),
-                ITEM_ONEHOT(entity[EntityFeature.ENTITY_FEATURE__ITEM]),
-                (
-                    _get_action_embedding(EntityFeature.ENTITY_FEATURE__ACTION_ID0)
-                    + _get_action_embedding(EntityFeature.ENTITY_FEATURE__ACTION_ID1)
-                    + _get_action_embedding(EntityFeature.ENTITY_FEATURE__ACTION_ID2)
-                    + _get_action_embedding(EntityFeature.ENTITY_FEATURE__ACTION_ID3)
-                )
-                / entity[EntityFeature.ENTITY_FEATURE__NUM_MOVES].clip(min=1),
+                moveset_onehot,
+                SPECIES_ONEHOT(species_token),
+                ABILITY_ONEHOT(ability_token),
+                ITEM_ONEHOT(item_token),
             ]
 
-            embedding = entity_aggregate(embeddings)
+            embedding = entity_combine(encoding)
 
             # Apply mask to filter out invalid entities.
             mask = get_entity_mask(entity)
@@ -377,9 +370,9 @@ class Encoder(nn.Module):
 
             return embedding, mask
 
-        def _encode_relative_edge(relative_edge: chex.Array) -> chex.Array:
+        def _encode_relative_edge(edge: chex.Array) -> chex.Array:
             # Encode minor arguments and side conditions using the binary encoder.
-            minor_args_indices = relative_edge[
+            minor_args_indices = edge[
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG3
                 + 1
             ]
@@ -387,7 +380,7 @@ class Encoder(nn.Module):
                 minor_args_indices.astype(jnp.uint16)
             ).reshape(-1)
 
-            side_condition_indices = relative_edge[
+            side_condition_indices = edge[
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS1
                 + 1
             ]
@@ -399,107 +392,112 @@ class Encoder(nn.Module):
             boolean_code = one_hot_concat_jax(
                 [
                     _encode_one_hot_relative_edge(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
                     ),
                     _encode_divided_one_hot_relative_edge(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO,
                         MAX_RATIO_TOKEN / 32,
                     ),
                     _encode_divided_one_hot_relative_edge(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO,
                         MAX_RATIO_TOKEN / 32,
                     ),
                     _encode_one_hot_relative_edge(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ATK_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_DEF_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPA_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPD_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPE_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_EVASION_VALUE,
                     ),
                     _encode_one_hot_relative_edge_boost(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ACCURACY_VALUE,
                     ),
                     _encode_one_hot_relative_edge(
-                        relative_edge, RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES
+                        edge, RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES
                     ),
                     _encode_one_hot_relative_edge(
-                        relative_edge,
+                        edge,
                         RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
                     ),
                 ]
             )
 
-            def _get_effect_embedding(feature_index: int):
-                mask = (
-                    relative_edge[feature_index] == EffectEnum.EFFECT_ENUM___NULL
-                ) | (
-                    relative_edge[feature_index] == EffectEnum.EFFECT_ENUM___UNSPECIFIED
-                )
-                return jnp.where(
-                    mask[None],
-                    0,
-                    effects_embedding(relative_edge[feature_index]),
-                )
-
-            effect_embedding = (
-                _get_effect_embedding(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0
-                )
-                + _get_effect_embedding(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1
-                )
-                + _get_effect_embedding(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2
-                )
-                + _get_effect_embedding(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3
-                )
-                + _get_effect_embedding(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4
-                )
-            ) / relative_edge[
+            effct_from_source_onehot = one_hot_concat_jax(
+                [
+                    (
+                        edge[
+                            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0
+                        ],
+                        0,
+                    ),
+                    (
+                        edge[
+                            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1
+                        ],
+                        0,
+                    ),
+                    (
+                        edge[
+                            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2
+                        ],
+                        0,
+                    ),
+                    (
+                        edge[
+                            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3
+                        ],
+                        0,
+                    ),
+                    (
+                        edge[
+                            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4
+                        ],
+                        NUM_EFFECTS,
+                    ),
+                ]
+            ).clip(max=1)
+            effct_from_source_onehot = effct_from_source_onehot.at[
+                ..., EffectEnum.EFFECT_ENUM___UNSPECIFIED
+            ].set(0)
+            effct_from_source_onehot = effct_from_source_onehot.at[
+                ..., EffectEnum.EFFECT_ENUM___NULL
+            ].set(0)
+            effct_from_source_onehot = effct_from_source_onehot / edge[
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES
-            ].clip(
-                min=1
-            )
+            ].clip(min=1)
 
-            ability_token = relative_edge[
+            ability_token = edge[
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN
             ]
-            item_token = relative_edge[
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN
-            ]
-            move_token = relative_edge[
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN
-            ]
-            action_token = relative_edge[
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN
-            ]
+            item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
+            move_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
+            action_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
+
             embeddings = [
                 ABILITY_ONEHOT(ability_token),
                 ITEM_ONEHOT(item_token),
@@ -508,30 +506,17 @@ class Encoder(nn.Module):
                 abilities_embedding(ability_token),
                 actions_embedding(action_token),
                 minor_args_encoding,
-                effect_embedding,
                 side_condition_encoding,
                 boolean_code,
-                _features_embedding(
-                    relative_edge,
-                    {
-                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN: 1
-                        / MAX_RATIO_TOKEN,
-                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO: 1
-                        / MAX_RATIO_TOKEN,
-                    },
-                ),
+                effct_from_source_onehot,
             ]
 
-            embedding = relative_edge_aggregate(embeddings)
+            embedding = relative_edge_combine(embeddings)
 
-            # Apply mask to filter out invalid edges.
-            mask = get_edge_mask(relative_edge)
-            embedding = jnp.where(mask, embedding, 0)
-
-            return embedding, mask
+            return embedding
 
         def _encode_absolute_edge(
-            absolute_edge: chex.Array,
+            edge: chex.Array,
             turn_offset: chex.Array,
             request_count_offset: chex.Array,
         ) -> chex.Array:
@@ -540,11 +525,11 @@ class Encoder(nn.Module):
             """
             # Compute turn and request count differences for encoding.
             turn = jnp.abs(
-                absolute_edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE]
+                edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE]
                 - turn_offset
             )
             request_count = jnp.abs(
-                absolute_edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT]
+                edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT]
                 - request_count_offset
             )
 
@@ -552,39 +537,39 @@ class Encoder(nn.Module):
             boolean_code = one_hot_concat_jax(
                 [
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_ID,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION,
                     ),
                     _encode_one_hot_absolute_edge(
-                        absolute_edge,
+                        edge,
                         AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION,
                     ),
                 ]
@@ -595,17 +580,15 @@ class Encoder(nn.Module):
                 _binary_scale_embedding(turn, 32),
                 _binary_scale_embedding(request_count, 32),
                 _binary_scale_embedding(
-                    absolute_edge[
-                        AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE
-                    ],
+                    edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE],
                     16,
                 ),
             ]
 
-            embedding = absolute_edge_aggregate(embeddings)
+            embedding = absolute_edge_combine(embeddings)
 
             # Apply mask to filter out invalid edges.
-            mask = get_edge_mask(absolute_edge)
+            mask = get_edge_mask(edge)
             embedding = jnp.where(mask, embedding, 0)
 
             return embedding, mask
@@ -623,7 +606,7 @@ class Encoder(nn.Module):
             entity_embeddings, _ = jax.vmap(_encode_entity)(history_container.entities)
 
             # Encode relative edges.
-            relative_edge_embeddings, _ = jax.vmap(_encode_relative_edge)(
+            relative_edge_embeddings = jax.vmap(_encode_relative_edge)(
                 history_container.relative_edges
             )
 
@@ -633,14 +616,15 @@ class Encoder(nn.Module):
             )
 
             # Combine all embeddings for the timestep.
-            timestep_embeddings = [
+            timestep_embedding = [
                 entity_embeddings[0],
                 entity_embeddings[1],
                 relative_edge_embeddings[0],
                 relative_edge_embeddings[1],
                 absolute_edge_embedding,
             ]
-            timestep_embedding = timestep_aggregate(timestep_embeddings)
+
+            timestep_embedding = timestep_combine(timestep_embedding)
 
             # Apply mask to the timestep embeddings.
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
@@ -689,13 +673,9 @@ class Encoder(nn.Module):
                 SPECIES_ONEHOT(action[MovesetFeature.MOVESET_FEATURE__SPECIES_ID]),
                 actions_embedding(action[MovesetFeature.MOVESET_FEATURE__ACTION_ID]),
                 boolean_code,
-                _features_embedding(
-                    action,
-                    {MovesetFeature.MOVESET_FEATURE__PP_RATIO: 1 / MAX_RATIO_TOKEN},
-                ),
             ]
 
-            embedding = action_aggregate(embeddings)
+            embedding = action_combine(embeddings)
 
             # Apply mask to the move embeddings.
             mask = get_move_mask(action)

@@ -170,7 +170,7 @@ def train_step(state: TrainState, batch: TimeStep, config: PretrainConfig):
             batch.env.legal,
             importance_sampling_correction,
             clip=config.nerd.clip,
-            threshold=config.nerd.beta,
+            beta=config.nerd.beta,
         )
 
         loss_norm = renormalize(

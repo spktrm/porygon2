@@ -34,7 +34,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 10
+    clip: float = 10_000
 
 
 @chex.dataclass(frozen=True)
@@ -347,7 +347,7 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
             batch.env.legal,
             importance_sampling_correction,
             clip=config.nerd.clip,
-            threshold=config.nerd.beta,
+            beta=config.nerd.beta,
         )
 
         loss_norm = get_average_logit_value(pred.logit, batch.env.legal, valid)

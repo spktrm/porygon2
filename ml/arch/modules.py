@@ -1,6 +1,5 @@
-import functools
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import chex
 import flax.linen as nn
@@ -10,13 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
 from ml_collections import ConfigDict
-
-from rlenv.data import (
-    ABSOLUTE_EDGE_MAX_VALUES,
-    ENTITY_MAX_VALUES,
-    RELATIVE_EDGE_MAX_VALUES,
-)
-from rlenv.protos.features_pb2 import EntityFeature
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -811,17 +803,20 @@ class GLU(nn.Module):
 
 class SumEmbeddings(nn.Module):
     output_size: int
+    use_layer_norm: bool = True
 
     @nn.compact
     def __call__(self, encodings: List[chex.Array]) -> jnp.ndarray:
         # Sum the transformed embeddings using parameter weights
 
-        bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
+        num_embeddings = len(encodings)
+
+        bias1 = self.param("bias1", nn.initializers.zeros_init(), (self.output_size,))
+        bias2 = self.param("bias2", nn.initializers.zeros_init(), (self.output_size,))
 
         def _transform_encoding(encoding: chex.Array, index: int):
             return nn.Dense(
                 self.output_size,
-                kernel_init=nn.initializers.lecun_normal(),
                 name=f"weight_{index}",
                 use_bias=False,
             )(encoding)
@@ -830,7 +825,24 @@ class SumEmbeddings(nn.Module):
             _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
         ]
 
-        return sum(transformed_encodings) + bias
+        output = sum(transformed_encodings) / (num_embeddings**0.5) + bias1
+        if self.use_layer_norm:
+            output = layer_norm(output)
+        output = nn.relu(output)
+
+        weights = nn.Dense(num_embeddings)(output)
+        scores = jax.nn.softmax(weights, axis=-1)
+
+        embeddings = [
+            score * embedding for score, embedding in zip(scores, transformed_encodings)
+        ]
+        output = sum(embeddings) + bias2
+
+        if self.use_layer_norm:
+            output = layer_norm(output)
+        output = nn.relu(output)
+
+        return nn.Dense(self.output_size)(output)
 
 
 class SequenceToVector(nn.Module):

@@ -8,20 +8,18 @@ from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Map
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Rewards(_message.Message):
-    __slots__ = ("win_reward", "hp_reward", "fainted_reward", "switch_reward", "longevity_reward", "fainted_fib_reward")
+    __slots__ = ("win_reward", "hp_reward", "fainted_reward", "scaled_fainted_reward", "scaled_hp_reward")
     WIN_REWARD_FIELD_NUMBER: _ClassVar[int]
     HP_REWARD_FIELD_NUMBER: _ClassVar[int]
     FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
-    SWITCH_REWARD_FIELD_NUMBER: _ClassVar[int]
-    LONGEVITY_REWARD_FIELD_NUMBER: _ClassVar[int]
-    FAINTED_FIB_REWARD_FIELD_NUMBER: _ClassVar[int]
+    SCALED_FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
+    SCALED_HP_REWARD_FIELD_NUMBER: _ClassVar[int]
     win_reward: float
     hp_reward: float
     fainted_reward: float
-    switch_reward: float
-    longevity_reward: float
-    fainted_fib_reward: float
-    def __init__(self, win_reward: _Optional[float] = ..., hp_reward: _Optional[float] = ..., fainted_reward: _Optional[float] = ..., switch_reward: _Optional[float] = ..., longevity_reward: _Optional[float] = ..., fainted_fib_reward: _Optional[float] = ...) -> None: ...
+    scaled_fainted_reward: float
+    scaled_hp_reward: float
+    def __init__(self, win_reward: _Optional[float] = ..., hp_reward: _Optional[float] = ..., fainted_reward: _Optional[float] = ..., scaled_fainted_reward: _Optional[float] = ..., scaled_hp_reward: _Optional[float] = ...) -> None: ...
 
 class Heuristics(_message.Message):
     __slots__ = ("heuristic_action",)
