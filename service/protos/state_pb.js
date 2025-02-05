@@ -186,9 +186,8 @@ proto.rlenv.Rewards.toObject = function(includeInstance, msg) {
     winReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 1, 0.0),
     hpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
     faintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
-    switchReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
-    longevityReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0),
-    faintedFibReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0)
+    scaledFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
+    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
   };
 
   if (includeInstance) {
@@ -239,15 +238,11 @@ proto.rlenv.Rewards.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 4:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setSwitchReward(value);
+      msg.setScaledFaintedReward(value);
       break;
     case 5:
       var value = /** @type {number} */ (reader.readFloat());
-      msg.setLongevityReward(value);
-      break;
-    case 6:
-      var value = /** @type {number} */ (reader.readFloat());
-      msg.setFaintedFibReward(value);
+      msg.setScaledHpReward(value);
       break;
     default:
       reader.skipField();
@@ -299,24 +294,17 @@ proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getSwitchReward();
+  f = message.getScaledFaintedReward();
   if (f !== 0.0) {
     writer.writeFloat(
       4,
       f
     );
   }
-  f = message.getLongevityReward();
+  f = message.getScaledHpReward();
   if (f !== 0.0) {
     writer.writeFloat(
       5,
-      f
-    );
-  }
-  f = message.getFaintedFibReward();
-  if (f !== 0.0) {
-    writer.writeFloat(
-      6,
       f
     );
   }
@@ -378,10 +366,10 @@ proto.rlenv.Rewards.prototype.setFaintedReward = function(value) {
 
 
 /**
- * optional float switch_reward = 4;
+ * optional float scaled_fainted_reward = 4;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getSwitchReward = function() {
+proto.rlenv.Rewards.prototype.getScaledFaintedReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 4, 0.0));
 };
 
@@ -390,16 +378,16 @@ proto.rlenv.Rewards.prototype.getSwitchReward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setSwitchReward = function(value) {
+proto.rlenv.Rewards.prototype.setScaledFaintedReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 4, value);
 };
 
 
 /**
- * optional float longevity_reward = 5;
+ * optional float scaled_hp_reward = 5;
  * @return {number}
  */
-proto.rlenv.Rewards.prototype.getLongevityReward = function() {
+proto.rlenv.Rewards.prototype.getScaledHpReward = function() {
   return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 5, 0.0));
 };
 
@@ -408,26 +396,8 @@ proto.rlenv.Rewards.prototype.getLongevityReward = function() {
  * @param {number} value
  * @return {!proto.rlenv.Rewards} returns this
  */
-proto.rlenv.Rewards.prototype.setLongevityReward = function(value) {
+proto.rlenv.Rewards.prototype.setScaledHpReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 5, value);
-};
-
-
-/**
- * optional float fainted_fib_reward = 6;
- * @return {number}
- */
-proto.rlenv.Rewards.prototype.getFaintedFibReward = function() {
-  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 6, 0.0));
-};
-
-
-/**
- * @param {number} value
- * @return {!proto.rlenv.Rewards} returns this
- */
-proto.rlenv.Rewards.prototype.setFaintedFibReward = function(value) {
-  return jspb.Message.setProto3FloatField(this, 6, value);
 };
 
 

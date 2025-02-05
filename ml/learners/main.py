@@ -64,7 +64,7 @@ def main():
 
     state = learner.create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         state = learner.load(state, latest_ckpt)
 
@@ -82,7 +82,7 @@ def main():
 
     train_progress = tqdm(desc="training")
 
-    for step_idx in range(learner_config.num_steps):
+    for _ in range(learner_config.num_steps):
         logs: dict
         winrates = {}
 
@@ -97,7 +97,7 @@ def main():
         logs.update(collect_batch_telemetry_data(batch))
         # logs.update(collect_action_prob_telemetry_data(minibatch))
 
-        logs["step_idx"] = step_idx
+        logs["Step"] = state.step
         wandb.log({**logs, **winrates})
         train_progress.update(1)
 

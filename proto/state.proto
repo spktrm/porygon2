@@ -10,9 +10,8 @@ message Rewards {
   float win_reward = 1;
   float hp_reward = 2;
   float fainted_reward = 3;
-  float switch_reward = 4;
-  float longevity_reward = 5;
-  float fainted_fib_reward = 6;
+  float scaled_fainted_reward = 4;
+  float scaled_hp_reward = 5;
 }
 
 message Heuristics {

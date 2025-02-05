@@ -30,10 +30,10 @@ def breakpoint_w_func(x, func: callable):
     func_val = func(x)
 
     def true_fn(x):
-        pass
+        jax.debug.breakpoint()
 
     def false_fn(x):
-        jax.debug.breakpoint()
+        pass
 
     jax.lax.cond(func_val, true_fn, false_fn, x)
 

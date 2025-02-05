@@ -1,13 +1,11 @@
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, Resnet, TransformerEncoder
+from ml.arch.modules import Logits, TransformerEncoder, softcap
 from ml.func import legal_log_policy, legal_policy
-
-
-import jax.numpy as jnp
 
 
 class PolicyHead(nn.Module):
@@ -35,18 +33,24 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
-        self.logits1 = Logits(**self.cfg.logits1.to_dict())
-        self.logits2 = Logits(**self.cfg.logits2.to_dict())
+        self.queries = self.param(
+            "queries",
+            nn.initializers.truncated_normal(0.02),
+            (4, self.cfg.transformer.model_size),
+        )
+        self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(self, embeddings: chex.Array, mask: chex.Array):
         embeddings = self.encoder(embeddings, mask)
 
-        weights = jnp.where(mask[..., None], self.logits1(embeddings), -1e9)
-        scores = jax.nn.softmax(weights, axis=0)
+        attn_weights = embeddings @ self.queries.T
+        attn_weights = jnp.where(mask[..., None], attn_weights, -1e9)
+        attn_scores = nn.softmax(attn_weights, axis=0)
 
-        weighted_embeddings = scores.T @ embeddings
-        state_embedding = weighted_embeddings.reshape(-1)
+        state_embedding = attn_scores.T @ embeddings
+        state_embedding = state_embedding.reshape(-1)
 
-        logits = self.logits2(state_embedding)
+        logits = self.logits(state_embedding)
+        logits = softcap(logits, max_value=3)
 
         return logits.reshape(-1)

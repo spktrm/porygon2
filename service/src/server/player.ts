@@ -25,95 +25,125 @@ const actionStrings = [
     "switch 6",
 ];
 
+interface TeamTrackerDatum {
+    hpTotal: number;
+    aliveTotal: number;
+    numPokemon: number;
+}
+
 export class Tracker {
-    hpDiffs: number[];
-    faintedDiffs: number[];
-    turnsWithoutChange: number;
-    fibs: number[];
+    battle: World | undefined;
+    data: TeamTrackerDatum[][];
 
     constructor() {
-        this.hpDiffs = [0];
-        this.faintedDiffs = [0];
-        this.turnsWithoutChange = 0;
-
-        this.fibs = [
-            0.03509312, 0.10527936, 0.21055872, 0.3509312, 0.5263968,
-            0.73695553,
-        ];
+        this.data = [];
+        this.battle = undefined;
     }
 
-    update1(battle: Battle) {
-        const [aliveTotal1, aliveTotal2] = battle.sides.map((side) => {
-            const aliveInTeam = side.team.reduce(
-                (count, pokemon) => count + (pokemon.fainted ? 0 : 1),
-                0,
-            );
-            const remainingPokemon = side.totalPokemon - side.team.length;
-            return aliveInTeam + remainingPokemon;
-        });
-        const aliveDiff = aliveTotal1 - aliveTotal2;
-        this.faintedDiffs.push(aliveDiff);
-        const faintedReward =
-            (this.faintedDiffs.at(-1) ?? 0) - (this.faintedDiffs.at(-2) ?? 0);
-
-        // Calculate HP totals for both sides
-        const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
-            const hpInTeam = side.team.reduce(
-                (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
-                0,
-            );
-            const remainingPokemon = side.totalPokemon - side.team.length;
-            return hpInTeam + remainingPokemon;
-        });
-
-        const hpDiff = hpTotal1 - hpTotal2;
-        const hpReward = hpDiff - (this.hpDiffs.at(-1) ?? 0);
-        this.hpDiffs.push(hpDiff);
-
-        return { faintedReward, hpReward };
+    setBattle(world: World) {
+        this.battle = world;
     }
 
-    update2(battle: World) {
-        const [aliveTotal1, aliveTotal2] = battle.sides.map((side) => {
-            const aliveInTeam = side.pokemon.reduce(
-                (count, pokemon) => count + +(pokemon.hp > 0),
-                0,
-            );
-            return aliveInTeam / side.pokemon.length;
-        });
-        const aliveDiff = aliveTotal1 - aliveTotal2;
-        this.faintedDiffs.push(aliveDiff);
-        const faintedReward =
-            (this.faintedDiffs.at(-1) ?? 0) - (this.faintedDiffs.at(-2) ?? 0);
-        const faintedFibReward =
-            Math.sign(faintedReward) *
-            this.fibs[5 - Math.min(aliveTotal1, aliveTotal2)];
-
-        // // Calculate HP totals for both sides
-        const [hpTotal1, hpTotal2] = battle.sides.map((side) => {
-            const hpInTeam = side.pokemon.reduce(
-                (sum, pokemon) => sum + pokemon.hp / pokemon.maxhp,
-                0,
-            );
-            return hpInTeam / side.pokemon.length;
-        });
-
-        const hpDiff = hpTotal1 - hpTotal2;
-        const hpReward = hpDiff - (this.hpDiffs.at(-1) ?? 0);
-        if (hpReward === 0) {
-            this.turnsWithoutChange += 1;
-        } else {
-            this.turnsWithoutChange = 0;
+    update() {
+        if (this.battle === undefined) {
+            throw new Error();
         }
-        this.hpDiffs.push(hpDiff);
 
-        return { faintedReward, hpReward, faintedFibReward };
+        const sides = [];
+        for (const side of this.battle.sides) {
+            let hpTotal = 0;
+            let aliveTotal = 0;
+            for (const member of side.pokemon) {
+                hpTotal += member.hp / member.maxhp;
+                aliveTotal += +(member.hp > 0);
+            }
+            sides.push({
+                hpTotal,
+                aliveTotal,
+                numPokemon: side.pokemon.length,
+            });
+        }
+        this.data.push(sides);
+    }
+
+    getFaintedReward() {
+        const tm1 = this.data.at(-1) ?? [];
+        const tm2 = this.data.at(-2) ?? [];
+
+        const p1tm1 = tm1.at(0)?.aliveTotal ?? 6;
+        const p1tm2 = tm2.at(0)?.aliveTotal ?? 6;
+
+        const p2tm1 = tm1.at(1)?.aliveTotal ?? 6;
+        const p2tm2 = tm2.at(1)?.aliveTotal ?? 6;
+
+        const reward = p1tm1 - p1tm2 - (p2tm1 - p2tm2);
+        return reward;
+    }
+
+    getHpReward() {
+        const tm1 = this.data.at(-1) ?? [];
+        const tm2 = this.data.at(-2) ?? [];
+
+        const p1tm1 = tm1.at(0)?.hpTotal ?? 6;
+        const p1tm2 = tm2.at(0)?.hpTotal ?? 6;
+
+        const p2tm1 = tm1.at(1)?.hpTotal ?? 6;
+        const p2tm2 = tm2.at(1)?.hpTotal ?? 6;
+
+        const reward = p1tm1 - p1tm2 - (p2tm1 - p2tm2);
+        return reward;
+    }
+
+    getScaledFaintedDiff() {
+        const tm1 = this.data.at(-1) ?? [];
+        const tm2 = this.data.at(-2) ?? [];
+
+        const p1tm1 = tm1.at(0)?.aliveTotal ?? 6;
+        const p1tm2 = tm2.at(0)?.aliveTotal ?? 6;
+
+        const p2tm1 = tm1.at(1)?.aliveTotal ?? 6;
+        const p2tm2 = tm2.at(1)?.aliveTotal ?? 6;
+
+        const p1Diff = p1tm1 - p1tm2 !== 0 ? 1 / (p1tm1 + 1) : 0;
+        const p2Diff = p2tm1 - p2tm2 !== 0 ? 1 / (p2tm1 + 1) : 0;
+
+        const reward = p2Diff - p1Diff;
+        return reward;
+    }
+
+    getScaledHpReward() {
+        const tm1 = this.data.at(-1) ?? [];
+        const tm2 = this.data.at(-2) ?? [];
+
+        const p1tm1 = tm1.at(0)?.hpTotal ?? 6;
+        const p1tm2 = tm2.at(0)?.hpTotal ?? 6;
+
+        const p2tm1 = tm1.at(1)?.hpTotal ?? 6;
+        const p2tm2 = tm2.at(1)?.hpTotal ?? 6;
+
+        const p1Diff = p1tm1 - p1tm2 !== 0 ? 1 / (p1tm1 + 1) : 0;
+        const p2Diff = p2tm1 - p2tm2 !== 0 ? 1 / (p2tm1 + 1) : 0;
+
+        const reward = p2Diff - p1Diff;
+        return reward;
+    }
+
+    getReward() {
+        const faintedReward = this.getFaintedReward();
+        const hpReward = this.getHpReward();
+        const scaledHpReward = this.getScaledHpReward();
+        const scaledFaintedReward = this.getScaledFaintedDiff();
+
+        return {
+            faintedReward,
+            hpReward,
+            scaledFaintedReward,
+            scaledHpReward,
+        };
     }
 
     reset() {
-        this.hpDiffs = [0];
-        this.faintedDiffs = [0];
-        this.turnsWithoutChange = 0;
+        this.data = [];
     }
 }
 

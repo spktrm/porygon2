@@ -4,10 +4,12 @@ import chex
 @chex.dataclass(frozen=True)
 class RewardStep:
     win_rewards: chex.Array = ()
+
     fainted_rewards: chex.Array = ()
-    switch_rewards: chex.Array = ()
-    longevity_rewards: chex.Array = ()
+    scaled_fainted_rewards: chex.Array = ()
+
     hp_rewards: chex.Array = ()
+    scaled_hp_rewards: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)

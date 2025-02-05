@@ -15,14 +15,11 @@ export class Rewards extends jspb.Message {
   getFaintedReward(): number;
   setFaintedReward(value: number): void;
 
-  getSwitchReward(): number;
-  setSwitchReward(value: number): void;
+  getScaledFaintedReward(): number;
+  setScaledFaintedReward(value: number): void;
 
-  getLongevityReward(): number;
-  setLongevityReward(value: number): void;
-
-  getFaintedFibReward(): number;
-  setFaintedFibReward(value: number): void;
+  getScaledHpReward(): number;
+  setScaledHpReward(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Rewards.AsObject;
@@ -39,9 +36,8 @@ export namespace Rewards {
     winReward: number,
     hpReward: number,
     faintedReward: number,
-    switchReward: number,
-    longevityReward: number,
-    faintedFibReward: number,
+    scaledFaintedReward: number,
+    scaledHpReward: number,
   }
 }
 

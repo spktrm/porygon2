@@ -424,12 +424,11 @@ def apply_force_with_threshold(
     decision_outputs: chex.Array,
     force: chex.Array,
     threshold: float,
-    threshold_center: chex.Array,
 ) -> chex.Array:
     """Apply the force with below a given threshold."""
-    chex.assert_equal_shape((decision_outputs, force, threshold_center))
-    can_decrease = decision_outputs - threshold_center > -threshold
-    can_increase = decision_outputs - threshold_center < threshold
+    chex.assert_equal_shape((decision_outputs, force))
+    can_decrease = decision_outputs > -threshold
+    can_increase = decision_outputs < threshold
     force_negative = jnp.minimum(force, 0.0)
     force_positive = jnp.maximum(force, 0.0)
     clipped_force = can_decrease * force_negative + can_increase * force_positive
@@ -453,12 +452,13 @@ def get_loss_nerd(
     legal_actions: chex.Array,
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
-    threshold: float = 2,
+    beta: float = 2,
     epsilon: float = 0.2,
 ) -> chex.Array:
     """Define the nerd loss."""
     assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
+    adv_pi_list = []
     num_valid_actions = jnp.sum(legal_actions, axis=-1, keepdims=True)
 
     for k, (logit_pi, pi, q_vr, ratio) in enumerate(
@@ -472,8 +472,12 @@ def get_loss_nerd(
             ratio * adv_pi, ratio.clip(min=1 - epsilon, max=1 + epsilon) * adv_pi
         )  # importance sampling correction
 
-        adv_pi = jnp.clip(adv_pi, a_min=-clip, a_max=clip)
+        player_adv_mask = valid * (player_ids == k)
+
+        adv_pi = jnp.clip(adv_pi, min=-clip, max=clip)
         adv_pi = lax.stop_gradient(adv_pi)
+
+        adv_pi_list.append(adv_pi * player_adv_mask[..., None])
 
         valid_logit_sum = jnp.sum(logit_pi * legal_actions, axis=-1, keepdims=True)
         mean_logit = valid_logit_sum / num_valid_actions
@@ -481,16 +485,14 @@ def get_loss_nerd(
         # Subtract only the mean of the valid logits
         logits = logit_pi - mean_logit
 
-        threshold_center = jnp.zeros_like(logits)
-
         nerd_loss = jnp.sum(
-            legal_actions
-            * apply_force_with_threshold(logits, adv_pi, threshold, threshold_center),
-            axis=-1,
+            legal_actions * apply_force_with_threshold(logits, adv_pi, beta), axis=-1
         )
-        nerd_loss = -renormalize(nerd_loss, valid * (player_ids == k))
+        nerd_loss = -renormalize(nerd_loss, player_adv_mask)
+
         loss_pi_list.append(nerd_loss)
-    return sum(loss_pi_list)
+
+    return sum(loss_pi_list), sum(adv_pi_list)
 
 
 def get_loss_pg(
@@ -509,7 +511,7 @@ def get_loss_pg(
 
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
         adv_pi = adv_pi  # importance sampling correction
-        adv_pi = jnp.clip(adv_pi, a_min=-100, a_max=100)
+        adv_pi = jnp.clip(adv_pi, min=-100, max=100)
         adv_pi = lax.stop_gradient(adv_pi)
 
         pg_loss = -(actions_oh * log_pi * adv_pi).mean(axis=-1, where=legal_actions)

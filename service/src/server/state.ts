@@ -184,6 +184,8 @@ const relativeArrayToObject = (array: Int16Array) => {
         sideConditions: sideConditionIndices.map(
             (index) => jsonDatum["sideCondition"][index],
         ),
+        num_from_sources:
+            array[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES],
         from_source: [
             jsonDatum["Effect"][
                 array[
@@ -386,11 +388,14 @@ function getUnkPokemon(n: number) {
     data[EntityFeature.ENTITY_FEATURE__SPECIES] =
         SpeciesEnum.SPECIES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__ITEM] = ItemsEnum.ITEMS_ENUM___UNK;
+    data[EntityFeature.ENTITY_FEATURE__GENDER] =
+        GendernameEnum.GENDERNAME_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__ITEM_EFFECT] =
         ItemeffecttypesEnum.ITEMEFFECTTYPES_ENUM___NULL;
     data[EntityFeature.ENTITY_FEATURE__ABILITY] =
         AbilitiesEnum.ABILITIES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__FAINTED] = 0;
+    data[EntityFeature.ENTITY_FEATURE__LEVEL] = 100;
     data[EntityFeature.ENTITY_FEATURE__HP] = 100;
     data[EntityFeature.ENTITY_FEATURE__MAXHP] = 100;
     data[EntityFeature.ENTITY_FEATURE__HP_RATIO] = MAX_RATIO_TOKEN; // Full Health
@@ -399,6 +404,7 @@ function getUnkPokemon(n: number) {
     data[EntityFeature.ENTITY_FEATURE__MOVEID1] = MovesEnum.MOVES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__MOVEID2] = MovesEnum.MOVES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__MOVEID3] = MovesEnum.MOVES_ENUM___UNK;
+    data[EntityFeature.ENTITY_FEATURE__NUM_MOVES] = 4;
     data[EntityFeature.ENTITY_FEATURE__ACTION_ID0] =
         ActionsEnum.ACTIONS_ENUM__MOVE__UNK;
     data[EntityFeature.ENTITY_FEATURE__ACTION_ID1] =
@@ -408,7 +414,7 @@ function getUnkPokemon(n: number) {
     data[EntityFeature.ENTITY_FEATURE__ACTION_ID3] =
         ActionsEnum.ACTIONS_ENUM__MOVE__UNK;
     data[EntityFeature.ENTITY_FEATURE__HAS_STATUS] = 0;
-    data[EntityFeature.ENTITY_FEATURE__SIDE] = n ?? 0;
+    data[EntityFeature.ENTITY_FEATURE__SIDE] = n;
     return data;
 }
 
@@ -693,18 +699,19 @@ class Edge {
             relativeEdgeOffset,
         );
         if (side.sideConditions.spikes) {
-            this.setRelativeEdgeFeature(
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES,
-                isMySide(side.n, playerIndex),
-                side.sideConditions.spikes.level,
-            );
+            this.setRelativeEdgeFeature({
+                featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES,
+                isMe: isMySide(side.n, playerIndex),
+                value: side.sideConditions.spikes.level,
+            });
         }
         if (side.sideConditions.toxicspikes) {
-            this.setRelativeEdgeFeature(
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
-                isMySide(side.n, playerIndex),
-                side.sideConditions.toxicspikes.level,
-            );
+            this.setRelativeEdgeFeature({
+                featureIndex:
+                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
+                isMe: isMySide(side.n, playerIndex),
+                value: side.sideConditions.toxicspikes.level,
+            });
         }
     }
 
@@ -728,11 +735,12 @@ class Edge {
         ] = field.weatherState.minDuration;
     }
 
-    setRelativeEdgeFeature(
-        featureIndex: RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-        isMe: number,
-        value: number,
-    ) {
+    setRelativeEdgeFeature(args: {
+        featureIndex: RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap];
+        isMe: number;
+        value: number;
+    }) {
+        const { featureIndex, isMe, value } = args;
         if (featureIndex === undefined) {
             throw new Error("Index cannot be undefined");
         }
@@ -766,16 +774,16 @@ class Edge {
         return this.relativeEdgeData.at(index);
     }
 
-    addMajorArg(argName: MajorArgNames, isMySide: number) {
+    addMajorArg(argName: MajorArgNames, isMe: number) {
         const index = IndexValueFromEnum(BattlemajorargsEnum, argName);
-        this.setRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
-            isMySide,
-            index,
-        );
+        this.setRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
+            isMe,
+            value: index,
+        });
     }
 
-    updateEdgeFromOf(effect: Partial<Effect>, isMySide: number) {
+    updateEdgeFromOf(effect: Partial<Effect>, isMe: number) {
         const { effectType } = effect;
         if (effectType) {
             const fromTypeToken = IndexValueFromEnum(
@@ -787,48 +795,43 @@ class Edge {
             const numFromTypes =
                 this.getRelativeEdgeFeature(
                     RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
-                    isMySide,
+                    isMe,
                 ) ?? 0;
             const numFromSources =
                 this.getRelativeEdgeFeature(
                     RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
-                    isMySide,
+                    isMe,
                 ) ?? 0;
-            const prevFromType = this.getRelativeEdgeFeature(
-                (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
-                    numFromTypes) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                isMySide,
-            );
-            const prevFromSource = this.getRelativeEdgeFeature(
-                (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
-                    numFromSources) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                isMySide,
-            );
-            if (prevFromType !== fromTypeToken && numFromTypes < 5) {
-                this.setRelativeEdgeFeature(
-                    (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
-                        numFromTypes) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                    isMySide,
-                    fromTypeToken,
-                );
-                this.setRelativeEdgeFeature(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
-                    isMySide,
-                    numFromTypes + 1,
-                );
+
+            if (numFromTypes < 5) {
+                this.setRelativeEdgeFeature({
+                    featureIndex:
+                        (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
+                            numFromTypes) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
+                    isMe,
+                    value: fromTypeToken,
+                });
+                this.setRelativeEdgeFeature({
+                    featureIndex:
+                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
+                    isMe,
+                    value: numFromTypes + 1,
+                });
             }
-            if (prevFromSource !== fromSourceToken && numFromSources < 5) {
-                this.setRelativeEdgeFeature(
-                    (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
-                        numFromSources) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                    isMySide,
-                    fromSourceToken,
-                );
-                this.setRelativeEdgeFeature(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
-                    isMySide,
-                    numFromSources + 1,
-                );
+            if (numFromSources < 5) {
+                this.setRelativeEdgeFeature({
+                    featureIndex:
+                        (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
+                            numFromSources) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
+                    isMe,
+                    value: fromSourceToken,
+                });
+                this.setRelativeEdgeFeature({
+                    featureIndex:
+                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
+                    isMe,
+                    value: numFromSources + 1,
+                });
             }
         }
     }
@@ -839,7 +842,7 @@ function getEffectToken(effect: Partial<Effect>): number {
     if (id) {
         return IndexValueFromEnum(EffectEnum, id);
     }
-    return 0;
+    return EffectEnum.EFFECT_ENUM___NULL;
 }
 
 class EdgeBuffer {
@@ -912,18 +915,19 @@ class EdgeBuffer {
             relativeEdgeOffset,
         );
         if (side.sideConditions.spikes) {
-            this.setLatestRelativeEdgeFeature(
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES,
-                isMySide(side.n, playerIndex),
-                side.sideConditions.spikes.level,
-            );
+            this.setLatestRelativeEdgeFeature({
+                featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES,
+                isMe: isMySide(side.n, playerIndex),
+                value: side.sideConditions.spikes.level,
+            });
         }
         if (side.sideConditions.toxicspikes) {
-            this.setLatestRelativeEdgeFeature(
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
-                isMySide(side.n, playerIndex),
-                side.sideConditions.toxicspikes.level,
-            );
+            this.setLatestRelativeEdgeFeature({
+                featureIndex:
+                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
+                isMe: isMySide(side.n, playerIndex),
+                value: side.sideConditions.toxicspikes.level,
+            });
         }
     }
 
@@ -970,11 +974,12 @@ class EdgeBuffer {
         }
     }
 
-    setLatestRelativeEdgeFeature(
-        featureIndex: RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-        isMySide: number,
-        value: number,
-    ) {
+    setLatestRelativeEdgeFeature(args: {
+        featureIndex: RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap];
+        isMe: number;
+        value: number;
+    }) {
+        const { featureIndex, isMe, value } = args;
         if (featureIndex === undefined) {
             throw new Error("Index cannot be undefined");
         }
@@ -984,7 +989,7 @@ class EdgeBuffer {
         const index =
             this.prevRelativeEdgeCursor +
             featureIndex +
-            (isMySide ? 0 : numRelativeEdgeFeatures);
+            (isMe ? 0 : numRelativeEdgeFeatures);
         this.relativeEdgeData[index] = value;
     }
 
@@ -1022,16 +1027,20 @@ class EdgeBuffer {
             isMe,
         )!;
         const newValue = currentValue | (1 << index % precision);
-        this.setLatestRelativeEdgeFeature(featureIndex, isMe, newValue);
+        this.setLatestRelativeEdgeFeature({
+            featureIndex,
+            isMe,
+            value: newValue,
+        });
     }
 
     updateLatestMajorArg(argName: MajorArgNames, isMe: number) {
         const index = IndexValueFromEnum(BattlemajorargsEnum, argName);
-        this.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
+        this.setLatestRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
             isMe,
-            index,
-        );
+            value: index,
+        });
     }
 
     setLatestAbsoluteEdgeFeature(
@@ -1056,7 +1065,6 @@ class EdgeBuffer {
                 effectType,
             );
             const fromSourceToken = getEffectToken(effect);
-
             const numFromTypes =
                 this.getLatestRelativeEdgeFeature(
                     RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
@@ -1067,47 +1075,35 @@ class EdgeBuffer {
                     RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
                     isMe,
                 ) ?? 0;
-            const prevFromType = this.getLatestRelativeEdgeFeature(
-                (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
-                    Math.max(
-                        0,
-                        numFromTypes - 1,
-                    )) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                isMe,
-            );
-            const prevFromSource = this.getLatestRelativeEdgeFeature(
-                (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
-                    Math.max(
-                        0,
-                        numFromSources - 1,
-                    )) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
-                isMe,
-            );
-            if (prevFromType !== fromTypeToken && numFromTypes < 5) {
-                this.setLatestRelativeEdgeFeature(
-                    (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
-                        numFromTypes) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
+            if (numFromTypes < 5) {
+                this.setLatestRelativeEdgeFeature({
+                    featureIndex:
+                        (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_TYPE_TOKEN0 +
+                            numFromTypes) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
                     isMe,
-                    fromTypeToken,
-                );
-                this.setLatestRelativeEdgeFeature(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
+                    value: fromTypeToken,
+                });
+                this.setLatestRelativeEdgeFeature({
+                    featureIndex:
+                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_TYPES,
                     isMe,
-                    numFromTypes + 1,
-                );
+                    value: numFromTypes + 1,
+                });
             }
-            if (prevFromSource !== fromSourceToken && numFromSources < 5) {
-                this.setLatestRelativeEdgeFeature(
-                    (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
-                        numFromSources) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
+            if (numFromSources < 5) {
+                this.setLatestRelativeEdgeFeature({
+                    featureIndex:
+                        (RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0 +
+                            numFromSources) as RelativeEdgeFeatureMap[keyof RelativeEdgeFeatureMap],
                     isMe,
-                    fromSourceToken,
-                );
-                this.setLatestRelativeEdgeFeature(
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
+                    value: fromSourceToken,
+                });
+                this.setLatestRelativeEdgeFeature({
+                    featureIndex:
+                        RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES,
                     isMe,
-                    numFromSources + 1,
-                );
+                    value: numFromSources + 1,
+                });
             }
         }
     }
@@ -1341,16 +1337,17 @@ export class EventHandler implements Protocol.Handler {
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName, isMe);
-        edge.setRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
+        edge.setRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
             isMe,
-            IndexValueFromEnum(ActionsEnum, `move_${move.id}`),
-        );
-        edge.setRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN,
+            value: IndexValueFromEnum(ActionsEnum, `move_${move.id}`),
+        });
+        edge.setRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN,
             isMe,
-            IndexValueFromEnum(MovesEnum, move.id),
-        );
+            value: IndexValueFromEnum(MovesEnum, move.id),
+        });
         this.addEdge(edge);
     }
 
@@ -1380,16 +1377,17 @@ export class EventHandler implements Protocol.Handler {
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName, isMe);
-        edge.setRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
+        edge.setRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
             isMe,
-            actionIndex,
-        );
-        edge.setRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN,
+            value: actionIndex,
+        });
+        edge.setRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN,
             isMe,
-            MovesEnum.MOVES_ENUM___SWITCH,
-        );
+            value: MovesEnum.MOVES_ENUM___SWITCH,
+        });
         this.addEdge(edge);
     }
 
@@ -1412,11 +1410,12 @@ export class EventHandler implements Protocol.Handler {
                 ActionsEnum,
                 `move_${move.id}`,
             );
-            edge.setRelativeEdgeFeature(
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
+            edge.setRelativeEdgeFeature({
+                featureIndex:
+                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN,
                 isMe,
-                actionIndex,
-            );
+                value: actionIndex,
+            });
         }
 
         const condition = this.getCondition(conditionId);
@@ -1548,11 +1547,15 @@ export class EventHandler implements Protocol.Handler {
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO,
                 isMe,
             ) ?? 0;
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO,
             isMe,
-            Math.min(MAX_RATIO_TOKEN, currentDamageToken + addedDamageToken),
-        );
+            value: Math.min(
+                MAX_RATIO_TOKEN,
+                currentDamageToken + addedDamageToken,
+            ),
+        });
     }
 
     "|-heal|"(args: Args["|-heal|"], kwArgs: KWArgs["|-heal|"]) {
@@ -1589,11 +1592,11 @@ export class EventHandler implements Protocol.Handler {
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO,
                 isMe,
             ) ?? 0;
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO,
             isMe,
-            Math.min(MAX_RATIO_TOKEN, currentHealToken + addedHealToken),
-        );
+            value: Math.min(MAX_RATIO_TOKEN, currentHealToken + addedHealToken),
+        });
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {
@@ -1612,11 +1615,12 @@ export class EventHandler implements Protocol.Handler {
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
             isMe,
-            statusToken,
-        );
+            value: statusToken,
+        });
     }
 
     "|-curestatus|"(args: Args["|-curestatus|"]) {
@@ -1633,11 +1637,12 @@ export class EventHandler implements Protocol.Handler {
         const statusToken = IndexValueFromEnum(StatusEnum, statusId);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
             isMe,
-            statusToken,
-        );
+            value: statusToken,
+        });
     }
 
     "|-cureteam|"(args: Args["|-cureteam|"]) {
@@ -1674,11 +1679,11 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(poke.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
             featureIndex,
             isMe,
-            parseInt(value),
-        );
+            value: parseInt(value),
+        });
     }
 
     "|-unboost|"(args: Args["|-unboost|"]) {
@@ -1695,11 +1700,11 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(poke.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
             featureIndex,
             isMe,
-            -parseInt(value),
-        );
+            value: -parseInt(value),
+        });
     }
 
     "|-setboost|"(args: Args["|-setboost|"], kwArgs: KWArgs["|-setboost|"]) {
@@ -1717,11 +1722,11 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(poke.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
             featureIndex,
             isMe,
-            parseInt(value),
-        );
+            value: parseInt(value),
+        });
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
     }
 
@@ -1972,11 +1977,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN,
             isMe,
-            itemIndex,
-        );
+            value: itemIndex,
+        });
     }
 
     "|-enditem|"(args: Args["|-enditem|"], kwArgs: KWArgs["|-enditem|"]) {
@@ -1995,11 +2000,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex: RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN,
             isMe,
-            itemIndex,
-        );
+            value: itemIndex,
+        });
     }
 
     "|-ability|"(args: Args["|-ability|"], kwArgs: KWArgs["|-ability|"]) {
@@ -2021,11 +2026,12 @@ export class EventHandler implements Protocol.Handler {
         }
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.setLatestRelativeEdgeFeature(
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN,
+        this.edgeBuffer.setLatestRelativeEdgeFeature({
+            featureIndex:
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN,
             isMe,
-            abilityIndex,
-        );
+            value: abilityIndex,
+        });
     }
 
     "|-endability|"(
@@ -2459,13 +2465,6 @@ export class StateHandler {
             return hpInTeam + remainingPokemon;
         });
 
-        const { hpReward, faintedReward } = this.player.tracker.update1(
-            this.player.publicBattle,
-        );
-
-        rewards.setHpReward(hpReward);
-        rewards.setFaintedReward(faintedReward);
-
         if (!this.player.done) {
             return rewards;
         }
@@ -2578,7 +2577,7 @@ export class StateHandler {
 
         const history = this.getHistory(numHistory);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readableHistory = EdgeBuffer.toReadableHistory(history);
+        const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2588,12 +2587,12 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());

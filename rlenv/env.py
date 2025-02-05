@@ -72,11 +72,11 @@ def process_state(state: State):
         fainted_rewards=np.array(
             [rewards.fainted_reward, -rewards.fainted_reward], dtype=float
         ),
-        switch_rewards=np.array(
-            [rewards.switch_reward, -rewards.switch_reward], dtype=float
+        scaled_hp_rewards=np.array(
+            [rewards.scaled_hp_reward, -rewards.scaled_hp_reward], dtype=float
         ),
-        longevity_rewards=np.array(
-            [rewards.longevity_reward, -rewards.longevity_reward], dtype=float
+        scaled_fainted_rewards=np.array(
+            [rewards.scaled_fainted_reward, -rewards.scaled_fainted_reward], dtype=float
         ),
     )
 

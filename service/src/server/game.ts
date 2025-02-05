@@ -26,6 +26,7 @@ export class Game {
     maxPlayers: number;
 
     tracker: Tracker;
+    prevTurn: number;
 
     constructor(gameId: number, workerIndex: number, port: MessagePort) {
         this.gameId = gameId;
@@ -39,6 +40,7 @@ export class Game {
         this.playerIds = [];
 
         this.tracker = new Tracker();
+        this.prevTurn = 0;
     }
 
     addPlayerId(playerId: number) {
@@ -116,15 +118,32 @@ export class Game {
 >player p2 ${JSON.stringify(p2spec)}`);
 
         const battle = stream.battle!;
+        this.tracker.setBattle(battle);
 
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
-            const { faintedReward, hpReward } = this.tracker.update2(battle);
-            const state = player.createState();
 
-            const rewards = state.getInfo()!.getRewards()!;
-            rewards.setHpReward(hpReward);
-            rewards.setFaintedReward(faintedReward);
+            const state = player.createState();
+            const info = state.getInfo()!;
+            const currentTurn = info.getTurn()!;
+
+            if (currentTurn > this.prevTurn) {
+                const rewards = info.getRewards()!;
+                this.tracker.update();
+                const {
+                    faintedReward,
+                    hpReward,
+                    scaledHpReward,
+                    scaledFaintedReward,
+                } = this.tracker.getReward();
+
+                rewards.setHpReward(hpReward);
+                rewards.setFaintedReward(faintedReward);
+                rewards.setScaledHpReward(scaledHpReward);
+                rewards.setScaledFaintedReward(scaledFaintedReward);
+
+                this.prevTurn = currentTurn;
+            }
 
             gameState.setState(state.serializeBinary());
             const playerId =

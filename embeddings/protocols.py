@@ -1,7 +1,6 @@
 from enum import Enum, auto
 from typing import Callable, List, TypedDict
 
-import numpy as np
 import pandas as pd
 
 from embeddings.encoders import multihot_encode, onehot_encode, sqrt_onehot_encode
@@ -36,16 +35,16 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "bst",
         ]
     ],
-    *[
-        {
-            "feature": stat_feature,
-            "feature_type": FeatureType.SCALAR,
-        }
-        for stat_feature in [
-            "genderRatio.M",
-            "genderRatio.F",
-        ]
-    ],
+    # *[
+    #     {
+    #         "feature": stat_feature,
+    #         "feature_type": FeatureType.SCALAR,
+    #     }
+    #     for stat_feature in [
+    #         "genderRatio.M",
+    #         "genderRatio.F",
+    #     ]
+    # ],
     {
         "feature": "weightkg",
         "func": sqrt_onehot_encode,
@@ -60,7 +59,7 @@ SPECIES_PROTOCOLS: List[Protocol] = [
         for stat_feature in [
             # "id",
             "nfe",
-            "tier",
+            # "tier",
             "maxHP",
             "baseForme",
             "gender",
@@ -78,14 +77,18 @@ SPECIES_PROTOCOLS: List[Protocol] = [
         for stat_feature in [
             "abilities",
             "types",
-            "tags",
-            "otherFormes",
+            # "tags",
+            # "otherFormes",
         ]
     ],
     {
         "feature_fn": lambda x: x.startswith("effectiveness."),
-        "func": lambda x: np.log1p(x),
         "feature_type": FeatureType.SCALAR,
+    },
+    {
+        "feature_fn": lambda x: x.startswith("effectiveness."),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
     },
 ]
 

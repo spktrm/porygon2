@@ -25,11 +25,19 @@ from ml.learners.func import (
     collect_gradient_telemetry_data,
     collect_loss_value_telemetry_data,
     collect_policy_stats_telemetry_data,
+    collect_regularisation_telemetry_data,
 )
-from ml.learners.rnad import NerdConfig
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
+
+
+@chex.dataclass(frozen=True)
+class NerdConfig:
+    """Nerd related params."""
+
+    beta: float = 3
+    clip: float = 6
 
 
 @chex.dataclass(frozen=True)
@@ -38,7 +46,7 @@ class VtraceConfig(ActorCriticConfig):
     target_network_avg: float = 1e-2
 
     nerd: NerdConfig = NerdConfig()
-    clip_gradient: float = 1
+    clip_gradient: float = 50
 
 
 def get_config():
@@ -100,13 +108,21 @@ def load(state: TrainState, path: str):
     with open(path, "rb") as f:
         step = pickle.load(f)
 
+    step_no = step.get("step", 0)
     state = state.replace(
-        params=step["params"],
-        params_target=step.get("params_target", step["params"]),
-        params_reg=step.get("params_reg", step["params"]),
-        opt_state=step["opt_state"],
         step=step["step"],
+        params=step["params"],
     )
+
+    if step_no > 0:
+        print(f"Learner steps: {step_no:08}")
+        print(f"Loading target and regularisation nets")
+        print(f"Loading optimizer state")
+        state.replace(
+            params_target=step["params_target"],
+            params_reg=step["params_reg"],
+            opt_state=step["opt_state"],
+        )
 
     return state
 
@@ -133,13 +149,20 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         policy_pprocessed = config.finetune(pred.pi, batch.env.legal, state.step)
 
         log_policy_reg = pred.log_pi - pred_reg.log_pi
+        logs.update(
+            collect_regularisation_telemetry_data(
+                pred.pi, log_policy_reg, batch.env.legal, batch.env.valid
+            )
+        )
 
         valid = batch.env.valid
 
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.rewards.fainted_rewards + batch.actor.rewards.win_rewards
+        rewards = (
+            batch.actor.rewards.win_rewards + batch.actor.rewards.fainted_rewards / 6
+        )
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -175,16 +198,10 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         ) / 2
         logs.update({"value_function_r2": jnp.maximum(explained_variance, 0)})
 
-        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
-            axis=-1
-        )
-        ratio = jnp.ones_like(policy_ratio)
-        ratio = ratio * (batch.env.legal.sum(axis=-1) > 1)
-
-        is_vector = jax.lax.stop_gradient(jnp.expand_dims(ratio, axis=-1))
+        is_vector = jnp.expand_dims(jnp.ones_like(valid), axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
-        loss_nerd = get_loss_nerd(
+        loss_nerd, adv_pi = get_loss_nerd(
             [pred.logit] * config.num_players,
             [pred.pi] * config.num_players,
             v_trace_policy_target_list,
@@ -193,7 +210,11 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             batch.env.legal,
             importance_sampling_correction,
             clip=config.nerd.clip,
-            threshold=config.nerd.beta,
+            beta=config.nerd.beta,
+        )
+
+        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
+            axis=-1
         )
         logs.update(
             collect_policy_stats_telemetry_data(
@@ -201,9 +222,11 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 pred.pi,
                 pred.log_pi,
                 batch.env.legal,
-                batch.env.valid,
+                valid,
                 pred_targ.pi,
                 policy_ratio,
+                sum(v_trace_policy_target_list),
+                adv_pi,
             )
         )
 
@@ -234,13 +257,13 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         old_tensors=state.params_reg,
         step_size=ema_val,
     )
-
     state = state.replace(
         params_target=params_target,
         params_reg=params_reg,
         actor_steps=state.actor_steps + batch.env.valid.sum(),
     )
 
+    logs["ema_val"] = ema_val
     logs.update(collect_gradient_telemetry_data(grads))
 
     return state, logs
