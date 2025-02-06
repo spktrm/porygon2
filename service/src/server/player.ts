@@ -28,16 +28,26 @@ const actionStrings = [
 interface TeamTrackerDatum {
     hpTotal: number;
     aliveTotal: number;
+    faintedTotal: number;
     numPokemon: number;
+    damageTotal: number;
 }
 
 export class Tracker {
     battle: World | undefined;
     data: TeamTrackerDatum[][];
+    f: (x: number) => number;
+    denom: number;
 
     constructor() {
         this.data = [];
         this.battle = undefined;
+
+        this.f = (x) => {
+            return x ** 3 / 3;
+        };
+
+        this.denom = 1 / this.f(6);
     }
 
     setBattle(world: World) {
@@ -57,10 +67,13 @@ export class Tracker {
                 hpTotal += member.hp / member.maxhp;
                 aliveTotal += +(member.hp > 0);
             }
+            const numPokemon = side.pokemon.length;
             sides.push({
                 hpTotal,
                 aliveTotal,
-                numPokemon: side.pokemon.length,
+                numPokemon,
+                faintedTotal: numPokemon - aliveTotal,
+                damageTotal: numPokemon - hpTotal,
             });
         }
         this.data.push(sides);
@@ -94,20 +107,20 @@ export class Tracker {
         return reward;
     }
 
-    getScaledFaintedDiff() {
+    getScaledFaintedReward() {
         const tm1 = this.data.at(-1) ?? [];
         const tm2 = this.data.at(-2) ?? [];
 
-        const p1tm1 = tm1.at(0)?.aliveTotal ?? 6;
-        const p1tm2 = tm2.at(0)?.aliveTotal ?? 6;
+        const f1tm1 = tm1.at(0)?.faintedTotal ?? 0;
+        const f1tm2 = tm2.at(0)?.faintedTotal ?? 0;
 
-        const p2tm1 = tm1.at(1)?.aliveTotal ?? 6;
-        const p2tm2 = tm2.at(1)?.aliveTotal ?? 6;
+        const f2tm1 = tm1.at(1)?.faintedTotal ?? 0;
+        const f2tm2 = tm2.at(1)?.faintedTotal ?? 0;
 
-        const p1Diff = p1tm1 - p1tm2 !== 0 ? 1 / (p1tm1 + 1) : 0;
-        const p2Diff = p2tm1 - p2tm2 !== 0 ? 1 / (p2tm1 + 1) : 0;
+        const p1Diff = this.f(f2tm2) - this.f(f2tm1);
+        const p2Diff = this.f(f1tm2) - this.f(f1tm1);
 
-        const reward = p2Diff - p1Diff;
+        const reward = this.denom * (p2Diff - p1Diff);
         return reward;
     }
 
@@ -115,14 +128,30 @@ export class Tracker {
         const tm1 = this.data.at(-1) ?? [];
         const tm2 = this.data.at(-2) ?? [];
 
-        const p1tm1 = tm1.at(0)?.hpTotal ?? 6;
-        const p1tm2 = tm2.at(0)?.hpTotal ?? 6;
+        const d1tm1 = tm1.at(0)?.damageTotal ?? 0;
+        const d1tm2 = tm2.at(0)?.damageTotal ?? 0;
 
-        const p2tm1 = tm1.at(1)?.hpTotal ?? 6;
-        const p2tm2 = tm2.at(1)?.hpTotal ?? 6;
+        const d2tm1 = tm1.at(1)?.damageTotal ?? 0;
+        const d2tm2 = tm2.at(1)?.damageTotal ?? 0;
 
-        const p1Diff = p1tm1 - p1tm2 !== 0 ? 1 / (p1tm1 + 1) : 0;
-        const p2Diff = p2tm1 - p2tm2 !== 0 ? 1 / (p2tm1 + 1) : 0;
+        const p1Diff = this.f(d2tm2) - this.f(d2tm1);
+        const p2Diff = this.f(d1tm2) - this.f(d1tm1);
+
+        const reward = this.denom * (p2Diff - p1Diff);
+        return reward;
+    }
+
+    getWinReward() {
+        const tm1 = this.data.at(-1) ?? [];
+
+        const f1tm1 = tm1.at(0)?.faintedTotal ?? 0;
+        const n1tm1 = tm1.at(0)?.numPokemon ?? 6;
+
+        const f2tm1 = tm1.at(1)?.faintedTotal ?? 0;
+        const n2tm1 = tm1.at(1)?.numPokemon ?? 6;
+
+        const p1Diff = +(f1tm1 === n1tm1);
+        const p2Diff = +(f2tm1 === n2tm1);
 
         const reward = p2Diff - p1Diff;
         return reward;
@@ -132,13 +161,15 @@ export class Tracker {
         const faintedReward = this.getFaintedReward();
         const hpReward = this.getHpReward();
         const scaledHpReward = this.getScaledHpReward();
-        const scaledFaintedReward = this.getScaledFaintedDiff();
+        const scaledFaintedReward = this.getScaledFaintedReward();
+        const winReward = this.getWinReward();
 
         return {
             faintedReward,
             hpReward,
             scaledFaintedReward,
             scaledHpReward,
+            winReward,
         };
     }
 

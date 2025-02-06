@@ -238,11 +238,12 @@ def l2_normalize(x: chex.Array, epsilon: float = 1e-6):
     return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
 
 
-def escort_transform(x: chex.Array, mask: chex.Array, p: int = 2, axis: int = -1):
+def escort_transform(
+    x: chex.Array, mask: chex.Array, p: int = 2, axis: int = -1, eps: float = 1e-8
+):
     abs_x = jnp.power(jnp.abs(x), p)
     denom = abs_x.sum(axis=axis, where=mask, keepdims=True)
-    denom = jnp.where(denom == 0, 1, denom)
-    return abs_x / denom
+    return abs_x / (denom + eps)
 
 
 class MultiHeadAttention(nn.Module):
@@ -809,10 +810,7 @@ class SumEmbeddings(nn.Module):
     def __call__(self, encodings: List[chex.Array]) -> jnp.ndarray:
         # Sum the transformed embeddings using parameter weights
 
-        num_embeddings = len(encodings)
-
-        bias1 = self.param("bias1", nn.initializers.zeros_init(), (self.output_size,))
-        bias2 = self.param("bias2", nn.initializers.zeros_init(), (self.output_size,))
+        bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
 
         def _transform_encoding(encoding: chex.Array, index: int):
             return nn.Dense(
@@ -825,18 +823,7 @@ class SumEmbeddings(nn.Module):
             _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
         ]
 
-        output = sum(transformed_encodings) / (num_embeddings**0.5) + bias1
-        if self.use_layer_norm:
-            output = layer_norm(output)
-        output = nn.relu(output)
-
-        weights = nn.Dense(num_embeddings)(output)
-        scores = jax.nn.softmax(weights, axis=-1)
-
-        embeddings = [
-            score * embedding for score, embedding in zip(scores, transformed_encodings)
-        ]
-        output = sum(embeddings) + bias2
+        output = sum(transformed_encodings) + bias
 
         if self.use_layer_norm:
             output = layer_norm(output)
