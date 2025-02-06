@@ -2538,8 +2538,8 @@ export class StateHandler {
         const drawRatio = this.player.privateBattle.turn / DRAW_TURNS;
         info.setDrawRatio(Math.max(0, Math.min(1, drawRatio)));
 
-        const rewards = this.getRewards();
-        info.setRewards(rewards);
+        // const rewards = this.getRewards();
+        // info.setRewards(rewards);
 
         // const heuristics = this.getHeuristics();
         // info.setHeuristics(heuristics);

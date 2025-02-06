@@ -13,7 +13,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_model
+from ml.arch.model import get_dummy_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -131,7 +131,7 @@ class TwoPlayerEnvironment:
         self.current_player = self.players[0]  # Start with the first player
 
     def is_done(self):
-        return self.dones.sum() == 2
+        return self.dones.all()
 
     async def _reset(self):
         """Reset both players, enqueue their initial states, and return the first state to act on."""
@@ -163,13 +163,13 @@ class TwoPlayerEnvironment:
     async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
         """Helper method to send the action to the player and enqueue the resulting state."""
         # Perform the step and add the resulting state along with the player back into the queue
-        state = await player._step(action)
-        if not self.is_done():
+        if not player.is_done():
+            state = await player._step(action)
             self.dones[int(state.info.player_index)] = state.info.done
-        if not state.info.done:
             await self.state_queue.put((player, state))
+
         if self.is_done():
-            await self.state_queue.put((player, state))
+            await self.state_queue.put((self.current_player, self.current_state))
 
 
 class BatchEnvironment(ABC):
@@ -387,7 +387,7 @@ def main():
     evaluation_progress = tqdm(desc="evaluation: ")
 
     num_envs = 8
-    network = get_model()
+    network = get_dummy_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     evaluation_env = EvalBatchCollector(network, 4)
 
