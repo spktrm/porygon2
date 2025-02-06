@@ -125,8 +125,12 @@ def collect_regularisation_telemetry_data(
     legal_mask: chex.Array,
     state_mask: chex.Array,
 ) -> dict[str, Any]:
-    raw_reg_rewards = regularisation_policy.mean(where=legal_mask)
-    norm_reg_rewards = (policy * regularisation_policy).mean(where=legal_mask)
+    raw_reg_rewards = regularisation_policy.mean(where=legal_mask, axis=-1).mean(
+        where=state_mask
+    )
+    norm_reg_rewards = jnp.squeeze((policy * regularisation_policy).sum(axis=-1)).mean(
+        where=state_mask
+    )
     return {
         "raw_reg_rewards": raw_reg_rewards,
         "norm_reg_rewards": norm_reg_rewards,
