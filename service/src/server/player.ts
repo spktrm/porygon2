@@ -31,6 +31,7 @@ interface TeamTrackerDatum {
     faintedTotal: number;
     numPokemon: number;
     damageTotal: number;
+    playerIndex: number;
 }
 
 export class Tracker {
@@ -54,7 +55,7 @@ export class Tracker {
         this.battle = world;
     }
 
-    update() {
+    update(playerIndex: number) {
         if (this.battle === undefined) {
             throw new Error();
         }
@@ -74,6 +75,7 @@ export class Tracker {
                 numPokemon,
                 faintedTotal: numPokemon - aliveTotal,
                 damageTotal: numPokemon - hpTotal,
+                playerIndex,
             });
         }
         this.data.push(sides);

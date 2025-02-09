@@ -35,7 +35,7 @@ class ValueHead(nn.Module):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.queries = self.param(
             "queries",
-            nn.initializers.truncated_normal(0.02),
+            nn.initializers.truncated_normal(),
             (4, self.cfg.transformer.model_size),
         )
         self.logits = Logits(**self.cfg.logits.to_dict())

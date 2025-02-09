@@ -126,7 +126,7 @@ export class Game {
             const playerIndex = +state.getInfo()!.getPlayerIndex();
 
             const rewards = new Rewards();
-            tracker.update();
+            tracker.update(playerIndex);
             const {
                 faintedReward,
                 hpReward,
