@@ -118,7 +118,7 @@ def load(state: TrainState, path: str):
         print(f"Learner steps: {step_no:08}")
         print(f"Loading target and regularisation nets")
         print(f"Loading optimizer state")
-        state.replace(
+        state = state.replace(
             params_target=step["params_target"],
             # params_reg=step["params_reg"],
             opt_state=step["opt_state"],
@@ -133,16 +133,14 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     def loss_fn(params: Params):
         # Define a checkpointed function
-        def rollout_fn(model_params, env, history):
+        def rollout_fn(model_params):
             return jax.vmap(jax.vmap(state.apply_fn, (None, 0, 0)), (None, 0, 0))(
-                model_params, env, history
+                model_params, batch.env, batch.history
             )
 
-        pred: ModelOutput = rollout_fn(params, batch.env, batch.history)
-        pred_targ: ModelOutput = rollout_fn(
-            state.params_target, batch.env, batch.history
-        )
-        # pred_reg: ModelOutput = rollout_fn(state.params_reg, batch.env, batch.history)
+        pred: ModelOutput = rollout_fn(params)
+        pred_targ: ModelOutput = rollout_fn(state.params_target)
+        # pred_reg: ModelOutput = rollout_fn(state.params_reg)
 
         logs = {}
 
@@ -160,11 +158,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = (
-            batch.actor.rewards.scaled_hp_rewards
-            + batch.actor.rewards.scaled_fainted_rewards
-            + batch.actor.rewards.win_rewards
-        )
+        rewards = batch.actor.rewards.scaled_fainted_rewards
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -248,7 +242,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     state = state.apply_gradients(grads=grads)
 
-    ema_val = jnp.maximum(1 / (state.step + 1) ** 2, config.target_network_avg)
+    ema_val = jnp.maximum(1 / (state.step + 1), config.target_network_avg)
     params_target = optax.incremental_update(
         new_tensors=state.params,
         old_tensors=state.params_target,
