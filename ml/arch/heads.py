@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, TransformerEncoder, softcap
+from ml.arch.modules import Logits, TransformerEncoder
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -35,7 +35,7 @@ class ValueHead(nn.Module):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.queries = self.param(
             "queries",
-            nn.initializers.truncated_normal(0.02),
+            nn.initializers.truncated_normal(),
             (4, self.cfg.transformer.model_size),
         )
         self.logits = Logits(**self.cfg.logits.to_dict())
@@ -51,6 +51,6 @@ class ValueHead(nn.Module):
         state_embedding = state_embedding.reshape(-1)
 
         logits = self.logits(state_embedding)
-        logits = softcap(logits, max_value=3)
+        # logits = softcap(logits, max_value=3)
 
         return logits.reshape(-1)

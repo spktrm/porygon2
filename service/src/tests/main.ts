@@ -2,7 +2,7 @@ import { MessagePort } from "worker_threads";
 import { Game } from "../server/game";
 import { Action, GameState } from "../../protos/service_pb";
 import { AsyncQueue } from "../server/utils";
-import { State } from "../../protos/state_pb";
+import { Rewards, State } from "../../protos/state_pb";
 // import { State } from "../../protos/state_pb";
 
 async function worker(gameId: number, playerIds: number[]) {
@@ -42,9 +42,9 @@ async function worker(gameId: number, playerIds: number[]) {
             game.tasks.submitResult(rqid, action);
         } else {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const rewards = info.getRewards()!;
+            const rewards = info.getRewards() ?? new Rewards();
             infos.map((info) => {
-                const rewards = info.getRewards()!;
+                const rewards = info.getRewards() ?? new Rewards();
                 const playerIndex = info.getPlayerIndex();
                 rewardsCounts[+playerIndex] += rewards.getFaintedReward();
             });

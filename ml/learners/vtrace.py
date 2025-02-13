@@ -37,16 +37,16 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 3
-    clip: float = 6
+    clip: float = 100
 
 
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
     entropy_loss_coef: float = 1e-2
-    target_network_avg: float = 1e-2
+    target_network_avg: float = 5e-3
 
     nerd: NerdConfig = NerdConfig()
-    clip_gradient: float = 50
+    clip_gradient: float = 5
 
 
 def get_config():
@@ -55,7 +55,7 @@ def get_config():
 
 class TrainState(train_state.TrainState):
 
-    params_reg: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    # params_reg: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     actor_steps: int = 0
@@ -67,7 +67,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
 
     params = module.init(rng, ex, hx)
     params_target = module.init(rng, ex, hx)
-    params_reg = module.init(rng, ex, hx)
+    # params_reg = module.init(rng, ex, hx)
 
     tx = optax.chain(
         optax.adam(
@@ -84,7 +84,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
         apply_fn=module.apply,
         params=params,
         params_target=params_target,
-        params_reg=params_reg,
+        # params_reg=params_reg,
         tx=tx,
     )
 
@@ -95,7 +95,7 @@ def save(state: TrainState):
             dict(
                 params=state.params,
                 params_target=state.params_target,
-                params_reg=state.params_reg,
+                # params_reg=state.params_reg,
                 opt_state=state.opt_state,
                 step=state.step,
             ),
@@ -118,9 +118,9 @@ def load(state: TrainState, path: str):
         print(f"Learner steps: {step_no:08}")
         print(f"Loading target and regularisation nets")
         print(f"Loading optimizer state")
-        state.replace(
+        state = state.replace(
             params_target=step["params_target"],
-            params_reg=step["params_reg"],
+            # params_reg=step["params_reg"],
             opt_state=step["opt_state"],
         )
 
@@ -133,22 +133,20 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     def loss_fn(params: Params):
         # Define a checkpointed function
-        def rollout_fn(model_params, env, history):
+        def rollout_fn(model_params):
             return jax.vmap(jax.vmap(state.apply_fn, (None, 0, 0)), (None, 0, 0))(
-                model_params, env, history
+                model_params, batch.env, batch.history
             )
 
-        pred: ModelOutput = rollout_fn(params, batch.env, batch.history)
-        pred_targ: ModelOutput = rollout_fn(
-            state.params_target, batch.env, batch.history
-        )
-        pred_reg: ModelOutput = rollout_fn(state.params_reg, batch.env, batch.history)
+        pred: ModelOutput = rollout_fn(params)
+        pred_targ: ModelOutput = rollout_fn(state.params_target)
+        # pred_reg: ModelOutput = rollout_fn(state.params_reg)
 
         logs = {}
 
         policy_pprocessed = config.finetune(pred.pi, batch.env.legal, state.step)
 
-        log_policy_reg = pred.log_pi - pred_reg.log_pi
+        log_policy_reg = pred.log_pi - pred_targ.log_pi
         logs.update(
             collect_regularisation_telemetry_data(
                 pred.pi, log_policy_reg, batch.env.legal, batch.env.valid
@@ -160,9 +158,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = (
-            batch.actor.rewards.win_rewards + batch.actor.rewards.fainted_rewards / 6
-        )
+        rewards = batch.actor.rewards.scaled_fainted_rewards
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -180,7 +176,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
-                eta=0.1,
+                eta=0.5,
                 gamma=config.gamma,
             )
             v_target_list.append(jax.lax.stop_gradient(v_target_))
@@ -252,14 +248,14 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         old_tensors=state.params_target,
         step_size=ema_val,
     )
-    params_reg = optax.incremental_update(
-        new_tensors=state.params_target,
-        old_tensors=state.params_reg,
-        step_size=ema_val,
-    )
+    # params_reg = optax.incremental_update(
+    #     new_tensors=state.params_target,
+    #     old_tensors=state.params_reg,
+    #     step_size=ema_val,
+    # )
     state = state.replace(
         params_target=params_target,
-        params_reg=params_reg,
+        # params_reg=params_reg,
         actor_steps=state.actor_steps + batch.env.valid.sum(),
     )
 
