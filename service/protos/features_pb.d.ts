@@ -55,6 +55,7 @@ export interface EntityFeatureMap {
   ENTITY_FEATURE__ACTION_ID2: 48;
   ENTITY_FEATURE__ACTION_ID3: 49;
   ENTITY_FEATURE__NUM_MOVES: 50;
+  ENTITY_FEATURE__IS_PUBLIC: 51;
 }
 
 export const EntityFeature: EntityFeatureMap;

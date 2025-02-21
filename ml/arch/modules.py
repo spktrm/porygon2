@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, get_args
 
 import chex
 import flax.linen as nn
@@ -8,7 +8,6 @@ import jax.lax as lax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.dtypes import promote_dtype
-from ml_collections import ConfigDict
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -27,7 +26,7 @@ def activation_fn(array: chex.Array):
 
 
 def layer_norm(array: chex.Array, axis: int = -1):
-    return nn.RMSNorm()(array)
+    return nn.LayerNorm()(array)
 
 
 def softcap(array: chex.Array, max_value: int = 50):
@@ -189,10 +188,21 @@ class Logits(nn.Module):
     num_logits: int
     num_linear_layers: int = 3
     use_layer_norm: bool = True
-    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    kernel_init: Literal["zeros", "lecun", "small"] = "lecun"
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
+        if self.kernel_init == "lecun":
+            kernel_init_fn = nn.initializers.lecun_normal()
+        elif self.kernel_init == "zeros":
+            kernel_init_fn = nn.initializers.zeros_init()
+        elif self.kernel_init == "small":
+            kernel_init_fn = nn.initializers.uniform(1e-2)
+        else:
+            raise ValueError(
+                f"{self.kernel_init} must be one of {get_args(self.kernel_init)}"
+            )
+
         for i in range(self.num_linear_layers):
             if i == self.num_linear_layers - 1:
                 output_size = self.num_logits
@@ -205,7 +215,7 @@ class Logits(nn.Module):
 
             # Apply activation and dense layer with custom kernel initializer
             x = activation_fn(x)
-            x = nn.Dense(features=output_size, kernel_init=self.kernel_init)(x)
+            x = nn.Dense(features=output_size, kernel_init=kernel_init_fn)(x)
         return x
 
 
@@ -384,7 +394,7 @@ class TransformerEncoder(nn.Module):
 
         self_attn_mask = create_attention_mask(mask)
         if ca_mask is not None:
-            self_attn_mask = self_attn_mask & ca_mask
+            self_attn_mask = jnp.logical_and(self_attn_mask, ca_mask)
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
@@ -400,7 +410,7 @@ class TransformerEncoder(nn.Module):
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, mha)
+            x = x + mha
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -411,7 +421,7 @@ class TransformerEncoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, ffn)
+            x = x + ffn
             x = jnp.where(mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -450,6 +460,11 @@ class TransformerDecoder(nn.Module):
         if ca_mask is not None:
             cross_attn_mask = cross_attn_mask & ca_mask
 
+        if self.use_layer_norm:
+            y_ln = layer_norm(y)
+        else:
+            y_ln = y
+
         for _ in range(self.num_layers):
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
@@ -463,8 +478,8 @@ class TransformerDecoder(nn.Module):
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
                 use_spectral_linear=self.use_spectral_linear,
-            )(query=x_ln, key=y, value=y, mask=cross_attn_mask)
-            x, _ = nn.GRUCell(self.model_size)(x, ca)
+            )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
+            x = x + ca
             if self.use_layer_norm:
                 x_ln = layer_norm(x)
             else:
@@ -475,7 +490,7 @@ class TransformerDecoder(nn.Module):
                 activate_first=False,
                 use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
-            x, _ = nn.GRUCell(self.model_size)(x, ffn)
+            x = x + ffn
             x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
 
         return x
@@ -802,56 +817,71 @@ class GLU(nn.Module):
         return w3(h)
 
 
+class DenseMultiHeadProjection(nn.Module):
+    num_heads: int
+    embed_dim: int
+    output_dim: int = None
+
+    @nn.compact
+    def __call__(self, x: chex.Array):
+
+        def _apply_projection(l):
+            return MLP((self.embed_dim,))(l)
+
+        outputs = [_apply_projection(x) for _ in range(self.num_heads)]
+        output = jnp.concatenate(outputs, axis=-1)
+        return MLP((self.output_dim or x.shape[-1],))(output)
+
+
+class GatedResidualLayer(nn.Module):
+    @nn.compact
+    def __call__(
+        self, x: chex.Array, y: chex.Array
+    ):  # x = original input, y = transformed output
+        gate = MLP((1,))(jnp.concatenate([x, y], axis=-1))  # Learn to mix x and y
+        gate = jax.nn.sigmoid(gate)  # Values between 0 and 1
+        return x * gate + y * (1 - gate)  # Blended output
+
+
 class SumEmbeddings(nn.Module):
     output_size: int
     use_layer_norm: bool = True
+    scaling_type: str = "fixed"  # 'learned', 'fixed', or 'attention'
 
     @nn.compact
-    def __call__(self, encodings: List[chex.Array]) -> jnp.ndarray:
-        # Sum the transformed embeddings using parameter weights
+    def __call__(
+        self, encodings: List[chex.Array], embeddings: List[chex.Array] = None
+    ) -> jnp.ndarray:
+        module_embeddings = []
+        for i, encoding in enumerate(encodings):
+            transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
+            module_embeddings.append(layer_norm(activation_fn(transformed)))
 
-        bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
+        if embeddings is not None:
+            for i, embedding in enumerate(embeddings):
+                module_embeddings.append(layer_norm(activation_fn(embedding)))
 
-        def _transform_encoding(encoding: chex.Array, index: int):
-            return nn.Dense(
-                self.output_size,
-                name=f"weight_{index}",
-                use_bias=False,
-            )(encoding)
+        if self.scaling_type == "learned":
+            # Learn weights for each encoding
+            weights = self.param(
+                "mixing_weights", nn.initializers.ones, (len(encodings),)
+            )
+            weights = jax.nn.softmax(weights)
+            scaled = sum(w * e for w, e in zip(weights, module_embeddings))
 
-        transformed_encodings = [
-            _transform_encoding(encoding, i) for i, encoding in enumerate(encodings)
-        ]
+        elif self.scaling_type == "attention":
+            # Use attention-like scaling
+            query = self.param(
+                "query", nn.initializers.normal(0.02), (self.output_size,)
+            )
+            scores = [jnp.einsum("...d,d->...", e, query) for e in module_embeddings]
+            weights = jax.nn.softmax(jnp.stack(scores, axis=-1))
+            scaled = sum(w[..., None] * e for w, e in zip(weights, module_embeddings))
 
-        output = sum(transformed_encodings) + bias
+        else:  # 'fixed'
+            scaled = sum(module_embeddings) / jnp.sqrt(len(module_embeddings))
 
-        if self.use_layer_norm:
-            output = layer_norm(output)
-        output = nn.relu(output)
-
-        return nn.Dense(self.output_size)(output)
-
-
-class SequenceToVector(nn.Module):
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(self, sequence: chex.Array, mask: chex.Array):
-        bias = self.param(
-            "pooled_embeddings",
-            nn.initializers.lecun_normal(),
-            (self.cfg.bias.num_latents, self.cfg.bias.entity_size),
-        )
-
-        pooled_embeddings = TransformerDecoder(**self.cfg.decoder.to_dict())(
-            bias, sequence, None, mask
-        )
-        pooled_embeddings = TransformerEncoder(**self.cfg.encoder.to_dict())(
-            pooled_embeddings
-        )
-
-        logit = Logits(**self.cfg.logits.to_dict())(pooled_embeddings.reshape(-1))
-        return logit.reshape(-1)
+        return scaled
 
 
 class MergeEmbeddings(nn.Module):
@@ -860,7 +890,7 @@ class MergeEmbeddings(nn.Module):
     @nn.compact
     def __call__(self, embeddings: List[chex.Array]) -> jnp.ndarray:
         embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
-        return SumEmbeddings(self.output_size)(encodings=None, embeddings=embeddings)
+        return SumEmbeddings(self.output_size)(embeddings)
 
 
 class GruResBlock(nn.Module):
@@ -882,6 +912,38 @@ class GruResBlock(nn.Module):
                 (hidden_size, model_size), use_layer_norm=False, activate_first=False
             )(x_ln)
             x, _ = nn.GRUCell(model_size)(x, nn.relu(ffn))
+        return x
+
+
+class TimestepResblock(nn.Module):
+    num_layers: int = 2
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: chex.Array, mask: chex.Array):
+        res = x
+        for _ in range(self.num_layers):
+            if self.use_layer_norm:
+                x = layer_norm(x)
+            x = activation_fn(x)
+            x = nn.Conv(
+                features=x.shape[-1],
+                kernel_size=(5,),
+                padding="SAME",
+            )(x)
+        return jnp.where(mask[..., None], x + res, 0)
+
+
+class TimestepResnet(nn.Module):
+    num_layers: int = 2
+    use_layer_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: chex.Array, mask: chex.Array):
+        for _ in range(self.num_layers):
+            x = TimestepResblock(
+                num_layers=self.num_layers, use_layer_norm=self.use_layer_norm
+            )(x, mask)
         return x
 
 

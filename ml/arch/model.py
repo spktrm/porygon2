@@ -43,10 +43,10 @@ class Model(nn.Module):
         logit, pi, log_pi = self.policy_head(action_embeddings, env_step.legal)
 
         # Apply the value head
-        v = self.value_head(entity_embeddings, entity_mask)
+        value = self.value_head(entity_embeddings, entity_mask)
 
         # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
 
 class DummyModel(nn.Module):

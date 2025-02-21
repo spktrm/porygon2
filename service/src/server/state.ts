@@ -487,6 +487,7 @@ function getArrayFromPokemon(
         dataArr[EntityFeature.ENTITY_FEATURE__NUM_MOVES] = moveSlots.length;
     }
 
+    dataArr[EntityFeature.ENTITY_FEATURE__IS_PUBLIC] = +isPublic;
     dataArr[EntityFeature.ENTITY_FEATURE__SPECIES] = IndexValueFromEnum<
         typeof SpeciesEnum
     >(SpeciesEnum, baseSpecies);
@@ -2161,7 +2162,10 @@ export class StateHandler {
         this.player = player;
     }
 
-    static getLegalActions(request?: AnyObject | null): {
+    static getLegalActions(
+        request?: AnyObject | null,
+        maskMoves: boolean = false,
+    ): {
         legalActions: OneDBoolean;
         isStruggling: boolean;
     } {
@@ -2198,17 +2202,6 @@ export class StateHandler {
                 const possibleMoves = active.moves ?? [];
                 const canSwitch = [];
 
-                for (let j = 1; j <= possibleMoves.length; j++) {
-                    const currentMove = possibleMoves[j - 1];
-                    if (currentMove.id === "struggle") {
-                        isStruggling = true;
-                    }
-                    if (!currentMove.disabled) {
-                        const moveIndex = j as 1 | 2 | 3 | 4;
-                        legalActions.set(-1 + moveIndex, true);
-                    }
-                }
-
                 for (let j = 0; j < 6; j++) {
                     const currentPokemon = pokemon[j];
                     if (
@@ -2222,6 +2215,18 @@ export class StateHandler {
 
                 const switches =
                     active.trapped || active.maybeTrapped ? [] : canSwitch;
+                const canAddMove = !maskMoves || switches.length === 0;
+
+                for (let j = 1; j <= possibleMoves.length; j++) {
+                    const currentMove = possibleMoves[j - 1];
+                    if (currentMove.id === "struggle") {
+                        isStruggling = true;
+                    }
+                    if ((!currentMove.disabled && canAddMove) || isStruggling) {
+                        const moveIndex = j as 1 | 2 | 3 | 4;
+                        legalActions.set(-1 + moveIndex, true);
+                    }
+                }
 
                 for (const j of switches) {
                     const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
@@ -2414,10 +2419,10 @@ export class StateHandler {
                 playerIndex,
                 false,
             ),
-            this.getTeamFromSide(
-                this.player.privateBattle.sides[1 - playerIndex],
-                playerIndex,
-            ),
+            // this.getTeamFromSide(
+            //     this.player.privateBattle.sides[1 - playerIndex],
+            //     playerIndex,
+            // ),
         ];
         return concatenateArrays(team);
     }
@@ -2577,7 +2582,7 @@ export class StateHandler {
 
         const history = this.getHistory(numHistory);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readableHistory = EdgeBuffer.toReadableHistory(history);
+        // const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2587,12 +2592,12 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());

@@ -37,18 +37,15 @@ interface TeamTrackerDatum {
 export class Tracker {
     battle: World | undefined;
     data: TeamTrackerDatum[][];
-    f: (x: number) => number;
-    denom: number;
+    f_int: (x: number) => number;
 
     constructor() {
         this.data = [];
         this.battle = undefined;
 
-        this.f = (x) => {
-            return x ** 3 / 3;
+        this.f_int = (x) => {
+            return (1 / 216) * x ** 3;
         };
-
-        this.denom = 1 / this.f(6);
     }
 
     setBattle(world: World) {
@@ -119,10 +116,10 @@ export class Tracker {
         const f2tm1 = tm1.at(1)?.faintedTotal ?? 0;
         const f2tm2 = tm2.at(1)?.faintedTotal ?? 0;
 
-        const p1Diff = this.f(f2tm2) - this.f(f2tm1);
-        const p2Diff = this.f(f1tm2) - this.f(f1tm1);
+        const p1Diff = this.f_int(f2tm2) - this.f_int(f2tm1);
+        const p2Diff = this.f_int(f1tm2) - this.f_int(f1tm1);
 
-        const reward = this.denom * (p2Diff - p1Diff);
+        const reward = p2Diff - p1Diff;
         return reward;
     }
 
@@ -136,10 +133,10 @@ export class Tracker {
         const d2tm1 = tm1.at(1)?.damageTotal ?? 0;
         const d2tm2 = tm2.at(1)?.damageTotal ?? 0;
 
-        const p1Diff = this.f(d2tm2) - this.f(d2tm1);
-        const p2Diff = this.f(d1tm2) - this.f(d1tm1);
+        const p1Diff = this.f_int(d2tm2) - this.f_int(d2tm1);
+        const p2Diff = this.f_int(d1tm2) - this.f_int(d1tm1);
 
-        const reward = this.denom * (p2Diff - p1Diff);
+        const reward = p2Diff - p1Diff;
         return reward;
     }
 

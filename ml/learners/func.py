@@ -85,13 +85,21 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
 
 
 @jax.jit
-def collect_gradient_telemetry_data(grads: chex.ArrayTree) -> Dict[str, Any]:
+def collect_parameter_and_gradient_telemetry_data(
+    params: chex.ArrayTree, grads: chex.ArrayTree
+) -> Dict[str, Any]:
     logs = dict(
+        param_norm=optax.global_norm(params),
         gradient_norm=optax.global_norm(grads),
     )
     for module_name in ["encoder", "policy_head", "value_head"]:
         for key, value in grads["params"][module_name].items():
             logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
+                lambda a, b: jnp.maximum(a, b),
+                jax.tree.map(lambda x: jnp.abs(x).max(), value),
+            )
+        for key, value in params["params"][module_name].items():
+            logs[f"{module_name}_{key}_abs_param_max"] = jax.tree.reduce(
                 lambda a, b: jnp.maximum(a, b),
                 jax.tree.map(lambda x: jnp.abs(x).max(), value),
             )
@@ -246,4 +254,10 @@ def collect_value_stats_telemetry_data(
     explained_variance = calculate_explained_variance(
         value_prediction, value_target, mask
     )
-    return {"value_function_explained_variance": jnp.maximum(-1, explained_variance)}
+    r2 = calculate_r2(value_prediction, value_target, mask)
+    return {
+        "value_function_explained_variance": jnp.maximum(-1, explained_variance),
+        "value_function_r2": jnp.maximum(r2, 0),
+        "value_target_mean": jnp.mean(value_target, where=mask),
+        "value_target_std": jnp.std(value_target, where=mask),
+    }

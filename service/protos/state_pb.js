@@ -187,7 +187,9 @@ proto.rlenv.Rewards.toObject = function(includeInstance, msg) {
     hpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
     faintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
     scaledFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
-    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
+    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0),
+    terminalHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
+    terminalFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 7, 0.0)
   };
 
   if (includeInstance) {
@@ -243,6 +245,14 @@ proto.rlenv.Rewards.deserializeBinaryFromReader = function(msg, reader) {
     case 5:
       var value = /** @type {number} */ (reader.readFloat());
       msg.setScaledHpReward(value);
+      break;
+    case 6:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setTerminalHpReward(value);
+      break;
+    case 7:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setTerminalFaintedReward(value);
       break;
     default:
       reader.skipField();
@@ -305,6 +315,20 @@ proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeFloat(
       5,
+      f
+    );
+  }
+  f = message.getTerminalHpReward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      6,
+      f
+    );
+  }
+  f = message.getTerminalFaintedReward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      7,
       f
     );
   }
@@ -398,6 +422,42 @@ proto.rlenv.Rewards.prototype.getScaledHpReward = function() {
  */
 proto.rlenv.Rewards.prototype.setScaledHpReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 5, value);
+};
+
+
+/**
+ * optional float terminal_hp_reward = 6;
+ * @return {number}
+ */
+proto.rlenv.Rewards.prototype.getTerminalHpReward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 6, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Rewards} returns this
+ */
+proto.rlenv.Rewards.prototype.setTerminalHpReward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 6, value);
+};
+
+
+/**
+ * optional float terminal_fainted_reward = 7;
+ * @return {number}
+ */
+proto.rlenv.Rewards.prototype.getTerminalFaintedReward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 7, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Rewards} returns this
+ */
+proto.rlenv.Rewards.prototype.setTerminalFaintedReward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 7, value);
 };
 
 
