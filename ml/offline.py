@@ -18,7 +18,7 @@ from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
 from ml.config import ActorCriticConfig
 from ml.learners.buffer import OfflineReplayBuffer
-from ml.learners.func import collect_gradient_telemetry_data
+from ml.learners.func import collect_parameter_and_gradient_telemetry_data
 from ml.utils import Params
 from rlenv.data import NUM_ACTIONS
 from rlenv.env import get_ex_step
@@ -83,7 +83,7 @@ def train_step(state: TrainState, batch: Tuple[EnvStep, chex.Array, chex.Array])
     logs.update(dict(loss=loss_val))
 
     state = state.apply_gradients(grads=grads)
-    logs.update(collect_gradient_telemetry_data(grads))
+    logs.update(collect_parameter_and_gradient_telemetry_data(grads))
 
     logs = {f"train_{k}": v for k, v in logs.items()}
 

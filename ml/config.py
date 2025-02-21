@@ -1,6 +1,4 @@
 import chex
-import haiku as hk
-import jax
 import numpy as np
 from jax import numpy as jnp
 
@@ -28,7 +26,7 @@ class FineTuning:
     from_learner_steps: int = -1
     # All policy probabilities below `threshold` are zeroed out. Thresholding
     # is disabled if this value is non-positive.
-    policy_threshold: float = 0.03
+    policy_threshold: float = 0.05
     # Rounds the policy probabilities to the "closest"
     # multiple of 1/`self.discretization`.
     # Discretization is disabled for non-positive values.
@@ -68,78 +66,6 @@ class FineTuning:
             (jnp.max(policy, axis=-1, keepdims=True) < self.policy_threshold)
         )
         return mask * policy / jnp.sum(mask * policy, axis=-1, keepdims=True)
-
-    def _discretize(self, policy: chex.Array) -> chex.Array:
-        """Round all action probabilities to a multiple of 1/self.discretize."""
-        if self.policy_discretization <= 0:
-            return policy
-
-        # The unbatched/single policy case:
-        if len(policy.shape) == 1:
-            return self._discretize_single(policy)
-
-        # policy may be [B, A] or [T, B, A], etc. Thus add hk.BatchApply.
-        dims = len(policy.shape) - 1
-
-        # TODO(author18): avoid mixing vmap and BatchApply since the two could
-        # be folded into either a single BatchApply or a sequence of vmaps, but
-        # not the mix.
-        vmapped = jax.vmap(self._discretize_single)
-        policy = hk.BatchApply(vmapped, num_dims=dims)(policy)
-
-        return policy
-
-    def _discretize_single(self, mu: chex.Array) -> chex.Array:
-        """A version of self._discretize but for the unbatched data."""
-        # TODO(author18): try to merge _discretize and _discretize_single
-        # into one function that handles both batched and unbatched cases.
-        if len(mu.shape) == 2:
-            mu_ = jnp.squeeze(mu, axis=0)
-        else:
-            mu_ = mu
-        n_actions = mu_.shape[-1]
-        roundup = jnp.ceil(mu_ * self.policy_discretization).astype(jnp.int32)
-        result = jnp.zeros_like(mu_)
-        order = jnp.argsort(-mu_)  # Indices of descending order.
-        weight_left = self.policy_discretization
-
-        def f_disc(i, order, roundup, weight_left, result):
-            x = jnp.minimum(roundup[order[i]], weight_left)
-            result = jax.numpy.where(
-                weight_left >= 0, result.at[order[i]].add(x), result
-            )
-            weight_left -= x
-            return i + 1, order, roundup, weight_left, result
-
-        def f_scan_scan(carry, x):
-            i, order, roundup, weight_left, result = carry
-            i_next, order_next, roundup_next, weight_left_next, result_next = f_disc(
-                i, order, roundup, weight_left, result
-            )
-            carry_next = (
-                i_next,
-                order_next,
-                roundup_next,
-                weight_left_next,
-                result_next,
-            )
-            return carry_next, x
-
-        (_, _, _, weight_left_next, result_next), _ = jax.lax.scan(
-            f_scan_scan,
-            init=(jnp.asarray(0), order, roundup, weight_left, result),
-            xs=None,
-            length=n_actions,
-        )
-
-        result_next = jnp.where(
-            weight_left_next > 0,
-            result_next.at[order[0]].add(weight_left_next),
-            result_next,
-        )
-        if len(mu.shape) == 2:
-            result_next = jnp.expand_dims(result_next, axis=0)
-        return result_next / self.policy_discretization
 
 
 @chex.dataclass(frozen=True)

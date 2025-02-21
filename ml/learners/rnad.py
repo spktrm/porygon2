@@ -23,7 +23,7 @@ from ml.func import (
     renormalize,
     rnad_v_trace,
 )
-from ml.learners.func import collect_gradient_telemetry_data
+from ml.learners.func import collect_parameter_and_gradient_telemetry_data
 from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
@@ -387,6 +387,6 @@ def train_step(state: TrainState, batch: TimeStep, config: RNaDConfig):
     )
 
     logs.update(dict(loss=loss_val))
-    logs.update(collect_gradient_telemetry_data(grads))
+    logs.update(collect_parameter_and_gradient_telemetry_data(grads))
 
     return state, logs

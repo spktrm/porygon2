@@ -26,7 +26,7 @@ def get_most_recent_file(dir_path):
     return most_recent_file
 
 
-def breakpoint_w_func(x, func: callable):
+def breakpoint_w_func(func: callable, x):
     func_val = func(x)
 
     def true_fn(x):

@@ -282,6 +282,7 @@ class BatchCollectorV2:
         self.finetuning = FineTuning()
         self.batch_size = batch_size
         self.finetune = finetune
+        self.num_steps = 0
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
         """Apply a batch of `actions` to a parallel list of `states`."""
@@ -348,6 +349,7 @@ class BatchCollectorV2:
 
         # Concatenate all the timesteps together to form a single rollout [T, B, ..]
         batch: TimeStep = stack_steps(timesteps)
+        self.num_steps += batch.env.valid.sum()
 
         if (batch.env.turn[1:] < batch.env.turn[:-1]).any():
             raise ValueError

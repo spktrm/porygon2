@@ -194,7 +194,7 @@ def rnad_v_trace(
     policy_ratio = _policy_ratio(merged_policy, acting_policy, actions_oh, valid)
     inv_mu = _policy_ratio(
         jnp.ones_like(merged_policy), acting_policy, actions_oh, valid
-    )
+    ).clip(max=10)
 
     eta_reg_entropy = (
         -eta
@@ -453,10 +453,9 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     beta: float = 2,
-    epsilon: float = 0.2,
+    epsilon: float = 0.5,
 ) -> chex.Array:
     """Define the nerd loss."""
-    assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
     adv_pi_list = []
     num_valid_actions = jnp.sum(legal_actions, axis=-1, keepdims=True)
@@ -464,7 +463,6 @@ def get_loss_nerd(
     for k, (logit_pi, pi, q_vr, ratio) in enumerate(
         zip(logit_list, policy_list, q_vr_list, importance_sampling_correction)
     ):
-        assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
 
@@ -488,6 +486,7 @@ def get_loss_nerd(
         nerd_loss = jnp.sum(
             legal_actions * apply_force_with_threshold(logits, adv_pi, beta), axis=-1
         )
+        nerd_loss = nerd_loss / num_valid_actions.squeeze(axis=-1)
         nerd_loss = -renormalize(nerd_loss, player_adv_mask)
 
         loss_pi_list.append(nerd_loss)

@@ -22,10 +22,11 @@ from ml.func import (
 )
 from ml.learners.func import (
     calculate_r2,
-    collect_gradient_telemetry_data,
+    collect_parameter_and_gradient_telemetry_data,
     collect_loss_value_telemetry_data,
     collect_policy_stats_telemetry_data,
     collect_regularisation_telemetry_data,
+    collect_value_stats_telemetry_data,
 )
 from ml.utils import Params
 from rlenv.env import get_ex_step
@@ -36,17 +37,17 @@ from rlenv.interfaces import ModelOutput, TimeStep
 class NerdConfig:
     """Nerd related params."""
 
-    beta: float = 3
-    clip: float = 100
+    beta: float = 2
+    clip: float = 1_000
 
 
 @chex.dataclass(frozen=True)
 class VtraceConfig(ActorCriticConfig):
     entropy_loss_coef: float = 1e-2
-    target_network_avg: float = 5e-3
+    target_network_avg: float = 1e-3
 
     nerd: NerdConfig = NerdConfig()
-    clip_gradient: float = 5
+    clip_gradient: float = 1
 
 
 def get_config():
@@ -70,12 +71,13 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
     # params_reg = module.init(rng, ex, hx)
 
     tx = optax.chain(
-        optax.adam(
+        optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
             b1=config.adam.b1,
             b2=config.adam.b2,
             eps=config.adam.eps,
+            weight_decay=config.adam.weight_decay,
         ),
         optax.clip_by_global_norm(config.clip_gradient),
     )
@@ -176,7 +178,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 lambda_=1.0,
                 c=config.c_vtrace,
                 rho=jnp.inf,
-                eta=0.5,
+                eta=0.1,
                 gamma=config.gamma,
             )
             v_target_list.append(jax.lax.stop_gradient(v_target_))
@@ -188,12 +190,18 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             v_target_list,
             has_played_list,
         )
-        explained_variance = (
-            calculate_r2(pred.v, v_target_list[0], has_played_list[0])
-            + calculate_r2(pred.v, v_target_list[1], has_played_list[1])
-        ) / 2
-        logs.update({"value_function_r2": jnp.maximum(explained_variance, 0)})
 
+        logs.update(
+            collect_value_stats_telemetry_data(
+                pred.v.squeeze(),
+                v_target_list[0].squeeze(),
+                has_played_list[0].squeeze(),
+            )
+        )
+
+        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
+            axis=-1
+        )
         is_vector = jnp.expand_dims(jnp.ones_like(valid), axis=-1)
         importance_sampling_correction = [is_vector] * config.num_players
 
@@ -209,9 +217,6 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             beta=config.nerd.beta,
         )
 
-        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
-            axis=-1
-        )
         logs.update(
             collect_policy_stats_telemetry_data(
                 pred.logit,
@@ -239,6 +244,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     (loss_val, logs), grads = grad_fn(state.params)
 
     logs.update(dict(loss=loss_val))
+    logs.update(collect_parameter_and_gradient_telemetry_data(state.params, grads))
 
     state = state.apply_gradients(grads=grads)
 
@@ -260,6 +266,5 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     )
 
     logs["ema_val"] = ema_val
-    logs.update(collect_gradient_telemetry_data(grads))
 
     return state, logs
