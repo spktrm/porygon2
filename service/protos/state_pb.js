@@ -634,7 +634,8 @@ proto.rlenv.Info.toObject = function(includeInstance, msg) {
     seed: jspb.Message.getFieldWithDefault(msg, 9, 0),
     draw: jspb.Message.getBooleanFieldWithDefault(msg, 10, false),
     heuristics: (f = msg.getHeuristics()) && proto.rlenv.Heuristics.toObject(includeInstance, f),
-    requestCount: jspb.Message.getFieldWithDefault(msg, 12, 0)
+    requestCount: jspb.Message.getFieldWithDefault(msg, 12, 0),
+    timestamp: jspb.Message.getFieldWithDefault(msg, 13, 0)
   };
 
   if (includeInstance) {
@@ -720,6 +721,10 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
     case 12:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRequestCount(value);
+      break;
+    case 13:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setTimestamp(value);
       break;
     default:
       reader.skipField();
@@ -833,6 +838,13 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0) {
     writer.writeInt32(
       12,
+      f
+    );
+  }
+  f = message.getTimestamp();
+  if (f !== 0) {
+    writer.writeInt32(
+      13,
       f
     );
   }
@@ -1090,6 +1102,24 @@ proto.rlenv.Info.prototype.getRequestCount = function() {
  */
 proto.rlenv.Info.prototype.setRequestCount = function(value) {
   return jspb.Message.setProto3IntField(this, 12, value);
+};
+
+
+/**
+ * optional int32 timestamp = 13;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getTimestamp = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 13, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setTimestamp = function(value) {
+  return jspb.Message.setProto3IntField(this, 13, value);
 };
 
 

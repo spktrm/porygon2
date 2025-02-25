@@ -1229,7 +1229,7 @@ export class EventHandler implements Protocol.Handler {
     actives: Map<ID, PokemonIdent>;
     turnOrder: number;
     turnNum: number;
-
+    timestamp: number;
     edgeBuffer: EdgeBuffer;
 
     constructor(player: Player) {
@@ -1240,6 +1240,7 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer = new EdgeBuffer(player);
         this.turnOrder = 0;
         this.turnNum = 0;
+        this.timestamp = 0;
     }
 
     getPokemon(pokemonid: PokemonIdent) {
@@ -2142,6 +2143,12 @@ export class EventHandler implements Protocol.Handler {
         this.turnOrder = 0;
     }
 
+    "|t:|"(args: Args["|t:|"]) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const [_, timestamp] = args;
+        this.timestamp = parseInt(timestamp);
+    }
+
     "|turn|"(args: Args["|turn|"]) {
         const turnNum = (args.at(1) ?? "").toString();
 
@@ -2533,6 +2540,7 @@ export class StateHandler {
         info.setDone(this.player.done);
         info.setDraw(this.player.draw);
         info.setRequestCount(this.player.requestCount);
+        info.setTimestamp(this.player.eventHandler.timestamp);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
@@ -2582,7 +2590,7 @@ export class StateHandler {
 
         const history = this.getHistory(numHistory);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readableHistory = EdgeBuffer.toReadableHistory(history);
+        const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2592,12 +2600,12 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());

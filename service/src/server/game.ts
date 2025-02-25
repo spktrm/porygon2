@@ -12,7 +12,7 @@ import { Rewards } from "../../protos/state_pb";
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 
-export const DRAW_TURNS = 75;
+export const DRAW_TURNS = 100;
 
 export class Game {
     gameId: number;

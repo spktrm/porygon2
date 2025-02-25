@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import PredictionResponse
-from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.utils import get_most_recent_file
@@ -21,8 +20,7 @@ class InferenceModel:
     def __init__(self, fpath: str = None, seed: int = 42):
         self.np_rng = np.random.RandomState(seed)
 
-        model_config = get_model_cfg()
-        self.network = get_model(model_config)
+        self.network = get_model()
         self.finetuning = FineTuning()
 
         if not fpath:

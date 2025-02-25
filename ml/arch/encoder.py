@@ -14,10 +14,8 @@ from ml.arch.modules import (
     BinaryEncoder,
     DenseMultiHeadProjection,
     GatedResidualLayer,
-    MergeEmbeddings,
     PretrainedEmbedding,
     SumEmbeddings,
-    TimestepResnet,
     TransformerDecoder,
     TransformerEncoder,
     one_hot_concat_jax,
@@ -224,6 +222,25 @@ def get_edge_mask(edge: chex.Array) -> chex.Array:
     Generate a mask for edges based on their validity tokens.
     """
     return edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID].astype(jnp.int32)
+
+
+def get_world_model_loss(
+    timestep_embeddings: chex.Array, mask: chex.Array
+) -> chex.Array:
+
+    embedding_size = timestep_embeddings.shape[-1]
+    projector = MLP((embedding_size,))
+    predictor = MLP((embedding_size,))
+
+    projected = projector(timestep_embeddings)
+    predictions = predictor(projected)
+
+    targ = jax.nn.softmax(jax.lax.stop_gradient(projected[0]).reshape(-1, 32))
+    pred = jax.nn.log_softmax(predictions[1].reshape(-1, 32))
+
+    loss = -(pred * targ).sum(axis=-1).mean()
+
+    return loss * mask[1]
 
 
 class Encoder(nn.Module):
@@ -777,7 +794,14 @@ class Encoder(nn.Module):
             entity_embeddings, entity_mask
         )
 
-        timestep_embeddings = TimestepResnet()(timestep_embeddings, valid_timestep_mask)
+        history_seq_length = valid_timestep_mask.shape[-1]
+        casual_attn_mask = jnp.triu(
+            jnp.ones((1, history_seq_length, history_seq_length))
+        )
+        timestep_embeddings = TransformerEncoder(**self.cfg.timestep_encoder.to_dict())(
+            timestep_embeddings, valid_timestep_mask, casual_attn_mask
+        )
+        wm_loss = get_world_model_loss(timestep_embeddings, valid_timestep_mask)
 
         fused_temporal = TransformerDecoder(
             **self.cfg.entity_timestep_decoder.to_dict()
@@ -811,4 +835,4 @@ class Encoder(nn.Module):
             entity_mask,
         )
 
-        return entity_output, entity_mask, contextual_action_embeddings
+        return entity_output, entity_mask, contextual_action_embeddings, wm_loss
