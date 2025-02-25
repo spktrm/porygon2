@@ -350,8 +350,8 @@ def generic_value_loss(
     chex.Array
         The scalar sum of all computed losses.
     """
-    chex.assert_trees_all_equal_shapes(v_list, v_target_list)
-    chex.assert_shape(mask_list, v_list[0].shape[:-1])
+    # chex.assert_trees_all_equal_shapes(v_list, v_target_list)
+    # chex.assert_shape(mask_list, v_list[0].shape[:-1])
 
     loss_v_list = []
     for v_n, v_target, mask in zip(v_list, v_target_list, mask_list):
@@ -399,6 +399,26 @@ def get_loss_v_mse(
     return generic_value_loss(v_list, v_target_list, mask_list, mse_loss)
 
 
+def get_loss_v_dist(
+    v_list: Sequence[chex.Array],
+    v_target_list: Sequence[chex.Array],
+    mask_list: Sequence[chex.Array],
+    sigma=2 / 3,
+) -> chex.Array:
+    """Compute MSE-based value loss."""
+
+    support = jnp.linspace(-1.5, 1.5, v_list[0].shape[-1] + 1)
+
+    def dist_loss(pred: chex.Array, targ: chex.Array):
+        cdf_evals = jax.scipy.special.erf((support - targ) / (jnp.sqrt(2) * sigma))
+        z = cdf_evals[..., -1] - cdf_evals[..., 0]
+        bin_probs = cdf_evals[..., 1:] - cdf_evals[..., :-1]
+        dist = bin_probs / z[..., None]
+        return -(dist * pred).sum(axis=-1, keepdims=True)
+
+    return generic_value_loss(v_list, v_target_list, mask_list, dist_loss)
+
+
 def get_loss_v_mae(
     v_list: Sequence[chex.Array],
     v_target_list: Sequence[chex.Array],
@@ -418,6 +438,30 @@ def get_loss_v_huber(
     return generic_value_loss(
         v_list, v_target_list, mask_list, lambda p, t: huber_loss(p, t, delta)
     )
+
+
+def get_contrastive_v_loss(
+    turn: chex.Array,
+    player_id: chex.Array,
+    valid: chex.Array,
+    pred_v: chex.Array,
+) -> chex.Array:
+    value_predictions = []
+
+    for player in [0, 1]:
+        turns = turn * (player_id == player)
+        turns = turns[1:] * (turns[1:] > jax.lax.cummax(turns[:-1], axis=0)) * valid[1:]
+        value_prediction = (
+            jax.nn.one_hot(turns, 200) * valid[1:, ..., None] * pred_v[1:]
+        )
+        value_predictions.append(value_prediction)
+
+    loss_value = (
+        (value_predictions[0] + jax.lax.stop_gradient(value_predictions[1])) ** 2
+        + (jax.lax.stop_gradient(value_predictions[0]) + value_predictions[1]) ** 2
+    ) / 2
+
+    return loss_value.sum() / valid.sum()
 
 
 def apply_force_with_threshold(
@@ -453,10 +497,9 @@ def get_loss_nerd(
     importance_sampling_correction: Sequence[chex.Array],
     clip: float = 100,
     beta: float = 2,
-    epsilon: float = 0.2,
+    epsilon: float = 0.5,
 ) -> chex.Array:
     """Define the nerd loss."""
-    assert isinstance(importance_sampling_correction, list)
     loss_pi_list = []
     adv_pi_list = []
     num_valid_actions = jnp.sum(legal_actions, axis=-1, keepdims=True)
@@ -464,7 +507,6 @@ def get_loss_nerd(
     for k, (logit_pi, pi, q_vr, ratio) in enumerate(
         zip(logit_list, policy_list, q_vr_list, importance_sampling_correction)
     ):
-        assert logit_pi.shape[0] == q_vr.shape[0]
         # loss policy
         adv_pi = q_vr - jnp.sum(pi * q_vr, axis=-1, keepdims=True)
 
@@ -488,6 +530,7 @@ def get_loss_nerd(
         nerd_loss = jnp.sum(
             legal_actions * apply_force_with_threshold(logits, adv_pi, beta), axis=-1
         )
+        nerd_loss = nerd_loss / num_valid_actions.squeeze(axis=-1)
         nerd_loss = -renormalize(nerd_loss, player_adv_mask)
 
         loss_pi_list.append(nerd_loss)

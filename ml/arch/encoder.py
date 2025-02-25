@@ -10,7 +10,10 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     BinaryEncoder,
+    DenseMultiHeadProjection,
+    GatedResidualLayer,
     PretrainedEmbedding,
     SumEmbeddings,
     TransformerDecoder,
@@ -22,14 +25,23 @@ from rlenv.data import (
     ACTION_MAX_VALUES,
     ENTITY_MAX_VALUES,
     MAX_RATIO_TOKEN,
+    NUM_ABILITIES,
     NUM_ACTIONS,
     NUM_EFFECTS,
+    NUM_ITEMS,
     NUM_MOVES,
     NUM_SPECIES,
     RELATIVE_EDGE_MAX_VALUES,
 )
 from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
-from rlenv.protos.enums_pb2 import ActionsEnum, EffectEnum, SpeciesEnum
+from rlenv.protos.enums_pb2 import (
+    AbilitiesEnum,
+    ActionsEnum,
+    EffectEnum,
+    ItemsEnum,
+    MovesEnum,
+    SpeciesEnum,
+)
 from rlenv.protos.features_pb2 import (
     AbsoluteEdgeFeature,
     EntityFeature,
@@ -61,7 +73,7 @@ def get_move_mask(move: chex.Array) -> chex.Array:
     )
 
 
-def _binary_scale_embedding(to_encode: chex.Array, world_dim: int) -> chex.Array:
+def _binary_scale_encoding(to_encode: chex.Array, world_dim: int) -> chex.Array:
     """Encode the feature using its binary representation."""
     chex.assert_rank(to_encode, 0)
     chex.assert_type(to_encode, jnp.int32)
@@ -238,19 +250,54 @@ class Encoder(nn.Module):
         species_embedding = nn.Embed(
             NUM_SPECIES, name="species_embedding", **embed_kwargs
         )
-        items_embedding = nn.Embed(NUM_SPECIES, name="items_embedding", **embed_kwargs)
+        items_embedding = nn.Embed(NUM_ITEMS, name="items_embedding", **embed_kwargs)
         abilities_embedding = nn.Embed(
-            NUM_SPECIES, name="abilities_embedding", **embed_kwargs
+            NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
         )
         actions_embedding = nn.Embed(
             NUM_ACTIONS, name="actions_embedding", **embed_kwargs
         )
 
+        species_linear = nn.Dense(entity_size, use_bias=False, name="species_linear")
+        items_linear = nn.Dense(entity_size, use_bias=False, name="items_linear")
+        abilities_linear = nn.Dense(
+            entity_size, use_bias=False, name="abilities_linear"
+        )
+        moves_linear = nn.Dense(entity_size, use_bias=False, name="moves_linear")
+
+        def _encode_species(token: chex.Array):
+            return jnp.where(
+                token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED,
+                0,
+                species_linear(SPECIES_ONEHOT(token)),
+            )
+
+        def _encode_item(token: chex.Array):
+            return jnp.where(
+                token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED,
+                0,
+                items_linear(ITEM_ONEHOT(token)),
+            )
+
+        def _encode_ability(token: chex.Array):
+            return jnp.where(
+                token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED,
+                0,
+                abilities_linear(ABILITY_ONEHOT(token)),
+            )
+
+        def _encode_move(token: chex.Array):
+            return jnp.where(
+                token == MovesEnum.MOVES_ENUM___UNSPECIFIED,
+                0,
+                moves_linear(MOVE_ONEHOT(token)),
+            )
+
         # Initialize aggregation modules for combining feature embeddings.
         entity_combine = SumEmbeddings(entity_size, name="entity_combine")
         relative_edge_combine = SumEmbeddings(entity_size, name="relative_edge_combine")
         absolute_edge_combine = SumEmbeddings(entity_size, name="absolute_edge_combine")
-        timestep_combine = SumEmbeddings(entity_size, name="timestep_combine")
+        timestep_mlp = MLP((entity_size,), name="timestep_mlp")
         action_combine = SumEmbeddings(entity_size, name="action_combine")
 
         def _encode_entity(entity: chex.Array) -> chex.Array:
@@ -273,13 +320,16 @@ class Encoder(nn.Module):
 
             boolean_code = one_hot_concat_jax(
                 [
-                    _encode_divided_one_hot_entity(
-                        entity, EntityFeature.ENTITY_FEATURE__LEVEL, 1
+                    _encode_sqrt_one_hot_entity(
+                        entity, EntityFeature.ENTITY_FEATURE__LEVEL
                     ),
                     _encode_one_hot_entity(
                         entity, EntityFeature.ENTITY_FEATURE__ACTIVE
                     ),
                     _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__SIDE),
+                    _encode_one_hot_entity(
+                        entity, EntityFeature.ENTITY_FEATURE__IS_PUBLIC
+                    ),
                     _encode_divided_one_hot_entity(
                         entity,
                         EntityFeature.ENTITY_FEATURE__HP_RATIO,
@@ -345,24 +395,34 @@ class Encoder(nn.Module):
                 ]
             ).clip(max=1) / entity[EntityFeature.ENTITY_FEATURE__NUM_MOVES].clip(min=1)
 
+            moveset_embedding = (
+                _encode_move(entity[EntityFeature.ENTITY_FEATURE__MOVEID0])
+                + _encode_move(entity[EntityFeature.ENTITY_FEATURE__MOVEID1])
+                + _encode_move(entity[EntityFeature.ENTITY_FEATURE__MOVEID2])
+                + _encode_move(entity[EntityFeature.ENTITY_FEATURE__MOVEID3])
+            ) / entity[EntityFeature.ENTITY_FEATURE__NUM_MOVES].clip(min=1)
+
             species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
             ability_token = entity[EntityFeature.ENTITY_FEATURE__ABILITY]
             item_token = entity[EntityFeature.ENTITY_FEATURE__ITEM]
 
-            encoding = [
-                species_embedding(species_token),
-                abilities_embedding(ability_token),
-                items_embedding(item_token),
-                boolean_code,
-                volatiles_encoding,
-                typechange_encoding,
-                moveset_onehot,
-                SPECIES_ONEHOT(species_token),
-                ABILITY_ONEHOT(ability_token),
-                ITEM_ONEHOT(item_token),
-            ]
-
-            embedding = entity_combine(encoding)
+            embedding = entity_combine(
+                encodings=[
+                    boolean_code,
+                    volatiles_encoding,
+                    typechange_encoding,
+                    moveset_onehot,
+                ],
+                embeddings=[
+                    _encode_species(species_token),
+                    _encode_ability(ability_token),
+                    _encode_item(item_token),
+                    moveset_embedding,
+                    species_embedding(species_token),
+                    abilities_embedding(ability_token),
+                    items_embedding(item_token),
+                ],
+            )
 
             # Apply mask to filter out invalid entities.
             mask = get_entity_mask(entity)
@@ -498,20 +558,22 @@ class Encoder(nn.Module):
             move_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
             action_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
 
-            embeddings = [
-                ABILITY_ONEHOT(ability_token),
-                ITEM_ONEHOT(item_token),
-                MOVE_ONEHOT(move_token),
-                items_embedding(item_token),
-                abilities_embedding(ability_token),
-                actions_embedding(action_token),
-                minor_args_encoding,
-                side_condition_encoding,
-                boolean_code,
-                effct_from_source_onehot,
-            ]
-
-            embedding = relative_edge_combine(embeddings)
+            embedding = relative_edge_combine(
+                encodings=[
+                    minor_args_encoding,
+                    side_condition_encoding,
+                    boolean_code,
+                    effct_from_source_onehot,
+                ],
+                embeddings=[
+                    _encode_ability(ability_token),
+                    _encode_item(item_token),
+                    _encode_move(move_token),
+                    items_embedding(item_token),
+                    abilities_embedding(ability_token),
+                    actions_embedding(action_token),
+                ],
+            )
 
             return embedding
 
@@ -575,23 +637,24 @@ class Encoder(nn.Module):
                 ]
             )
 
-            embeddings = [
-                boolean_code,
-                _binary_scale_embedding(turn, 32),
-                _binary_scale_embedding(request_count, 32),
-                _binary_scale_embedding(
-                    edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE],
-                    16,
-                ),
-            ]
-
-            embedding = absolute_edge_combine(embeddings)
+            embedding = absolute_edge_combine(
+                encodings=[
+                    boolean_code,
+                    # _binary_scale_embedding(turn, 32),
+                    _binary_scale_encoding(request_count, 32),
+                    _binary_scale_encoding(
+                        edge[
+                            AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE
+                        ],
+                        16,
+                    ),
+                ]
+            )
 
             # Apply mask to filter out invalid edges.
             mask = get_edge_mask(edge)
-            embedding = jnp.where(mask, embedding, 0)
 
-            return embedding, mask
+            return embedding, mask, request_count
 
         # Encode each timestep's features, including nodes and edges.
         def _encode_timestep(
@@ -611,25 +674,30 @@ class Encoder(nn.Module):
             )
 
             # Encode absolute edges.
-            absolute_edge_embedding, edge_mask = _encode_absolute_edge(
-                history_container.absolute_edges, turn_offset, request_count_offset
+            absolute_edge_embedding, edge_mask, timestep_position = (
+                _encode_absolute_edge(
+                    history_container.absolute_edges, turn_offset, request_count_offset
+                )
             )
 
             # Combine all embeddings for the timestep.
-            timestep_embedding = [
-                entity_embeddings[0],
-                entity_embeddings[1],
-                relative_edge_embeddings[0],
-                relative_edge_embeddings[1],
-                absolute_edge_embedding,
-            ]
+            timestep_embedding = jnp.concatenate(
+                [
+                    entity_embeddings[0],
+                    entity_embeddings[1],
+                    relative_edge_embeddings[0],
+                    relative_edge_embeddings[1],
+                    absolute_edge_embedding,
+                ],
+                axis=-1,
+            )
 
-            timestep_embedding = timestep_combine(timestep_embedding)
+            timestep_embedding = timestep_mlp(timestep_embedding)
 
             # Apply mask to the timestep embeddings.
             timestep_embedding = jnp.where(edge_mask, timestep_embedding, 0)
 
-            return timestep_embedding, edge_mask
+            return timestep_embedding, edge_mask, timestep_position
 
         # Encode history data across multiple timesteps.
         def _encode_timesteps(history_container: HistoryContainer):
@@ -653,35 +721,35 @@ class Encoder(nn.Module):
             """
             boolean_code = one_hot_concat_jax(
                 [
-                    _encode_one_hot_action(
-                        action, MovesetFeature.MOVESET_FEATURE__ACTION_TYPE
-                    ),
+                    # _encode_one_hot_action(
+                    #     action, MovesetFeature.MOVESET_FEATURE__ACTION_TYPE
+                    # ),
                     _encode_sqrt_one_hot_action(
                         action, MovesetFeature.MOVESET_FEATURE__PP
                     ),
                     _encode_sqrt_one_hot_action(
                         action, MovesetFeature.MOVESET_FEATURE__MAXPP
                     ),
-                    _encode_one_hot_action(
-                        action, MovesetFeature.MOVESET_FEATURE__HAS_PP
-                    ),
+                    # _encode_one_hot_action(
+                    #     action, MovesetFeature.MOVESET_FEATURE__HAS_PP
+                    # ),
                 ]
             )
 
-            embeddings = [
-                MOVE_ONEHOT(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
-                SPECIES_ONEHOT(action[MovesetFeature.MOVESET_FEATURE__SPECIES_ID]),
-                actions_embedding(action[MovesetFeature.MOVESET_FEATURE__ACTION_ID]),
-                boolean_code,
-            ]
+            embedding = action_combine(
+                encodings=[
+                    boolean_code,
+                ],
+                embeddings=[
+                    _encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
+                    _encode_species(action[MovesetFeature.MOVESET_FEATURE__SPECIES_ID]),
+                    actions_embedding(
+                        action[MovesetFeature.MOVESET_FEATURE__ACTION_ID]
+                    ),
+                ],
+            )
 
-            embedding = action_combine(embeddings)
-
-            # Apply mask to the move embeddings.
-            mask = get_move_mask(action)
-            embedding = jnp.where(mask, embedding, 0)
-
-            return embedding, mask
+            return embedding
 
         _encode_entities = jax.vmap(_encode_entity)
         private_entity_embeddings, private_entity_mask = _encode_entities(
@@ -691,55 +759,60 @@ class Encoder(nn.Module):
             env_step.public_team
         )
 
-        timestep_embeddings, valid_timestep_mask = _encode_timesteps(
+        timestep_embeddings, valid_timestep_mask, _ = _encode_timesteps(
             history_step.major_history
         )
 
-        action_embeddings, _ = jax.vmap(_encode_action)(
+        action_embeddings = jax.vmap(_encode_action)(
             env_step.moveset, env_step.legal.astype(int)
         )
 
-        contextual_private_entity_embeddings = TransformerEncoder(
-            **self.cfg.private_entity_encoder.to_dict()
-        )(private_entity_embeddings, private_entity_mask)
-
-        contextual_public_entity_embeddings = TransformerEncoder(
-            **self.cfg.public_entity_encoder.to_dict()
-        )(public_entity_embeddings, public_entity_mask)
-
-        contextual_entity_embeddings = TransformerDecoder(
-            **self.cfg.entity_decoder.to_dict()
-        )(
-            contextual_private_entity_embeddings,
-            contextual_public_entity_embeddings,
-            private_entity_mask,
-            public_entity_mask,
+        entity_mask = jnp.concatenate((private_entity_mask, public_entity_mask), axis=0)
+        entity_embeddings = jnp.concatenate(
+            (private_entity_embeddings, public_entity_embeddings), axis=0
+        )
+        entity_context = TransformerEncoder(**self.cfg.entity_encoder.to_dict())(
+            entity_embeddings, entity_mask
         )
 
-        contextual_timestep_embeddings = TransformerEncoder(
-            **self.cfg.timestep_encoder.to_dict()
-        )(timestep_embeddings, valid_timestep_mask)
+        history_seq_length = valid_timestep_mask.shape[-1]
+        casual_attn_mask = jnp.triu(
+            jnp.ones((1, history_seq_length, history_seq_length))
+        )
+        timestep_embeddings = TransformerEncoder(**self.cfg.timestep_encoder.to_dict())(
+            timestep_embeddings, valid_timestep_mask, casual_attn_mask
+        )
 
-        contextual_entity_embeddings = TransformerDecoder(
+        fused_temporal = TransformerDecoder(
             **self.cfg.entity_timestep_decoder.to_dict()
         )(
-            contextual_entity_embeddings,
-            contextual_timestep_embeddings,
-            private_entity_mask,
+            entity_context,
+            timestep_embeddings,
+            entity_mask,
             valid_timestep_mask,
         )
+
+        cross_modal = TransformerDecoder(**self.cfg.action_entity_decoder.to_dict())(
+            fused_temporal,
+            action_embeddings,
+            entity_mask,
+            env_step.legal,
+        )
+
+        final_embeddings = GatedResidualLayer(**self.cfg.entity_gating.to_dict())(
+            entity_context, cross_modal
+        )
+        entity_output = DenseMultiHeadProjection(
+            **self.cfg.entity_projection.to_dict()
+        )(final_embeddings)
 
         contextual_action_embeddings = TransformerDecoder(
             **self.cfg.action_entity_decoder.to_dict()
         )(
             action_embeddings,
-            contextual_entity_embeddings,
+            final_embeddings,
             env_step.legal,
-            private_entity_mask,
+            entity_mask,
         )
 
-        return (
-            contextual_entity_embeddings,
-            private_entity_mask,
-            contextual_action_embeddings,
-        )
+        return entity_output, entity_mask, contextual_action_embeddings

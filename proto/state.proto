@@ -12,6 +12,8 @@ message Rewards {
   float fainted_reward = 3;
   float scaled_fainted_reward = 4;
   float scaled_hp_reward = 5;
+  float terminal_hp_reward = 6;
+  float terminal_fainted_reward = 7;
 }
 
 message Heuristics {
@@ -31,6 +33,7 @@ message Info {
   bool draw = 10;
   Heuristics heuristics = 11;
   int32 request_count = 12;
+  int32 timestamp = 13;
 }
 
 message State {

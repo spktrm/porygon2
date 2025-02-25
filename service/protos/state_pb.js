@@ -187,7 +187,9 @@ proto.rlenv.Rewards.toObject = function(includeInstance, msg) {
     hpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 2, 0.0),
     faintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
     scaledFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 4, 0.0),
-    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0)
+    scaledHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 5, 0.0),
+    terminalHpReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
+    terminalFaintedReward: jspb.Message.getFloatingPointFieldWithDefault(msg, 7, 0.0)
   };
 
   if (includeInstance) {
@@ -243,6 +245,14 @@ proto.rlenv.Rewards.deserializeBinaryFromReader = function(msg, reader) {
     case 5:
       var value = /** @type {number} */ (reader.readFloat());
       msg.setScaledHpReward(value);
+      break;
+    case 6:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setTerminalHpReward(value);
+      break;
+    case 7:
+      var value = /** @type {number} */ (reader.readFloat());
+      msg.setTerminalFaintedReward(value);
       break;
     default:
       reader.skipField();
@@ -305,6 +315,20 @@ proto.rlenv.Rewards.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0.0) {
     writer.writeFloat(
       5,
+      f
+    );
+  }
+  f = message.getTerminalHpReward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      6,
+      f
+    );
+  }
+  f = message.getTerminalFaintedReward();
+  if (f !== 0.0) {
+    writer.writeFloat(
+      7,
       f
     );
   }
@@ -398,6 +422,42 @@ proto.rlenv.Rewards.prototype.getScaledHpReward = function() {
  */
 proto.rlenv.Rewards.prototype.setScaledHpReward = function(value) {
   return jspb.Message.setProto3FloatField(this, 5, value);
+};
+
+
+/**
+ * optional float terminal_hp_reward = 6;
+ * @return {number}
+ */
+proto.rlenv.Rewards.prototype.getTerminalHpReward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 6, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Rewards} returns this
+ */
+proto.rlenv.Rewards.prototype.setTerminalHpReward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 6, value);
+};
+
+
+/**
+ * optional float terminal_fainted_reward = 7;
+ * @return {number}
+ */
+proto.rlenv.Rewards.prototype.getTerminalFaintedReward = function() {
+  return /** @type {number} */ (jspb.Message.getFloatingPointFieldWithDefault(this, 7, 0.0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Rewards} returns this
+ */
+proto.rlenv.Rewards.prototype.setTerminalFaintedReward = function(value) {
+  return jspb.Message.setProto3FloatField(this, 7, value);
 };
 
 
@@ -574,7 +634,8 @@ proto.rlenv.Info.toObject = function(includeInstance, msg) {
     seed: jspb.Message.getFieldWithDefault(msg, 9, 0),
     draw: jspb.Message.getBooleanFieldWithDefault(msg, 10, false),
     heuristics: (f = msg.getHeuristics()) && proto.rlenv.Heuristics.toObject(includeInstance, f),
-    requestCount: jspb.Message.getFieldWithDefault(msg, 12, 0)
+    requestCount: jspb.Message.getFieldWithDefault(msg, 12, 0),
+    timestamp: jspb.Message.getFieldWithDefault(msg, 13, 0)
   };
 
   if (includeInstance) {
@@ -660,6 +721,10 @@ proto.rlenv.Info.deserializeBinaryFromReader = function(msg, reader) {
     case 12:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRequestCount(value);
+      break;
+    case 13:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setTimestamp(value);
       break;
     default:
       reader.skipField();
@@ -773,6 +838,13 @@ proto.rlenv.Info.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0) {
     writer.writeInt32(
       12,
+      f
+    );
+  }
+  f = message.getTimestamp();
+  if (f !== 0) {
+    writer.writeInt32(
+      13,
       f
     );
   }
@@ -1030,6 +1102,24 @@ proto.rlenv.Info.prototype.getRequestCount = function() {
  */
 proto.rlenv.Info.prototype.setRequestCount = function(value) {
   return jspb.Message.setProto3IntField(this, 12, value);
+};
+
+
+/**
+ * optional int32 timestamp = 13;
+ * @return {number}
+ */
+proto.rlenv.Info.prototype.getTimestamp = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 13, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.rlenv.Info} returns this
+ */
+proto.rlenv.Info.prototype.setTimestamp = function(value) {
+  return jspb.Message.setProto3IntField(this, 13, value);
 };
 
 

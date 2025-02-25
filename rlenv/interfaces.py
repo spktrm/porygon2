@@ -16,6 +16,7 @@ class RewardStep:
 class EnvStep:
     # Standard Info
     ts: chex.Array = ()
+    timestamp: chex.Array = ()
     draw_ratio: chex.Array = ()
     valid: chex.Array = ()
     draw: chex.Array = ()

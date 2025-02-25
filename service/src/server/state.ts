@@ -487,6 +487,7 @@ function getArrayFromPokemon(
         dataArr[EntityFeature.ENTITY_FEATURE__NUM_MOVES] = moveSlots.length;
     }
 
+    dataArr[EntityFeature.ENTITY_FEATURE__IS_PUBLIC] = +isPublic;
     dataArr[EntityFeature.ENTITY_FEATURE__SPECIES] = IndexValueFromEnum<
         typeof SpeciesEnum
     >(SpeciesEnum, baseSpecies);
@@ -1228,7 +1229,7 @@ export class EventHandler implements Protocol.Handler {
     actives: Map<ID, PokemonIdent>;
     turnOrder: number;
     turnNum: number;
-
+    timestamp: number;
     edgeBuffer: EdgeBuffer;
 
     constructor(player: Player) {
@@ -1239,6 +1240,7 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer = new EdgeBuffer(player);
         this.turnOrder = 0;
         this.turnNum = 0;
+        this.timestamp = 0;
     }
 
     getPokemon(pokemonid: PokemonIdent) {
@@ -2141,6 +2143,12 @@ export class EventHandler implements Protocol.Handler {
         this.turnOrder = 0;
     }
 
+    "|t:|"(args: Args["|t:|"]) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const [_, timestamp] = args;
+        this.timestamp = parseInt(timestamp);
+    }
+
     "|turn|"(args: Args["|turn|"]) {
         const turnNum = (args.at(1) ?? "").toString();
 
@@ -2161,7 +2169,10 @@ export class StateHandler {
         this.player = player;
     }
 
-    static getLegalActions(request?: AnyObject | null): {
+    static getLegalActions(
+        request?: AnyObject | null,
+        maskMoves: boolean = false,
+    ): {
         legalActions: OneDBoolean;
         isStruggling: boolean;
     } {
@@ -2198,17 +2209,6 @@ export class StateHandler {
                 const possibleMoves = active.moves ?? [];
                 const canSwitch = [];
 
-                for (let j = 1; j <= possibleMoves.length; j++) {
-                    const currentMove = possibleMoves[j - 1];
-                    if (currentMove.id === "struggle") {
-                        isStruggling = true;
-                    }
-                    if (!currentMove.disabled) {
-                        const moveIndex = j as 1 | 2 | 3 | 4;
-                        legalActions.set(-1 + moveIndex, true);
-                    }
-                }
-
                 for (let j = 0; j < 6; j++) {
                     const currentPokemon = pokemon[j];
                     if (
@@ -2222,6 +2222,18 @@ export class StateHandler {
 
                 const switches =
                     active.trapped || active.maybeTrapped ? [] : canSwitch;
+                const canAddMove = !maskMoves || switches.length === 0;
+
+                for (let j = 1; j <= possibleMoves.length; j++) {
+                    const currentMove = possibleMoves[j - 1];
+                    if (currentMove.id === "struggle") {
+                        isStruggling = true;
+                    }
+                    if ((!currentMove.disabled && canAddMove) || isStruggling) {
+                        const moveIndex = j as 1 | 2 | 3 | 4;
+                        legalActions.set(-1 + moveIndex, true);
+                    }
+                }
 
                 for (const j of switches) {
                     const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
@@ -2414,10 +2426,10 @@ export class StateHandler {
                 playerIndex,
                 false,
             ),
-            this.getTeamFromSide(
-                this.player.privateBattle.sides[1 - playerIndex],
-                playerIndex,
-            ),
+            // this.getTeamFromSide(
+            //     this.player.privateBattle.sides[1 - playerIndex],
+            //     playerIndex,
+            // ),
         ];
         return concatenateArrays(team);
     }
@@ -2528,6 +2540,7 @@ export class StateHandler {
         info.setDone(this.player.done);
         info.setDraw(this.player.draw);
         info.setRequestCount(this.player.requestCount);
+        info.setTimestamp(this.player.eventHandler.timestamp);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
@@ -2538,8 +2551,8 @@ export class StateHandler {
         const drawRatio = this.player.privateBattle.turn / DRAW_TURNS;
         info.setDrawRatio(Math.max(0, Math.min(1, drawRatio)));
 
-        const rewards = this.getRewards();
-        info.setRewards(rewards);
+        // const rewards = this.getRewards();
+        // info.setRewards(rewards);
 
         // const heuristics = this.getHeuristics();
         // info.setHeuristics(heuristics);
