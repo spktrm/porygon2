@@ -17,6 +17,8 @@ from ml.utils import get_most_recent_file
 from rlenv.interfaces import TimeStep
 from rlenv.main import EvalBatchCollector, SingleTrajectoryTrainingBatchCollector
 
+jax.config.update("jax_default_matmul_precision", "bfloat16")
+
 
 def iterate(batch: TimeStep, minibatch_size: int = 4) -> Iterator[TimeStep]:
     _, batch_size, *__ = batch.env.valid.shape

@@ -88,6 +88,7 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
     private readonly data: T;
     private readonly bitsPerElement: number;
     private readonly mask: number;
+    sum: number;
 
     constructor(
         length: number,
@@ -103,6 +104,7 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         this.data = new bufferConstructor(
             Math.ceil(length / this.bitsPerElement),
         );
+        this.sum = 0;
     }
 
     private getElementAndBit(index: number): [number, number] {
@@ -115,6 +117,11 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         if (index < 0 || index >= this.length)
             throw new RangeError("Index out of bounds");
         const [element, bit] = this.getElementAndBit(index);
+        if (bit === 0) {
+            this.sum += 1;
+        } else {
+            this.sum -= 1;
+        }
         this.data[element] ^= 1 << bit;
     }
 
@@ -130,8 +137,10 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
             throw new RangeError("Index out of bounds");
         const [element, bit] = this.getElementAndBit(index);
         if (value) {
+            this.sum += 1;
             this.data[element] |= 1 << bit;
         } else {
+            this.sum -= 1;
             this.data[element] &= ~(1 << bit);
         }
     }

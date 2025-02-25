@@ -7,6 +7,7 @@ import { Action, GameState } from "../../protos/service_pb";
 import { MessagePort } from "worker_threads";
 import { EVAL_GAME_ID_OFFSET } from "./data";
 import { getEvalAction } from "./eval";
+import { Rewards } from "../../protos/state_pb";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
@@ -25,9 +26,6 @@ export class Game {
     playerIds: number[];
     maxPlayers: number;
 
-    tracker: Tracker;
-    prevTurn: number;
-
     constructor(gameId: number, workerIndex: number, port: MessagePort) {
         this.gameId = gameId;
         this.workerIndex = workerIndex;
@@ -38,9 +36,6 @@ export class Game {
         this.maxPlayers = this.gameId < EVAL_GAME_ID_OFFSET ? 2 : 1;
         this.resetCount = 0;
         this.playerIds = [];
-
-        this.tracker = new Tracker();
-        this.prevTurn = 0;
     }
 
     addPlayerId(playerId: number) {
@@ -66,7 +61,6 @@ export class Game {
                 console.error("No players have been added");
             }
             this.resetCount = 0;
-            this.tracker.reset();
             this.tasks.reset();
             this._reset(options);
         }
@@ -118,38 +112,42 @@ export class Game {
 >player p2 ${JSON.stringify(p2spec)}`);
 
         const battle = stream.battle!;
-        this.tracker.setBattle(battle);
+
+        const tracker = new Tracker();
+        tracker.setBattle(battle);
+        tracker.reset();
 
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
 
             const state = player.createState();
             const info = state.getInfo()!;
-            const currentTurn = info.getTurn()!;
+            const isDone = info.getDone()!;
+            const playerIndex = +state.getInfo()!.getPlayerIndex();
 
-            if (currentTurn > this.prevTurn) {
-                const rewards = info.getRewards()!;
-                this.tracker.update();
-                const {
-                    faintedReward,
-                    hpReward,
-                    scaledHpReward,
-                    scaledFaintedReward,
-                } = this.tracker.getReward();
+            const rewards = new Rewards();
+            tracker.update(playerIndex);
+            const {
+                faintedReward,
+                hpReward,
+                scaledHpReward,
+                scaledFaintedReward,
+                winReward,
+            } = tracker.getReward();
 
-                rewards.setHpReward(hpReward);
-                rewards.setFaintedReward(faintedReward);
-                rewards.setScaledHpReward(scaledHpReward);
-                rewards.setScaledFaintedReward(scaledFaintedReward);
+            rewards.setHpReward(hpReward);
+            rewards.setFaintedReward(faintedReward);
+            rewards.setScaledHpReward(scaledHpReward);
+            rewards.setScaledFaintedReward(scaledFaintedReward);
+            rewards.setWinReward(winReward);
 
-                this.prevTurn = currentTurn;
-            }
+            info.setRewards(rewards);
+            state.setInfo(info);
 
             gameState.setState(state.serializeBinary());
-            const playerId =
-                this.playerIds[+state.getInfo()!.getPlayerIndex()] ?? 1;
+            const playerId = this.playerIds[playerIndex] ?? 1;
             let rqid = -1;
-            if (!state.getInfo()!.getDone()) {
+            if (!isDone) {
                 rqid = this.tasks.createJob();
             }
             gameState.setRqid(rqid);

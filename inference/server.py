@@ -36,9 +36,12 @@ async def predict(request: Request):
     pprint_nparray(
         np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__SPECIES_ID])
     )
-    pprint_nparray(np.array(response.pi))
+    print()
     pprint_nparray(np.array(response.logit))
     pprint_nparray(np.array(response.log_pi))
+    print()
+    pprint_nparray(np.array(response.pi))
+    print()
     pprint_nparray(np.array(response.v))
     pprint_nparray(np.array(response.action))
 

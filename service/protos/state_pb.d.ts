@@ -21,6 +21,12 @@ export class Rewards extends jspb.Message {
   getScaledHpReward(): number;
   setScaledHpReward(value: number): void;
 
+  getTerminalHpReward(): number;
+  setTerminalHpReward(value: number): void;
+
+  getTerminalFaintedReward(): number;
+  setTerminalFaintedReward(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Rewards.AsObject;
   static toObject(includeInstance: boolean, msg: Rewards): Rewards.AsObject;
@@ -38,6 +44,8 @@ export namespace Rewards {
     faintedReward: number,
     scaledFaintedReward: number,
     scaledHpReward: number,
+    terminalHpReward: number,
+    terminalFaintedReward: number,
   }
 }
 
@@ -102,6 +110,9 @@ export class Info extends jspb.Message {
   getRequestCount(): number;
   setRequestCount(value: number): void;
 
+  getTimestamp(): number;
+  setTimestamp(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -126,6 +137,7 @@ export namespace Info {
     draw: boolean,
     heuristics?: Heuristics.AsObject,
     requestCount: number,
+    timestamp: number,
   }
 }
 

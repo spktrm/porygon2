@@ -8,18 +8,22 @@ from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Map
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Rewards(_message.Message):
-    __slots__ = ("win_reward", "hp_reward", "fainted_reward", "scaled_fainted_reward", "scaled_hp_reward")
+    __slots__ = ("win_reward", "hp_reward", "fainted_reward", "scaled_fainted_reward", "scaled_hp_reward", "terminal_hp_reward", "terminal_fainted_reward")
     WIN_REWARD_FIELD_NUMBER: _ClassVar[int]
     HP_REWARD_FIELD_NUMBER: _ClassVar[int]
     FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
     SCALED_FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
     SCALED_HP_REWARD_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_HP_REWARD_FIELD_NUMBER: _ClassVar[int]
+    TERMINAL_FAINTED_REWARD_FIELD_NUMBER: _ClassVar[int]
     win_reward: float
     hp_reward: float
     fainted_reward: float
     scaled_fainted_reward: float
     scaled_hp_reward: float
-    def __init__(self, win_reward: _Optional[float] = ..., hp_reward: _Optional[float] = ..., fainted_reward: _Optional[float] = ..., scaled_fainted_reward: _Optional[float] = ..., scaled_hp_reward: _Optional[float] = ...) -> None: ...
+    terminal_hp_reward: float
+    terminal_fainted_reward: float
+    def __init__(self, win_reward: _Optional[float] = ..., hp_reward: _Optional[float] = ..., fainted_reward: _Optional[float] = ..., scaled_fainted_reward: _Optional[float] = ..., scaled_hp_reward: _Optional[float] = ..., terminal_hp_reward: _Optional[float] = ..., terminal_fainted_reward: _Optional[float] = ...) -> None: ...
 
 class Heuristics(_message.Message):
     __slots__ = ("heuristic_action",)
@@ -28,7 +32,7 @@ class Heuristics(_message.Message):
     def __init__(self, heuristic_action: _Optional[int] = ...) -> None: ...
 
 class Info(_message.Message):
-    __slots__ = ("game_id", "done", "player_index", "turn", "ts", "draw_ratio", "worker_index", "rewards", "seed", "draw", "heuristics", "request_count")
+    __slots__ = ("game_id", "done", "player_index", "turn", "ts", "draw_ratio", "worker_index", "rewards", "seed", "draw", "heuristics", "request_count", "timestamp")
     GAME_ID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
     PLAYER_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -41,6 +45,7 @@ class Info(_message.Message):
     DRAW_FIELD_NUMBER: _ClassVar[int]
     HEURISTICS_FIELD_NUMBER: _ClassVar[int]
     REQUEST_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     game_id: int
     done: bool
     player_index: bool
@@ -53,7 +58,8 @@ class Info(_message.Message):
     draw: bool
     heuristics: Heuristics
     request_count: int
-    def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ...) -> None: ...
+    timestamp: int
+    def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ..., timestamp: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
     __slots__ = ("info", "legal_actions", "history", "moveset", "public_team", "private_team", "key")

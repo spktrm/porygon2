@@ -57,6 +57,7 @@ class EntityFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_FEATURE__ACTION_ID2: _ClassVar[EntityFeature]
     ENTITY_FEATURE__ACTION_ID3: _ClassVar[EntityFeature]
     ENTITY_FEATURE__NUM_MOVES: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__IS_PUBLIC: _ClassVar[EntityFeature]
 
 class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -191,6 +192,7 @@ ENTITY_FEATURE__ACTION_ID1: EntityFeature
 ENTITY_FEATURE__ACTION_ID2: EntityFeature
 ENTITY_FEATURE__ACTION_ID3: EntityFeature
 ENTITY_FEATURE__NUM_MOVES: EntityFeature
+ENTITY_FEATURE__IS_PUBLIC: EntityFeature
 MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum

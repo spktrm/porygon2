@@ -29,6 +29,10 @@ def get_history(history: History, padding_length: int = NUM_HISTORY):
         (history_length, NUM_ABSOLUTE_EDGE_FIELDS)
     )
 
+    entities = np.flip(entities, axis=0)
+    relative_edges = np.flip(relative_edges, axis=0)
+    absolute_edges = np.flip(absolute_edges, axis=0)
+
     return HistoryContainer(
         entities=padnstack(entities, padding_length).astype(int),
         relative_edges=padnstack(relative_edges, padding_length).astype(int),
@@ -54,7 +58,7 @@ def process_state(state: State):
     )
     private_team = (
         np.frombuffer(state.private_team, dtype=np.int16)
-        .reshape(12, NUM_ENTITY_FIELDS)
+        .reshape(6, NUM_ENTITY_FIELDS)
         .astype(int)
     )
     public_team = (
@@ -88,6 +92,7 @@ def process_state(state: State):
         player_id=np.array(player_index, dtype=int),
         game_id=np.array(state.info.game_id, dtype=int),
         turn=np.array(state.info.turn, dtype=int),
+        timestamp=np.array(state.info.timestamp, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
         private_team=private_team.astype(int),
