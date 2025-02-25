@@ -199,9 +199,6 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             )
         )
 
-        loss_wm = renormalize(pred.wm_loss, valid)
-        logs["loss_wm"] = loss_wm
-
         policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
             axis=-1
         )
@@ -238,11 +235,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             pred.pi,
             valid * (batch.env.legal.sum(axis=-1) > 1),
         )
-        loss = (
-            config.value_loss_coef * loss_v
-            + config.policy_loss_coef * loss_nerd
-            + loss_wm
-        )
+        loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
         logs.update(collect_loss_value_telemetry_data(loss_v, loss_nerd, loss_entropy))
 
         return loss, logs

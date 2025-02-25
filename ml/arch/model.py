@@ -35,7 +35,7 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        entity_embeddings, entity_mask, action_embeddings, wm_loss = self.encoder(
+        entity_embeddings, entity_mask, action_embeddings = self.encoder(
             env_step, history_step
         )
 
@@ -51,7 +51,6 @@ class Model(nn.Module):
             pi=pi,
             log_pi=log_pi,
             v=value,
-            wm_loss=wm_loss,
         )
 
 

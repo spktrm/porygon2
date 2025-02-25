@@ -40,7 +40,7 @@ def activation_fn(array: chex.Array) -> chex.Array:
     Returns:
         chex.Array: Activated array.
     """
-    return jax.nn.silu(array) * array
+    return nn.gelu(array)
 
 
 def layer_norm(array: chex.Array) -> chex.Array:
