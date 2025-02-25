@@ -12,7 +12,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params, get_most_recent_file
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
@@ -35,7 +35,7 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        entity_embeddings, entity_mask, action_embeddings = self.encoder(
+        entity_embeddings, entity_mask, action_embeddings, wm_loss = self.encoder(
             env_step, history_step
         )
 
@@ -46,7 +46,13 @@ class Model(nn.Module):
         value = self.value_head(entity_embeddings, entity_mask)
 
         # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
+        return ModelOutput(
+            logit=logit,
+            pi=pi,
+            log_pi=log_pi,
+            v=value,
+            wm_loss=wm_loss,
+        )
 
 
 class DummyModel(nn.Module):
@@ -118,11 +124,10 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 
 def main():
-    config = get_model_cfg()
-    network = get_model(config)
+    network = get_model()
     ex, hx = get_ex_step()
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

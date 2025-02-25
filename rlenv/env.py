@@ -92,6 +92,7 @@ def process_state(state: State):
         player_id=np.array(player_index, dtype=int),
         game_id=np.array(state.info.game_id, dtype=int),
         turn=np.array(state.info.turn, dtype=int),
+        timestamp=np.array(state.info.timestamp, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
         private_team=private_team.astype(int),

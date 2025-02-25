@@ -17,13 +17,13 @@ from ml.func import (
     _player_others,
     get_loss_entropy,
     get_loss_nerd,
-    get_loss_v_mse,
+    get_loss_v_huber,
+    renormalize,
     rnad_v_trace,
 )
 from ml.learners.func import (
-    calculate_r2,
-    collect_parameter_and_gradient_telemetry_data,
     collect_loss_value_telemetry_data,
+    collect_parameter_and_gradient_telemetry_data,
     collect_policy_stats_telemetry_data,
     collect_regularisation_telemetry_data,
     collect_value_stats_telemetry_data,
@@ -185,7 +185,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             has_played_list.append(jax.lax.stop_gradient(has_played))
             v_trace_policy_target_list.append(jax.lax.stop_gradient(policy_target_))
 
-        loss_v = get_loss_v_mse(
+        loss_v = get_loss_v_huber(
             [pred.v] * config.num_players,
             v_target_list,
             has_played_list,
@@ -198,6 +198,9 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
                 has_played_list[0].squeeze(),
             )
         )
+
+        loss_wm = renormalize(pred.wm_loss, valid)
+        logs["loss_wm"] = loss_wm
 
         policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
             axis=-1
@@ -235,7 +238,11 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             pred.pi,
             valid * (batch.env.legal.sum(axis=-1) > 1),
         )
-        loss = config.value_loss_coef * loss_v + config.policy_loss_coef * loss_nerd
+        loss = (
+            config.value_loss_coef * loss_v
+            + config.policy_loss_coef * loss_nerd
+            + loss_wm
+        )
         logs.update(collect_loss_value_telemetry_data(loss_v, loss_nerd, loss_entropy))
 
         return loss, logs

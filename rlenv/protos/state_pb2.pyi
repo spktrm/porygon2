@@ -32,7 +32,7 @@ class Heuristics(_message.Message):
     def __init__(self, heuristic_action: _Optional[int] = ...) -> None: ...
 
 class Info(_message.Message):
-    __slots__ = ("game_id", "done", "player_index", "turn", "ts", "draw_ratio", "worker_index", "rewards", "seed", "draw", "heuristics", "request_count")
+    __slots__ = ("game_id", "done", "player_index", "turn", "ts", "draw_ratio", "worker_index", "rewards", "seed", "draw", "heuristics", "request_count", "timestamp")
     GAME_ID_FIELD_NUMBER: _ClassVar[int]
     DONE_FIELD_NUMBER: _ClassVar[int]
     PLAYER_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -45,6 +45,7 @@ class Info(_message.Message):
     DRAW_FIELD_NUMBER: _ClassVar[int]
     HEURISTICS_FIELD_NUMBER: _ClassVar[int]
     REQUEST_COUNT_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     game_id: int
     done: bool
     player_index: bool
@@ -57,7 +58,8 @@ class Info(_message.Message):
     draw: bool
     heuristics: Heuristics
     request_count: int
-    def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ...) -> None: ...
+    timestamp: int
+    def __init__(self, game_id: _Optional[int] = ..., done: bool = ..., player_index: bool = ..., turn: _Optional[int] = ..., ts: _Optional[float] = ..., draw_ratio: _Optional[float] = ..., worker_index: _Optional[int] = ..., rewards: _Optional[_Union[Rewards, _Mapping]] = ..., seed: _Optional[int] = ..., draw: bool = ..., heuristics: _Optional[_Union[Heuristics, _Mapping]] = ..., request_count: _Optional[int] = ..., timestamp: _Optional[int] = ...) -> None: ...
 
 class State(_message.Message):
     __slots__ = ("info", "legal_actions", "history", "moveset", "public_team", "private_team", "key")

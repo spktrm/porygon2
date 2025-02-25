@@ -110,6 +110,9 @@ export class Info extends jspb.Message {
   getRequestCount(): number;
   setRequestCount(value: number): void;
 
+  getTimestamp(): number;
+  setTimestamp(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Info.AsObject;
   static toObject(includeInstance: boolean, msg: Info): Info.AsObject;
@@ -134,6 +137,7 @@ export namespace Info {
     draw: boolean,
     heuristics?: Heuristics.AsObject,
     requestCount: number,
+    timestamp: number,
   }
 }
 
