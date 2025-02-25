@@ -142,7 +142,7 @@ def get_model_cfg():
     cfg.value_head.transformer.use_spectral_linear = use_spectral_linear
     cfg.value_head.transformer.resblocks_hidden_size = transformer_hidden_size
 
-    cfg.value_head.logits.num_logits = 18
+    cfg.value_head.logits.num_logits = 1
     cfg.value_head.logits.num_linear_layers = 2
     cfg.value_head.logits.use_layer_norm = use_layer_norm
     # cfg.value_head.logits.kernel_init = "small"
