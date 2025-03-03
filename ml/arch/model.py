@@ -12,7 +12,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params
+from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
@@ -126,7 +126,7 @@ def main():
     network = get_model()
     ex, hx = get_ex_step()
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

@@ -18,7 +18,6 @@ from ml.func import (
     get_loss_entropy,
     get_loss_nerd,
     get_loss_v_huber,
-    renormalize,
     rnad_v_trace,
 )
 from ml.learners.func import (
@@ -38,7 +37,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 2
-    clip: float = 1_000
+    clip: float = 10
 
 
 @chex.dataclass(frozen=True)
@@ -56,8 +55,8 @@ def get_config():
 
 class TrainState(train_state.TrainState):
 
-    # params_reg: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     params_target: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    params_reg: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     actor_steps: int = 0
 
@@ -68,7 +67,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
 
     params = module.init(rng, ex, hx)
     params_target = module.init(rng, ex, hx)
-    # params_reg = module.init(rng, ex, hx)
+    params_reg = module.init(rng, ex, hx)
 
     tx = optax.chain(
         optax.adamw(
@@ -86,7 +85,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfi
         apply_fn=module.apply,
         params=params,
         params_target=params_target,
-        # params_reg=params_reg,
+        params_reg=params_reg,
         tx=tx,
     )
 
@@ -97,7 +96,7 @@ def save(state: TrainState):
             dict(
                 params=state.params,
                 params_target=state.params_target,
-                # params_reg=state.params_reg,
+                params_reg=state.params_reg,
                 opt_state=state.opt_state,
                 step=state.step,
             ),
@@ -111,18 +110,21 @@ def load(state: TrainState, path: str):
         step = pickle.load(f)
 
     step_no = step.get("step", 0)
-    state = state.replace(
-        step=step["step"],
-        params=step["params"],
-    )
+
+    params = step["params"]
+    state = state.replace(step=step["step"], params=params)
 
     if step_no > 0:
         print(f"Learner steps: {step_no:08}")
         print(f"Loading target and regularisation nets")
         print(f"Loading optimizer state")
+
+        params_target = step.get("params_target", params)
+        params_reg = step.get("params_reg", params_target)
+
         state = state.replace(
-            params_target=step["params_target"],
-            # params_reg=step["params_reg"],
+            params_target=params_target,
+            params_reg=params_reg,
             opt_state=step["opt_state"],
         )
 
@@ -142,13 +144,13 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
         pred: ModelOutput = rollout_fn(params)
         pred_targ: ModelOutput = rollout_fn(state.params_target)
-        # pred_reg: ModelOutput = rollout_fn(state.params_reg)
+        pred_reg: ModelOutput = rollout_fn(state.params_reg)
 
         logs = {}
 
         policy_pprocessed = config.finetune(pred.pi, batch.env.legal, state.step)
 
-        log_policy_reg = pred.log_pi - pred_targ.log_pi
+        log_policy_reg = pred.log_pi - pred_reg.log_pi
         logs.update(
             collect_regularisation_telemetry_data(
                 pred.pi, log_policy_reg, batch.env.legal, batch.env.valid
@@ -245,6 +247,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
 
     logs.update(dict(loss=loss_val))
     logs.update(collect_parameter_and_gradient_telemetry_data(state.params, grads))
+    # logs.update(efficient_per_module_gradient_stats(grads))
 
     state = state.apply_gradients(grads=grads)
 
@@ -254,14 +257,14 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         old_tensors=state.params_target,
         step_size=ema_val,
     )
-    # params_reg = optax.incremental_update(
-    #     new_tensors=state.params_target,
-    #     old_tensors=state.params_reg,
-    #     step_size=ema_val,
-    # )
+    params_reg = optax.incremental_update(
+        new_tensors=state.params_target,
+        old_tensors=state.params_reg,
+        step_size=ema_val,
+    )
     state = state.replace(
         params_target=params_target,
-        # params_reg=params_reg,
+        params_reg=params_reg,
         actor_steps=state.actor_steps + batch.env.valid.sum(),
     )
 
