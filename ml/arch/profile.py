@@ -29,7 +29,8 @@ def main():
         params = network.init(key, ex, hx)
 
     apply_fn = network.apply
-    output = apply_fn(params, ex, hx)
+    for _ in range(5):
+        output = apply_fn(params, ex, hx)
 
     with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
         # Run the operations to be profiled

@@ -92,18 +92,131 @@ def collect_parameter_and_gradient_telemetry_data(
         param_norm=optax.global_norm(params),
         gradient_norm=optax.global_norm(grads),
     )
-    for module_name in ["encoder", "policy_head", "value_head"]:
-        for key, value in grads["params"][module_name].items():
-            logs[f"{module_name}_{key}_abs_grad_max"] = jax.tree.reduce(
-                lambda a, b: jnp.maximum(a, b),
-                jax.tree.map(lambda x: jnp.abs(x).max(), value),
-            )
-        for key, value in params["params"][module_name].items():
-            logs[f"{module_name}_{key}_abs_param_max"] = jax.tree.reduce(
-                lambda a, b: jnp.maximum(a, b),
-                jax.tree.map(lambda x: jnp.abs(x).max(), value),
-            )
     return logs
+
+
+@jax.jit
+def efficient_per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]:
+    stats = {}
+
+    # List of modules to analyze separately
+    modules = ["encoder", "policy_head", "value_head"]
+
+    # For each module, calculate relevant statistics
+    for module_name in modules:
+        if module_name not in grads["params"]:
+            continue
+
+        module_grads = grads["params"][module_name]
+
+        # Calculate statistics directly on tree leaves without concatenation
+        def calc_stats_fn(grads):
+            # Compute statistics in a vectorized way
+            abs_grads = jnp.abs(grads)
+
+            # Basic statistics that can be calculated without concatenation
+            norm = jnp.sqrt(jnp.sum(grads**2))
+            mean = jnp.mean(abs_grads)
+
+            # Approximate percentiles using mean and std
+            std = jnp.std(abs_grads)
+            approx_25th = jnp.maximum(mean - 0.674 * std, 0)  # Approximation
+            approx_75th = mean + 0.674 * std
+
+            # Signal-to-noise
+            snr = jnp.mean(grads) / (std + 1e-8)
+
+            # Zero gradient percentage
+            zero_pct = jnp.mean(abs_grads < 1e-8)
+
+            # Min and max
+            grad_min = jnp.min(abs_grads)
+            grad_max = jnp.max(abs_grads)
+
+            return {
+                "norm": norm,
+                "mean": mean,
+                "approx_25th": approx_25th,
+                "approx_75th": approx_75th,
+                "snr": snr,
+                "zero_pct": zero_pct,
+                "min": grad_min,
+                "max": grad_max,
+            }
+
+        # Process each parameter group separately and aggregate
+        module_stats = {
+            "norm": 0.0,
+            "mean": 0.0,
+            "approx_25th": 0.0,
+            "approx_75th": 0.0,
+            "snr": 0.0,
+            "zero_pct": 0.0,
+            "min": float("inf"),
+            "max": 0.0,
+        }
+
+        param_count = 0
+
+        for key, value in module_grads.items():
+            # Process each leaf in the tree
+            for leaf in jax.tree_util.tree_leaves(value):
+                if not hasattr(leaf, "size"):
+                    continue
+
+                leaf_stats = calc_stats_fn(leaf)
+                leaf_size = leaf.size
+
+                # Weighted average for appropriate metrics
+                module_stats["mean"] = (
+                    module_stats["mean"] * param_count + leaf_stats["mean"] * leaf_size
+                ) / (param_count + leaf_size)
+                module_stats["approx_25th"] = (
+                    module_stats["approx_25th"] * param_count
+                    + leaf_stats["approx_25th"] * leaf_size
+                ) / (param_count + leaf_size)
+                module_stats["approx_75th"] = (
+                    module_stats["approx_75th"] * param_count
+                    + leaf_stats["approx_75th"] * leaf_size
+                ) / (param_count + leaf_size)
+                module_stats["snr"] = (
+                    module_stats["snr"] * param_count + leaf_stats["snr"] * leaf_size
+                ) / (param_count + leaf_size)
+                module_stats["zero_pct"] = (
+                    module_stats["zero_pct"] * param_count
+                    + leaf_stats["zero_pct"] * leaf_size
+                ) / (param_count + leaf_size)
+
+                # For norm, we accumulate squares and take sqrt at the end
+                module_stats["norm"] += leaf_stats["norm"] ** 2
+
+                # For min/max, we take the global min/max
+                module_stats["min"] = jnp.minimum(
+                    module_stats["min"], leaf_stats["min"]
+                )
+                module_stats["max"] = jnp.maximum(
+                    module_stats["max"], leaf_stats["max"]
+                )
+
+                param_count += leaf_size
+
+        # Finalize calculations
+        module_stats["norm"] = jnp.sqrt(module_stats["norm"])
+
+        # Prefix for this module's statistics
+        prefix = f"{module_name}_"
+
+        # Add to the overall stats dictionary
+        stats[f"{prefix}grad_norm"] = module_stats["norm"]
+        stats[f"{prefix}grad_mean"] = module_stats["mean"]
+        stats[f"{prefix}grad_approx_25th"] = module_stats["approx_25th"]
+        stats[f"{prefix}grad_approx_75th"] = module_stats["approx_75th"]
+        stats[f"{prefix}grad_signal_to_noise"] = module_stats["snr"]
+        stats[f"{prefix}grad_zero_percentage"] = module_stats["zero_pct"]
+        stats[f"{prefix}grad_min"] = module_stats["min"]
+        stats[f"{prefix}grad_max"] = module_stats["max"]
+
+    return stats
 
 
 @jax.jit

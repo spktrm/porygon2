@@ -34,9 +34,6 @@ class ValueHead(nn.Module):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-        support = jnp.linspace(-1.5, 1.5, self.cfg.logits.num_logits + 1)
-        self.centers = (support[:-1] + support[1:]) / 2
-
     def __call__(self, entity_embeddings: chex.Array, entity_mask: chex.Array):
         queries = self.encoder(entity_embeddings, entity_mask)
         b1, b2, b3 = jnp.split(queries, 3, axis=0)
