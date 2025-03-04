@@ -400,10 +400,10 @@ def main():
 
     while True:
         batch = training_env.collect_batch_trajectory(params)
-        with open("rlenv/ex_batch", "wb") as f:
-            pickle.dump(batch, f)
-        break
-        collect_batch_telemetry_data(batch)
+        # with open("rlenv/ex_batch", "wb") as f:
+        #     pickle.dump(batch, f)
+        # break
+        data = collect_batch_telemetry_data(batch)
 
         training_progress.update(batch.env.valid.sum())
         batch = evaluation_env.collect_batch_trajectory(params)

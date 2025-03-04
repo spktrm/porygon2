@@ -2156,6 +2156,14 @@ export class EventHandler implements Protocol.Handler {
         this.turnNum = parseInt(turnNum);
     }
 
+    "|win|"() {
+        this.player.done = true;
+    }
+
+    "|tie|"() {
+        this.player.done = true;
+    }
+
     reset() {
         this.prevHp = new Map();
         this.actives = new Map();
@@ -2540,7 +2548,7 @@ export class StateHandler {
         info.setDone(this.player.done);
         info.setDraw(this.player.draw);
         info.setRequestCount(this.player.requestCount);
-        info.setTimestamp(this.player.eventHandler.timestamp);
+        // info.setTimestamp(this.player.eventHandler.timestamp);
 
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
