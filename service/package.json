@@ -13,6 +13,7 @@
         "start-evaluation1-server": "node dist/server/index.js --type evaluation1",
         "start-evaluation2-server": "node dist/server/index.js --type evaluation2",
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
+        "start-evaluation-client2": "npm run compile-base && node dist/client/index2.js ",
         "test": "npm run compile-base && node dist/tests/main.js",
         "offline": "npm run compile-base && node dist/offline/main.js",
         "matchup": "npm run compile-base && node dist/tests/matchup.js",
@@ -32,6 +33,7 @@
         "@types/pino": "^7.0.4",
         "@types/progress": "^2.0.7",
         "@types/ws": "^8.5.13",
+        "axios": "^1.8.1",
         "google-protobuf": "^3.19.1",
         "pino": "^9.5.0",
         "pino-pretty": "^13.0.0",
@@ -40,6 +42,7 @@
     },
     "devDependencies": {
         "@eslint/js": "^9.15.0",
+        "@types/axios": "^0.9.36",
         "eslint": "^9.15.0",
         "globals": "^15.12.0",
         "ts-node": "^10.9.2",

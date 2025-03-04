@@ -292,7 +292,10 @@ export class Player extends BattleStreams.BattlePlayer {
             return false;
         }
         this.rqid = request?.rqid;
-        if (request?.teamPreview) {
+        if (
+            request?.teamPreview ||
+            (chunk.includes("|inactive|") && chunk.includes("30 seconds left"))
+        ) {
             return true;
         }
         if (request?.wait) {
@@ -363,12 +366,12 @@ export class Player extends BattleStreams.BattlePlayer {
                 this.log.push("---request---");
                 this.requestCount += 1;
                 const key = await this.send(this);
-                this.privateBattle.request = undefined;
                 const action = await this.recv(key!);
                 if (action !== undefined) {
                     this.actionLog.push(action);
                     const actionValue = action.getValue();
                     this.choose(actionStrings[actionValue] ?? "default");
+                    this.privateBattle.request = undefined;
                 }
             }
         }
