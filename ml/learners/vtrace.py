@@ -46,7 +46,7 @@ class VtraceConfig(ActorCriticConfig):
     target_network_avg: float = 1e-3
 
     nerd: NerdConfig = NerdConfig()
-    clip_gradient: float = 1
+    clip_gradient: float = 200
 
 
 def get_config():
@@ -162,7 +162,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
         v_target_list, has_played_list, v_trace_policy_target_list = [], [], []
         action_oh = jax.nn.one_hot(batch.actor.action, batch.actor.policy.shape[-1])
 
-        rewards = batch.actor.rewards.scaled_fainted_rewards
+        rewards = batch.actor.rewards.win_rewards
 
         for player in range(config.num_players):
             reward = rewards[:, :, player]  # [T, B, Player]
@@ -201,7 +201,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
             )
         )
 
-        policy_ratio = (action_oh * jnp.exp(pred.log_pi - pred_targ.log_pi)).sum(
+        policy_ratio = (action_oh * jnp.exp(pred.log_pi - batch.actor.log_policy)).sum(
             axis=-1
         )
         is_vector = jnp.expand_dims(jnp.ones_like(valid), axis=-1)

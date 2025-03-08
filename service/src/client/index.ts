@@ -1,26 +1,14 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import WebSocket from "ws";
-import { inspect } from "util";
+import axios from "axios";
+
 import { Player } from "../server/player";
 import { ObjectReadWriteStream } from "@pkmn/streams";
 import { recvFnType, sendFnType } from "../server/types";
 import { Action, GameState } from "../../protos/service_pb";
 import { TaskQueueSystem } from "../server/utils";
-import { request } from "https";
-
-const offline = `localhost:8000`;
-const online = "sim3.psim.us";
-
-function stringToUniqueInt(str: string): number {
-    let hash = 5381;
-    for (let i = 0; i < str.length; i++) {
-        hash = (hash * 33) ^ str.charCodeAt(i);
-    }
-    return hash >>> 0; // Ensure the hash is a positive integer
-}
 
 async function ActionFromResponse(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     modelOutput: Record<string, any>,
 ): Promise<Action> {
     const { action: actionIndex } = modelOutput;
@@ -51,7 +39,13 @@ class ClientStream extends ObjectReadWriteStream<string> {
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
             const state = player.createState();
-            gameState.setState(state.serializeBinary());
+            try {
+                const stateBinary = state.serializeBinary();
+                gameState.setState(stateBinary);
+            } catch (e) {
+                console.log(state.toObject());
+                console.log(e);
+            }
             const playerId = 0;
             let rqid = -1;
             if (!state.getInfo()!.getDone()) {
@@ -80,7 +74,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
 
         this.player = new Player(
             0,
-            stringToUniqueInt(options?.roomId),
+            Math.floor(2 ** 16 * Math.random()),
             this,
             0,
             sendFn,
@@ -96,26 +90,35 @@ class ClientStream extends ObjectReadWriteStream<string> {
     }
 }
 
+const welcomeMessage =
+    "You are fighting an AI in development - trained with reinforcement learning. If you have any questions, please message spktrm#6133 on discord. glfh :)";
+
+/**
+ * Class representing a Pokémon Showdown battle
+ */
 class Battle {
-    roomId: string;
+    private battleId: string;
     private ws: WebSocket;
     stream: ClientStream;
     prevMessage: string | undefined;
+    active: boolean;
 
     constructor(roomId: string, ws: WebSocket) {
-        this.roomId = roomId;
+        this.battleId = roomId;
         this.ws = ws;
+        this.active = true;
 
         this.prevMessage = undefined;
 
-        const stream = new ClientStream({
+        this.ws.send(`${this.battleId}|/timer on`);
+        this.ws.send(`${this.battleId}|${welcomeMessage}`);
+        this.stream = new ClientStream({
             roomId,
             choose: (message: string) => {
-                this.ws.send(`${this.roomId}|/choose ${message}`);
+                this.ws.send(`${this.battleId}|/choose ${message}`);
                 this.prevMessage = message;
             },
         });
-        this.stream = stream;
     }
 
     public async receive(message: string): Promise<void> {
@@ -129,182 +132,394 @@ class Battle {
     }
 
     send(message: string): void {
-        const toSend = `${this.roomId}|${message}`;
+        const toSend = `${this.battleId}|/choose ${message}`;
         this.ws.send(toSend);
         this.prevMessage = message;
     }
-}
-
-class BattleManager {
-    battles: { [roomId: string]: Battle } = {};
-    private ws: WebSocket;
-
-    constructor(ws: WebSocket) {
-        this.ws = ws;
+    /**
+     * Check if the battle is active
+     * @returns Whether the battle is active
+     */
+    public isActive(): boolean {
+        return !this.stream.player.done;
     }
 
-    public addBattle(roomId: string): [boolean, Battle] {
-        let isNew = false;
-        if (!this.battles[roomId]) {
-            this.battles[roomId] = new Battle(roomId, this.ws);
-            isNew = true;
-        }
-        return [isNew, this.battles[roomId]];
-    }
-
-    public getBattle(roomId: string): Battle | undefined {
-        return this.battles[roomId];
-    }
-
-    public removeBattle(roomId: string): void {
-        delete this.battles[roomId];
+    /**
+     * Get the battle ID
+     * @returns The battle ID
+     */
+    public getBattleId(): string {
+        return this.battleId;
     }
 }
 
-class PokemonShowdownBot {
-    private ws: WebSocket;
-    private serverUrl: string = `ws://${offline}/showdown/websocket`;
-    private username: string = "YourUsername";
-    private password: string | undefined = undefined;
-    private battleManager: BattleManager;
+interface BotConfig {
+    username: string;
+    password: string;
+    format: string;
+    team?: string;
+    maxConcurrentBattles: number; // Changed from maxSearches to maxConcurrentBattles
+    serverUrl: string;
+    secure: boolean;
+}
 
-    constructor(username: string, password: string | undefined = undefined) {
-        this.username = username;
-        this.password = password;
-        this.ws = new WebSocket(this.serverUrl);
-        this.battleManager = new BattleManager(this.ws);
-        this.setupListeners();
+interface BotState {
+    activeBattles: number; // Track current active battles
+    rooms: Set<string>;
+    challenges: Map<string, string>; // challenger name -> format
+    battles: Map<string, Battle>;
+}
+
+export class ShowdownBot {
+    private config: BotConfig;
+    private state: BotState;
+    private ws: WebSocket | null = null;
+    private challstr: string = "";
+    private connected: boolean = false;
+    private loggedIn: boolean = false;
+
+    constructor(config: BotConfig) {
+        this.config = config;
+        this.state = {
+            activeBattles: 0,
+            rooms: new Set(),
+            challenges: new Map(),
+            battles: new Map(),
+        };
     }
 
-    private setupListeners(): void {
+    public start(): void {
+        this.connect();
+    }
+
+    private connect(): void {
+        const protocol = this.config.secure ? "wss" : "ws";
+        const serverUrl = `${protocol}://${this.config.serverUrl}/showdown/websocket`;
+
+        console.log(`Connecting to ${serverUrl}...`);
+
+        this.ws = new WebSocket(serverUrl);
+
         this.ws.on("open", () => {
-            console.log("Connected to Pokémon Showdown.");
-            this.send("|/cmd rooms");
+            console.log("Connection established.");
+            this.connected = true;
         });
 
-        this.ws.on("message", async (data) =>
-            this.handleMessage(data.toString()),
-        );
+        this.ws.on("message", (data) => {
+            this.handleMessage(data);
+        });
 
-        this.ws.on("close", () => console.log("Disconnected from the server."));
+        this.ws.on("close", () => {
+            console.log(
+                "Connection closed. Attempting to reconnect in 10 seconds...",
+            );
+            this.connected = false;
+            this.loggedIn = false;
+
+            setTimeout(() => {
+                this.connect();
+            }, 10000);
+        });
+
+        this.ws.on("error", (error) => {
+            console.error("WebSocket error:", error.message);
+        });
     }
 
-    private async handleMessage(message: string): Promise<void> {
-        console.log("Received:", message);
+    private handleMessage(data: WebSocket.RawData): void {
+        const message = data.toString();
         const lines = message.split("\n");
-        for (const line of lines) {
-            if (line.startsWith("|challstr|")) {
-                this.login(line.slice("|challstr|".length));
-            } else if (line.startsWith("|updatesearch|")) {
-                this.handleUpdateSearch(line);
-            } else if (line.startsWith("|pm|")) {
-                this.handlePrivateMessage(line);
-            } else if (line.startsWith(">")) {
-                const roomId = line.slice(1).trim();
-                const [isNew, battle] = this.battleManager.addBattle(roomId);
-                if (isNew) {
-                    if (this.serverUrl.includes(online)) {
-                        this.send(`${roomId}|/timer on`);
-                    }
-                    // this.send(`${roomId}|glhf`);
+
+        if (message.startsWith(">")) {
+            const roomId = lines[0].slice(1);
+            if (!this.state.battles.has(roomId)) {
+                this.state.battles.set(roomId, new Battle(roomId, this.ws!));
+                this.state.activeBattles++; // Increment active battles when a new battle starts
+            }
+
+            const battle = this.state.battles.get(roomId);
+            if (!battle) {
+                throw new Error("Battle not found.");
+            }
+
+            battle.receive(message);
+
+            const battleIsWon = message.includes("|win|");
+            const battleIsTie = message.includes("|tie|");
+            if (battleIsWon || battleIsTie) {
+                // Clean up battle
+                if (this.state.battles.has(roomId)) {
+                    this.state.activeBattles--; // Decrement active battles when a battle ends
                 }
-                await battle.receive(lines.slice(1).join("\n"));
-                if (lines[1].startsWith("|request|")) {
-                    try {
-                        const data = JSON.parse(lines[1].split("|")[2]);
-                        console.log(inspect(data, false, null, true));
-                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    } catch (err) {
-                        /* empty */
-                    }
+
+                if (this.state.rooms.has(roomId)) {
+                    this.state.rooms.delete(roomId);
                 }
-                return;
-            } else if (line.startsWith("|win|") || line.startsWith("|tie|")) {
-                this.send(`|/search gen3randombattle`);
+
+                // Search for another battle if we have room for more
+                this.checkAndSearchForBattles(); // Check if we can search for more battles
+            }
+        } else {
+            for (const line of lines) {
+                if (!line || line === "") continue;
+
+                if (line.startsWith("|")) {
+                    this.parseLine(line);
+                }
             }
         }
     }
 
-    private login(challstr: string): void {
-        const loginDetails: { [k: string]: any } = {
-            name: this.username,
-            pass: this.password,
-            challstr,
-        };
+    private parseLine(line: string): void {
+        const parts = line.slice(1).split("|");
+        const messageType = parts[0];
+        console.log(line);
 
-        const requestOptions = {
-            hostname: "play.pokemonshowdown.com",
-            path: "/api/login",
-            method: "POST",
-            headers: {
-                "Sec-Fetch-Mode": "cors",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        };
+        switch (messageType) {
+            case "challstr":
+                this.challstr = parts.slice(1).join("|");
+                this.login();
+                break;
 
-        const postData = Object.keys(loginDetails)
-            .map((key) => {
-                return (
-                    encodeURIComponent(key) +
-                    "=" +
-                    encodeURIComponent(loginDetails[key])
-                );
-            })
-            .join("&");
+            case "updateuser": {
+                const username = parts[1].trim();
+                const namedStatus = parts[2];
 
-        const req = request(requestOptions, (res: any) => {
-            let data = "";
-            let payload: { [k: string]: any };
-            res.on("data", (chunk: any) => (data += chunk));
-            res.on("end", () => {
-                if (data.charAt(0) === "]") {
-                    payload = JSON.parse(data.slice(1));
-                    if (payload.actionsuccess) {
-                        console.log("Logged in successfully!");
-                        this.send(
-                            `|/trn ${this.username},0,${payload.assertion}`,
-                        );
-                    } else {
-                        console.log("Login failed:", data);
-                    }
+                if (
+                    username.toLowerCase() ===
+                        this.config.username.toLowerCase() &&
+                    namedStatus === "1"
+                ) {
+                    console.log(`Successfully logged in as ${username}`);
+                    this.loggedIn = true;
+
+                    // Start searching for battles if configured
+                    this.checkAndSearchForBattles(); // Modified to check first
                 }
-            });
-        });
+                break;
+            }
 
-        req.on("error", (e: any) =>
-            console.error(`Request error: ${e.message}`),
-        );
-        req.write(postData);
-        req.end();
-    }
+            case "pm": {
+                const sender = parts[1].trim();
+                const receiver = parts[2].trim();
+                const message = parts.slice(3).join("|");
 
-    private handleUpdateSearch(line: string): void {
-        const parts = line.split("|");
-        const data = JSON.parse(parts[2]);
-        if (
-            data.searching.length === 0 &&
-            Object.keys(data.games ?? {}).length < 4
-        ) {
-            this.searchForBattles();
+                // Handle challenge requests
+                if (
+                    message.startsWith("/challenge") &&
+                    receiver.toLowerCase() ===
+                        this.config.username.toLowerCase()
+                ) {
+                    const challengeParts = message.split("|");
+                    const format = challengeParts[1];
+
+                    // Store the challenge
+                    this.state.challenges.set(sender, format);
+
+                    // Accept the challenge if we haven't reached the concurrent limit
+                    this.checkAndAcceptChallenge(sender); // Modified to check first
+                }
+                break;
+            }
+
+            case "updatechallenges":
+                try {
+                    const challengesData = JSON.parse(parts[1]);
+
+                    // Process incoming challenges
+                    if (challengesData.challengesFrom) {
+                        for (const challenger in challengesData.challengesFrom) {
+                            const format =
+                                challengesData.challengesFrom[challenger];
+
+                            // Store the challenge
+                            this.state.challenges.set(challenger, format);
+
+                            // Accept the challenge if we haven't reached the concurrent limit
+                            this.checkAndAcceptChallenge(challenger); // Modified to check first
+                        }
+                    }
+                } catch (error) {
+                    console.error("Error parsing challenges:", error);
+                }
+                break;
+
+            case "updatesearch": {
+                this.checkAndSearchForBattles();
+                break;
+            }
+
+            case "init": {
+                // Track room init
+                if (parts[1] === "battle") {
+                    const roomId = parts[2] || "";
+                    this.state.rooms.add(roomId);
+                }
+                break;
+            }
+
+            case "deinit": {
+                // Track room init
+                const roomId = parts[2] || "";
+                if (this.state.battles.has(roomId)) {
+                    this.state.battles.delete(roomId);
+                }
+                break;
+            }
         }
     }
 
-    private searchForBattles(): void {
-        this.send(`|/utm null`);
-        this.send(`|/search gen3randombattle`);
+    private async login(): Promise<void> {
+        if (!this.challstr) {
+            console.error("No challstr received. Cannot login.");
+            return;
+        }
+
+        try {
+            const response = await axios.post(
+                "https://play.pokemonshowdown.com/action.php",
+                {
+                    act: "login",
+                    name: this.config.username,
+                    pass: this.config.password,
+                    challstr: this.challstr,
+                },
+                {
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Sec-Fetch-Mode": "cors",
+                    },
+                },
+            );
+
+            const responseData = response.data;
+
+            if (
+                typeof responseData === "string" &&
+                responseData.startsWith("]")
+            ) {
+                const json = JSON.parse(responseData.slice(1));
+
+                if (json.assertion) {
+                    this.send(
+                        `|/trn ${this.config.username},0,${json.assertion}`,
+                    );
+                } else {
+                    console.error("No assertion received. Login failed.");
+                }
+            } else {
+                console.error("Invalid login response:", responseData);
+            }
+        } catch (error) {
+            console.error(
+                "Login error:",
+                error instanceof Error ? error.message : error,
+            );
+        }
+    }
+
+    private checkAndSearchForBattles(): void {
+        if (!this.loggedIn) {
+            console.log("Not logged in. Cannot search for battles.");
+            return;
+        }
+
+        // Check if we can start more battles
+        const totalActiveBattles = this.state.activeBattles;
+
+        if (totalActiveBattles >= this.config.maxConcurrentBattles) {
+            console.log(
+                `Maximum number of concurrent battles reached (${totalActiveBattles}/${this.config.maxConcurrentBattles}).`,
+            );
+            return;
+        }
+
+        // Set the team if provided
+        if (this.config.team) {
+            this.send(`|/utm ${this.config.team}`);
+        }
+
+        // Search for a battle
+        this.send(`|/search ${this.config.format}`);
+
+        console.log(
+            `Searching for battle. Current active: ${this.state.activeBattles}, max: ${this.config.maxConcurrentBattles}`,
+        );
+    }
+
+    private checkAndAcceptChallenge(challenger: string): void {
+        if (!this.loggedIn) {
+            console.log("Not logged in. Cannot accept challenges.");
+            return;
+        }
+
+        const format = this.state.challenges.get(challenger);
+
+        if (!format) {
+            console.error(`No challenge found from ${challenger}`);
+            return;
+        }
+
+        if (format !== this.config.format) {
+            console.log(
+                `Rejecting challenge from ${challenger} in format ${format} (not ${this.config.format})`,
+            );
+            this.send(`|/reject ${challenger}`);
+            this.state.challenges.delete(challenger);
+            return;
+        }
+
+        // Check if we can start more battles
+        const totalActiveBattles = this.state.activeBattles;
+
+        if (totalActiveBattles >= this.config.maxConcurrentBattles) {
+            console.log(
+                `Maximum number of concurrent challenges reached (${totalActiveBattles}/${this.config.maxConcurrentBattles}). Rejecting challenge from ${challenger}.`,
+            );
+            this.send(`|/reject ${challenger}`);
+            this.state.challenges.delete(challenger);
+            return;
+        }
+
+        // Set the team if provided
+        if (this.config.team) {
+            this.send(`|/utm ${this.config.team}`);
+        }
+
+        // Accept the challenge
+        this.send(`|/accept ${challenger}`);
+
+        console.log(
+            `Accepted challenge from ${challenger} in format: ${format}. Current active battles: ${this.state.activeBattles}/${this.config.maxConcurrentBattles}`,
+        );
+
+        // Remove the challenge
+        this.state.challenges.delete(challenger);
     }
 
     private send(message: string): void {
-        console.log("Sending:", message);
-        this.ws.send(message);
-    }
+        if (!this.connected || !this.ws) {
+            console.error("Not connected. Cannot send message.");
+            return;
+        }
 
-    private handlePrivateMessage(line: string): void {
-        const parts = line.split("|");
-        const sender = parts[2];
-        const message = parts[4];
-        console.log(`PM from ${sender}: ${message}`);
+        this.ws.send(message);
     }
 }
 
-new PokemonShowdownBot("asdf234fae", "asdf234fae");
+// Example usage:
+if (require.main === module) {
+    const config: BotConfig = {
+        username: "asdf234fae",
+        password: "asdf234fae",
+        format: "gen3randombattle",
+        maxConcurrentBattles: 5, // Changed from maxSearches to maxConcurrentBattles
+        serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
+        secure: false, // Set to true for main server
+        // serverUrl: "sim3.psim.us", // Use 'localhost' for local server
+        // secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
+    };
+
+    const bot = new ShowdownBot(config);
+    bot.start();
+}

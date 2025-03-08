@@ -48,7 +48,7 @@ class InferenceModel:
             arr=finetuned_pi,
         )
         return PredictionResponse(
-            pi=output.pi.flatten().tolist(),
+            pi=finetuned_pi.flatten().tolist(),
             log_pi=output.log_pi.flatten().tolist(),
             logit=output.logit.flatten().tolist(),
             v=output.v.item(),
