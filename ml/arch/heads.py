@@ -35,7 +35,10 @@ class ValueHead(nn.Module):
         self.logits = Logits(**self.cfg.logits.to_dict())
 
     def __call__(self, entity_embeddings: chex.Array, entity_mask: chex.Array):
-        queries = self.encoder(entity_embeddings, entity_mask)
+        queries = self.encoder(
+            entity_embeddings,
+            None,  # entity_mask,
+        )
         b1, b2, b3 = jnp.split(queries, 3, axis=0)
         m1, m2, m3 = jnp.split(entity_mask[..., None], 3, axis=0)
         embedding = jnp.concatenate(

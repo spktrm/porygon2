@@ -28,13 +28,16 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex, hx)
 
-    apply_fn = network.apply
-    for _ in range(5):
-        output = apply_fn(params, ex, hx)
+    # @jax.jit
+    def call_network(ex, hx):
+        return network.apply(params, ex, hx)
 
-    with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+    for _ in range(5):
+        output = call_network(ex, hx)
+
+    with jax.profiler.trace("/tmp/tensorboard"):
         # Run the operations to be profiled
-        output = apply_fn(params, ex, hx)
+        output = call_network(ex, hx)
         block_all(output)
 
 

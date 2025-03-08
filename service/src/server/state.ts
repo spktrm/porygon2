@@ -2598,7 +2598,7 @@ export class StateHandler {
 
         const history = this.getHistory(numHistory);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readableHistory = EdgeBuffer.toReadableHistory(history);
+        // const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2608,12 +2608,12 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());
