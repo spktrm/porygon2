@@ -1,6 +1,5 @@
 import asyncio
 import functools
-import pickle
 from abc import ABC, abstractmethod
 from typing import Callable, List, Sequence, Tuple
 
@@ -13,7 +12,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model, get_model
+from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -405,7 +404,7 @@ def main():
         # with open("rlenv/ex_batch", "wb") as f:
         #     pickle.dump(batch, f)
 
-        data = collect_batch_telemetry_data(batch)
+        collect_batch_telemetry_data(batch)
 
         # training_progress.update(batch.env.valid.sum())
         # batch = evaluation_env.collect_batch_trajectory(params)
