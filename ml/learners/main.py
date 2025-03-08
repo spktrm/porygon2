@@ -86,25 +86,29 @@ def main():
 
     for _ in range(learner_config.num_steps):
         logs: dict
-        winrates = {}
-
-        time_to_eval = state.step % (eval_freq // learner_config.num_eval_games) == 0
-        if time_to_eval and learner_config.do_eval:
-            winrates = evaluate(evaluation_collector, state)
 
         batch = training_collector.collect_batch_trajectory(state.params)
-        state, logs = learner.train_step(state, batch, learner_config)
+        for minibatch in iterate(batch, learner_config.minibatch_size):
+            winrates = {}
 
-        logs.update(collect_nn_telemetry_data(state))
-        logs.update(collect_batch_telemetry_data(batch))
-        # logs.update(collect_action_prob_telemetry_data(minibatch))
+            time_to_eval = (
+                state.step % (eval_freq // learner_config.num_eval_games) == 0
+            )
+            if time_to_eval and learner_config.do_eval:
+                winrates = evaluate(evaluation_collector, state)
 
-        logs["Step"] = state.step
-        wandb.log({**logs, **winrates})
-        train_progress.update(1)
+            state, logs = learner.train_step(state, minibatch, learner_config)
 
-        if state.step % save_freq == 0 and state.step > 0:
-            learner.save(state)
+            logs.update(collect_nn_telemetry_data(state))
+            logs.update(collect_batch_telemetry_data(minibatch))
+            # logs.update(collect_action_prob_telemetry_data(minibatch))
+
+            logs["Step"] = state.step
+            wandb.log({**logs, **winrates})
+            train_progress.update(1)
+
+            if state.step % save_freq == 0 and state.step > 0:
+                learner.save(state)
 
     print("done")
 

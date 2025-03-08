@@ -95,20 +95,6 @@ def _encode_one_hot(
     return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
 
 
-_encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_MAX_VALUES)
-_encode_one_hot_action = partial(_encode_one_hot, max_values=ACTION_MAX_VALUES)
-_encode_one_hot_relative_edge = partial(
-    _encode_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
-)
-_encode_one_hot_absolute_edge = partial(
-    _encode_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
-)
-_encode_one_hot_entity_boost = partial(_encode_one_hot_entity, value_offset=6)
-_encode_one_hot_relative_edge_boost = partial(
-    _encode_one_hot_relative_edge, value_offset=6
-)
-
-
 def _encode_capped_one_hot(
     entity: chex.Array, feature_idx: int, max_values: Dict[int, int]
 ) -> Tuple[int, int]:
@@ -116,17 +102,6 @@ def _encode_capped_one_hot(
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
     return jnp.minimum(entity[feature_idx], max_value), max_value + 1
-
-
-_encode_capped_one_hot_entity = partial(
-    _encode_capped_one_hot, max_values=ENTITY_MAX_VALUES
-)
-_encode_capped_one_hot_relative_edge = partial(
-    _encode_capped_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
-)
-_encode_capped_one_hot_absolute_edge = partial(
-    _encode_capped_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
-)
 
 
 def _encode_sqrt_one_hot(
@@ -141,20 +116,6 @@ def _encode_sqrt_one_hot(
     return x, max_sqrt_value + 1
 
 
-_encode_sqrt_one_hot_entity = partial(
-    _encode_sqrt_one_hot, max_values=ENTITY_MAX_VALUES
-)
-_encode_sqrt_one_hot_action = partial(
-    _encode_sqrt_one_hot, max_values=ACTION_MAX_VALUES
-)
-_encode_sqrt_one_hot_relative_edge = partial(
-    _encode_sqrt_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
-)
-_encode_sqrt_one_hot_absolute_edge = partial(
-    _encode_sqrt_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
-)
-
-
 def _encode_divided_one_hot(
     entity: chex.Array, feature_idx: int, divisor: int, max_values: Dict[int, int]
 ) -> Tuple[int, int]:
@@ -165,17 +126,6 @@ def _encode_divided_one_hot(
     x = jnp.floor_divide(entity[feature_idx], divisor)
     x = jnp.minimum(x, max_divided_value)
     return x, max_divided_value + 1
-
-
-_encode_divided_one_hot_entity = partial(
-    _encode_divided_one_hot, max_values=ENTITY_MAX_VALUES
-)
-_encode_divided_one_hot_relative_edge = partial(
-    _encode_divided_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
-)
-_encode_divided_one_hot_absolute_edge = partial(
-    _encode_divided_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
-)
 
 
 def _features_embedding(
@@ -204,6 +154,31 @@ def _features_embedding(
         rescaled_features = jnp.multiply(consecutive_features, consecutive_rescales)
         selected_features.append(rescaled_features)
     return jnp.concatenate(selected_features, axis=0).astype(jnp.float32)
+
+
+_encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_MAX_VALUES)
+_encode_one_hot_relative_edge = partial(
+    _encode_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
+)
+_encode_one_hot_absolute_edge = partial(
+    _encode_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
+)
+_encode_one_hot_entity_boost = partial(_encode_one_hot_entity, value_offset=6)
+_encode_one_hot_relative_edge_boost = partial(
+    _encode_one_hot_relative_edge, value_offset=6
+)
+_encode_sqrt_one_hot_entity = partial(
+    _encode_sqrt_one_hot, max_values=ENTITY_MAX_VALUES
+)
+_encode_sqrt_one_hot_action = partial(
+    _encode_sqrt_one_hot, max_values=ACTION_MAX_VALUES
+)
+_encode_divided_one_hot_entity = partial(
+    _encode_divided_one_hot, max_values=ENTITY_MAX_VALUES
+)
+_encode_divided_one_hot_relative_edge = partial(
+    _encode_divided_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
+)
 
 
 def get_entity_mask(entity: chex.Array) -> chex.Array:

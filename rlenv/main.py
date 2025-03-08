@@ -13,7 +13,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model
+from ml.arch.model import get_dummy_model, get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -381,41 +381,43 @@ class EvalBatchCollector(BatchCollectorV2):
 
 
 def main():
-    # batch_progress = tqdm(desc="Batch: ")
-    # game_progress = tqdm(desc="Games: ")
-    # state_progress = tqdm(desc="States: ")
+    batch_progress = tqdm(desc="Batch: ")
+    game_progress = tqdm(desc="Games: ")
+    state_progress = tqdm(desc="States: ")
 
     training_progress = tqdm(desc="training: ")
-    evaluation_progress = tqdm(desc="evaluation: ")
+    # evaluation_progress = tqdm(desc="evaluation: ")
 
-    num_envs = 8
-    network = get_dummy_model()
+    num_envs = 32
+    network = get_model()
     training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
-    evaluation_env = EvalBatchCollector(network, 4)
+    # evaluation_env = EvalBatchCollector(network, 4)
 
     ex, hx = get_ex_step()
     params = network.init(jax.random.PRNGKey(42), ex, hx)
 
     np.zeros(num_envs)
+    batch = training_env.collect_batch_trajectory(params)
 
     while True:
-        batch = training_env.collect_batch_trajectory(params)
-        with open("rlenv/ex_batch", "wb") as f:
-            pickle.dump(batch, f)
-        break
-        collect_batch_telemetry_data(batch)
 
-        training_progress.update(batch.env.valid.sum())
-        batch = evaluation_env.collect_batch_trajectory(params)
-        evaluation_progress.update(batch.env.valid.sum())
+        batch = training_env.collect_batch_trajectory(params)
+        # with open("rlenv/ex_batch", "wb") as f:
+        #     pickle.dump(batch, f)
+
+        data = collect_batch_telemetry_data(batch)
+
+        # training_progress.update(batch.env.valid.sum())
+        # batch = evaluation_env.collect_batch_trajectory(params)
+        # evaluation_progress.update(batch.env.valid.sum())
 
         # win_rewards = np.sign(
         #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
         # )
         # avg_reward = avg_reward * (1 - tau) + win_rewards.astype(float) * tau
-        # state_progress.update(batch.env.valid.sum())
-        # game_progress.update(num_envs)
-        # batch_progress.update(1)
+        state_progress.update(batch.env.valid.sum())
+        game_progress.update(num_envs)
+        batch_progress.update(1)
         # batch_progress.set_description(np.array2string(avg_reward))
 
 
