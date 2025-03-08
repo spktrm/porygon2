@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 import axios from "axios";
+import * as dotenv from "dotenv";
+import * as path from "path";
 
 import { Player } from "../server/player";
 import { ObjectReadWriteStream } from "@pkmn/streams";
@@ -509,9 +511,16 @@ export class ShowdownBot {
 
 // Example usage:
 if (require.main === module) {
+    const result = dotenv.config({
+        path: path.resolve(__dirname, "../../../.env"),
+    });
+    if (result.error) {
+        throw result.error;
+    }
+
     const config: BotConfig = {
-        username: "asdf234fae",
-        password: "asdf234fae",
+        username: process.env.SHOWDOWN_USERNAME!,
+        password: process.env.SHOWDOWN_PASSWORD!,
         format: "gen3randombattle",
         maxConcurrentBattles: 5, // Changed from maxSearches to maxConcurrentBattles
         serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
@@ -519,6 +528,8 @@ if (require.main === module) {
         // serverUrl: "sim3.psim.us", // Use 'localhost' for local server
         // secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
     };
+
+    console.log(config);
 
     const bot = new ShowdownBot(config);
     bot.start();
