@@ -1,5 +1,4 @@
 from enum import Enum, auto
-import math
 from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, get_args
 
 import chex
