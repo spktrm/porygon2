@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "main": "src/index.ts",
     "scripts": {
-        "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts",
+        "compile-base": "rm -rf ./dist && tsc && ts-node src/tests/ex.ts ",
         "compile-proto": "./scripts/compile_proto.sh",
         "kill": "killall python && killall node ",
         "start": "npm run compile-base && node dist/server/index.js | pino-pretty",
@@ -32,6 +32,9 @@
         "@types/pino": "^7.0.4",
         "@types/progress": "^2.0.7",
         "@types/ws": "^8.5.13",
+        "axios": "^1.8.1",
+        "copyfiles": "^2.4.1",
+        "dotenv": "^16.4.7",
         "google-protobuf": "^3.19.1",
         "pino": "^9.5.0",
         "pino-pretty": "^13.0.0",
@@ -40,6 +43,7 @@
     },
     "devDependencies": {
         "@eslint/js": "^9.15.0",
+        "@types/axios": "^0.9.36",
         "eslint": "^9.15.0",
         "globals": "^15.12.0",
         "ts-node": "^10.9.2",

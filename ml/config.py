@@ -88,8 +88,10 @@ class ActorCriticConfig:
     trajectory_max: int = 1000
     # num players in game
     num_players: int = 2
+    # The batch size to use when collecting trajectories.
+    batch_size: int = 32
     # The batch size to use when learning/improving parameters.
-    batch_size: int = 4
+    minibatch_size: int = 4
     # The learning rate for `params`.
     learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.
@@ -99,7 +101,7 @@ class ActorCriticConfig:
     # The "speed" at which `params_target` is following `params`.
     target_network_avg: float = 1e-3
 
-    gamma: float = 1.0
+    gamma: float = 0.99
     c_vtrace: float = 1.0
     rho_vtrace: float = np.inf
 

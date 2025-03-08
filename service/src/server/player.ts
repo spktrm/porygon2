@@ -292,7 +292,10 @@ export class Player extends BattleStreams.BattlePlayer {
             return false;
         }
         this.rqid = request?.rqid;
-        if (request?.teamPreview) {
+        if (
+            request?.teamPreview ||
+            (chunk.includes("|inactive|") && chunk.includes("30 seconds left"))
+        ) {
             return true;
         }
         if (request?.wait) {
@@ -319,6 +322,21 @@ export class Player extends BattleStreams.BattlePlayer {
         return true;
     }
 
+    checkStreamBuffer() {
+        if (this.stream.buf.length === 0) {
+            return true;
+        } else {
+            let ok = true;
+            for (const msg of this.stream.buf) {
+                if (!msg.includes("|inactive")) {
+                    ok = false;
+                    break;
+                }
+            }
+            return ok;
+        }
+    }
+
     async start() {
         const backup: string[] = [];
 
@@ -336,17 +354,18 @@ export class Player extends BattleStreams.BattlePlayer {
 
             if (!this.hasRequest) {
                 if (chunk.includes("|request")) {
+                    this.log.push("---request---");
                     this.hasRequest = true;
                 }
             }
 
             if (this.hasRequest) {
-                for (const line of chunk.split("\n")) {
-                    this.addLine(line);
-                }
                 while (backup.length > 0) {
                     const line = backup.shift();
                     if (line) this.addLine(line);
+                }
+                for (const line of chunk.split("\n")) {
+                    this.addLine(line);
                 }
             } else {
                 for (const line of chunk.split("\n")) {
@@ -357,18 +376,17 @@ export class Player extends BattleStreams.BattlePlayer {
 
             if (
                 this.isWorldReady() &&
-                (this.offline || this.stream.buf.length === 0) &&
+                (this.offline || this.checkStreamBuffer()) &&
                 this.isActionRequired(chunk)
             ) {
-                this.log.push("---request---");
                 this.requestCount += 1;
                 const key = await this.send(this);
-                this.privateBattle.request = undefined;
                 const action = await this.recv(key!);
                 if (action !== undefined) {
                     this.actionLog.push(action);
                     const actionValue = action.getValue();
                     this.choose(actionStrings[actionValue] ?? "default");
+                    this.privateBattle.request = undefined;
                 }
             }
         }

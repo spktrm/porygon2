@@ -1,4 +1,5 @@
 from enum import Enum, auto
+import math
 from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, get_args
 
 import chex
@@ -419,6 +420,7 @@ class MultiHeadAttention(nn.Module):
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, s1_length, _ = query.shape
+        *leading_dims, s2_length, _ = value.shape
 
         key_size = self.key_size
         value_size = self.value_size or self.key_size
@@ -1132,11 +1134,13 @@ class SumEmbeddings(nn.Module):
         module_embeddings = []
         for i, encoding in enumerate(encodings):
             transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
-            module_embeddings.append(layer_norm(activation_fn(transformed)))
+            transformed = layer_norm(activation_fn(transformed))
+            module_embeddings.append(transformed)
 
         if embeddings is not None:
             for i, embedding in enumerate(embeddings):
-                module_embeddings.append(layer_norm(activation_fn(embedding)))
+                embedding = layer_norm(activation_fn(embedding))
+                module_embeddings.append(embedding)
 
         if self.scaling_type == "learned":
             # Learn weights for each encoding
