@@ -12,7 +12,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params, get_most_recent_file
+from ml.utils import Params
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
