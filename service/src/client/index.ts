@@ -522,11 +522,11 @@ if (require.main === module) {
         username: process.env.SHOWDOWN_USERNAME!,
         password: process.env.SHOWDOWN_PASSWORD!,
         format: "gen3randombattle",
-        maxConcurrentBattles: 5, // Changed from maxSearches to maxConcurrentBattles
-        serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
-        secure: false, // Set to true for main server
-        // serverUrl: "sim3.psim.us", // Use 'localhost' for local server
-        // secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
+        maxConcurrentBattles: 1, // Changed from maxSearches to maxConcurrentBattles
+        // serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
+        // secure: false, // Set to true for main server
+        serverUrl: "sim3.psim.us", // Use 'localhost' for local server
+        secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
     };
 
     console.log(config);
