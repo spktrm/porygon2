@@ -1061,8 +1061,8 @@ class GLU(nn.Module):
         w2 = nn.Dense(hidden_size, use_bias=False)
         w3 = nn.Dense(feature_dim, use_bias=False)
 
-        a = w1(a)
-        b = w2(b)
+        a = w1(activation_fn(layer_norm(a)))
+        b = w2(activation_fn(layer_norm(b)))
         h = nn.silu(a) * b
 
         return w3(h)
