@@ -56,6 +56,7 @@ export interface EntityFeatureMap {
   ENTITY_FEATURE__ACTION_ID3: 49;
   ENTITY_FEATURE__NUM_MOVES: 50;
   ENTITY_FEATURE__IS_PUBLIC: 51;
+  ENTITY_FEATURE__LAST_MOVE: 52;
 }
 
 export const EntityFeature: EntityFeatureMap;
@@ -89,6 +90,14 @@ export interface MovesetFeatureMap {
 }
 
 export const MovesetFeature: MovesetFeatureMap;
+
+export interface ActionsFeatureMap {
+  ACTIONS_FEATURE___UNSPECIFIED: 0;
+  ACTIONS_FEATURE__MOVE_ID: 1;
+  ACTIONS_FEATURE__ACTION_INDEX: 2;
+}
+
+export const ActionsFeature: ActionsFeatureMap;
 
 export interface RelativeEdgeFeatureMap {
   RELATIVE_EDGE_FEATURE___UNSPECIFIED: 0;

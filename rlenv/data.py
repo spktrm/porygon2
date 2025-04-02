@@ -25,6 +25,7 @@ from rlenv.protos.enums_pb2 import (
 )
 from rlenv.protos.features_pb2 import (
     AbsoluteEdgeFeature,
+    ActionsFeature,
     EntityFeature,
     MovesetActionTypeEnum,
     MovesetFeature,
@@ -64,8 +65,9 @@ NUM_MOVE_FIELDS = len(MovesetFeature.keys())
 NUM_RELATIVE_EDGE_FIELDS = len(RelativeEdgeFeature.keys())
 NUM_ABSOLUTE_EDGE_FIELDS = len(AbsoluteEdgeFeature.keys())
 NUM_ENTITY_FIELDS = len(EntityFeature.keys())
+NUM_ACTION_FIELDS = len(ActionsFeature.keys())
 
-NUM_HISTORY = 32
+NUM_HISTORY = 1
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES

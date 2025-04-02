@@ -175,6 +175,26 @@ export class State extends jspb.Message {
   getKey(): string;
   setKey(value: string): void;
 
+  getAllMyMoves(): Uint8Array | string;
+  getAllMyMoves_asU8(): Uint8Array;
+  getAllMyMoves_asB64(): string;
+  setAllMyMoves(value: Uint8Array | string): void;
+
+  getAllOppMoves(): Uint8Array | string;
+  getAllOppMoves_asU8(): Uint8Array;
+  getAllOppMoves_asB64(): string;
+  setAllOppMoves(value: Uint8Array | string): void;
+
+  getAllMyMovesMask(): Uint8Array | string;
+  getAllMyMovesMask_asU8(): Uint8Array;
+  getAllMyMovesMask_asB64(): string;
+  setAllMyMovesMask(value: Uint8Array | string): void;
+
+  getAllOppMovesMask(): Uint8Array | string;
+  getAllOppMovesMask_asU8(): Uint8Array;
+  getAllOppMovesMask_asB64(): string;
+  setAllOppMovesMask(value: Uint8Array | string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
   static toObject(includeInstance: boolean, msg: State): State.AsObject;
@@ -194,6 +214,10 @@ export namespace State {
     publicTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
     key: string,
+    allMyMoves: Uint8Array | string,
+    allOppMoves: Uint8Array | string,
+    allMyMovesMask: Uint8Array | string,
+    allOppMovesMask: Uint8Array | string,
   }
 }
 

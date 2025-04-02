@@ -9,6 +9,7 @@ import { recvFnType, sendFnType } from "./types";
 import { EventHandler, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
 import { Action } from "../../protos/service_pb";
+import { Rewards } from "../../protos/state_pb";
 
 const generations = new Generations(Dex);
 
@@ -157,19 +158,20 @@ export class Tracker {
     }
 
     getReward() {
+        const rewards = new Rewards();
         const faintedReward = this.getFaintedReward();
         const hpReward = this.getHpReward();
         const scaledHpReward = this.getScaledHpReward();
         const scaledFaintedReward = this.getScaledFaintedReward();
         const winReward = this.getWinReward();
 
-        return {
-            faintedReward,
-            hpReward,
-            scaledFaintedReward,
-            scaledHpReward,
-            winReward,
-        };
+        rewards.setHpReward(hpReward);
+        rewards.setFaintedReward(faintedReward);
+        rewards.setScaledHpReward(scaledHpReward);
+        rewards.setScaledFaintedReward(scaledFaintedReward);
+        rewards.setWinReward(winReward);
+
+        return rewards;
     }
 
     reset() {
@@ -228,6 +230,13 @@ export class Player extends BattleStreams.BattlePlayer {
         this.eventHandler = new EventHandler(this);
 
         this.tracker = new Tracker();
+        if (
+            worldStream !== null &&
+            worldStream.battle !== undefined &&
+            worldStream.battle !== null
+        ) {
+            this.tracker.setBattle(worldStream.battle);
+        }
 
         this.actionLog = [];
 
