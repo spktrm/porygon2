@@ -37,7 +37,7 @@ class NerdConfig:
     """Nerd related params."""
 
     beta: float = 2
-    clip: float = 10
+    clip: float = 50
 
 
 @chex.dataclass(frozen=True)
@@ -260,7 +260,7 @@ def train_step(state: TrainState, batch: TimeStep, config: VtraceConfig):
     params_reg = optax.incremental_update(
         new_tensors=state.params_target,
         old_tensors=state.params_reg,
-        step_size=ema_val,
+        step_size=jnp.maximum(ema_val, 0.01),
     )
     state = state.replace(
         params_target=params_target,

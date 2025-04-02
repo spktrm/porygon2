@@ -13,6 +13,23 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
+class DyT(nn.Module):
+    init_a: float = 0.5
+
+    @nn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        alpha = self.param(
+            "alpha",
+            lambda *args, **kwargs: nn.initializers.ones(*args, **kwargs) * self.init_a,
+            (1,),
+        )
+        gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1],))
+        beta = self.param("beta", nn.initializers.zeros, (x.shape[-1],))
+
+        x = nn.tanh(alpha * x)
+        return gamma * x + beta
+
+
 def astype(x: chex.Array, dtype: jnp.dtype) -> chex.Array:
     """
     Cast x if necessary.
@@ -692,7 +709,7 @@ class PercieverIO(nn.Module):
             key_size=self.latent_dim,
             value_size=self.latent_dim,
             model_size=self.latent_dim,
-            num_layers=1,
+            num_layers=self.num_layers,
             num_heads=self.num_heads,
             use_layer_norm=self.use_layer_norm,
             resblocks_hidden_size=self.resblocks_hidden_size or 4 * self.latent_dim,
@@ -709,8 +726,7 @@ class PercieverIO(nn.Module):
         )
 
         latents = encoder(latents, x, None, x_mask)
-        for _ in range(self.num_layers):
-            latents = process(latents)
+        latents = process(latents)
         return decoder(y, latents, y_mask, None)
 
 
@@ -1114,7 +1130,6 @@ class GatedResidualLayer(nn.Module):
 class SumEmbeddings(nn.Module):
     output_size: int
     use_layer_norm: bool = True
-    scaling_type: str = "fixed"  # 'learned', 'fixed', or 'attention'
 
     @nn.compact
     def __call__(
@@ -1133,35 +1148,16 @@ class SumEmbeddings(nn.Module):
         module_embeddings = []
         for i, encoding in enumerate(encodings):
             transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
-            transformed = layer_norm(activation_fn(transformed))
+            # transformed = layer_norm(activation_fn(transformed))
             module_embeddings.append(transformed)
 
         if embeddings is not None:
             for i, embedding in enumerate(embeddings):
-                embedding = layer_norm(activation_fn(embedding))
+                # embedding = layer_norm(activation_fn(embedding))
                 module_embeddings.append(embedding)
 
-        if self.scaling_type == "learned":
-            # Learn weights for each encoding
-            weights = self.param(
-                "mixing_weights", nn.initializers.ones, (len(encodings),)
-            )
-            weights = jax.nn.softmax(weights)
-            scaled = sum(w * e for w, e in zip(weights, module_embeddings))
-
-        elif self.scaling_type == "attention":
-            # Use attention-like scaling
-            query = self.param(
-                "query", nn.initializers.normal(0.02), (self.output_size,)
-            )
-            scores = [jnp.einsum("...d,d->...", e, query) for e in module_embeddings]
-            weights = jax.nn.softmax(jnp.stack(scores, axis=-1))
-            scaled = sum(w[..., None] * e for w, e in zip(weights, module_embeddings))
-
-        else:  # 'fixed'
-            scaled = sum(module_embeddings) / jnp.sqrt(len(module_embeddings))
-
-        return scaled
+        embedding = sum(module_embeddings)
+        return MLP((self.output_size,), use_layer_norm=self.use_layer_norm)(embedding)
 
 
 class MergeEmbeddings(nn.Module):

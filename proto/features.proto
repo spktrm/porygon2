@@ -60,6 +60,7 @@ enum EntityFeature {
 
   ENTITY_FEATURE__NUM_MOVES = 50;
   ENTITY_FEATURE__IS_PUBLIC = 51;
+  ENTITY_FEATURE__LAST_MOVE = 52;
 }
 
 
@@ -86,6 +87,13 @@ enum MovesetFeature {
   MOVESET_FEATURE__MAXPP = 6;
   MOVESET_FEATURE__HAS_PP = 7;
   MOVESET_FEATURE__ACTION_TYPE = 8;
+}
+
+enum ActionsFeature {
+  ACTIONS_FEATURE___UNSPECIFIED = 0;
+  ACTIONS_FEATURE__MOVE_ID = 1;
+  ACTIONS_FEATURE__ACTION_INDEX = 2;
+  
 }
 
 enum RelativeEdgeFeature {

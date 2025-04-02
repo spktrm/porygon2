@@ -44,6 +44,10 @@ message State {
   bytes public_team = 5;
   bytes private_team = 6;
   string key = 7;
+  bytes all_my_moves = 8;
+  bytes all_opp_moves = 9;
+  bytes all_my_moves_mask = 10;
+  bytes all_opp_moves_mask = 11;
 }
 
 message Trajectory {
