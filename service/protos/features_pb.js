@@ -16,6 +16,7 @@ var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
 goog.exportSymbol('proto.AbsoluteEdgeFeature', null, global);
+goog.exportSymbol('proto.ActionsFeature', null, global);
 goog.exportSymbol('proto.EntityFeature', null, global);
 goog.exportSymbol('proto.MovesetActionTypeEnum', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
@@ -76,7 +77,8 @@ proto.EntityFeature = {
   ENTITY_FEATURE__ACTION_ID2: 48,
   ENTITY_FEATURE__ACTION_ID3: 49,
   ENTITY_FEATURE__NUM_MOVES: 50,
-  ENTITY_FEATURE__IS_PUBLIC: 51
+  ENTITY_FEATURE__IS_PUBLIC: 51,
+  ENTITY_FEATURE__LAST_MOVE: 52
 };
 
 /**
@@ -110,6 +112,15 @@ proto.MovesetFeature = {
   MOVESET_FEATURE__MAXPP: 6,
   MOVESET_FEATURE__HAS_PP: 7,
   MOVESET_FEATURE__ACTION_TYPE: 8
+};
+
+/**
+ * @enum {number}
+ */
+proto.ActionsFeature = {
+  ACTIONS_FEATURE___UNSPECIFIED: 0,
+  ACTIONS_FEATURE__MOVE_ID: 1,
+  ACTIONS_FEATURE__ACTION_INDEX: 2
 };
 
 /**

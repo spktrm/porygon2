@@ -7,12 +7,12 @@ import { Action, GameState } from "../../protos/service_pb";
 import { MessagePort } from "worker_threads";
 import { EVAL_GAME_ID_OFFSET } from "./data";
 import { getEvalAction } from "./eval";
-import { Rewards } from "../../protos/state_pb";
+// import { Rewards } from "../../protos/state_pb";
 
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 
-export const DRAW_TURNS = 100;
+export const DRAW_TURNS = 200;
 
 export class Game {
     gameId: number;
@@ -120,28 +120,29 @@ export class Game {
         const sendFn: sendFnType = async (player) => {
             const gameState = new GameState();
 
+            player.tracker.update(player.getPlayerIndex()!);
             const state = player.createState();
             const info = state.getInfo()!;
             const isDone = info.getDone()!;
             const playerIndex = +state.getInfo()!.getPlayerIndex();
 
-            const rewards = new Rewards();
-            tracker.update(playerIndex);
-            const {
-                faintedReward,
-                hpReward,
-                scaledHpReward,
-                scaledFaintedReward,
-                winReward,
-            } = tracker.getReward();
+            // const rewards = new Rewards();
+            // tracker.update(playerIndex);
+            // const {
+            //     faintedReward,
+            //     hpReward,
+            //     scaledHpReward,
+            //     scaledFaintedReward,
+            //     winReward,
+            // } = tracker.getReward();
 
-            rewards.setHpReward(hpReward);
-            rewards.setFaintedReward(faintedReward);
-            rewards.setScaledHpReward(scaledHpReward);
-            rewards.setScaledFaintedReward(scaledFaintedReward);
-            rewards.setWinReward(winReward);
+            // rewards.setHpReward(hpReward);
+            // rewards.setFaintedReward(faintedReward);
+            // rewards.setScaledHpReward(scaledHpReward);
+            // rewards.setScaledFaintedReward(scaledFaintedReward);
+            // rewards.setWinReward(winReward);
 
-            info.setRewards(rewards);
+            // info.setRewards(rewards);
             state.setInfo(info);
 
             gameState.setState(state.serializeBinary());

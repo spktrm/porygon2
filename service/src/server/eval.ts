@@ -20,7 +20,7 @@ export const evalActionMapping: EvalActionFnType[] = [
     }, // Default - 1
     GetMaxDamageAction,
     GetHeuristicAction,
-    // GetLLMAction,
+    // GetSearchAction,
 ];
 
 export const numEvals = Object.keys(evalActionMapping).length;
