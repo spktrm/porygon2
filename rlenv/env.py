@@ -1,4 +1,3 @@
-from functools import cache, lru_cache
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -6,13 +5,19 @@ import numpy as np
 from rlenv.data import (
     EX_STATE,
     NUM_ABSOLUTE_EDGE_FIELDS,
-    NUM_ACTION_FIELDS,
     NUM_ENTITY_FIELDS,
     NUM_HISTORY,
     NUM_MOVE_FIELDS,
     NUM_RELATIVE_EDGE_FIELDS,
 )
-from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
+from rlenv.interfaces import (
+    EnvStep,
+    HistoryContainer,
+    HistoryStep,
+    RewardStep,
+    TimeStep,
+)
+from rlenv.protos.features_pb2 import AbsoluteEdgeFeature
 from rlenv.protos.history_pb2 import History
 from rlenv.protos.state_pb2 import State
 from rlenv.utils import padnstack
@@ -31,15 +36,29 @@ def get_history(history: History, padding_length: int = NUM_HISTORY):
         (history_length, NUM_ABSOLUTE_EDGE_FIELDS)
     )
 
-    entities = np.flip(entities, axis=0)
-    relative_edges = np.flip(relative_edges, axis=0)
-    absolute_edges = np.flip(absolute_edges, axis=0)
-
     return HistoryContainer(
         entities=padnstack(entities, padding_length).astype(int),
         relative_edges=padnstack(relative_edges, padding_length).astype(int),
         absolute_edges=padnstack(absolute_edges, padding_length).astype(int),
     )
+
+
+def expand_dims(x, axis: int):
+    return jax.tree_map(lambda i: np.expand_dims(i, axis=axis), x)
+
+
+def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
+    history_length = np.max(
+        history.major_history.absolute_edges[
+            ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+        ].sum(0),
+        axis=0,
+    ).item()
+
+    # Round history length up to the nearest multiple of resolution
+    rounded_length = int(np.ceil(history_length / resolution) * resolution) + 1
+
+    return jax.tree_map(lambda x: x[:rounded_length], history)
 
 
 def get_legal_mask(state: State):
@@ -66,16 +85,6 @@ def process_state(state: State):
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
         .reshape(12, NUM_ENTITY_FIELDS)
-        .astype(int)
-    )
-    all_my_moves = (
-        np.frombuffer(state.all_my_moves, dtype=np.int16)
-        .reshape(6, 4, NUM_ACTION_FIELDS)
-        .astype(int)
-    )
-    all_opp_moves = (
-        np.frombuffer(state.all_opp_moves, dtype=np.int16)
-        .reshape(6, 4, NUM_ACTION_FIELDS)
         .astype(int)
     )
 
@@ -107,8 +116,6 @@ def process_state(state: State):
         timestamp=np.array(state.info.timestamp, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
-        all_my_moves=all_my_moves,
-        all_opp_moves=all_opp_moves,
         private_team=private_team.astype(int),
         public_team=public_team.astype(int),
         moveset=moveset.astype(int),
@@ -120,7 +127,7 @@ def process_state(state: State):
         major_history=history_step,
     )
 
-    return env_step, history_step
+    return expand_dims(env_step, axis=0), history_step
 
 
 def as_jax_arr(x):

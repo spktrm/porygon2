@@ -517,8 +517,7 @@ class TransformerEncoder(nn.Module):
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
-    x_need_pos: bool = False
-    y_need_pos: bool = False
+    need_pos: bool = False
     use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
 
@@ -557,8 +556,8 @@ class TransformerEncoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.y_need_pos,
+                query_need_pos=self.need_pos,
+                key_need_pos=self.need_pos,
                 use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x = x + mha
@@ -1085,7 +1084,6 @@ class GLU(nn.Module):
 
 
 class DenseMultiHeadProjection(nn.Module):
-    num_heads: int
     embed_dim: int
     output_dim: int = None
 
@@ -1101,11 +1099,7 @@ class DenseMultiHeadProjection(nn.Module):
             chex.Array: Output array.
         """
 
-        def _apply_projection(l):
-            return MLP((self.embed_dim,))(l)
-
-        outputs = [_apply_projection(x) for _ in range(self.num_heads)]
-        output = jnp.concatenate(outputs, axis=-1)
+        output = MLP((self.embed_dim,))(x)
         return MLP((self.output_dim or x.shape[-1],))(output)
 
 
@@ -1146,13 +1140,13 @@ class SumEmbeddings(nn.Module):
             chex.Array: Summed embeddings array.
         """
         module_embeddings = []
-        for i, encoding in enumerate(encodings):
+        for _, encoding in enumerate(encodings):
             transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
             # transformed = layer_norm(activation_fn(transformed))
             module_embeddings.append(transformed)
 
         if embeddings is not None:
-            for i, embedding in enumerate(embeddings):
+            for _, embedding in enumerate(embeddings):
                 # embedding = layer_norm(activation_fn(embedding))
                 module_embeddings.append(embedding)
 
