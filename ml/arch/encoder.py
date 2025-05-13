@@ -583,7 +583,7 @@ class Encoder(nn.Module):
             Encode features of an absolute edge, including turn and request offsets.
             """
             # Compute turn and request count differences for encoding.
-            turn = edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE]
+            edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE]
             request_count = edge[
                 AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT
             ]

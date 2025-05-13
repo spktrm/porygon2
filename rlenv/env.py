@@ -10,13 +10,7 @@ from rlenv.data import (
     NUM_MOVE_FIELDS,
     NUM_RELATIVE_EDGE_FIELDS,
 )
-from rlenv.interfaces import (
-    EnvStep,
-    HistoryContainer,
-    HistoryStep,
-    RewardStep,
-    TimeStep,
-)
+from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
 from rlenv.protos.features_pb2 import AbsoluteEdgeFeature
 from rlenv.protos.history_pb2 import History
 from rlenv.protos.state_pb2 import State
