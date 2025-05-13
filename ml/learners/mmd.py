@@ -27,7 +27,7 @@ from ml.learners.func import (
     collect_parameter_and_gradient_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
-from rlenv.env import get_ex_step
+from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep
 from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollector
 
@@ -41,6 +41,7 @@ class MMDConfig(ActorCriticConfig):
     gae_lambda: float = 1.0
     entropy_loss_coef: float = 0.05
     kl_loss_coef: float = 0.05
+    kl_target: float = 0.01
 
 
 def get_config():
@@ -165,13 +166,10 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
     """Train for a single step."""
 
     def loss_fn(params: Params):
-        # Define a checkpointed function
-        def rollout_fn(model_params):
-            return jax.vmap(jax.vmap(state.apply_fn, (None, 0, 0)), (None, 0, 0))(
-                model_params, batch.env, batch.history
-            )
 
-        pred: ModelOutput = rollout_fn(params)
+        pred: ModelOutput = jax.vmap(state.apply_fn, (None, 1, 1), 1)(
+            params, batch.env, batch.history
+        )
 
         valid = batch.env.valid
 
@@ -206,7 +204,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        ent_kl_coef_mult = 0.1 * jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
@@ -217,9 +215,9 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
 
         old_approx_kl = (-log_ratio).mean(where=valid)
         approx_kl = ((ratio - 1) - log_ratio).mean(where=valid)
-        clipfracs = jnp.isclose(jnp.abs(ratio - 1.0) - config.clip_coef, 0).mean(
-            where=valid
-        )
+        clipfracs = (
+            ~jnp.isclose(ratio.clip(1 - config.clip_coef, 1 + config.clip_coef), ratio)
+        ).mean(where=valid)
         explained_var = calculate_explained_variance(value_pred, returns, valid)
 
         logs = dict(
@@ -243,7 +241,6 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
     logs.update(collect_parameter_and_gradient_telemetry_data(state.params, grads))
 
     state = state.apply_gradients(grads=grads)
-
     state = state.replace(
         actor_steps=state.actor_steps + batch.env.valid.sum(),
     )
@@ -267,13 +264,13 @@ def evaluate(evaluation_collector: EvalBatchCollector, state: train_state.TrainS
 
     win_rewards = np.sign(
         (
-            eval_batch.actor.rewards.win_rewards[..., 0]
+            eval_batch.actor.rewards.win_rewards[..., 0].squeeze()
             * eval_batch.env.valid.squeeze()
         ).sum(0)
     )
 
     fainted_rewards = (
-        eval_batch.actor.rewards.fainted_rewards[..., 0]
+        eval_batch.actor.rewards.fainted_rewards[..., 0].squeeze()
         * eval_batch.env.valid.squeeze()
     ).sum(0)
 
@@ -291,7 +288,7 @@ def main():
     network = get_model(model_config)
 
     training_collector = DoubleTrajectoryTrainingBatchCollector(
-        network, learner_config.batch_size
+        network, learner_config.num_actors
     )
     evaluation_collector = EvalBatchCollector(network, 4)
 
@@ -313,33 +310,49 @@ def main():
     eval_freq = 5000
     save_freq = 1000
 
-    train_progress = tqdm(desc="training")
+    train_progress = tqdm(desc="training", smoothing=0)
 
     for _ in range(learner_config.num_steps):
         logs: dict
 
         batch = training_collector.collect_batch_trajectory(state.params)
-        for minibatch in iterate(batch, learner_config.minibatch_size):
-            winrates = {}
 
-            time_to_eval = (
-                state.step % (eval_freq // learner_config.num_eval_games) == 0
-            )
-            if time_to_eval and learner_config.do_eval:
-                winrates = evaluate(evaluation_collector, state)
+        for _ in range(learner_config.num_epochs):
+            for minibatch in iterate(batch, learner_config.minibatch_size):
+                winrates = {}
 
-            state, logs = train_step(state, minibatch, learner_config)
+                time_to_eval = (
+                    state.step % (eval_freq // learner_config.num_eval_games) == 0
+                )
+                if time_to_eval and learner_config.do_eval:
+                    winrates = evaluate(evaluation_collector, state)
 
-            logs.update(collect_nn_telemetry_data(state))
-            logs.update(collect_batch_telemetry_data(minibatch))
-            # logs.update(collect_action_prob_telemetry_data(minibatch))
+                minibatch = TimeStep(
+                    env=minibatch.env,
+                    history=clip_history(minibatch.history, 128),
+                    actor=minibatch.actor,
+                )
+                new_state, logs = train_step(state, minibatch, learner_config)
 
-            logs["Step"] = state.step
-            wandb.log({**logs, **winrates})
-            train_progress.update(1)
+                # should_early_stop = (
+                #     logs["old_approx_kl"] > 1.5 * learner_config.kl_target
+                # ).item()
 
-            if state.step % save_freq == 0 and state.step > 0:
-                save(state)
+                # if should_early_stop:
+                #     continue
+
+                state = new_state
+
+                logs.update(collect_nn_telemetry_data(state))
+                logs.update(collect_batch_telemetry_data(minibatch))
+                # logs.update(collect_action_prob_telemetry_data(minibatch))
+
+                logs["Step"] = state.step
+                wandb.log({**logs, **winrates})
+                train_progress.update(1)
+
+                if state.step % save_freq == 0 and state.step > 0:
+                    save(state)
 
     print("done")
 

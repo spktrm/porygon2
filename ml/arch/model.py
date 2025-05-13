@@ -35,13 +35,19 @@ class Model(nn.Module):
         """
 
         # Get current state and action embeddings from the encoder
-        action_embeddings = self.encoder(env_step, history_step)
+        entity_embeddings, entity_mask, action_embeddings = self.encoder(
+            env_step, history_step
+        )
 
         # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(action_embeddings, env_step.legal)
+        logit, pi, log_pi = jax.vmap(self.policy_head)(
+            action_embeddings, env_step.legal
+        )
 
         # Apply the value head
-        value = self.value_head(action_embeddings, env_step.legal)
+        value = jax.vmap(self.value_head)(
+            entity_embeddings, entity_mask, action_embeddings, env_step.legal
+        )
 
         # Return the model output
         return ModelOutput(

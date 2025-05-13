@@ -87,17 +87,10 @@ export interface MovesetFeatureMap {
   MOVESET_FEATURE__MAXPP: 6;
   MOVESET_FEATURE__HAS_PP: 7;
   MOVESET_FEATURE__ACTION_TYPE: 8;
+  MOVESET_FEATURE__ENTITY_IDX: 9;
 }
 
 export const MovesetFeature: MovesetFeatureMap;
-
-export interface ActionsFeatureMap {
-  ACTIONS_FEATURE___UNSPECIFIED: 0;
-  ACTIONS_FEATURE__MOVE_ID: 1;
-  ACTIONS_FEATURE__ACTION_INDEX: 2;
-}
-
-export const ActionsFeature: ActionsFeatureMap;
 
 export interface RelativeEdgeFeatureMap {
   RELATIVE_EDGE_FEATURE___UNSPECIFIED: 0;
