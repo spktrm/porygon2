@@ -58,6 +58,7 @@ class EntityFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_FEATURE__ACTION_ID3: _ClassVar[EntityFeature]
     ENTITY_FEATURE__NUM_MOVES: _ClassVar[EntityFeature]
     ENTITY_FEATURE__IS_PUBLIC: _ClassVar[EntityFeature]
+    ENTITY_FEATURE__LAST_MOVE: _ClassVar[EntityFeature]
 
 class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -82,6 +83,12 @@ class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_FEATURE__MAXPP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__HAS_PP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
+
+class ActionsFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTIONS_FEATURE___UNSPECIFIED: _ClassVar[ActionsFeature]
+    ACTIONS_FEATURE__MOVE_ID: _ClassVar[ActionsFeature]
+    ACTIONS_FEATURE__ACTION_INDEX: _ClassVar[ActionsFeature]
 
 class RelativeEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -193,6 +200,7 @@ ENTITY_FEATURE__ACTION_ID2: EntityFeature
 ENTITY_FEATURE__ACTION_ID3: EntityFeature
 ENTITY_FEATURE__NUM_MOVES: EntityFeature
 ENTITY_FEATURE__IS_PUBLIC: EntityFeature
+ENTITY_FEATURE__LAST_MOVE: EntityFeature
 MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum
@@ -208,6 +216,9 @@ MOVESET_FEATURE__PP: MovesetFeature
 MOVESET_FEATURE__MAXPP: MovesetFeature
 MOVESET_FEATURE__HAS_PP: MovesetFeature
 MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
+ACTIONS_FEATURE___UNSPECIFIED: ActionsFeature
+ACTIONS_FEATURE__MOVE_ID: ActionsFeature
+ACTIONS_FEATURE__ACTION_INDEX: ActionsFeature
 RELATIVE_EDGE_FEATURE___UNSPECIFIED: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MAJOR_ARG: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MINOR_ARG0: RelativeEdgeFeature

@@ -35,6 +35,7 @@ import {
     numMoveFields,
     NUM_HISTORY,
     jsonDatum,
+    numActionFields,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -48,6 +49,7 @@ import { GetHeuristicAction } from "./baselines/heuristic";
 import {
     AbsoluteEdgeFeature,
     AbsoluteEdgeFeatureMap,
+    ActionsFeature,
     EntityFeature,
     MovesetActionTypeEnum,
     MovesetFeature,
@@ -404,6 +406,7 @@ function getUnkPokemon(n: number) {
     data[EntityFeature.ENTITY_FEATURE__MOVEID1] = MovesEnum.MOVES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__MOVEID2] = MovesEnum.MOVES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__MOVEID3] = MovesEnum.MOVES_ENUM___UNK;
+    data[EntityFeature.ENTITY_FEATURE__LAST_MOVE] = MovesEnum.MOVES_ENUM___UNK;
     data[EntityFeature.ENTITY_FEATURE__NUM_MOVES] = 4;
     data[EntityFeature.ENTITY_FEATURE__ACTION_ID0] =
         ActionsEnum.ACTIONS_ENUM__MOVE__UNK;
@@ -510,6 +513,19 @@ function getArrayFromPokemon(
     } else {
         dataArr[EntityFeature.ENTITY_FEATURE__ABILITY] =
             AbilitiesEnum.ABILITIES_ENUM___UNK;
+    }
+
+    if (pokemon.lastMove === "") {
+        dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] =
+            MovesEnum.MOVES_ENUM___NULL;
+    } else if (pokemon.lastMove === "switch-in") {
+        dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] =
+            MovesEnum.MOVES_ENUM___SWITCH;
+    } else {
+        dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] = IndexValueFromEnum(
+            MovesEnum,
+            pokemon.lastMove,
+        );
     }
 
     dataArr[EntityFeature.ENTITY_FEATURE__GENDER] = IndexValueFromEnum(
@@ -1332,7 +1348,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident as PokemonIdent)!;
         const isMe = isMySide(poke.side.n, playerIndex);
 
         const move = this.getMove(moveId);
@@ -1971,7 +1987,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
+        const poke = this.getPokemon(poke1Ident as PokemonIdent)!;
         const isMe = isMySide(poke.side.n, playerIndex);
 
         const itemIndex = IndexValueFromEnum(ItemsEnum, itemId);
@@ -2380,7 +2396,7 @@ export class StateHandler {
             pushSwitchAction(action);
             bufferOffset += numMoveFields;
         }
-        bufferOffset += (6 - activeMoves.length) * numMoveFields;
+        bufferOffset += (6 - switches.length) * numMoveFields;
 
         return new Uint8Array(actionBuffer.buffer);
     }
@@ -2422,6 +2438,149 @@ export class StateHandler {
         ) {
             buffer.set(nullPokemon, offset);
             offset += numPokemonFeatures;
+        }
+
+        return buffer;
+    }
+
+    getAllMyMoves(): Int16Array {
+        const request = this.player.getRequest() as AnyObject;
+
+        const active = (request?.active ??
+            [])[0] as Protocol.MoveRequest["active"][0];
+        const activeMoves = (active ?? {})?.moves ?? [];
+        const switches = (request?.side?.pokemon ??
+            []) as Protocol.Request.SideInfo["pokemon"];
+
+        const buffer = new Int16Array(6 * 4 * numActionFields);
+        let bufferOffset = 0;
+
+        for (const [actionIndex, action] of activeMoves.entries()) {
+            buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                IndexValueFromEnum(MovesEnum, action.id);
+            buffer[
+                bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+            ] = actionIndex;
+            bufferOffset += numActionFields;
+        }
+        for (let i = 0; i < 4 - Math.min(4, activeMoves.length); i++) {
+            buffer[bufferOffset] = MovesEnum.MOVES_ENUM___NULL;
+            buffer[
+                bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+            ] = i + activeMoves.length;
+            bufferOffset += numActionFields;
+        }
+        for (const [potentialSwitchIndex, potentialSwitch] of switches
+            .slice(0, 6)
+            .entries()) {
+            const numMoves = potentialSwitch.moves.length;
+            if (!potentialSwitch.active) {
+                for (const move of potentialSwitch.moves) {
+                    buffer[
+                        bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID
+                    ] = IndexValueFromEnum(MovesEnum, move);
+                    buffer[
+                        bufferOffset +
+                            ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                    ] = potentialSwitchIndex + 4;
+                    bufferOffset += numActionFields;
+                }
+                for (let i = 0; i < 4 - numMoves; i++) {
+                    buffer[
+                        bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID
+                    ] = MovesEnum.MOVES_ENUM___NULL;
+                    bufferOffset += numActionFields;
+                }
+            }
+        }
+        for (let i = 0; i < 6 - switches.length; i++) {
+            for (let i = 0; i < 4; i++) {
+                buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                    MovesEnum.MOVES_ENUM___NULL;
+                buffer[
+                    bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                ] = i + 4 + Math.min(6, switches.length);
+                bufferOffset += numActionFields;
+            }
+        }
+
+        return buffer;
+    }
+
+    getAllOppMoves(): Int16Array {
+        const playerIndex = this.player.getPlayerIndex()!;
+        const oppSide = this.player.publicBattle.sides[1 - playerIndex];
+
+        const buffer = new Int16Array(6 * 4 * numActionFields);
+        let bufferOffset = 0;
+
+        let activeIndex = 0;
+        let switchIndex = 4;
+
+        for (const member of oppSide.team.slice(0, 6)) {
+            for (const move of member.moves.slice(0, 4)) {
+                buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                    member.fainted || member.hp === 0
+                        ? MovesEnum.MOVES_ENUM___NULL
+                        : IndexValueFromEnum(MovesEnum, move);
+                if (member.isActive()) {
+                    buffer[
+                        bufferOffset +
+                            ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                    ] = activeIndex;
+                    activeIndex += 1;
+                } else {
+                    buffer[
+                        bufferOffset +
+                            ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                    ] = switchIndex;
+                }
+                bufferOffset += numActionFields;
+            }
+            const numMoves = member.moves.length;
+            for (let i = 0; i < 4 - numMoves; i++) {
+                buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                    member.fainted
+                        ? MovesEnum.MOVES_ENUM___NULL
+                        : MovesEnum.MOVES_ENUM___UNK;
+                if (member.isActive()) {
+                    buffer[
+                        bufferOffset +
+                            ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                    ] = activeIndex;
+                    activeIndex += 1;
+                } else {
+                    buffer[
+                        bufferOffset +
+                            ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                    ] = switchIndex;
+                }
+                bufferOffset += numActionFields;
+            }
+            switchIndex += 1;
+        }
+        const teamLength = Math.min(oppSide.team.length, 6);
+        for (
+            let i = 0;
+            i < Math.min(6, oppSide.totalPokemon - teamLength);
+            i++
+        ) {
+            for (let i = 0; i < 4; i++) {
+                buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                    MovesEnum.MOVES_ENUM___UNK;
+                buffer[
+                    bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
+                ] = switchIndex;
+                bufferOffset += numActionFields;
+            }
+            switchIndex += 1;
+        }
+        for (let i = 0; i < 6 - Math.min(6, oppSide.totalPokemon); i++) {
+            for (let i = 0; i < 4; i++) {
+                buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
+                    MovesEnum.MOVES_ENUM___NULL;
+                bufferOffset += numActionFields;
+            }
         }
 
         return buffer;
@@ -2484,6 +2643,9 @@ export class StateHandler {
             const remainingPokemon = side.totalPokemon - side.team.length;
             return hpInTeam + remainingPokemon;
         });
+
+        rewards.setFaintedReward(aliveTotal1 - aliveTotal2);
+        rewards.setHpReward(hpTotal1 - hpTotal2);
 
         if (!this.player.done) {
             return rewards;
@@ -2553,14 +2715,18 @@ export class StateHandler {
         const worldStream = this.player.worldStream;
         if (worldStream !== null) {
             const world = worldStream.battle!;
-            info.setSeed(hashArrayToInt32(world.prng.initialSeed));
+            info.setSeed(
+                hashArrayToInt32(
+                    world.prng.startingSeed.split(",").map((x) => parseInt(x)),
+                ),
+            );
         }
 
         const drawRatio = this.player.privateBattle.turn / DRAW_TURNS;
         info.setDrawRatio(Math.max(0, Math.min(1, drawRatio)));
 
-        // const rewards = this.getRewards();
-        // info.setRewards(rewards);
+        const rewards = this.player.tracker.getReward();
+        info.setRewards(rewards);
 
         // const heuristics = this.getHeuristics();
         // info.setHeuristics(heuristics);
@@ -2578,14 +2744,38 @@ export class StateHandler {
         return entityDatums;
     }
 
-    getState(numHistory: number = NUM_HISTORY): State {
+    checkRequest() {
+        const request = this.player.getRequest();
         if (
             !this.player.offline &&
             !this.player.done &&
-            this.player.getRequest() === undefined
+            request === undefined
         ) {
             throw new Error("Need Request");
         }
+
+        if (request !== undefined) {
+            const side = request.side;
+            if (side !== undefined) {
+                const mySide =
+                    this.player.privateBattle.sides[
+                        this.player.getPlayerIndex()!
+                    ];
+                for (const [index, pokemon] of side.pokemon.entries()) {
+                    const sidePokemon = mySide.team[index];
+                    if (
+                        pokemon.speciesForme.toLowerCase() !==
+                        sidePokemon.baseSpecies.toString().toLowerCase()
+                    ) {
+                        throw new Error("Pokemon name mismatch");
+                    }
+                }
+            }
+        }
+    }
+
+    getState(numHistory: number = NUM_HISTORY): State {
+        this.checkRequest();
 
         const state = new State();
         const info = this.getInfo();
@@ -2610,6 +2800,12 @@ export class StateHandler {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
+
+        const allMyMoves = this.getAllMyMoves();
+        const allOppMoves = this.getAllOppMoves();
+
+        state.setAllMyMoves(new Uint8Array(allMyMoves.buffer));
+        state.setAllOppMoves(new Uint8Array(allOppMoves.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
