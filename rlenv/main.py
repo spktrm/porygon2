@@ -1,7 +1,5 @@
 import asyncio
 import functools
-import random
-import statistics
 import time
 from abc import ABC, abstractmethod
 import traceback
@@ -20,7 +18,13 @@ from ml.arch.model import get_dummy_model, get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
-from rlenv.env import as_jax_arr, get_ex_step, process_state
+from rlenv.env import (
+    as_jax_arr,
+    clip_history,
+    expand_dims,
+    get_ex_step,
+    process_state,
+)
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.service_pb2 import (
     Action,
@@ -31,7 +35,7 @@ from rlenv.protos.service_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import stack_steps
+from rlenv.utils import concatenate_steps, stack_steps
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -60,7 +64,9 @@ class SinglePlayerEnvironment:
         return self
 
     async def _init(self):
-        self.websocket = await websockets.connect(SERVER_URI)
+        self.websocket = await websockets.connect(
+            SERVER_URI, ping_interval=3600, ping_timeout=3600
+        )
         connect_message = ClientMessage(
             player_id=self.player_id, game_id=self.game_id, connect=ConnectMessage()
         )
@@ -69,12 +75,9 @@ class SinglePlayerEnvironment:
 
     async def read_continuously(self):
         while True:
-            try:
+            async with asyncio.timeout(60 * 60):
                 incoming_message = await self.websocket.recv()
-                await self.queue.put(incoming_message)
-            except websockets.ConnectionClosed:
-                print(f"Connection closed for player {self.player_id}")
-                break
+            await self.queue.put(incoming_message)
 
     async def reset(self):
         await self._reset()
@@ -85,6 +88,7 @@ class SinglePlayerEnvironment:
             player_id=self.player_id, game_id=self.game_id, reset=ResetMessage()
         )
         await self.websocket.send(reset_message.SerializeToString())
+
         return await self._recv()
 
     async def step(self, action: int):
@@ -289,7 +293,7 @@ class BatchCollectorV2:
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
         """Apply a batch of `actions` to a parallel list of `states`."""
-        return self.game.step(list(actions))
+        return self.game.step(list(actions.reshape(-1)))
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _network_jit_apply(
@@ -444,7 +448,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
     def _network_batch_inference(
         self, params: Params, ex_batch: EnvStep, hx_batch: HistoryStep
     ) -> tuple:
-        outputs = jax.vmap(self.network.apply, (None, 0, 0), 0)(
+        outputs = jax.vmap(self.network.apply, (None, 1, 1), 1)(
             params, ex_batch, hx_batch
         )
         return outputs.pi, outputs.log_pi
@@ -475,7 +479,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
         async with self.phase_lock:
             if phase != self.collection_phase:
-                old_phase = self.collection_phase
+                self.collection_phase
                 self.collection_phase = phase
                 # print(f"Collection phase transition: {old_phase} -> {phase}")
 
@@ -524,7 +528,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 try:
                     # Use wait_for with a timeout to check stop_inference periodically
                     request_id, (ex, hx) = await asyncio.wait_for(
-                        self.inference_queue.get(), timeout=0.1
+                        self.inference_queue.get(), timeout=1
                     )
                     batch_obs.append(ex)
                     batch_hist.append(hx)
@@ -578,9 +582,10 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 # Process batch if we have observations and haven't been stopped
                 if batch_obs and not self.stop_inference.is_set():
                     # Convert to batch and call network
-                    ex_batch = as_jax_arr(stack_steps(batch_obs))
-                    hx_batch = as_jax_arr(stack_steps(batch_hist))
+                    ex_batch = as_jax_arr(stack_steps(batch_obs, axis=1))
+                    hx_batch = as_jax_arr(stack_steps(batch_hist, axis=1))
 
+                    print(ex_batch.valid.shape)
                     pi_batch, log_pi_batch = self._network_batch_inference(
                         params, ex_batch, hx_batch
                     )
@@ -591,11 +596,14 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
                     # Distribute results
                     async with self.inference_lock:
-                        for i, req_id in enumerate(request_ids):
-                            self.inference_results[req_id] = (
-                                pi_batch[i],
-                                log_pi_batch[i],
+                        for i, (req_id, pi_res, log_pi_res) in enumerate(
+                            zip(
+                                request_ids,
+                                jnp.split(pi_batch, pi_batch.shape[1], axis=1),
+                                jnp.split(log_pi_batch, log_pi_batch.shape[1], axis=1),
                             )
+                        ):
+                            self.inference_results[req_id] = pi_res, log_pi_res
                             # Mark task as done for the queue
                             self.inference_queue.task_done()
 
@@ -608,7 +616,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                         self._tune_parameters()
 
         except Exception as e:
-            print(f"Inference worker exception: {e}")
+            traceback.print_exc()
         finally:
             # Clean up any remaining requests if we're shutting down
             async with self.inference_lock:
@@ -717,47 +725,41 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
     ):
         """Get network inference for an actor, potentially batched with others."""
         # Ensure inference worker is running with correct params
-        await self.update_inference_worker(params)
+        # await self.update_inference_worker(params)
 
-        # Create a unique request ID
-        request_id = id(env_step)
+        # # Create a unique request ID
+        # request_id = id(env_step)
 
-        # Submit observation to the inference queue
-        await self.inference_queue.put((request_id, (env_step, history_step)))
+        # # Submit observation to the inference queue
+        # await self.inference_queue.put((request_id, (env_step, history_step)))
 
-        # Wait for result
-        while True:
-            async with self.inference_lock:
-                if request_id in self.inference_results:
-                    pi, log_pi = self.inference_results.pop(request_id)
-                    # Handle the case where we got dummy results during shutdown
-                    if pi is None:
-                        # Fall back to direct inference
-                        env_step_jax = as_jax_arr(env_step)
-                        history_step_jax = as_jax_arr(history_step)
-                        pi, log_pi = self._network_jit_apply(
-                            params, env_step_jax, history_step_jax
-                        )
-                    break
-            await asyncio.sleep(0.001)  # Small wait to avoid busy loop
+        # # Wait for result
+        # while True:
+        #     async with self.inference_lock:
+        #         if request_id in self.inference_results:
+        #             pi, log_pi = self.inference_results.pop(request_id)
+        #             # Handle the case where we got dummy results during shutdown
+        #             if pi is None:
+        #                 # Fall back to direct inference
+        #                 env_step_jax = as_jax_arr(env_step)
+        #                 history_step_jax = as_jax_arr(history_step)
+        #                 print(env_step.valid.shape)
+        #                 pi, log_pi = self._network_jit_apply(
+        #                     params, env_step_jax, history_step_jax
+        #                 )
+        #             break
+        #     await asyncio.sleep(0.001)  # Small wait to avoid busy loop
+
+        env_step_jax = as_jax_arr(env_step)
+        history_step_jax = as_jax_arr(clip_history(history_step))
+
+        pi, log_pi = self._network_jit_apply(params, env_step_jax, history_step_jax)
 
         # Sample action from policy
         action = np.apply_along_axis(
             lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
         )
 
-        return action, ActorStep(
-            action=action, policy=pi, log_policy=log_pi, rewards=()
-        )
-
-    def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
-        """Legacy actor_step - primarily for compatibility, prefer get_actor_inference"""
-        env_step = as_jax_arr(env_step)
-        history_step = as_jax_arr(history_step)
-        pi, log_pi = self._network_jit_apply(params, env_step, history_step)
-        action = np.apply_along_axis(
-            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
-        )
         return action, ActorStep(
             action=action, policy=pi, log_policy=log_pi, rewards=()
         )
@@ -789,7 +791,6 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
                 timestep = TimeStep(
                     env=pex,
-                    history=phx,
                     actor=ActorStep(
                         action=actor_step.action,
                         policy=actor_step.policy,
@@ -822,7 +823,6 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 ex, hx = await env.step(a.item())
                 timestep = TimeStep(
                     env=ex,
-                    history=hx,
                     actor=ActorStep(
                         action=actor_step.action,
                         policy=actor_step.policy,
@@ -832,7 +832,12 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 )
                 trajectory.append(timestep)
 
-            return stack_steps(trajectory)
+            trajectory = stack_steps(trajectory, 0)
+            return TimeStep(
+                env=trajectory.env,
+                actor=trajectory.actor,
+                history=expand_dims(hx, axis=1),
+            )
         finally:
             # Ensure environment is marked as inactive if there's an exception
             async with self.active_envs_lock:
@@ -862,41 +867,10 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 self.collect_trajectories(params, resolution)
             )
             self.state_index = 0
-            return as_jax_arr(stack_steps(trajectories, 1))
+            return as_jax_arr(concatenate_steps(trajectories, 1))
         finally:
             # Ensure inference worker is stopped when collection is complete
             self.loop.run_until_complete(self.stop_inference_worker())
-
-    async def benchmark_environment_speed(self, params, num_steps=100):
-        """Measure how frequently observations arrive."""
-        env = self.envs[0]  # Use first environment for testing
-        arrival_times = []
-
-        ex, hx = await env.reset()
-        start_time = time.time()
-
-        for _ in range(num_steps):
-            # Use direct inference for benchmarking
-            env_step_jax = as_jax_arr(ex)
-            history_step_jax = as_jax_arr(hx)
-            pi, log_pi = self._network_jit_apply(params, env_step_jax, history_step_jax)
-
-            action = np.apply_along_axis(
-                lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
-            )
-
-            ex, hx = await env.step(action.item())
-            arrival_times.append(time.time() - start_time)
-
-        # Calculate median time between observations
-        intervals = [
-            arrival_times[i] - arrival_times[i - 1]
-            for i in range(1, len(arrival_times))
-        ]
-        median_interval = statistics.median(intervals)
-        # print(f"Median time between observations: {median_interval*1000:.2f}ms")
-
-        return median_interval
 
 
 class EvalBatchCollector(BatchCollectorV2):
@@ -912,7 +886,7 @@ def main():
     state_progress = tqdm(desc="States: ")
 
     num_envs = 4
-    network = get_dummy_model()
+    network = get_model()
     # training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     training_env = DoubleTrajectoryTrainingBatchCollector(network, num_envs)
     # evaluation_env = EvalBatchCollector(network, 4)

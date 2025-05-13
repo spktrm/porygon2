@@ -89,9 +89,11 @@ class ActorCriticConfig:
     # num players in game
     num_players: int = 2
     # The batch size to use when collecting trajectories.
-    batch_size: int = 16
+    num_actors: int = 128
+    # How many epochs to run on the collected trajectories.
+    num_epochs: int = 2
     # The batch size to use when learning/improving parameters.
-    minibatch_size: int = batch_size
+    minibatch_size: int = 8
     # The learning rate for `params`.
     learning_rate: float = 3e-5
     # The config related to the ADAM optimizer used for updating `params`.

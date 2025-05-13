@@ -26,8 +26,8 @@ class EnvStep:
     seed_hash: chex.Array = ()
     request_count: chex.Array = ()
     public_team: chex.Array = ()
-    all_my_moves: chex.Array = ()
-    all_opp_moves: chex.Array = ()
+    # all_my_moves: chex.Array = ()
+    # all_opp_moves: chex.Array = ()
 
     # Private Info
     moveset: chex.Array = ()

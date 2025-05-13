@@ -51,8 +51,14 @@ def get_model_cfg():
     cfg.encoder.vector_size = vector_size
 
     cfg.encoder.entity_encoder = ConfigDict()
-    cfg.encoder.action_decoder = ConfigDict()
+    cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.entity_timestep_decoder = ConfigDict()
+    cfg.encoder.entity_gating = ConfigDict()
+    cfg.encoder.entity_projection = ConfigDict()
+    cfg.encoder.action_entity_decoder = ConfigDict()
+    cfg.encoder.to_vector = ConfigDict()
 
+    num_transformer_layers = 1
     num_transformer_heads = 2
     transformer_hidden_size_scale = 4
 
@@ -60,7 +66,7 @@ def get_model_cfg():
     transformer_key_value_scale = 1 / num_transformer_heads
     transformer_key_value_size = int(transformer_key_value_scale * entity_size)
 
-    cfg.encoder.entity_encoder.num_layers = 2
+    cfg.encoder.entity_encoder.num_layers = num_transformer_layers
     cfg.encoder.entity_encoder.key_size = transformer_key_value_size
     cfg.encoder.entity_encoder.value_size = transformer_key_value_size
     cfg.encoder.entity_encoder.model_size = entity_size
@@ -69,22 +75,45 @@ def get_model_cfg():
     cfg.encoder.entity_encoder.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_encoder.resblocks_hidden_size = transformer_hidden_size
 
-    cfg.encoder.action_decoder.num_layers = 2
-    cfg.encoder.action_decoder.key_size = transformer_key_value_size
-    cfg.encoder.action_decoder.value_size = transformer_key_value_size
-    cfg.encoder.action_decoder.model_size = entity_size
-    cfg.encoder.action_decoder.num_heads = num_transformer_heads
-    cfg.encoder.action_decoder.use_layer_norm = use_layer_norm
-    cfg.encoder.action_decoder.use_spectral_linear = use_spectral_linear
-    cfg.encoder.action_decoder.resblocks_hidden_size = transformer_hidden_size
-    cfg.encoder.action_decoder.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder.num_layers = num_transformer_layers
+    cfg.encoder.timestep_encoder.key_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder.value_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder.model_size = entity_size
+    cfg.encoder.timestep_encoder.num_heads = num_transformer_heads
+    cfg.encoder.timestep_encoder.use_layer_norm = use_layer_norm
+    cfg.encoder.timestep_encoder.use_spectral_linear = use_spectral_linear
+    cfg.encoder.timestep_encoder.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder.need_pos = True
+
+    cfg.encoder.entity_timestep_decoder.num_layers = num_transformer_layers
+    cfg.encoder.entity_timestep_decoder.key_size = transformer_key_value_size
+    cfg.encoder.entity_timestep_decoder.value_size = transformer_key_value_size
+    cfg.encoder.entity_timestep_decoder.model_size = entity_size
+    cfg.encoder.entity_timestep_decoder.num_heads = num_transformer_heads
+    cfg.encoder.entity_timestep_decoder.use_layer_norm = use_layer_norm
+    cfg.encoder.entity_timestep_decoder.use_spectral_linear = use_spectral_linear
+    cfg.encoder.entity_timestep_decoder.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.entity_timestep_decoder.y_need_pos = True
+
+    cfg.encoder.entity_projection.embed_dim = vector_size
+    cfg.encoder.entity_projection.output_dim = entity_size
+
+    cfg.encoder.action_entity_decoder.num_layers = num_transformer_layers
+    cfg.encoder.action_entity_decoder.key_size = transformer_key_value_size
+    cfg.encoder.action_entity_decoder.value_size = transformer_key_value_size
+    cfg.encoder.action_entity_decoder.model_size = entity_size
+    cfg.encoder.action_entity_decoder.num_heads = num_transformer_heads
+    cfg.encoder.action_entity_decoder.use_layer_norm = use_layer_norm
+    cfg.encoder.action_entity_decoder.use_spectral_linear = use_spectral_linear
+    cfg.encoder.action_entity_decoder.resblocks_hidden_size = transformer_hidden_size
 
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()
     cfg.policy_head.transformer = ConfigDict()
     cfg.policy_head.logits = ConfigDict()
 
-    cfg.policy_head.transformer.num_layers = 1
+    cfg.policy_head.transformer.num_layers = num_transformer_layers
     cfg.policy_head.transformer.key_size = transformer_key_value_size
     cfg.policy_head.transformer.value_size = transformer_key_value_size
     cfg.policy_head.transformer.model_size = entity_size
@@ -96,13 +125,14 @@ def get_model_cfg():
     cfg.policy_head.logits.num_logits = 1
     cfg.policy_head.logits.num_linear_layers = 2
     cfg.policy_head.logits.use_layer_norm = use_layer_norm
+    # cfg.policy_head.logits.kernel_init = "small"
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
     cfg.value_head.logits = ConfigDict()
 
-    cfg.value_head.transformer.num_layers = 1
+    cfg.value_head.transformer.num_layers = num_transformer_layers
     cfg.value_head.transformer.key_size = transformer_key_value_size
     cfg.value_head.transformer.value_size = transformer_key_value_size
     cfg.value_head.transformer.model_size = entity_size
@@ -114,6 +144,7 @@ def get_model_cfg():
     cfg.value_head.logits.num_logits = 1
     cfg.value_head.logits.num_linear_layers = 2
     cfg.value_head.logits.use_layer_norm = use_layer_norm
+    # cfg.value_head.logits.kernel_init = "small"
 
     return cfg
 
