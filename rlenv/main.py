@@ -1,8 +1,8 @@
 import asyncio
 import functools
 import time
-from abc import ABC, abstractmethod
 import traceback
+from abc import ABC, abstractmethod
 from typing import Callable, List, Sequence, Tuple
 
 import chex
@@ -14,17 +14,11 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_dummy_model, get_model
+from ml.arch.model import get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
-from rlenv.env import (
-    as_jax_arr,
-    clip_history,
-    expand_dims,
-    get_ex_step,
-    process_state,
-)
+from rlenv.env import as_jax_arr, clip_history, expand_dims, get_ex_step, process_state
 from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
 from rlenv.protos.service_pb2 import (
     Action,
@@ -615,7 +609,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                     ):
                         self._tune_parameters()
 
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
         finally:
             # Clean up any remaining requests if we're shutting down
