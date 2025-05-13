@@ -1,6 +1,5 @@
 import chex
 import flax.linen as nn
-import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from ml.arch.modules import Logits, TransformerEncoder
@@ -14,7 +13,11 @@ class PolicyHead(nn.Module):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-    def __call__(self, action_embeddings: chex.Array, action_mask: chex.Array):
+    def __call__(
+        self,
+        action_embeddings: chex.Array,
+        action_mask: chex.Array,
+    ):
         action_embeddings = self.encoder(action_embeddings, action_mask)
 
         logits = self.logits(action_embeddings)
@@ -34,19 +37,11 @@ class ValueHead(nn.Module):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-    def __call__(self, entity_embeddings: chex.Array, entity_mask: chex.Array):
-        queries = self.encoder(
-            entity_embeddings,
-            None,  # entity_mask,
-        )
-        b1, b2, b3 = jnp.split(queries, 3, axis=0)
-        m1, m2, m3 = jnp.split(entity_mask[..., None], 3, axis=0)
-        embedding = jnp.concatenate(
-            (
-                b1.mean(axis=0, where=m1),
-                b2.mean(axis=0, where=m2),
-                b3.mean(axis=0, where=m3),
-            ),
-            axis=-1,
-        )
-        return self.logits(embedding).reshape(-1)
+    def __call__(
+        self,
+        action_embeddings: chex.Array,
+        action_mask: chex.Array,
+    ):
+        action_embeddings = self.encoder(action_embeddings, action_mask)
+        actions_embedding = action_embeddings.mean(axis=0, where=action_mask[..., None])
+        return self.logits(actions_embedding).reshape(-1)

@@ -1,3 +1,4 @@
+from functools import cache, lru_cache
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -5,6 +6,7 @@ import numpy as np
 from rlenv.data import (
     EX_STATE,
     NUM_ABSOLUTE_EDGE_FIELDS,
+    NUM_ACTION_FIELDS,
     NUM_ENTITY_FIELDS,
     NUM_HISTORY,
     NUM_MOVE_FIELDS,
@@ -66,6 +68,16 @@ def process_state(state: State):
         .reshape(12, NUM_ENTITY_FIELDS)
         .astype(int)
     )
+    all_my_moves = (
+        np.frombuffer(state.all_my_moves, dtype=np.int16)
+        .reshape(6, 4, NUM_ACTION_FIELDS)
+        .astype(int)
+    )
+    all_opp_moves = (
+        np.frombuffer(state.all_opp_moves, dtype=np.int16)
+        .reshape(6, 4, NUM_ACTION_FIELDS)
+        .astype(int)
+    )
 
     rewards = state.info.rewards
     heuristics = state.info.heuristics
@@ -95,6 +107,8 @@ def process_state(state: State):
         timestamp=np.array(state.info.timestamp, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
+        all_my_moves=all_my_moves,
+        all_opp_moves=all_opp_moves,
         private_team=private_team.astype(int),
         public_team=public_team.astype(int),
         moveset=moveset.astype(int),
