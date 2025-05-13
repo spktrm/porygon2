@@ -83,12 +83,7 @@ class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_FEATURE__MAXPP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__HAS_PP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
-
-class ActionsFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    ACTIONS_FEATURE___UNSPECIFIED: _ClassVar[ActionsFeature]
-    ACTIONS_FEATURE__MOVE_ID: _ClassVar[ActionsFeature]
-    ACTIONS_FEATURE__ACTION_INDEX: _ClassVar[ActionsFeature]
+    MOVESET_FEATURE__ENTITY_IDX: _ClassVar[MovesetFeature]
 
 class RelativeEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -216,9 +211,7 @@ MOVESET_FEATURE__PP: MovesetFeature
 MOVESET_FEATURE__MAXPP: MovesetFeature
 MOVESET_FEATURE__HAS_PP: MovesetFeature
 MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
-ACTIONS_FEATURE___UNSPECIFIED: ActionsFeature
-ACTIONS_FEATURE__MOVE_ID: ActionsFeature
-ACTIONS_FEATURE__ACTION_INDEX: ActionsFeature
+MOVESET_FEATURE__ENTITY_IDX: MovesetFeature
 RELATIVE_EDGE_FEATURE___UNSPECIFIED: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MAJOR_ARG: RelativeEdgeFeature
 RELATIVE_EDGE_FEATURE__MINOR_ARG0: RelativeEdgeFeature
