@@ -28,15 +28,13 @@ from ml.learners.func import (
 )
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
-from rlenv.interfaces import ModelOutput, TimeStep
+from rlenv.interfaces import ModelOutput, Targets, TimeStep
 from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollector
-
-jax.config.update("jax_default_matmul_precision", "bfloat16")
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig(ActorCriticConfig):
-    clip_gradient: float = 10
+    clip_gradient: float = 1
     clip_coef: float = 0.2
     gae_lambda: float = 1.0
     entropy_loss_coef: float = 0.05
@@ -95,7 +93,7 @@ def load(state: TrainState, path: str):
     step_no = step.get("step", 0)
     print(f"Learner steps: {step_no:08}")
 
-    actor_steps = step.get("actor_steps", 15_000_000)
+    actor_steps = step.get("actor_steps", 0)
     print("Actor steps: ", actor_steps)
 
     params = step["params"]
@@ -162,7 +160,38 @@ def compute_gae(
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
-def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
+def compute_returns(state: TrainState, batch: TimeStep, config: MMDConfig):
+    """Train for a single step."""
+
+    pred: ModelOutput = jax.vmap(state.apply_fn, (None, 1, 1), 1)(
+        state.params, batch.env, batch.history
+    )
+
+    valid = batch.env.valid
+
+    rewards = jnp.take_along_axis(
+        batch.actor.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
+    ).squeeze()
+
+    value_pred = jnp.squeeze(pred.v, axis=-1)
+    baselines = jnp.concatenate([value_pred, jnp.zeros_like(value_pred[-1:])])
+    discounts = valid * config.gamma
+    lambda_ = jnp.ones_like(valid) * config.gae_lambda
+
+    advantages = jax.vmap(
+        functools.partial(compute_gae, stop_target_gradients=True),
+        in_axes=(1, 1, 1, 1),
+    )(rewards, discounts, lambda_, baselines).T
+    returns = jax.lax.stop_gradient(advantages + baselines[:-1])
+
+    advantages = advantages - advantages.mean(where=valid, keepdims=True)
+    advantages = advantages / advantages.std(where=valid, keepdims=True)
+
+    return Targets(advantages=advantages, returns=returns)
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMDConfig):
     """Train for a single step."""
 
     def loss_fn(params: Params):
@@ -172,21 +201,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         )
 
         valid = batch.env.valid
-
-        rewards = jnp.take_along_axis(
-            batch.actor.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
-        ).squeeze()
-
         value_pred = jnp.squeeze(pred.v, axis=-1)
-        baselines = jnp.concatenate([value_pred, jnp.zeros_like(value_pred[-1:])])
-        discounts = valid * config.gamma
-        lambda_ = jnp.ones_like(valid) * config.gae_lambda
-
-        advantages = jax.vmap(
-            functools.partial(compute_gae, stop_target_gradients=True),
-            in_axes=(1, 1, 1, 1),
-        )(rewards, discounts, lambda_, baselines).T
-        returns = jax.lax.stop_gradient(advantages + baselines[:-1])
 
         action = batch.actor.action[..., None]
         log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
@@ -194,11 +209,13 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
 
-        pg_loss1 = -advantages * ratio
-        pg_loss2 = -advantages * ratio.clip(1 - config.clip_coef, 1 + config.clip_coef)
+        pg_loss1 = -targets.advantages * ratio
+        pg_loss2 = -targets.advantages * ratio.clip(
+            1 - config.clip_coef, 1 + config.clip_coef
+        )
 
         loss_pg = jnp.maximum(pg_loss1, pg_loss2).mean(where=valid)
-        loss_v = 0.5 * jnp.square(returns - value_pred).mean(where=valid)
+        loss_v = 0.5 * jnp.square(targets.returns - value_pred).mean(where=valid)
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
@@ -218,7 +235,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         clipfracs = (
             ~jnp.isclose(ratio.clip(1 - config.clip_coef, 1 + config.clip_coef), ratio)
         ).mean(where=valid)
-        explained_var = calculate_explained_variance(value_pred, returns, valid)
+        explained_var = calculate_explained_variance(value_pred, targets.returns, valid)
 
         logs = dict(
             old_approx_kl=old_approx_kl,
@@ -315,9 +332,12 @@ def main():
     for _ in range(learner_config.num_steps):
         logs: dict
 
+        original_state = state
         batch = training_collector.collect_batch_trajectory(state.params)
 
         for _ in range(learner_config.num_epochs):
+            should_early_stop = False
+
             for minibatch in iterate(batch, learner_config.minibatch_size):
                 winrates = {}
 
@@ -329,17 +349,17 @@ def main():
 
                 minibatch = TimeStep(
                     env=minibatch.env,
-                    history=clip_history(minibatch.history, 128),
+                    history=clip_history(minibatch.history, resolution=64),
                     actor=minibatch.actor,
                 )
-                new_state, logs = train_step(state, minibatch, learner_config)
+                targets = compute_returns(original_state, minibatch, learner_config)
+                new_state, logs = train_step(state, minibatch, targets, learner_config)
 
-                # should_early_stop = (
-                #     logs["old_approx_kl"] > 1.5 * learner_config.kl_target
-                # ).item()
-
-                # if should_early_stop:
-                #     continue
+                should_early_stop = (
+                    logs["approx_kl"] > learner_config.kl_target * 1.5
+                ).item()
+                if should_early_stop:
+                    break
 
                 state = new_state
 
@@ -353,6 +373,10 @@ def main():
 
                 if state.step % save_freq == 0 and state.step > 0:
                     save(state)
+
+            if should_early_stop:
+                print("Early stopping")
+                break
 
     print("done")
 

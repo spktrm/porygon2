@@ -38,7 +38,7 @@ def get_history(history: History, padding_length: int = NUM_HISTORY):
 
 
 def expand_dims(x, axis: int):
-    return jax.tree_map(lambda i: np.expand_dims(i, axis=axis), x)
+    return jax.tree.map(lambda i: np.expand_dims(i, axis=axis), x)
 
 
 def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
@@ -50,9 +50,9 @@ def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
     ).item()
 
     # Round history length up to the nearest multiple of resolution
-    rounded_length = int(np.ceil(history_length / resolution) * resolution) + 1
+    rounded_length = int(np.ceil(history_length / resolution) * resolution)
 
-    return jax.tree_map(lambda x: x[:rounded_length], history)
+    return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
 def get_legal_mask(state: State):

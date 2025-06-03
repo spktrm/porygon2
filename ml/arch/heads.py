@@ -1,10 +1,10 @@
 import chex
+import numpy as np
 import flax.linen as nn
-import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, TransformerEncoder
+from ml.arch.modules import MLP, Logits, TransformerDecoder, TransformerEncoder
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -20,7 +20,7 @@ class PolicyHead(nn.Module):
         action_embeddings: chex.Array,
         action_mask: chex.Array,
     ):
-        action_embeddings = self.encoder(action_embeddings, action_mask)
+        action_embeddings = self.encoder(action_embeddings, jnp.ones_like(action_mask))
 
         logits = self.logits(action_embeddings)
         logits = logits.reshape(-1)
@@ -32,44 +32,13 @@ class PolicyHead(nn.Module):
         return logits, policy, log_policy
 
 
-def _init_from_embeddings(
-    key: chex.PRNGKey,
-    shape: tuple,
-    embeddings: chex.Array,
-):
-    return jax.random.normal(key, shape) * embeddings.std(axis=0) + embeddings.mean(
-        axis=0
-    )
-
-
-class ClsEmbeddings(nn.Module):
-    num_cls_embeddings: int = 1
-
-    @nn.compact
-    def __call__(self, embeddings: chex.Array, mask: chex.Array):
-        cls_embedding = self.param(
-            "cls_embedding",
-            lambda key, shape: _init_from_embeddings(key, shape, embeddings),
-            (self.num_cls_embeddings, embeddings.shape[-1]),
-        )
-        embeddings = jnp.concatenate([cls_embedding, embeddings], axis=0)
-        mask = jnp.concatenate(
-            [
-                jnp.ones((self.num_cls_embeddings, mask.shape[1]), dtype=mask.dtype),
-                mask,
-            ],
-            axis=0,
-        )
-        return embeddings, mask
-
-
 class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.encoder1 = TransformerEncoder(**self.cfg.transformer.to_dict())
-        self.encoder2 = TransformerEncoder(**self.cfg.transformer.to_dict())
-        self.logits = Logits(**self.cfg.logits.to_dict())
+        self.decoder1 = TransformerDecoder(**self.cfg.transformer.to_dict())
+        self.decoder2 = TransformerDecoder(**self.cfg.transformer.to_dict())
+        self.logits = MLP(**self.cfg.logits.to_dict())
 
     def __call__(
         self,
@@ -78,16 +47,30 @@ class ValueHead(nn.Module):
         action_embeddings: chex.Array,
         action_mask: chex.Array,
     ):
-        entity_embeddings = self.encoder1(entity_embeddings, entity_mask)
-        entities_embedding = entity_embeddings.mean(
-            axis=0, where=entity_mask[..., None]
+        entity_context_embeddings = self.decoder1(
+            entity_embeddings, action_embeddings, entity_mask, action_mask
+        )
+        action_context_embeddings = self.decoder2(
+            action_embeddings, entity_embeddings, action_mask, entity_mask
         )
 
-        action_embeddings = self.encoder2(action_embeddings, action_mask)
-        actions_embedding = action_embeddings.mean(axis=0, where=action_mask[..., None])
+        def _pool_sequence(embeddings: chex.Array, mask: chex.Array):
+            expanded_mask = mask[..., None]
+            mask_sum = jnp.sum(mask).clip(min=1)
+            mean_embedding = jnp.sum(embeddings * expanded_mask, axis=0) / mask_sum
+            max_embedding = jnp.where(expanded_mask, embeddings, -1e30).max(0)
+            min_embedding = jnp.where(expanded_mask, embeddings, 1e30).min(0)
+            return jnp.concatenate(
+                [mean_embedding, max_embedding, min_embedding], axis=-1
+            )
 
         state_embedding = jnp.concatenate(
-            [entities_embedding, actions_embedding], axis=-1
+            (
+                _pool_sequence(entity_context_embeddings, entity_mask),
+                _pool_sequence(action_context_embeddings, action_mask),
+            ),
+            axis=-1,
         )
 
-        return self.logits(state_embedding).reshape(-1)
+        output_logits = self.logits(state_embedding).reshape(-1)
+        return jnp.tanh(output_logits)

@@ -436,7 +436,10 @@ function getArrayFromPokemon(
     }
 
     let pokemon: Pokemon;
-    if (candidate.volatiles.transform !== undefined) {
+    if (
+        candidate.volatiles.transform !== undefined &&
+        candidate.volatiles.transform.pokemon !== undefined
+    ) {
         pokemon = candidate.volatiles.transform.pokemon as Pokemon;
     } else {
         pokemon = candidate;
@@ -903,6 +906,7 @@ class EdgeBuffer {
                 : getArrayFromPokemon(onlyActive, playerIndex);
         this.entityData.set(activePokemonBuffer, entityOffset);
     }
+
     updateLatestSideConditionData(
         side: Side,
         relativeEdgeOffset: number,
@@ -1209,10 +1213,16 @@ class EdgeBuffer {
                 (historyIndex + 1) * numAbsoluteEdgeFeatures,
             );
             historyItems.push({
-                entites: [
-                    entityArrayToObject(stepEntity0),
-                    entityArrayToObject(stepEntity1),
-                ],
+                myEntites: [0].map((memberIndex) => {
+                    const start = memberIndex * numPokemonFeatures;
+                    const end = (memberIndex + 1) * numPokemonFeatures;
+                    return entityArrayToObject(stepEntity0.slice(start, end));
+                }),
+                oppEntites: [0].map((memberIndex) => {
+                    const start = memberIndex * numPokemonFeatures;
+                    const end = (memberIndex + 1) * numPokemonFeatures;
+                    return entityArrayToObject(stepEntity1.slice(start, end));
+                }),
                 relativeEdges: [
                     relativeArrayToObject(stepRelativeEdge0),
                     relativeArrayToObject(stepRelativeEdge1),
@@ -1245,7 +1255,7 @@ export class EventHandler implements Protocol.Handler {
         this.timestamp = 0;
     }
 
-    getPokemon(pokemonid: PokemonIdent) {
+    getPokemon(pokemonid: PokemonIdent): Pokemon | null {
         if (
             !pokemonid ||
             pokemonid === "??" ||
@@ -2727,7 +2737,7 @@ export class StateHandler {
 
     static toReadableTeam(buffer: Int16Array) {
         const entityDatums = [];
-        for (let entityIndex = 0; entityIndex < 12; entityIndex++) {
+        for (let entityIndex = 0; entityIndex < 6; entityIndex++) {
             const start = entityIndex * numPokemonFeatures;
             const end = (entityIndex + 1) * numPokemonFeatures;
             entityDatums.push(entityArrayToObject(buffer.slice(start, end)));
