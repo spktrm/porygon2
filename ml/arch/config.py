@@ -44,22 +44,22 @@ def get_model_cfg():
     vector_size = 1024
 
     use_layer_norm = True
-    use_spectral_linear = False
 
     cfg.encoder = ConfigDict()
     cfg.encoder.entity_size = entity_size
     cfg.encoder.vector_size = vector_size
 
     cfg.encoder.entity_encoder = ConfigDict()
-    cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.timestep_encoder1 = ConfigDict()
+    cfg.encoder.timestep_encoder2 = ConfigDict()
     cfg.encoder.entity_timestep_decoder = ConfigDict()
     cfg.encoder.entity_gating = ConfigDict()
     cfg.encoder.entity_projection = ConfigDict()
     cfg.encoder.action_entity_decoder = ConfigDict()
     cfg.encoder.to_vector = ConfigDict()
 
-    num_transformer_layers = 1
-    num_transformer_heads = 2
+    num_transformer_layers = 2
+    num_transformer_heads = 4
     transformer_hidden_size_scale = 4
 
     transformer_hidden_size = int(transformer_hidden_size_scale * entity_size)
@@ -72,27 +72,34 @@ def get_model_cfg():
     cfg.encoder.entity_encoder.model_size = entity_size
     cfg.encoder.entity_encoder.num_heads = num_transformer_heads
     cfg.encoder.entity_encoder.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_encoder.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_encoder.resblocks_hidden_size = transformer_hidden_size
 
-    cfg.encoder.timestep_encoder.num_layers = num_transformer_layers
-    cfg.encoder.timestep_encoder.key_size = transformer_key_value_size
-    cfg.encoder.timestep_encoder.value_size = transformer_key_value_size
-    cfg.encoder.timestep_encoder.model_size = entity_size
-    cfg.encoder.timestep_encoder.num_heads = num_transformer_heads
-    cfg.encoder.timestep_encoder.use_layer_norm = use_layer_norm
-    cfg.encoder.timestep_encoder.use_spectral_linear = use_spectral_linear
-    cfg.encoder.timestep_encoder.resblocks_hidden_size = transformer_hidden_size
-    cfg.encoder.timestep_encoder.resblocks_hidden_size = transformer_hidden_size
-    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.timestep_encoder1.num_layers = 1
+    cfg.encoder.timestep_encoder1.key_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder1.value_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder1.model_size = entity_size
+    cfg.encoder.timestep_encoder1.num_heads = num_transformer_heads
+    cfg.encoder.timestep_encoder1.use_layer_norm = use_layer_norm
+    cfg.encoder.timestep_encoder1.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder1.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder1.need_pos = True
 
-    cfg.encoder.entity_timestep_decoder.num_layers = num_transformer_layers
+    cfg.encoder.timestep_encoder2.num_layers = 1
+    cfg.encoder.timestep_encoder2.key_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder2.value_size = transformer_key_value_size
+    cfg.encoder.timestep_encoder2.model_size = entity_size
+    cfg.encoder.timestep_encoder2.num_heads = num_transformer_heads
+    cfg.encoder.timestep_encoder2.use_layer_norm = use_layer_norm
+    cfg.encoder.timestep_encoder2.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder2.resblocks_hidden_size = transformer_hidden_size
+    cfg.encoder.timestep_encoder2.need_pos = True
+
+    cfg.encoder.entity_timestep_decoder.num_layers = 1
     cfg.encoder.entity_timestep_decoder.key_size = transformer_key_value_size
     cfg.encoder.entity_timestep_decoder.value_size = transformer_key_value_size
     cfg.encoder.entity_timestep_decoder.model_size = entity_size
     cfg.encoder.entity_timestep_decoder.num_heads = num_transformer_heads
     cfg.encoder.entity_timestep_decoder.use_layer_norm = use_layer_norm
-    cfg.encoder.entity_timestep_decoder.use_spectral_linear = use_spectral_linear
     cfg.encoder.entity_timestep_decoder.resblocks_hidden_size = transformer_hidden_size
     cfg.encoder.entity_timestep_decoder.y_need_pos = True
 
@@ -105,7 +112,6 @@ def get_model_cfg():
     cfg.encoder.action_entity_decoder.model_size = entity_size
     cfg.encoder.action_entity_decoder.num_heads = num_transformer_heads
     cfg.encoder.action_entity_decoder.use_layer_norm = use_layer_norm
-    cfg.encoder.action_entity_decoder.use_spectral_linear = use_spectral_linear
     cfg.encoder.action_entity_decoder.resblocks_hidden_size = transformer_hidden_size
 
     # Policy Head Configuration
@@ -119,18 +125,17 @@ def get_model_cfg():
     cfg.policy_head.transformer.model_size = entity_size
     cfg.policy_head.transformer.num_heads = num_transformer_heads
     cfg.policy_head.transformer.use_layer_norm = use_layer_norm
-    cfg.policy_head.transformer.use_spectral_linear = use_spectral_linear
     cfg.policy_head.transformer.resblocks_hidden_size = transformer_hidden_size
 
     cfg.policy_head.logits.num_logits = 1
     cfg.policy_head.logits.num_linear_layers = 2
     cfg.policy_head.logits.use_layer_norm = use_layer_norm
-    # cfg.policy_head.logits.kernel_init = "small"
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
     cfg.value_head.logits = ConfigDict()
+    cfg.value_head.num_cls_embeddings = vector_size // entity_size
 
     cfg.value_head.transformer.num_layers = num_transformer_layers
     cfg.value_head.transformer.key_size = transformer_key_value_size
@@ -138,13 +143,12 @@ def get_model_cfg():
     cfg.value_head.transformer.model_size = entity_size
     cfg.value_head.transformer.num_heads = num_transformer_heads
     cfg.value_head.transformer.use_layer_norm = use_layer_norm
-    cfg.value_head.transformer.use_spectral_linear = use_spectral_linear
     cfg.value_head.transformer.resblocks_hidden_size = transformer_hidden_size
+    cfg.value_head.transformer.x_need_pos = False
+    cfg.value_head.transformer.y_need_pos = False
 
-    cfg.value_head.logits.num_logits = 1
-    cfg.value_head.logits.num_linear_layers = 2
+    cfg.value_head.logits.layer_sizes = (vector_size, vector_size, 1)
     cfg.value_head.logits.use_layer_norm = use_layer_norm
-    # cfg.value_head.logits.kernel_init = "small"
 
     return cfg
 

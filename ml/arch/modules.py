@@ -190,6 +190,7 @@ class PoolMethod(Enum):
     MAX = auto()
     MEAN = auto()
     ATTN = auto()
+    SUM = auto()
 
 
 class VectorResblock(nn.Module):
@@ -198,7 +199,6 @@ class VectorResblock(nn.Module):
     num_layers: int = 2
     hidden_size: Optional[int] = None
     use_layer_norm: bool = True
-    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -225,10 +225,7 @@ class VectorResblock(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            if self.use_spectral_linear:
-                x = SNDense(**kwargs)(x)
-            else:
-                x = nn.Dense(**kwargs)(x)
+            x = nn.Dense(**kwargs)(x)
         return x + shortcut
 
 
@@ -351,6 +348,23 @@ def get_rope_embedding(x: chex.Array) -> chex.Array:
     return x_rope
 
 
+def get_single_rope_embedding(
+    x: chex.Array, pos: chex.Array, base: int = 10000
+) -> chex.Array:
+
+    dim = x.shape[-1]
+    d_2 = dim // 2
+
+    theta = 1 / (base ** (jnp.arange(0, dim, 2) / dim))
+    idx_theta = pos / theta
+    idx_theta = jnp.concatenate([idx_theta, idx_theta], axis=-1)
+    freqs_cos = jnp.cos(idx_theta)
+    freqs_sin = jnp.sin(idx_theta)
+    neg_half_x = jnp.concatenate([x[..., :d_2], -x[..., d_2:]], axis=-1)
+
+    return (x * freqs_cos) + (neg_half_x * freqs_sin)
+
+
 def l2_normalize(x: chex.Array, epsilon: float = 1e-6) -> chex.Array:
     """
     Apply L2 normalization.
@@ -411,7 +425,6 @@ class MultiHeadAttention(nn.Module):
     model_size: Optional[int] = None
     query_need_pos: bool = False
     key_need_pos: bool = False
-    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(
@@ -442,12 +455,10 @@ class MultiHeadAttention(nn.Module):
         value_size = self.value_size or self.key_size
         model_size = self.model_size or self.key_size * self.num_heads
 
-        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
-
         def _linear_projection(
             x: chex.Array, head_size: int, need_pos: bool = False
         ) -> chex.Array:
-            y = linear_mod(self.num_heads * head_size)(x)
+            y = nn.Dense(self.num_heads * head_size)(x)
             if need_pos:
                 y = get_rope_embedding(y)
             *leading_dims, _ = x.shape
@@ -482,7 +493,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = linear_mod(model_size)
+        final_projection = nn.Dense(model_size)
         return final_projection(attn)  # [T', D']
 
 
@@ -518,7 +529,6 @@ class TransformerEncoder(nn.Module):
     num_heads: int
     use_layer_norm: bool = True
     need_pos: bool = False
-    use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
@@ -558,7 +568,6 @@ class TransformerEncoder(nn.Module):
                 model_size=self.model_size,
                 query_need_pos=self.need_pos,
                 key_need_pos=self.need_pos,
-                use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x = x + mha
             if self.use_layer_norm:
@@ -569,7 +578,6 @@ class TransformerEncoder(nn.Module):
                 (self.resblocks_hidden_size, self.model_size),
                 use_layer_norm=False,
                 activate_first=False,
-                use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
             x = x + ffn
             x = jnp.where(mask[..., jnp.newaxis], x, 0)
@@ -588,7 +596,6 @@ class TransformerDecoder(nn.Module):
     use_layer_norm: bool = True
     x_need_pos: bool = False
     y_need_pos: bool = False
-    use_spectral_linear: bool = False
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
@@ -640,7 +647,6 @@ class TransformerDecoder(nn.Module):
                 model_size=self.model_size,
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
-                use_spectral_linear=self.use_spectral_linear,
             )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
             x = x + ca
             if self.use_layer_norm:
@@ -651,7 +657,6 @@ class TransformerDecoder(nn.Module):
                 (self.resblocks_hidden_size, self.model_size),
                 use_layer_norm=False,
                 activate_first=False,
-                use_spectral_linear=self.use_spectral_linear,
             )(x_ln)
             x = x + ffn
             x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
@@ -735,7 +740,6 @@ class MLP(nn.Module):
     layer_sizes: Sequence[int]
     use_layer_norm: bool = True
     activate_first: bool = True
-    use_spectral_linear: bool = False
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -748,16 +752,15 @@ class MLP(nn.Module):
         Returns:
             chex.Array: Output array.
         """
-        linear_mod = SNDense if self.use_spectral_linear else nn.Dense
         for layer_index, size in enumerate(self.layer_sizes):
             if layer_index == 0 and not self.activate_first:
                 # Skip layer normalization and activation for the first layer
-                x = linear_mod(size)(x)
+                x = nn.Dense(size)(x)
             else:
                 if self.use_layer_norm:
                     x = layer_norm(x)
                 x = activation_fn(x)
-                x = linear_mod(size)(x)
+                x = nn.Dense(size)(x)
         return x
 
 
@@ -1123,11 +1126,13 @@ class GatedResidualLayer(nn.Module):
 
 class SumEmbeddings(nn.Module):
     output_size: int
-    use_layer_norm: bool = True
+    pool_method: PoolMethod = PoolMethod.SUM
 
     @nn.compact
     def __call__(
-        self, encodings: List[chex.Array], embeddings: Optional[List[chex.Array]] = None
+        self,
+        encodings: Optional[List[chex.Array]] = None,
+        embeddings: Optional[List[chex.Array]] = None,
     ) -> chex.Array:
         """
         Sum embeddings.
@@ -1139,19 +1144,45 @@ class SumEmbeddings(nn.Module):
         Returns:
             chex.Array: Summed embeddings array.
         """
+        if encodings is None and embeddings is None:
+            raise ValueError("At least one of encodings or embeddings must be provided")
+
         module_embeddings = []
-        for _, encoding in enumerate(encodings):
-            transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
-            # transformed = layer_norm(activation_fn(transformed))
-            module_embeddings.append(transformed)
+        if encodings is not None:
+            for _, encoding in enumerate(encodings):
+                transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
+                module_embeddings.append(transformed)
 
         if embeddings is not None:
             for _, embedding in enumerate(embeddings):
-                # embedding = layer_norm(activation_fn(embedding))
                 module_embeddings.append(embedding)
 
-        embedding = sum(module_embeddings)
-        return MLP((self.output_size,), use_layer_norm=self.use_layer_norm)(embedding)
+        num_embeddings = len(module_embeddings)
+
+        if self.pool_method is PoolMethod.SUM:
+            embedding = sum(module_embeddings)
+        elif self.pool_method is PoolMethod.MEAN:
+            embedding = sum(module_embeddings) / np.sqrt(num_embeddings)
+        elif self.pool_method is PoolMethod.ATTN:
+            if num_embeddings == 1:
+                embedding = module_embeddings[0]
+            else:
+                embedding = sum(module_embeddings) + self.param(
+                    "attn_bias", nn.initializers.zeros, (self.output_size,)
+                )
+                attention = MLP((num_embeddings,))(embedding)
+                attention = jax.nn.softmax(attention, axis=-1)
+                embedding = sum(
+                    attn * emb for attn, emb in zip(attention, module_embeddings)
+                )
+
+        else:
+            raise ValueError(f"Pool method {self.pool_method} is not supported")
+
+        embedding = embedding + self.param(
+            "bias", nn.initializers.zeros, (self.output_size,)
+        )
+        return MLP((self.output_size,))(embedding)
 
 
 class MergeEmbeddings(nn.Module):
@@ -1169,7 +1200,7 @@ class MergeEmbeddings(nn.Module):
             chex.Array: Merged embeddings array.
         """
         embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
-        return SumEmbeddings(self.output_size)(embeddings)
+        return SumEmbeddings(self.output_size)(encodings=embeddings)
 
 
 class TimestepResblock(nn.Module):

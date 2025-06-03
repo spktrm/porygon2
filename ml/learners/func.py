@@ -10,7 +10,7 @@ from flax.training import train_state
 from ml.func import get_average_logit_value, get_loss_entropy, renormalize
 from rlenv.data import ACTION_STRINGS
 from rlenv.interfaces import TimeStep
-from rlenv.protos.features_pb2 import MovesetFeature
+from rlenv.protos.features_pb2 import AbsoluteEdgeFeature, MovesetFeature
 
 
 def conditional_breakpoint(pred):
@@ -60,6 +60,10 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     valid = batch.env.valid
     lengths = valid.sum(0)
 
+    history_lengths = batch.history.major_history.absolute_edges[
+        ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+    ].sum(0)
+
     can_move = batch.env.legal[..., :4].any(axis=-1)
     can_switch = batch.env.legal[..., 4:].any(axis=-1)
 
@@ -71,6 +75,7 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
         trajectory_length_mean=lengths.mean(),
         trajectory_length_min=lengths.min(),
         trajectory_length_max=lengths.max(),
+        history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         draw_ratio=batch.env.draw.any(axis=0).astype(float).mean(),
