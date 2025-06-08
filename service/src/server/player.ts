@@ -365,6 +365,13 @@ export class Player extends BattleStreams.BattlePlayer {
     async start() {
         const backup: string[] = [];
 
+        const shiftBackup = () => {
+            while (backup.length > 0) {
+                const line = backup.shift();
+                if (line) this.addLine(line);
+            }
+        };
+
         for await (const chunk of this.stream) {
             if (this.done || this.draw) {
                 // Early finish
@@ -392,10 +399,7 @@ export class Player extends BattleStreams.BattlePlayer {
             }
 
             if (this.hasRequest && this.started) {
-                while (backup.length > 0) {
-                    const line = backup.shift();
-                    if (line) this.addLine(line);
-                }
+                shiftBackup();
                 for (const line of chunk.split("\n")) {
                     this.addLine(line);
                 }
@@ -413,6 +417,11 @@ export class Player extends BattleStreams.BattlePlayer {
                 this.isActionRequired(chunk)
             ) {
                 this.requestCount += 1;
+
+                shiftBackup();
+                this.privateBattle.requestStatus = "received";
+                this.updateRequest();
+
                 const key = await this.send(this);
                 const action = await this.recv(key!);
                 if (action !== undefined) {

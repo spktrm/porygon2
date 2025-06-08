@@ -12,7 +12,7 @@ import uvloop
 import websockets
 from tqdm import tqdm
 
-from ml.arch.model import get_model
+from ml.arch.model import get_dummy_model, get_model
 from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
@@ -511,11 +511,12 @@ def main():
     game_progress = tqdm(desc="Games: ")
     state_progress = tqdm(desc="States: ")
 
-    num_envs = 4
-    network = get_model()
+    num_envs = 32
+    network = get_dummy_model()
     # training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     training_env = DoubleTrajectoryTrainingBatchCollector(network, num_envs)
-    # evaluation_env = EvalBatchCollector(network, 4)
+
+    evaluation_env = EvalBatchCollector(network, 4)
 
     ex, hx = get_ex_step()
     params = network.init(jax.random.PRNGKey(42), ex, hx)
@@ -532,8 +533,9 @@ def main():
         collect_batch_telemetry_data(batch)
 
         # training_progress.update(batch.env.valid.sum())
-        # batch = evaluation_env.collect_batch_trajectory(params)
+        batch = evaluation_env.collect_batch_trajectory(params)
         # evaluation_progress.update(batch.env.valid.sum())
+        collect_batch_telemetry_data(batch)
 
         # win_rewards = np.sign(
         #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)

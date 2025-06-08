@@ -21,10 +21,10 @@ from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
 from ml.config import ActorCriticConfig
 from ml.learners.func import (
-    calculate_explained_variance,
     collect_batch_telemetry_data,
     collect_nn_telemetry_data,
     collect_parameter_and_gradient_telemetry_data,
+    collect_value_stats_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
@@ -235,18 +235,17 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         clipfracs = (
             ~jnp.isclose(ratio.clip(1 - config.clip_coef, 1 + config.clip_coef), ratio)
         ).mean(where=valid)
-        explained_var = calculate_explained_variance(value_pred, targets.returns, valid)
 
         logs = dict(
             old_approx_kl=old_approx_kl,
             approx_kl=approx_kl,
             clipfracs=clipfracs,
             ent_kl_coef_mult=ent_kl_coef_mult,
-            explained_var=explained_var,
             loss_pg=loss_pg,
             loss_v=loss_v,
             loss_entropy=loss_entropy,
             loss_kl=loss_kl,
+            **collect_value_stats_telemetry_data(value_pred, targets.returns, valid),
         )
 
         return loss, logs
@@ -302,14 +301,15 @@ def main():
     model_config = get_model_cfg()
     pprint(learner_config)
 
-    network = get_model(model_config)
+    training_network = get_model(model_config)
+    inference_network = get_model(model_config)
 
     training_collector = DoubleTrajectoryTrainingBatchCollector(
-        network, learner_config.num_actors
+        inference_network, learner_config.num_actors
     )
-    evaluation_collector = EvalBatchCollector(network, 4)
+    evaluation_collector = EvalBatchCollector(inference_network, 4)
 
-    state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
+    state = create_train_state(training_network, jax.random.PRNGKey(42), learner_config)
 
     latest_ckpt = get_most_recent_file("./ckpts", "mmd")
     if latest_ckpt:
