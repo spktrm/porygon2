@@ -1,7 +1,7 @@
 import { MessagePort } from "worker_threads";
 import { Game } from "../server/game";
 import { Action, GameState } from "../../protos/service_pb";
-import { AsyncQueue } from "../server/utils";
+import { AsyncQueue, OneDBoolean } from "../server/utils";
 import { Rewards, State } from "../../protos/state_pb";
 // import { State } from "../../protos/state_pb";
 
@@ -37,8 +37,22 @@ async function worker(gameId: number, playerIds: number[]) {
         infos.push(info);
 
         if (rqid >= 0) {
+            const legalActions = state.getLegalActions_asU8();
+            const vector = new OneDBoolean(10);
+            vector.setBuffer(legalActions);
+            const binaryArray = vector.toBinaryVector();
+
+            const availableIndices = binaryArray
+                .map((value, index) => (value === 1 ? index : -1))
+                .filter((index) => index !== -1);
+            const randomIndex =
+                availableIndices[
+                    Math.floor(Math.random() * availableIndices.length)
+                ];
+            const randomAction = randomIndex !== undefined ? randomIndex : -1;
+
             const action = new Action();
-            action.setValue(-1);
+            action.setValue(randomAction);
             game.tasks.submitResult(rqid, action);
         } else {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -68,11 +82,11 @@ async function worker(gameId: number, playerIds: number[]) {
 
 async function main() {
     for (const { gameId, playerIds } of [
-        { gameId: 0, playerIds: [0, 1] },
+        // { gameId: 0, playerIds: [0, 1] },
         // { gameId: 1, playerIds: [2, 3] },
         // { gameId: 10000, playerIds: [10000] },
         // { gameId: 10001, playerIds: [10001] },
-        // { gameId: 10002, playerIds: [10002] },
+        { gameId: 10002, playerIds: [10002] },
         // { gameId: 10003, playerIds: [10003] },
     ]) {
         await worker(gameId, playerIds);

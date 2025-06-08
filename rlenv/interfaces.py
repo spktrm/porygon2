@@ -13,6 +13,12 @@ class RewardStep:
 
 
 @chex.dataclass(frozen=True)
+class Targets:
+    advantages: chex.Array = ()
+    returns: chex.Array = ()
+
+
+@chex.dataclass(frozen=True)
 class EnvStep:
     # Standard Info
     ts: chex.Array = ()

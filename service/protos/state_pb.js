@@ -1161,11 +1161,7 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
     moveset: msg.getMoveset_asB64(),
     publicTeam: msg.getPublicTeam_asB64(),
     privateTeam: msg.getPrivateTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 7, ""),
-    allMyMoves: msg.getAllMyMoves_asB64(),
-    allOppMoves: msg.getAllOppMoves_asB64(),
-    allMyMovesMask: msg.getAllMyMovesMask_asB64(),
-    allOppMovesMask: msg.getAllOppMovesMask_asB64()
+    key: jspb.Message.getFieldWithDefault(msg, 7, "")
   };
 
   if (includeInstance) {
@@ -1231,22 +1227,6 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 7:
       var value = /** @type {string} */ (reader.readString());
       msg.setKey(value);
-      break;
-    case 8:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setAllMyMoves(value);
-      break;
-    case 9:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setAllOppMoves(value);
-      break;
-    case 10:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setAllMyMovesMask(value);
-      break;
-    case 11:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setAllOppMovesMask(value);
       break;
     default:
       reader.skipField();
@@ -1325,34 +1305,6 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writeString(
       7,
-      f
-    );
-  }
-  f = message.getAllMyMoves_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      8,
-      f
-    );
-  }
-  f = message.getAllOppMoves_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      9,
-      f
-    );
-  }
-  f = message.getAllMyMovesMask_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      10,
-      f
-    );
-  }
-  f = message.getAllOppMovesMask_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      11,
       f
     );
   }
@@ -1616,174 +1568,6 @@ proto.rlenv.State.prototype.getKey = function() {
  */
 proto.rlenv.State.prototype.setKey = function(value) {
   return jspb.Message.setProto3StringField(this, 7, value);
-};
-
-
-/**
- * optional bytes all_my_moves = 8;
- * @return {!(string|Uint8Array)}
- */
-proto.rlenv.State.prototype.getAllMyMoves = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
-};
-
-
-/**
- * optional bytes all_my_moves = 8;
- * This is a type-conversion wrapper around `getAllMyMoves()`
- * @return {string}
- */
-proto.rlenv.State.prototype.getAllMyMoves_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getAllMyMoves()));
-};
-
-
-/**
- * optional bytes all_my_moves = 8;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getAllMyMoves()`
- * @return {!Uint8Array}
- */
-proto.rlenv.State.prototype.getAllMyMoves_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getAllMyMoves()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.setAllMyMoves = function(value) {
-  return jspb.Message.setProto3BytesField(this, 8, value);
-};
-
-
-/**
- * optional bytes all_opp_moves = 9;
- * @return {!(string|Uint8Array)}
- */
-proto.rlenv.State.prototype.getAllOppMoves = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
-};
-
-
-/**
- * optional bytes all_opp_moves = 9;
- * This is a type-conversion wrapper around `getAllOppMoves()`
- * @return {string}
- */
-proto.rlenv.State.prototype.getAllOppMoves_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getAllOppMoves()));
-};
-
-
-/**
- * optional bytes all_opp_moves = 9;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getAllOppMoves()`
- * @return {!Uint8Array}
- */
-proto.rlenv.State.prototype.getAllOppMoves_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getAllOppMoves()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.setAllOppMoves = function(value) {
-  return jspb.Message.setProto3BytesField(this, 9, value);
-};
-
-
-/**
- * optional bytes all_my_moves_mask = 10;
- * @return {!(string|Uint8Array)}
- */
-proto.rlenv.State.prototype.getAllMyMovesMask = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
-};
-
-
-/**
- * optional bytes all_my_moves_mask = 10;
- * This is a type-conversion wrapper around `getAllMyMovesMask()`
- * @return {string}
- */
-proto.rlenv.State.prototype.getAllMyMovesMask_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getAllMyMovesMask()));
-};
-
-
-/**
- * optional bytes all_my_moves_mask = 10;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getAllMyMovesMask()`
- * @return {!Uint8Array}
- */
-proto.rlenv.State.prototype.getAllMyMovesMask_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getAllMyMovesMask()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.setAllMyMovesMask = function(value) {
-  return jspb.Message.setProto3BytesField(this, 10, value);
-};
-
-
-/**
- * optional bytes all_opp_moves_mask = 11;
- * @return {!(string|Uint8Array)}
- */
-proto.rlenv.State.prototype.getAllOppMovesMask = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
-};
-
-
-/**
- * optional bytes all_opp_moves_mask = 11;
- * This is a type-conversion wrapper around `getAllOppMovesMask()`
- * @return {string}
- */
-proto.rlenv.State.prototype.getAllOppMovesMask_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getAllOppMovesMask()));
-};
-
-
-/**
- * optional bytes all_opp_moves_mask = 11;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getAllOppMovesMask()`
- * @return {!Uint8Array}
- */
-proto.rlenv.State.prototype.getAllOppMovesMask_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getAllOppMovesMask()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.rlenv.State} returns this
- */
-proto.rlenv.State.prototype.setAllOppMovesMask = function(value) {
-  return jspb.Message.setProto3BytesField(this, 11, value);
 };
 
 

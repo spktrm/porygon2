@@ -8,6 +8,8 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 import { recvFnType, sendFnType } from "../server/types"; // Assuming these paths are correct
 import { Action, GameState } from "../../protos/service_pb"; // Assuming these paths are correct
 import { TaskQueueSystem } from "../server/utils"; // Assuming these paths are correct
+import { AnyObject } from "@pkmn/sim";
+import { Protocol } from "@pkmn/protocol";
 
 async function ActionFromResponse(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,6 +26,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
     roomId: string | undefined;
     player: Player;
     tasks: TaskQueueSystem<Action>;
+    modelOutput: Record<string, unknown>;
 
     constructor(
         options: {
@@ -35,6 +38,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
         super();
         this.debug = !!options.debug;
         this.roomId = options?.roomId;
+        this.modelOutput = {};
 
         this.tasks = new TaskQueueSystem();
 
@@ -61,6 +65,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
                 body: state.serializeBinary(),
             });
             const modelOutput = await response.json();
+            this.modelOutput = modelOutput;
             const action = await ActionFromResponse(modelOutput);
             action.setRqid(rqid);
             if (rqid >= 0) this.tasks.submitResult(rqid, action);
@@ -91,6 +96,252 @@ class ClientStream extends ObjectReadWriteStream<string> {
     _write(message: string) {
         this.push(message);
     }
+
+    getThinkingMesssage(): string {
+        const request = this.player.getRequest() as AnyObject;
+        const pi = this.modelOutput.pi as number[] | undefined;
+        const action = this.modelOutput.action as number | undefined;
+        const value = this.modelOutput.v as number | undefined;
+
+        if (
+            request !== undefined &&
+            this.modelOutput &&
+            pi !== undefined &&
+            action !== undefined &&
+            value !== undefined
+        ) {
+            const messages = [];
+
+            if (value > 0.66) {
+                const winningMessages = [
+                    "I'm almost certain to win this battle!",
+                    "I'm very likely to win this battle!",
+                    "Victory is within my grasp!",
+                    "I feel confident about winning!",
+                ];
+                messages.push(
+                    winningMessages[
+                        Math.floor(Math.random() * winningMessages.length)
+                    ],
+                );
+            } else if (value > 0.33) {
+                const favorableMessages = [
+                    "Things are looking good for me.",
+                    "I'm in a favorable position.",
+                    "I have the advantage right now.",
+                    "I'm ahead in this battle.",
+                ];
+                messages.push(
+                    favorableMessages[
+                        Math.floor(Math.random() * favorableMessages.length)
+                    ],
+                );
+            } else if (value > 0) {
+                const slightAdvantageMessages = [
+                    "I have a slight advantage.",
+                    "I'm doing okay so far.",
+                    "It's looking a bit better for me.",
+                    "I'm a little ahead.",
+                ];
+                messages.push(
+                    slightAdvantageMessages[
+                        Math.floor(
+                            Math.random() * slightAdvantageMessages.length,
+                        )
+                    ],
+                );
+            } else if (value > -0.33) {
+                const evenMessages = [
+                    "This battle is pretty even.",
+                    "It's a close match.",
+                    "Neither side has a clear advantage.",
+                    "It's anyone's game right now.",
+                ];
+                messages.push(
+                    evenMessages[
+                        Math.floor(Math.random() * evenMessages.length)
+                    ],
+                );
+            } else if (value > -0.66) {
+                const unfavorableMessages = [
+                    "I'm in a tough spot.",
+                    "Things aren't looking great for me.",
+                    "I'm at a disadvantage right now.",
+                    "I need to turn things around.",
+                ];
+                messages.push(
+                    unfavorableMessages[
+                        Math.floor(Math.random() * unfavorableMessages.length)
+                    ],
+                );
+            } else if (value > -1) {
+                const losingMessages = [
+                    "I'm very likely to lose this battle.",
+                    "Defeat seems imminent.",
+                    "I'm almost certain to lose.",
+                    "It's not looking good for me at all.",
+                ];
+                messages.push(
+                    losingMessages[
+                        Math.floor(Math.random() * losingMessages.length)
+                    ],
+                );
+            }
+
+            const active = (request?.active ??
+                [])[0] as Protocol.MoveRequest["active"][0];
+            const activeMoves = (active ?? {})?.moves ?? [];
+            const switches = (request?.side?.pokemon ??
+                []) as Protocol.Request.SideInfo["pokemon"];
+
+            const moveLabels = [
+                ...activeMoves.map((action) => `use ${action.id}`),
+                ...new Array(4 - activeMoves.length),
+                ...switches.map((action) => `switch to ${action.speciesForme}`),
+                ...new Array(6 - switches.length),
+            ];
+
+            const entropy =
+                -pi.reduce(
+                    (acc, prob) => acc - prob * Math.log(prob + 1e-10),
+                    0,
+                ) / Math.log(pi.length);
+            if (entropy > 0.8) {
+                const notSureMessages = [
+                    "I'm not sure what to do...",
+                    "I need more time to think...",
+                    "I'm still deciding...",
+                ];
+                messages.push(
+                    notSureMessages[
+                        Math.floor(Math.random() * notSureMessages.length)
+                    ],
+                );
+                return messages
+                    .flatMap((m) => (Math.random() < 0.5 ? [] : [m]))
+                    .join("... ");
+            }
+
+            const topKIndices = pi
+                .map((prob: number, index: number) => ({
+                    index,
+                    prob,
+                }))
+                .sort((a, b) => b.prob - a.prob)
+                .slice(0, 3)
+                .map((item) => item.index);
+
+            for (const kIndex of topKIndices) {
+                const moveLabel = moveLabels[kIndex];
+                if (moveLabel) {
+                    const probability = pi[kIndex];
+
+                    if (probability > 0.75) {
+                        const probMessages = [
+                            "I'm almost certain to",
+                            "I'm very likely to",
+                            "I will probably",
+                            "I will likely",
+                            "I will definitely",
+                            "I'm planning to",
+                            "I'm set to",
+                            "I'm going to",
+                            "I'm sure to",
+                            "I'm confident to",
+                            "I'm ready to",
+                            "I'm about to",
+                            "I'm inclined to",
+                            "I'm determined to",
+                            "I'm prepared to",
+                        ];
+                        const randomIndex = Math.floor(
+                            Math.random() * probMessages.length,
+                        );
+                        messages.push(
+                            `${probMessages[randomIndex]} ${moveLabel}.`,
+                        );
+                    } else if (probability > 0.5) {
+                        const mightMessages = [
+                            "It's possible to",
+                            "There's a chance to",
+                            "I could possibly",
+                            "Maybe I'll",
+                            "I might",
+                            "I may decide to",
+                            "I could go for",
+                            "I might try to",
+                        ];
+                        const randomIndex = Math.floor(
+                            Math.random() * mightMessages.length,
+                        );
+                        messages.push(
+                            `${mightMessages[randomIndex]} ${moveLabel}.`,
+                        );
+                    } else if (probability > 0.25) {
+                        const couldMessages = [
+                            "I might",
+                            "There's a chance to",
+                            "It's possible to",
+                            "I could",
+                            "Maybe I'll",
+                            "I may",
+                            "I suppose I could",
+                            "I might consider",
+                            "I could end up",
+                            "Perhaps I'll",
+                            "I could see myself",
+                            "I might opt to",
+                        ];
+                        const randomIndex = Math.floor(
+                            Math.random() * couldMessages.length,
+                        );
+                        messages.push(
+                            `${couldMessages[randomIndex]} ${moveLabel}.`,
+                        );
+                    } else if (probability > 0.01) {
+                        const unlikelyMessages = [
+                            "I probably won't",
+                            "It's unlikely I'll",
+                            "I doubt I'll",
+                            "I don't think I'll",
+                            "I might not",
+                            "I probably won't end up",
+                            "It's doubtful that I'll",
+                            "I don't expect to",
+                            "I likely won't",
+                            "I could avoid",
+                            "I might skip",
+                            "I may not",
+                        ];
+                        const randomIndex = Math.floor(
+                            Math.random() * unlikelyMessages.length,
+                        );
+                        messages.push(
+                            `${unlikelyMessages[randomIndex]} ${moveLabel}.`,
+                        );
+                    }
+                }
+            }
+
+            if (messages.length === 0) {
+                messages.push(`I will definitely ${moveLabels[action]}`);
+                return messages
+                    .flatMap((m) => (Math.random() < 0.5 ? [] : [m]))
+                    .join("... ");
+            } else {
+                return messages
+                    .flatMap((m) => (Math.random() < 0.5 ? [] : [m]))
+                    .join("... ");
+            }
+        }
+        const generalMessages = [
+            "Thinking...",
+            "Processing...",
+            "Analyzing the situation...",
+        ];
+        const randomIndex = Math.floor(Math.random() * generalMessages.length);
+        return generalMessages[randomIndex];
+    }
 }
 
 const welcomeMessage =
@@ -115,8 +366,7 @@ class Battle {
         this.stream = new ClientStream({
             roomId,
             choose: (message: string) => {
-                this.ws.send(`${this.battleId}|/choose ${message}`);
-                this.prevMessage = message;
+                this.send(`${message}`);
             },
         });
     }
@@ -132,8 +382,11 @@ class Battle {
     }
 
     send(message: string): void {
-        const toSend = `${this.battleId}|/choose ${message}`;
-        this.ws.send(toSend);
+        if (Math.random() < 0.5)
+            this.ws.send(
+                `${this.battleId}|${this.stream.getThinkingMesssage().trim()}`,
+            );
+        this.ws.send(`${this.battleId}|/choose ${message}`);
         this.prevMessage = message;
     }
     public isActive(): boolean {

@@ -52,10 +52,6 @@ class EntityFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_FEATURE__SIDE: _ClassVar[EntityFeature]
     ENTITY_FEATURE__TYPECHANGE0: _ClassVar[EntityFeature]
     ENTITY_FEATURE__TYPECHANGE1: _ClassVar[EntityFeature]
-    ENTITY_FEATURE__ACTION_ID0: _ClassVar[EntityFeature]
-    ENTITY_FEATURE__ACTION_ID1: _ClassVar[EntityFeature]
-    ENTITY_FEATURE__ACTION_ID2: _ClassVar[EntityFeature]
-    ENTITY_FEATURE__ACTION_ID3: _ClassVar[EntityFeature]
     ENTITY_FEATURE__NUM_MOVES: _ClassVar[EntityFeature]
     ENTITY_FEATURE__IS_PUBLIC: _ClassVar[EntityFeature]
     ENTITY_FEATURE__LAST_MOVE: _ClassVar[EntityFeature]
@@ -189,10 +185,6 @@ ENTITY_FEATURE__VOLATILES8: EntityFeature
 ENTITY_FEATURE__SIDE: EntityFeature
 ENTITY_FEATURE__TYPECHANGE0: EntityFeature
 ENTITY_FEATURE__TYPECHANGE1: EntityFeature
-ENTITY_FEATURE__ACTION_ID0: EntityFeature
-ENTITY_FEATURE__ACTION_ID1: EntityFeature
-ENTITY_FEATURE__ACTION_ID2: EntityFeature
-ENTITY_FEATURE__ACTION_ID3: EntityFeature
 ENTITY_FEATURE__NUM_MOVES: EntityFeature
 ENTITY_FEATURE__IS_PUBLIC: EntityFeature
 ENTITY_FEATURE__LAST_MOVE: EntityFeature
