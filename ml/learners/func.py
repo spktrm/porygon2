@@ -97,6 +97,7 @@ def collect_parameter_and_gradient_telemetry_data(
         param_norm=optax.global_norm(params),
         gradient_norm=optax.global_norm(grads),
     )
+    # logs.update(per_module_gradient_stats(grads))
     return logs
 
 
@@ -220,6 +221,96 @@ def efficient_per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]
         stats[f"{prefix}grad_zero_percentage"] = module_stats["zero_pct"]
         stats[f"{prefix}grad_min"] = module_stats["min"]
         stats[f"{prefix}grad_max"] = module_stats["max"]
+
+    return stats
+
+
+def _calculate_stats_for_tree(
+    grads_tree: chex.ArrayTree, prefix: str = ""
+) -> Dict[str, jnp.ndarray] | None:
+    """
+    Helper function to calculate gradient statistics for a given PyTree of gradients.
+
+    It flattens all gradients within the tree into a single vector for analysis.
+    """
+    # Get all gradient arrays from the PyTree
+    leaves = jax.tree_util.tree_leaves(grads_tree)
+
+    # If there are no parameters in this submodule, skip it
+    if not leaves:
+        return None
+
+    # Flatten all gradient arrays into a single 1D vector
+    flat_grads = jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+
+    # Calculate statistics on the entire flattened array
+    abs_grads = jnp.abs(flat_grads)
+
+    norm = jnp.linalg.norm(flat_grads)
+    mean = jnp.mean(abs_grads)
+    std = jnp.std(abs_grads)
+    grad_min = jnp.min(abs_grads)
+    grad_max = jnp.max(abs_grads)
+    p25, p50, p75 = jnp.percentile(abs_grads, jnp.array([25, 50, 75]))
+    snr = jnp.mean(flat_grads) / (jnp.std(flat_grads) + 1e-8)
+    zero_pct = jnp.mean(abs_grads < 1e-8)
+
+    return {
+        f"{prefix}grad_norm": norm,
+        f"{prefix}grad_mean": mean,
+        f"{prefix}grad_std": std,
+        f"{prefix}grad_min": grad_min,
+        f"{prefix}grad_max": grad_max,
+        f"{prefix}grad_p25": p25,
+        f"{prefix}grad_p50": p50,
+        f"{prefix}grad_p75": p75,
+        f"{prefix}grad_signal_to_noise": snr,
+        f"{prefix}grad_zero_percentage": zero_pct,
+    }
+
+
+@jax.jit
+def per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]:
+    """
+    Calculates gradient statistics for high-level modules and their direct sub-modules.
+
+    This function iterates through 'encoder', 'policy_head', and 'value_head',
+    calculating stats for the entire module and then for each sub-module
+    one level deep.
+
+    Args:
+        grads: A PyTree of gradients, expected to have a 'params' key
+               containing the module parameters.
+
+    Returns:
+        A dictionary containing gradient statistics, with keys prefixed
+        by module and sub-module names.
+    """
+    stats = {}
+    top_level_modules = ["encoder", "policy_head", "value_head"]
+
+    for module_name in top_level_modules:
+        if module_name not in grads.get("params", {}):
+            continue
+
+        module_grads_tree = grads["params"][module_name]
+
+        # 1. Calculate and store stats for the entire top-level module
+        prefix = f"{module_name}_"
+        top_level_stats = _calculate_stats_for_tree(module_grads_tree, prefix)
+        if top_level_stats is not None:
+            stats.update(top_level_stats)
+
+        # 2. Iterate through sub-modules (1 level deep)
+        for sub_module_name, sub_module_grads_tree in module_grads_tree.items():
+            # Ensure the item is a sub-module (a dict-like PyTree) and not a direct parameter array
+            if isinstance(sub_module_grads_tree, dict):
+                prefix = f"{module_name}_{sub_module_name}_"
+                sub_module_stats = _calculate_stats_for_tree(
+                    sub_module_grads_tree, prefix
+                )
+                if sub_module_stats is not None:
+                    stats.update(sub_module_stats)
 
     return stats
 

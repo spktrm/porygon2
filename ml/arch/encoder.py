@@ -11,6 +11,7 @@ from ml_collections import ConfigDict
 
 from ml.arch.modules import (
     BinaryEncoder,
+    MergeEmbeddings,
     PretrainedEmbedding,
     SumEmbeddings,
     TransformerDecoder,
@@ -23,7 +24,7 @@ from rlenv.data import (
     ENTITY_MAX_VALUES,
     MAX_RATIO_TOKEN,
     NUM_ABILITIES,
-    NUM_EFFECTS,
+    NUM_FROM_SOURCE_EFFECTS,
     NUM_ITEMS,
     NUM_MOVES,
     NUM_SPECIES,
@@ -208,11 +209,13 @@ class Encoder(nn.Module):
 
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
+        vector_size = self.cfg.vector_size
 
         embed_kwargs = dict(
             features=entity_size, embedding_init=nn.initializers.lecun_normal()
         )
 
+        # Initialize embeddings for various entities and features.
         self.species_embedding = nn.Embed(
             NUM_SPECIES, name="species_embedding", **embed_kwargs
         )
@@ -225,7 +228,11 @@ class Encoder(nn.Module):
         self.moves_embedding = nn.Embed(
             NUM_MOVES, name="moves_embedding", **embed_kwargs
         )
+        self.effect_from_source_embedding = nn.Embed(
+            NUM_FROM_SOURCE_EFFECTS, name="effect_from_source_embedding", **embed_kwargs
+        )
 
+        # Initialize linear layers for encoding various entity features.
         self.species_linear = nn.Dense(
             entity_size, use_bias=False, name="species_linear"
         )
@@ -236,15 +243,24 @@ class Encoder(nn.Module):
         self.moves_linear = nn.Dense(entity_size, use_bias=False, name="moves_linear")
 
         # Initialize aggregation modules for combining feature embeddings.
-        self.entity_combine = SumEmbeddings(entity_size, name="entity_combine")
+        self.entity_combine = SumEmbeddings(
+            output_size=entity_size, hidden_size=vector_size, name="entity_combine"
+        )
         self.relative_edge_combine = SumEmbeddings(
-            entity_size, name="relative_edge_combine"
+            output_size=entity_size, name="relative_edge_combine"
         )
         self.absolute_edge_combine = SumEmbeddings(
-            entity_size, name="absolute_edge_combine"
+            output_size=entity_size, name="absolute_edge_combine"
         )
-        self.timestep_combine = SumEmbeddings(entity_size, name="timestep_combine")
-        self.action_combine = SumEmbeddings(entity_size, name="action_combine")
+        self.timestep_combine = MergeEmbeddings(
+            output_size=entity_size, hidden_size=vector_size, name="timestep_combine"
+        )
+        self.action_combine = SumEmbeddings(
+            output_size=entity_size, hidden_size=vector_size, name="action_combine"
+        )
+        self.latent_combine = MergeEmbeddings(
+            output_size=entity_size, hidden_size=vector_size, name="latent_combine"
+        )
 
         # Transformer encoders for processing sequences of entities and edges.
         self.entity_encoder = TransformerEncoder(**self.cfg.entity_encoder.to_dict())
@@ -315,6 +331,9 @@ class Encoder(nn.Module):
             0,
             self.moves_linear(MOVE_ONEHOT(token)),
         )
+
+    def _encode_effect_from_source(self, token: chex.Array):
+        return self.effect_from_source_embedding(token)
 
     def _encode_entity(self, entity: chex.Array):
         # Encode volatile and type-change indices using the binary encoder.
@@ -436,14 +455,10 @@ class Encoder(nn.Module):
             .clip(min=0, max=1)
         )
 
-        moveset_embedding_avg = self.moves_embedding(move_tokens).sum(0) / entity[
-            EntityFeature.ENTITY_FEATURE__NUM_MOVES
-        ].clip(min=1)
+        moveset_embedding_sum = self.moves_embedding(move_tokens).sum(0)
 
         move_embeddings = jax.vmap(self._encode_move)(move_tokens)
-        moveset_linear_embedding_avg = move_embeddings.sum(0) / entity[
-            EntityFeature.ENTITY_FEATURE__NUM_MOVES
-        ].clip(min=1)
+        moveset_linear_embedding_sum = move_embeddings.sum(0)
 
         species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
         ability_token = entity[EntityFeature.ENTITY_FEATURE__ABILITY]
@@ -465,8 +480,8 @@ class Encoder(nn.Module):
                 self.species_embedding(species_token),
                 self.abilities_embedding(ability_token),
                 self.items_embedding(item_token),
-                moveset_embedding_avg,
-                moveset_linear_embedding_avg,
+                moveset_embedding_sum,
+                moveset_linear_embedding_sum,
             ],
         )
 
@@ -553,39 +568,25 @@ class Encoder(nn.Module):
             ]
         )
 
-        effct_from_source_onehot = one_hot_concat_jax(
+        effect_from_source_indices = np.array(
             [
-                (
-                    edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0],
-                    0,
-                ),
-                (
-                    edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1],
-                    0,
-                ),
-                (
-                    edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2],
-                    0,
-                ),
-                (
-                    edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3],
-                    0,
-                ),
-                (
-                    edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4],
-                    NUM_EFFECTS,
-                ),
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0,
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1,
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2,
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3,
+                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4,
             ]
-        ).clip(max=1)
-        effct_from_source_onehot = effct_from_source_onehot.at[
-            ..., EffectEnum.EFFECT_ENUM___UNSPECIFIED
-        ].set(0)
-        effct_from_source_onehot = effct_from_source_onehot.at[
-            ..., EffectEnum.EFFECT_ENUM___NULL
-        ].set(0)
-        effct_from_source_onehot = effct_from_source_onehot / edge[
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__NUM_FROM_SOURCES
-        ].clip(min=1)
+        )
+        effect_from_source_tokens = edge[effect_from_source_indices]
+        effect_from_source_embeddings = jax.vmap(self._encode_effect_from_source)(
+            effect_from_source_tokens
+        )
+        effect_from_source_mask = (
+            effect_from_source_tokens != EffectEnum.EFFECT_ENUM___UNSPECIFIED
+        ) & (effect_from_source_tokens != EffectEnum.EFFECT_ENUM___NULL)
+        effect_from_source_embedding = jnp.where(
+            effect_from_source_mask[..., None], effect_from_source_embeddings, 0
+        ).sum(axis=0)
 
         ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
@@ -597,7 +598,6 @@ class Encoder(nn.Module):
                 minor_args_encoding,
                 side_condition_encoding,
                 boolean_code,
-                effct_from_source_onehot,
             ],
             embeddings=[
                 self._encode_ability(ability_token),
@@ -606,6 +606,7 @@ class Encoder(nn.Module):
                 self.items_embedding(item_token),
                 self.abilities_embedding(ability_token),
                 self.moves_embedding(action_token),
+                effect_from_source_embedding,
             ],
         )
 
@@ -746,9 +747,12 @@ class Encoder(nn.Module):
         ).reshape(*entity_embeddings.shape)
 
         # Combine all embeddings for the timestep.
-        timestep_embedding = self.timestep_combine(
-            encodings=[relative_edge_embeddings.reshape(seq_len, -1)],
-            embeddings=[entity_embeddings[:, 0], absolute_edge_embedding],
+        timestep_embedding = jax.vmap(self.timestep_combine)(
+            [
+                *jnp.split(entity_embeddings.reshape(seq_len, -1), 2, axis=-1),
+                *jnp.split(relative_edge_embeddings.reshape(seq_len, -1), 2, axis=-1),
+                absolute_edge_embedding,
+            ],
         )
 
         # Apply mask to the timestep embeddings.
@@ -833,7 +837,9 @@ class Encoder(nn.Module):
             self.latent_action_decoder, in_axes=(None, 0, None, 0)
         )(self.action_latent_embeddings, action_embeddings, None, env_step.legal)
 
-        latent_embeddings = latent_timesteps + latent_entities + latent_actions
+        latent_embeddings = jax.vmap(jax.vmap(self.latent_combine))(
+            embeddings=[latent_timesteps, latent_entities, latent_actions]
+        )
         latent_embeddings = jax.vmap(self.latent_encoder)(latent_embeddings)
 
         contextual_action_embeddings = jax.vmap(

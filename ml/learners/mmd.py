@@ -184,10 +184,27 @@ def compute_returns(state: TrainState, batch: TimeStep, config: MMDConfig):
     )(rewards, discounts, lambda_, baselines).T
     returns = jax.lax.stop_gradient(advantages + baselines[:-1])
 
-    advantages = advantages - advantages.mean(where=valid, keepdims=True)
-    advantages = advantages / advantages.std(where=valid, keepdims=True)
-
     return Targets(advantages=advantages, returns=returns)
+
+
+def compute_target_statistics(
+    batch: TimeStep, iterations: list[tuple[TimeStep, Targets]]
+):
+    valid_sum = batch.env.valid.sum()
+    target_adv_mean = (
+        sum([jnp.sum(t.advantages, where=m.env.valid) for m, t in iterations])
+        / valid_sum
+    )
+    target_adv_std = jnp.sqrt(
+        sum(
+            [
+                jnp.square(t.advantages - target_adv_mean).sum(where=m.env.valid)
+                for m, t in iterations
+            ]
+        )
+        / valid_sum
+    )
+    return target_adv_mean, target_adv_std
 
 
 @functools.partial(jax.jit, static_argnums=(3,))
@@ -209,10 +226,12 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
 
-        pg_loss1 = -targets.advantages * ratio
-        pg_loss2 = -targets.advantages * ratio.clip(
-            1 - config.clip_coef, 1 + config.clip_coef
+        advantages = (targets.advantages - targets.advantage_mean) / (
+            targets.advantage_std + 1e-8
         )
+
+        pg_loss1 = -advantages * ratio
+        pg_loss2 = -advantages * ratio.clip(1 - config.clip_coef, 1 + config.clip_coef)
 
         loss_pg = jnp.maximum(pg_loss1, pg_loss2).mean(where=valid)
         loss_v = 0.5 * jnp.square(targets.returns - value_pred).mean(where=valid)
@@ -338,7 +357,25 @@ def main():
         for _ in range(learner_config.num_epochs):
             should_early_stop = False
 
+            # Compute targets for the batch
+            # This is done outside the minibatch loop to avoid recomputing the
+            # model output for each minibatch.
+            iterations: list[tuple[TimeStep, Targets]] = []
             for minibatch in iterate(batch, learner_config.minibatch_size):
+                minibatch = TimeStep(
+                    env=minibatch.env,
+                    history=clip_history(minibatch.history, resolution=64),
+                    actor=minibatch.actor,
+                )
+                targets = compute_returns(original_state, minibatch, learner_config)
+                iterations.append((minibatch, targets))
+
+            target_adv_mean, target_adv_std = compute_target_statistics(
+                batch, iterations
+            )
+
+            # Do the learning updates
+            for minibatch, target in iterations:
                 winrates = {}
 
                 time_to_eval = (
@@ -347,13 +384,17 @@ def main():
                 if time_to_eval and learner_config.do_eval:
                     winrates = evaluate(evaluation_collector, state)
 
-                minibatch = TimeStep(
-                    env=minibatch.env,
-                    history=clip_history(minibatch.history, resolution=64),
-                    actor=minibatch.actor,
+                new_state, logs = train_step(
+                    state,
+                    minibatch,
+                    Targets(
+                        advantages=target.advantages,
+                        returns=target.returns,
+                        advantage_mean=target_adv_mean,
+                        advantage_std=target_adv_std,
+                    ),
+                    learner_config,
                 )
-                targets = compute_returns(original_state, minibatch, learner_config)
-                new_state, logs = train_step(state, minibatch, targets, learner_config)
 
                 should_early_stop = (
                     logs["approx_kl"] > learner_config.kl_target * 1.5

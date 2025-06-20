@@ -423,6 +423,7 @@ class MultiHeadAttention(nn.Module):
     key_size: int
     value_size: Optional[int] = None
     model_size: Optional[int] = None
+    qk_layer_norm: bool = False
     query_need_pos: bool = False
     key_need_pos: bool = False
 
@@ -449,16 +450,20 @@ class MultiHeadAttention(nn.Module):
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, s1_length, _ = query.shape
-        *leading_dims, s2_length, _ = value.shape
 
         key_size = self.key_size
         value_size = self.value_size or self.key_size
         model_size = self.model_size or self.key_size * self.num_heads
 
         def _linear_projection(
-            x: chex.Array, head_size: int, need_pos: bool = False
+            x: chex.Array,
+            head_size: int,
+            use_layer_norm: bool = False,
+            need_pos: bool = False,
         ) -> chex.Array:
             y = nn.Dense(self.num_heads * head_size)(x)
+            if use_layer_norm:
+                y = layer_norm(y)
             if need_pos:
                 y = get_rope_embedding(y)
             *leading_dims, _ = x.shape
@@ -466,9 +471,11 @@ class MultiHeadAttention(nn.Module):
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
         query_heads = _linear_projection(
-            query, key_size, self.query_need_pos
+            query, key_size, self.qk_layer_norm, self.query_need_pos
         )  # [T', H, Q=K]
-        key_heads = _linear_projection(key, key_size, self.key_need_pos)  # [T, H, K]
+        key_heads = _linear_projection(
+            key, key_size, self.qk_layer_norm, self.key_need_pos
+        )  # [T, H, K]
         value_heads = _linear_projection(value, value_size)  # [T, H, V]
 
         # Compute attention weights.
@@ -529,6 +536,7 @@ class TransformerEncoder(nn.Module):
     num_heads: int
     use_layer_norm: bool = True
     need_pos: bool = False
+    qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
@@ -555,6 +563,7 @@ class TransformerEncoder(nn.Module):
         self_attn_mask = create_attention_mask(mask)
         if ca_mask is not None:
             self_attn_mask = jnp.logical_and(self_attn_mask, ca_mask)
+        positionwise_mask = self_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
@@ -566,6 +575,7 @@ class TransformerEncoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
+                qk_layer_norm=self.qk_layer_norm,
                 query_need_pos=self.need_pos,
                 key_need_pos=self.need_pos,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
@@ -574,13 +584,15 @@ class TransformerEncoder(nn.Module):
                 x_ln = layer_norm(x)
             else:
                 x_ln = x
-            ffn = MLP(
-                (self.resblocks_hidden_size, self.model_size),
-                use_layer_norm=False,
-                activate_first=False,
+            ffn = jax.vmap(
+                MLP(
+                    (self.resblocks_hidden_size or self.model_size, self.model_size),
+                    use_layer_norm=False,
+                    activate_first=False,
+                )
             )(x_ln)
             x = x + ffn
-            x = jnp.where(mask[..., jnp.newaxis], x, 0)
+            x = jnp.where(positionwise_mask, x, 0)
 
         return x
 
@@ -596,6 +608,7 @@ class TransformerDecoder(nn.Module):
     use_layer_norm: bool = True
     x_need_pos: bool = False
     y_need_pos: bool = False
+    qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
 
     @nn.compact
@@ -629,6 +642,7 @@ class TransformerDecoder(nn.Module):
         cross_attn_mask = create_attention_mask(x_mask, y_mask)
         if ca_mask is not None:
             cross_attn_mask = cross_attn_mask & ca_mask
+        positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         if self.use_layer_norm:
             y_ln = layer_norm(y)
@@ -645,6 +659,7 @@ class TransformerDecoder(nn.Module):
                 key_size=self.key_size,
                 value_size=self.value_size,
                 model_size=self.model_size,
+                qk_layer_norm=self.qk_layer_norm,
                 query_need_pos=self.x_need_pos,
                 key_need_pos=self.y_need_pos,
             )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
@@ -653,13 +668,15 @@ class TransformerDecoder(nn.Module):
                 x_ln = layer_norm(x)
             else:
                 x_ln = x
-            ffn = MLP(
-                (self.resblocks_hidden_size, self.model_size),
-                use_layer_norm=False,
-                activate_first=False,
+            ffn = jax.vmap(
+                MLP(
+                    (self.resblocks_hidden_size or self.model_size, self.model_size),
+                    use_layer_norm=False,
+                    activate_first=False,
+                )
             )(x_ln)
             x = x + ffn
-            x = jnp.where(x_mask[..., jnp.newaxis], x, 0)
+            x = jnp.where(positionwise_mask, x, 0)
 
         return x
 
@@ -1079,54 +1096,17 @@ class GLU(nn.Module):
         w2 = nn.Dense(hidden_size, use_bias=False)
         w3 = nn.Dense(feature_dim, use_bias=False)
 
-        a = w1(activation_fn(layer_norm(a)))
-        b = w2(activation_fn(layer_norm(b)))
+        a = w1(a)
+        b = w2(b)
         h = nn.silu(a) * b
 
         return w3(h)
 
 
-class DenseMultiHeadProjection(nn.Module):
-    embed_dim: int
-    output_dim: int = None
-
-    @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
-        """
-        Apply dense multi-head projection.
-
-        Args:
-            x (chex.Array): Input array.
-
-        Returns:
-            chex.Array: Output array.
-        """
-
-        output = MLP((self.embed_dim,))(x)
-        return MLP((self.output_dim or x.shape[-1],))(output)
-
-
-class GatedResidualLayer(nn.Module):
-    @nn.compact
-    def __call__(self, x: chex.Array, y: chex.Array) -> chex.Array:
-        """
-        Apply gated residual layer.
-
-        Args:
-            x (chex.Array): Original input array.
-            y (chex.Array): Transformed output array.
-
-        Returns:
-            chex.Array: Blended output array.
-        """
-        gate = MLP((1,))(jnp.concatenate([x, y], axis=-1))  # Learn to mix x and y
-        gate = jax.nn.sigmoid(gate)  # Values between 0 and 1
-        return x * gate + y * (1 - gate)  # Blended output
-
-
 class SumEmbeddings(nn.Module):
     output_size: int
-    pool_method: PoolMethod = PoolMethod.SUM
+    hidden_size: int = None
+    use_layer_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -1157,102 +1137,33 @@ class SumEmbeddings(nn.Module):
             for _, embedding in enumerate(embeddings):
                 module_embeddings.append(embedding)
 
-        num_embeddings = len(module_embeddings)
+        bias = self.param("bias", nn.initializers.zeros, (self.output_size,))
+        x = sum(module_embeddings) + bias
 
-        if self.pool_method is PoolMethod.SUM:
-            embedding = sum(module_embeddings)
-        elif self.pool_method is PoolMethod.MEAN:
-            embedding = sum(module_embeddings) / np.sqrt(num_embeddings)
-        elif self.pool_method is PoolMethod.ATTN:
-            if num_embeddings == 1:
-                embedding = module_embeddings[0]
-            else:
-                embedding = sum(module_embeddings) + self.param(
-                    "attn_bias", nn.initializers.zeros, (self.output_size,)
-                )
-                attention = MLP((num_embeddings,))(embedding)
-                attention = jax.nn.softmax(attention, axis=-1)
-                embedding = sum(
-                    attn * emb for attn, emb in zip(attention, module_embeddings)
-                )
-
+        if self.use_layer_norm:
+            x_ln = layer_norm(x)
         else:
-            raise ValueError(f"Pool method {self.pool_method} is not supported")
+            x_ln = x
 
-        embedding = embedding + self.param(
-            "bias", nn.initializers.zeros, (self.output_size,)
-        )
-        return MLP((self.output_size,))(embedding)
+        ffn = MLP(
+            (self.hidden_size or self.output_size, self.output_size),
+            use_layer_norm=False,
+            activate_first=False,
+        )(x_ln)
+
+        return x + ffn
 
 
 class MergeEmbeddings(nn.Module):
     output_size: int
+    hidden_size: int = None
+    use_layer_norm: bool = True
 
     @nn.compact
     def __call__(self, embeddings: List[chex.Array]) -> chex.Array:
-        """
-        Merge embeddings.
-
-        Args:
-            embeddings (List[chex.Array]): List of embedding arrays.
-
-        Returns:
-            chex.Array: Merged embeddings array.
-        """
-        embeddings = [activation_fn(layer_norm(embedding)) for embedding in embeddings]
-        return SumEmbeddings(self.output_size)(encodings=embeddings)
-
-
-class TimestepResblock(nn.Module):
-    num_layers: int = 2
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array) -> chex.Array:
-        """
-        Apply timestep residual block.
-
-        Args:
-            x (chex.Array): Input array.
-            mask (chex.Array): Mask array.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        res = x
-        for _ in range(self.num_layers):
-            if self.use_layer_norm:
-                x = layer_norm(x)
-            x = activation_fn(x)
-            x = nn.Conv(
-                features=x.shape[-1],
-                kernel_size=(5,),
-                padding="SAME",
-            )(x)
-        return jnp.where(mask[..., None], x + res, 0)
-
-
-class TimestepResnet(nn.Module):
-    num_layers: int = 2
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array) -> chex.Array:
-        """
-        Apply timestep residual network.
-
-        Args:
-            x (chex.Array): Input array.
-            mask (chex.Array): Mask array.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        for _ in range(self.num_layers):
-            x = TimestepResblock(
-                num_layers=self.num_layers, use_layer_norm=self.use_layer_norm
-            )(x, mask)
-        return x
+        return SumEmbeddings(self.output_size, self.hidden_size, self.use_layer_norm)(
+            encodings=[activation_fn(layer_norm(emb)) for emb in embeddings],
+        )
 
 
 def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> chex.Array:

@@ -1,7 +1,6 @@
 import chex
 import flax.linen as nn
 import jax
-import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from ml.arch.modules import Logits, TransformerEncoder
@@ -18,7 +17,7 @@ class PolicyHead(nn.Module):
     def __call__(self, action_embeddings: chex.Array, action_mask: chex.Array):
         action_embeddings = self.encoder(action_embeddings, action_mask)
 
-        logits = self.logits(action_embeddings)
+        logits = jax.vmap(self.logits)(action_embeddings)
         logits = logits.reshape(-1)
         logits = logits - logits.mean(where=action_mask)
 
@@ -33,41 +32,16 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
-        # Vmap the Logits module to handle multiple heads with independent parameters
-        VmappedLogits = nn.vmap(
-            Logits,
-            in_axes=0,
-            out_axes=0,
-            variable_axes={"params": 0},
-            split_rngs={"params": True},
-        )
+        self.logits = Logits(**self.cfg.logits.to_dict())
 
-        # Instantiate the vmapped Logits module.
-        # Arguments are for a single Logits instance.
-        # nn.vmap will ensure parameters are created for `num_heads` instances.
-        self.multi_value_heads = VmappedLogits(
-            **self.cfg.logits.to_dict(), name="vectorized_value_logits"
-        )
+    def __call__(self, latent_embeddings: chex.Array, latent_mask: chex.Array = None):
+        latent_embeddings = self.encoder(latent_embeddings, latent_mask)
 
-    def __call__(self, latent_embeddings: chex.Array):
-        latent_embeddings = self.encoder(latent_embeddings)
+        if latent_mask is None:
+            cls_embedding = latent_embeddings.mean(axis=0)
+        else:
+            cls_embedding = latent_embeddings.mean(where=latent_mask[..., None], axis=0)
 
-        reshaped_for_heads = latent_embeddings.reshape(
-            self.cfg.num_heads, -1, latent_embeddings.shape[-1]
-        )
+        value = self.logits(cls_embedding)
 
-        def pool_head(embedding_slice: chex.Array) -> chex.Array:
-            return jnp.concatenate(
-                [
-                    embedding_slice.mean(0),
-                    embedding_slice.max(0),
-                    embedding_slice.min(0),
-                ],
-                axis=-1,
-            )
-
-        pooled_embeddings = jax.vmap(pool_head)(reshaped_for_heads)
-        head_outputs = self.multi_value_heads(pooled_embeddings)
-        head_values_tanh = jnp.tanh(head_outputs)
-
-        return head_values_tanh.reshape(-1).mean(keepdims=True)
+        return value.reshape(-1)
