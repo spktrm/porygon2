@@ -16,6 +16,8 @@ class RewardStep:
 class Targets:
     advantages: chex.Array = ()
     returns: chex.Array = ()
+    advantage_mean: chex.Array = ()
+    advantage_std: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -80,3 +82,4 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
+    wm_loss: chex.Array = ()
