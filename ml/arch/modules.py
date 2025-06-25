@@ -1,3 +1,4 @@
+import math
 from enum import Enum, auto
 from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, get_args
 
@@ -424,8 +425,7 @@ class MultiHeadAttention(nn.Module):
     value_size: Optional[int] = None
     model_size: Optional[int] = None
     qk_layer_norm: bool = False
-    query_need_pos: bool = False
-    key_need_pos: bool = False
+    need_pos: bool = False
 
     @nn.compact
     def __call__(
@@ -471,10 +471,10 @@ class MultiHeadAttention(nn.Module):
 
         # Compute key/query/values (overload K/Q/V to denote the respective sizes).
         query_heads = _linear_projection(
-            query, key_size, self.qk_layer_norm, self.query_need_pos
+            query, key_size, self.qk_layer_norm, self.need_pos
         )  # [T', H, Q=K]
         key_heads = _linear_projection(
-            key, key_size, self.qk_layer_norm, self.key_need_pos
+            key, key_size, self.qk_layer_norm, self.need_pos
         )  # [T, H, K]
         value_heads = _linear_projection(value, value_size)  # [T, H, V]
 
@@ -576,8 +576,7 @@ class TransformerEncoder(nn.Module):
                 value_size=self.value_size,
                 model_size=self.model_size,
                 qk_layer_norm=self.qk_layer_norm,
-                query_need_pos=self.need_pos,
-                key_need_pos=self.need_pos,
+                need_pos=self.need_pos,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             x = x + mha
             if self.use_layer_norm:
@@ -606,8 +605,7 @@ class TransformerDecoder(nn.Module):
     num_layers: int
     num_heads: int
     use_layer_norm: bool = True
-    x_need_pos: bool = False
-    y_need_pos: bool = False
+    need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
 
@@ -660,8 +658,7 @@ class TransformerDecoder(nn.Module):
                 value_size=self.value_size,
                 model_size=self.model_size,
                 qk_layer_norm=self.qk_layer_norm,
-                query_need_pos=self.x_need_pos,
-                key_need_pos=self.y_need_pos,
+                need_pos=self.need_pos,
             )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
             x = x + ca
             if self.use_layer_norm:
@@ -679,76 +676,6 @@ class TransformerDecoder(nn.Module):
             x = jnp.where(positionwise_mask, x, 0)
 
         return x
-
-
-class PercieverIO(nn.Module):
-    num_latents: int
-    latent_dim: int
-
-    num_layers: int = 1
-    num_heads: int = 2
-    use_layer_norm: bool = True
-    resblocks_hidden_size: Optional[int] = None
-
-    @nn.compact
-    def __call__(
-        self,
-        x: chex.Array,
-        y: chex.Array,
-        x_mask: chex.Array,
-        y_mask: chex.Array,
-    ) -> chex.Array:
-        """
-        Apply Perceiver IO model.
-
-        Args:
-            x (chex.Array): Input array.
-            y (chex.Array): Input array.
-            x_mask (chex.Array): Mask array for x.
-            y_mask (chex.Array): Mask array for y.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        latents = self.param(
-            "latent",
-            nn.initializers.truncated_normal(0.02),
-            (self.num_latents, self.latent_dim),
-        )
-
-        encoder = TransformerDecoder(
-            key_size=x.shape[-1],
-            value_size=self.latent_dim,
-            model_size=self.latent_dim,
-            num_layers=1,
-            num_heads=self.num_heads,
-            use_layer_norm=self.use_layer_norm,
-            resblocks_hidden_size=self.resblocks_hidden_size or 4 * self.latent_dim,
-        )
-
-        process = TransformerEncoder(
-            key_size=self.latent_dim,
-            value_size=self.latent_dim,
-            model_size=self.latent_dim,
-            num_layers=self.num_layers,
-            num_heads=self.num_heads,
-            use_layer_norm=self.use_layer_norm,
-            resblocks_hidden_size=self.resblocks_hidden_size or 4 * self.latent_dim,
-        )
-
-        decoder = TransformerDecoder(
-            key_size=self.latent_dim,
-            value_size=y.shape[-1],
-            model_size=y.shape[-1],
-            num_layers=1,
-            num_heads=self.num_heads,
-            use_layer_norm=self.use_layer_norm,
-            resblocks_hidden_size=self.resblocks_hidden_size or 4 * y.shape[-1],
-        )
-
-        latents = encoder(latents, x, None, x_mask)
-        latents = process(latents)
-        return decoder(y, latents, y_mask, None)
 
 
 class MLP(nn.Module):
@@ -1124,9 +1051,6 @@ class SumEmbeddings(nn.Module):
         Returns:
             chex.Array: Summed embeddings array.
         """
-        if encodings is None and embeddings is None:
-            raise ValueError("At least one of encodings or embeddings must be provided")
-
         module_embeddings = []
         if encodings is not None:
             for _, encoding in enumerate(encodings):
@@ -1137,8 +1061,15 @@ class SumEmbeddings(nn.Module):
             for _, embedding in enumerate(embeddings):
                 module_embeddings.append(embedding)
 
+        num_module_embeddings = len(module_embeddings)
+        if num_module_embeddings == 0:
+            raise ValueError("No embeddings or encodings provided")
+
         bias = self.param("bias", nn.initializers.zeros, (self.output_size,))
-        x = sum(module_embeddings) + bias
+
+        # divide by the number of embeddings to normalize
+        scale_factor = 1 / math.sqrt(num_module_embeddings)
+        x = sum(module_embeddings) * scale_factor + bias
 
         if self.use_layer_norm:
             x_ln = layer_norm(x)

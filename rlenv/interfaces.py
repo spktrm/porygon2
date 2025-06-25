@@ -82,4 +82,3 @@ class ModelOutput:
     v: chex.Array = ()
     log_pi: chex.Array = ()
     logit: chex.Array = ()
-    wm_loss: chex.Array = ()
