@@ -3,7 +3,7 @@ import flax.linen as nn
 import jax
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, TransformerEncoder
+from ml.arch.modules import Logits, TransformerDecoder
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -11,11 +11,18 @@ class PolicyHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
+        self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-    def __call__(self, action_embeddings: chex.Array, action_mask: chex.Array):
-        action_embeddings = self.encoder(action_embeddings, action_mask)
+    def __call__(
+        self,
+        latent_embeddings: chex.Array,
+        action_embeddings: chex.Array,
+        action_mask: chex.Array,
+    ):
+        action_embeddings = self.decoder(
+            action_embeddings, latent_embeddings, action_mask, None
+        )
 
         logits = jax.vmap(self.logits)(action_embeddings)
         logits = logits.reshape(-1)
@@ -31,17 +38,13 @@ class ValueHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
+        self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
         self.logits = Logits(**self.cfg.logits.to_dict())
 
-    def __call__(self, latent_embeddings: chex.Array, latent_mask: chex.Array = None):
-        latent_embeddings = self.encoder(latent_embeddings, latent_mask)
+    def __call__(self, latent_embeddings: chex.Array):
+        query = latent_embeddings.mean(axis=0, keepdims=True)
 
-        if latent_mask is None:
-            cls_embedding = latent_embeddings.mean(axis=0)
-        else:
-            cls_embedding = latent_embeddings.mean(where=latent_mask[..., None], axis=0)
-
-        value = self.logits(cls_embedding)
+        pooled = self.decoder(query, latent_embeddings)
+        value = self.logits(pooled)
 
         return value.reshape(-1)

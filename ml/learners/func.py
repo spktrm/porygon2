@@ -362,7 +362,6 @@ def collect_policy_stats_telemetry_data(
     state_mask: chex.Array,
     prev_policy: chex.Array,
     ratio: chex.Array,
-    policy_target: chex.Array,
     adv_pi: chex.Array,
 ) -> dict[str, Any]:
     move_mask = legal_mask[..., :4]
@@ -380,11 +379,6 @@ def collect_policy_stats_telemetry_data(
 
     target_mask = legal_mask * state_mask[..., None]
 
-    mean_target = policy_target.mean(where=target_mask)
-    std_target = policy_target.std(where=target_mask)
-    max_target = jnp.where(target_mask, policy_target, -1e9).max()
-    min_target = jnp.where(target_mask, policy_target, 1e9).min()
-
     mean_adv_pi = adv_pi.mean(where=target_mask)
     std_adv_pi = adv_pi.std(where=target_mask)
     max_adv_pi = jnp.where(target_mask, adv_pi, -1e9).max()
@@ -396,10 +390,6 @@ def collect_policy_stats_telemetry_data(
         "avg_logit_value": avg_logit_value,
         "kl_div": renormalize(kl_div, state_mask),
         "ratio": renormalize(ratio, state_mask),
-        "mean_policy_target": mean_target,
-        "std_policy_target": std_target,
-        "max_policy_target": max_target,
-        "min_policy_target": min_target,
         "mean_adv_pi": mean_adv_pi,
         "std_adv_pi": std_adv_pi,
         "max_adv_pi": max_adv_pi,

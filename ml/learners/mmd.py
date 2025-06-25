@@ -19,11 +19,12 @@ from tqdm import tqdm
 import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.config import ActorCriticConfig
+from ml.config import AdamConfig
 from ml.learners.func import (
     collect_batch_telemetry_data,
     collect_nn_telemetry_data,
     collect_parameter_and_gradient_telemetry_data,
+    collect_policy_stats_telemetry_data,
     collect_value_stats_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
@@ -33,13 +34,34 @@ from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollecto
 
 
 @chex.dataclass(frozen=True)
-class MMDConfig(ActorCriticConfig):
+class MMDConfig:
+    num_steps = 1_000_000
+    num_actors: int = 32
+    do_eval: bool = True
+    num_eval_games: int = 200
+
+    # Batch iteration params
+    num_epochs: int = 40
+    minibatch_size: int = 4
+
+    # Learning params
+    adam: AdamConfig = AdamConfig(b1=0, b2=0.999, eps=1e-8, weight_decay=0)
+    learning_rate: float = 3e-5
     clip_gradient: float = 1
+
+    # PPO params
     clip_coef: float = 0.2
-    gae_lambda: float = 1.0
+    gae_lambda: float = 0.95
+    gamma: float = 0.99
+
+    # Loss coefficients
+    value_loss_coef: float = 0.25
+    policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.05
     kl_loss_coef: float = 0.05
-    kl_target: float = 0.01
+
+    # Stopping param
+    kl_target: float = 0.025
 
 
 def get_config():
@@ -51,7 +73,7 @@ class TrainState(train_state.TrainState):
     actor_steps: int = 0
 
 
-def create_train_state(module: nn.Module, rng: PRNGKey, config: ActorCriticConfig):
+def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     """Creates an initial `TrainState`."""
     ex, hx = get_ex_step()
 
@@ -234,13 +256,13 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         pg_loss2 = -advantages * ratio.clip(1 - config.clip_coef, 1 + config.clip_coef)
 
         loss_pg = jnp.maximum(pg_loss1, pg_loss2).mean(where=valid)
-        loss_v = 0.5 * jnp.square(targets.returns - value_pred).mean(where=valid)
+        loss_v = jnp.square(targets.returns - value_pred).mean(where=valid)
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        ent_kl_coef_mult = jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = 1  # jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
@@ -264,7 +286,21 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
             loss_v=loss_v,
             loss_entropy=loss_entropy,
             loss_kl=loss_kl,
-            **collect_value_stats_telemetry_data(value_pred, targets.returns, valid),
+        )
+        logs.update(
+            collect_policy_stats_telemetry_data(
+                pred.logit,
+                pred.pi,
+                pred.log_pi,
+                batch.env.legal,
+                valid,
+                batch.actor.policy,
+                ratio,
+                advantages,
+            )
+        )
+        logs.update(
+            collect_value_stats_telemetry_data(value_pred, targets.returns, valid)
         )
 
         return loss, logs
@@ -351,7 +387,6 @@ def main():
     for _ in range(learner_config.num_steps):
         logs: dict
 
-        original_state = state
         batch = training_collector.collect_batch_trajectory(state.params)
 
         for _ in range(learner_config.num_epochs):
@@ -367,7 +402,7 @@ def main():
                     history=clip_history(minibatch.history, resolution=64),
                     actor=minibatch.actor,
                 )
-                targets = compute_returns(original_state, minibatch, learner_config)
+                targets = compute_returns(state, minibatch, learner_config)
                 iterations.append((minibatch, targets))
 
             target_adv_mean, target_adv_std = compute_target_statistics(

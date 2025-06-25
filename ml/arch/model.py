@@ -27,12 +27,7 @@ class Model(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.policy_head = PolicyHead(self.cfg.policy_head)
-
-        self.value_head1 = ValueHead(self.cfg.value_head)
-        self.value_head2 = ValueHead(self.cfg.value_head)
-
-        # entity_size = self.cfg.entity_size
-        # self.wm_head = MLP((entity_size, entity_size))
+        self.value_head = ValueHead(self.cfg.value_head)
 
     def _shared_forward(self, env_step: EnvStep, history_step: HistoryStep):
         """
@@ -43,7 +38,7 @@ class Model(nn.Module):
 
         # Apply action argument heads
         logit, pi, log_pi = jax.vmap(self.policy_head)(
-            action_embeddings, env_step.legal
+            latent_embeddings, action_embeddings, env_step.legal
         )
         return logit, pi, log_pi, latent_embeddings, action_embeddings
 
@@ -51,33 +46,16 @@ class Model(nn.Module):
         """
         Forward pass for training. Computes policy and value.
         """
-        logit, pi, log_pi, latent_embeddings, action_embeddings = self._shared_forward(
+        logit, pi, log_pi, latent_embeddings, _ = self._shared_forward(
             env_step, history_step
         )
 
-        # wm_pred = jax.vmap(jax.vmap(self.wm_head))(latent_embeddings[:-1])
-        # wm_targ = jax.lax.stop_gradient(latent_embeddings[1:])
-
-        # # Compute the world model loss
-        # wm_loss = jnp.square(wm_pred - wm_targ).mean(axis=(-1, -2))
-        # wm_loss = jnp.sum(
-        #     wm_loss, where=env_step.valid[:-1] & env_step.valid[1:], keepdims=True
-        # )
-
         # Apply the value head
-        value1 = jax.vmap(self.value_head1)(latent_embeddings)
-        value2 = jax.vmap(self.value_head2)(action_embeddings, env_step.legal)
-        value = (value1 + value2) / 2.0  # Average the two value heads
+        value = jax.vmap(self.value_head)(latent_embeddings)
         value = jnp.tanh(value)
 
         # Return the model output
-        return ModelOutput(
-            logit=logit,
-            pi=pi,
-            log_pi=log_pi,
-            v=value,
-            # wm_loss=wm_loss,
-        )
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
     def predict_step(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
         """

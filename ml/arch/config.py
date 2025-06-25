@@ -53,9 +53,9 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 256
+    entity_size = 512
     vector_size = 1024
-    num_latents = 32
+    num_latents = 64
 
     cfg.entity_size = entity_size
     cfg.vector_size = vector_size
@@ -69,25 +69,23 @@ def get_model_cfg():
     cfg.encoder.num_latents = num_latents
 
     cfg.encoder.entity_encoder = ConfigDict()
-    cfg.encoder.timestep_encoder1 = ConfigDict()
-    cfg.encoder.timestep_encoder2 = ConfigDict()
+    cfg.encoder.timestep_encoder = ConfigDict()
     cfg.encoder.action_encoder = ConfigDict()
     cfg.encoder.latent_timestep_decoder = ConfigDict()
     cfg.encoder.latent_entity_decoder = ConfigDict()
     cfg.encoder.latent_action_decoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
-    cfg.encoder.action_latent_decoder = ConfigDict()
 
     encoder_num_layers = 1
-    encoder_num_heads = 4
-    encoder_hidden_size_scale = 4 * 2 / 3
+    encoder_num_heads = 8
+    encoder_hidden_size_scale = 1
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_key_value_scale = 1 / encoder_num_heads
     encoder_key_value_size = int(encoder_key_value_scale * entity_size)
     encoder_qk_layer_norm = False
 
     decoder_num_layers = 1
-    decoder_num_heads = 1
+    decoder_num_heads = 8
     decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_key_value_scale = 1 / decoder_num_heads
@@ -119,27 +117,22 @@ def get_model_cfg():
     set_attributes(cfg.encoder.entity_encoder, **transformer_encoder_kwargs)
     cfg.encoder.entity_encoder.need_pos = False
 
-    set_attributes(cfg.encoder.timestep_encoder1, **transformer_encoder_kwargs)
-    cfg.encoder.timestep_encoder1.need_pos = True
-
-    set_attributes(cfg.encoder.timestep_encoder2, **transformer_encoder_kwargs)
-    cfg.encoder.timestep_encoder2.need_pos = True
+    set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
+    cfg.encoder.timestep_encoder.need_pos = True
 
     set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
     cfg.encoder.action_encoder.need_pos = False
 
     set_attributes(cfg.encoder.latent_timestep_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.latent_timestep_decoder.y_need_pos = True
+    cfg.encoder.latent_timestep_decoder.need_pos = True
 
     set_attributes(cfg.encoder.latent_entity_decoder, **transformer_decoder_kwargs)
 
     set_attributes(cfg.encoder.latent_action_decoder, **transformer_decoder_kwargs)
 
     set_attributes(cfg.encoder.latent_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.latent_encoder.num_layers = 2
+    cfg.encoder.latent_encoder.num_layers = 3
     cfg.encoder.latent_encoder.need_pos = False
-
-    set_attributes(cfg.encoder.action_latent_decoder, **transformer_decoder_kwargs)
 
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()
