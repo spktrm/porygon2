@@ -6,14 +6,12 @@ from typing import Callable, List, Sequence, Tuple
 import chex
 import flax.linen as nn
 import jax
-import jax.numpy as jnp
 import numpy as np
 import uvloop
 import websockets
 from tqdm import tqdm
 
 from ml.arch.model import get_dummy_model
-from ml.config import FineTuning
 from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
 from rlenv.env import as_jax_arr, clip_history, expand_dims, get_ex_step, process_state
@@ -274,13 +272,10 @@ class BatchCollectorV2:
         network: nn.Module,
         batch_size: int,
         env_constructor: BatchEnvironment = BatchTwoPlayerEnvironment,
-        finetune: bool = False,
     ):
         self.game: BatchEnvironment = env_constructor(batch_size)
         self.network = network
-        self.finetuning = FineTuning()
         self.batch_size = batch_size
-        self.finetune = finetune
         self.num_steps = 0
 
     def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
@@ -295,8 +290,7 @@ class BatchCollectorV2:
             self.network.apply, (None, 0, 0), 0
         )
         output = rollout(params, env_steps, history_step)
-        finetuned_pi = self.finetuning._threshold(output.pi, env_steps.legal)
-        return jnp.where(self.finetune, finetuned_pi, output.pi), output.log_pi
+        return output.pi, output.log_pi
 
     def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
         env_step = as_jax_arr(env_step)
@@ -377,7 +371,6 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
         super().__init__(batch_size, False)
 
         self.network = network
-        self.finetuning = FineTuning()
         self.batch_size = batch_size
         self.num_steps = 0
 
@@ -501,9 +494,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
 class EvalBatchCollector(BatchCollectorV2):
     def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(
-            network, batch_size, BatchSinglePlayerEnvironment, finetune=True
-        )
+        super().__init__(network, batch_size, BatchSinglePlayerEnvironment)
 
 
 def main():

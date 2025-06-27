@@ -377,12 +377,10 @@ def collect_policy_stats_telemetry_data(
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)
     kl_div = optax.kl_divergence(log_policy, prev_policy)
 
-    target_mask = legal_mask * state_mask[..., None]
-
-    mean_adv_pi = adv_pi.mean(where=target_mask)
-    std_adv_pi = adv_pi.std(where=target_mask)
-    max_adv_pi = jnp.where(target_mask, adv_pi, -1e9).max()
-    min_adv_pi = jnp.where(target_mask, adv_pi, 1e9).min()
+    mean_adv_pi = adv_pi.mean(where=state_mask)
+    std_adv_pi = adv_pi.std(where=state_mask)
+    max_adv_pi = jnp.where(state_mask, adv_pi, -1e9).max()
+    min_adv_pi = jnp.where(state_mask, adv_pi, 1e9).min()
 
     return {
         "move_entropy": move_entropy,

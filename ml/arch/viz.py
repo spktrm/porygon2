@@ -29,9 +29,6 @@ def main():
 
     print(z.compile().cost_analysis())
 
-    # with open("t.dot", "w") as f:
-    #     f.write(z.compiler_ir("hlo").as_hlo_dot_graph())
-
 
 if __name__ == "__main__":
     main()
