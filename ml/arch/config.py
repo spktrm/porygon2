@@ -54,18 +54,15 @@ def get_model_cfg():
     cfg = ConfigDict()
 
     entity_size = 512
-    vector_size = 1024
     num_latents = 64
 
     cfg.entity_size = entity_size
-    cfg.vector_size = vector_size
     cfg.num_latents = num_latents
 
     use_layer_norm = True
 
     cfg.encoder = ConfigDict()
     cfg.encoder.entity_size = entity_size
-    cfg.encoder.vector_size = vector_size
     cfg.encoder.num_latents = num_latents
 
     cfg.encoder.entity_encoder = ConfigDict()
@@ -82,7 +79,7 @@ def get_model_cfg():
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_key_value_scale = 1 / encoder_num_heads
     encoder_key_value_size = int(encoder_key_value_scale * entity_size)
-    encoder_qk_layer_norm = False
+    encoder_qk_layer_norm = True
 
     decoder_num_layers = 1
     decoder_num_heads = 8
@@ -90,7 +87,7 @@ def get_model_cfg():
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_key_value_scale = 1 / decoder_num_heads
     decoder_key_value_size = int(decoder_key_value_scale * entity_size)
-    decoder_qk_layer_norm = False
+    decoder_qk_layer_norm = True
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,

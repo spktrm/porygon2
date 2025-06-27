@@ -208,7 +208,6 @@ class Encoder(nn.Module):
 
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
-        vector_size = self.cfg.vector_size
 
         embed_kwargs = dict(
             features=entity_size, embedding_init=nn.initializers.lecun_normal()
@@ -243,7 +242,7 @@ class Encoder(nn.Module):
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_combine = SumEmbeddings(
-            output_size=entity_size, hidden_size=vector_size, name="entity_combine"
+            output_size=entity_size, name="entity_combine"
         )
         self.relative_edge_combine = SumEmbeddings(
             output_size=entity_size, name="relative_edge_combine"
@@ -252,13 +251,13 @@ class Encoder(nn.Module):
             output_size=entity_size, name="absolute_edge_combine"
         )
         self.timestep_combine = SumEmbeddings(
-            output_size=entity_size, hidden_size=vector_size, name="timestep_combine"
+            output_size=entity_size, name="timestep_combine"
         )
         self.action_combine = SumEmbeddings(
-            output_size=entity_size, hidden_size=vector_size, name="action_combine"
+            output_size=entity_size, name="action_combine"
         )
         self.latent_combine = SumEmbeddings(
-            output_size=entity_size, hidden_size=vector_size, name="latent_combine"
+            output_size=entity_size, name="latent_combine"
         )
 
         # Transformer encoders for processing sequences of entities and edges.

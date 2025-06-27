@@ -253,7 +253,9 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         )
 
         pg_loss1 = -advantages * ratio
-        pg_loss2 = -advantages * ratio.clip(1 - config.clip_coef, 1 + config.clip_coef)
+        pg_loss2 = -advantages * ratio.clip(
+            min=1 - config.clip_coef, max=1 + config.clip_coef
+        )
 
         loss_pg = jnp.maximum(pg_loss1, pg_loss2).mean(where=valid)
         loss_v = jnp.square(targets.returns - value_pred).mean(where=valid)
