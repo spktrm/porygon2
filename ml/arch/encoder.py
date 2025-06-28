@@ -463,14 +463,8 @@ class Encoder(nn.Module):
                 self.species_embedding(species_token),
                 self.abilities_embedding(ability_token),
                 self.items_embedding(item_token),
-                move_embeddings[0],
-                move_embeddings[1],
-                move_embeddings[2],
-                move_embeddings[3],
-                move_encodings[0],
-                move_encodings[1],
-                move_encodings[2],
-                move_encodings[3],
+                move_embeddings.sum(axis=0),
+                move_encodings.sum(axis=0),
             ],
         )
 
@@ -573,9 +567,9 @@ class Encoder(nn.Module):
         effect_from_source_mask = (
             effect_from_source_tokens != EffectEnum.EFFECT_ENUM___UNSPECIFIED
         ) & (effect_from_source_tokens != EffectEnum.EFFECT_ENUM___NULL)
-        effect_from_source_embeddings = jnp.where(
+        effect_from_source_embedding = jnp.where(
             effect_from_source_mask[..., None], effect_from_source_embeddings, 0
-        )
+        ).sum(axis=0)
 
         ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
@@ -595,11 +589,7 @@ class Encoder(nn.Module):
                 self.items_embedding(item_token),
                 self.abilities_embedding(ability_token),
                 self.moves_embedding(action_token),
-                effect_from_source_embeddings[0],
-                effect_from_source_embeddings[1],
-                effect_from_source_embeddings[2],
-                effect_from_source_embeddings[3],
-                effect_from_source_embeddings[4],
+                effect_from_source_embedding,
             ],
         )
 
