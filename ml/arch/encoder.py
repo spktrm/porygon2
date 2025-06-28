@@ -210,35 +210,36 @@ class Encoder(nn.Module):
         entity_size = self.cfg.entity_size
 
         embed_kwargs = dict(
-            features=entity_size, embedding_init=nn.initializers.lecun_normal()
+            features=entity_size, embedding_init=nn.initializers.normal()
+        )
+        dense_kwargs = dict(
+            features=entity_size, kernel_init=nn.initializers.normal(), use_bias=False
         )
 
         # Initialize embeddings for various entities and features.
         self.species_embedding = nn.Embed(
-            NUM_SPECIES, name="species_embedding", **embed_kwargs
+            num_embeddings=NUM_SPECIES, name="species_embedding", **embed_kwargs
         )
         self.items_embedding = nn.Embed(
-            NUM_ITEMS, name="items_embedding", **embed_kwargs
+            num_embeddings=NUM_ITEMS, name="items_embedding", **embed_kwargs
         )
         self.abilities_embedding = nn.Embed(
-            NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
+            num_embeddings=NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
         )
         self.moves_embedding = nn.Embed(
-            NUM_MOVES, name="moves_embedding", **embed_kwargs
+            num_embeddings=NUM_MOVES, name="moves_embedding", **embed_kwargs
         )
         self.effect_from_source_embedding = nn.Embed(
-            NUM_FROM_SOURCE_EFFECTS, name="effect_from_source_embedding", **embed_kwargs
+            num_embeddings=NUM_FROM_SOURCE_EFFECTS,
+            name="effect_from_source_embedding",
+            **embed_kwargs
         )
 
         # Initialize linear layers for encoding various entity features.
-        self.species_linear = nn.Dense(
-            entity_size, use_bias=False, name="species_linear"
-        )
-        self.items_linear = nn.Dense(entity_size, use_bias=False, name="items_linear")
-        self.abilities_linear = nn.Dense(
-            entity_size, use_bias=False, name="abilities_linear"
-        )
-        self.moves_linear = nn.Dense(entity_size, use_bias=False, name="moves_linear")
+        self.species_linear = nn.Dense(name="species_linear", **dense_kwargs)
+        self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
+        self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
+        self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_combine = SumEmbeddings(
@@ -282,7 +283,7 @@ class Encoder(nn.Module):
         # Latents
         self.latent_embeddings = self.param(
             "latent_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
+            nn.initializers.normal(),
             (self.cfg.num_latents, entity_size),
         )
 
@@ -439,10 +440,8 @@ class Encoder(nn.Module):
             .clip(min=0, max=1)
         )
 
-        moveset_embedding_sum = self.moves_embedding(move_tokens).sum(0)
-
-        move_embeddings = jax.vmap(self._encode_move)(move_tokens)
-        moveset_linear_embedding_sum = move_embeddings.sum(0)
+        move_embeddings = self.moves_embedding(move_tokens)
+        move_encodings = jax.vmap(self._encode_move)(move_tokens)
 
         species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
         ability_token = entity[EntityFeature.ENTITY_FEATURE__ABILITY]
@@ -464,8 +463,14 @@ class Encoder(nn.Module):
                 self.species_embedding(species_token),
                 self.abilities_embedding(ability_token),
                 self.items_embedding(item_token),
-                moveset_embedding_sum,
-                moveset_linear_embedding_sum,
+                move_embeddings[0],
+                move_embeddings[1],
+                move_embeddings[2],
+                move_embeddings[3],
+                move_encodings[0],
+                move_encodings[1],
+                move_encodings[2],
+                move_encodings[3],
             ],
         )
 
@@ -568,9 +573,9 @@ class Encoder(nn.Module):
         effect_from_source_mask = (
             effect_from_source_tokens != EffectEnum.EFFECT_ENUM___UNSPECIFIED
         ) & (effect_from_source_tokens != EffectEnum.EFFECT_ENUM___NULL)
-        effect_from_source_embedding = jnp.where(
+        effect_from_source_embeddings = jnp.where(
             effect_from_source_mask[..., None], effect_from_source_embeddings, 0
-        ).sum(axis=0)
+        )
 
         ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
@@ -590,7 +595,11 @@ class Encoder(nn.Module):
                 self.items_embedding(item_token),
                 self.abilities_embedding(ability_token),
                 self.moves_embedding(action_token),
-                effect_from_source_embedding,
+                effect_from_source_embeddings[0],
+                effect_from_source_embeddings[1],
+                effect_from_source_embeddings[2],
+                effect_from_source_embeddings[3],
+                effect_from_source_embeddings[4],
             ],
         )
 
@@ -817,6 +826,6 @@ class Encoder(nn.Module):
         latent_embeddings = jax.vmap(jax.vmap(self.latent_combine))(
             embeddings=[latent_timesteps, latent_entities, latent_actions]
         )
-        latent_embeddings = jax.vmap(self.latent_encoder)(latent_embeddings)
+        contextual_latent_embeddings = jax.vmap(self.latent_encoder)(latent_embeddings)
 
-        return latent_embeddings, action_embeddings
+        return contextual_latent_embeddings, action_embeddings
