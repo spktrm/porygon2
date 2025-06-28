@@ -199,6 +199,7 @@ export class Player extends BattleStreams.BattlePlayer {
 
     done: boolean;
     draw: boolean;
+    started: boolean;
 
     worldStream: BattleStreams.BattleStream | null;
     offline: boolean;
@@ -249,6 +250,7 @@ export class Player extends BattleStreams.BattlePlayer {
 
         this.done = false;
         this.draw = false;
+        this.started = false;
 
         this.worldStream = worldStream;
         this.offline = offline;
@@ -273,7 +275,12 @@ export class Player extends BattleStreams.BattlePlayer {
     }
 
     addLine(line: string) {
-        this.privateBattle.add(line);
+        try {
+            this.privateBattle.add(line);
+        } catch (err) {
+            console.log(err);
+            this.privateBattle.add(line);
+        }
         this.publicBattle.add(line);
         this.getPlayerIndex();
         if (line.startsWith("|start")) {
@@ -294,6 +301,9 @@ export class Player extends BattleStreams.BattlePlayer {
 
     isActionRequired(chunk: string): boolean {
         const request = this.getRequest()! as AnyObject;
+        if (this.privateBattle.requestStatus !== "applied") {
+            return false;
+        }
         if (this.offline) {
             return true;
         }
@@ -346,8 +356,21 @@ export class Player extends BattleStreams.BattlePlayer {
         }
     }
 
+    updateRequest() {
+        while (this.privateBattle.requestStatus !== "applied") {
+            this.privateBattle.update();
+        }
+    }
+
     async start() {
         const backup: string[] = [];
+
+        const shiftBackup = () => {
+            while (backup.length > 0) {
+                const line = backup.shift();
+                if (line) this.addLine(line);
+            }
+        };
 
         for await (const chunk of this.stream) {
             if (this.done || this.draw) {
@@ -368,20 +391,25 @@ export class Player extends BattleStreams.BattlePlayer {
                 }
             }
 
-            if (this.hasRequest) {
-                while (backup.length > 0) {
-                    const line = backup.shift();
-                    if (line) this.addLine(line);
+            for (const line of chunk.split("\n")) {
+                backup.push(line);
+                if (line.startsWith("|start")) {
+                    this.started = true;
                 }
+            }
+
+            if (this.hasRequest && this.started) {
+                shiftBackup();
                 for (const line of chunk.split("\n")) {
                     this.addLine(line);
                 }
-            } else {
-                for (const line of chunk.split("\n")) {
-                    backup.push(line);
+                this.updateRequest();
+                if (this.privateBattle.turn === 1) {
+                    this.privateBattle.requestStatus = "received";
+                    this.updateRequest();
                 }
+                this.hasRequest = false;
             }
-            this.privateBattle.update();
 
             if (
                 this.isWorldReady() &&
@@ -389,6 +417,11 @@ export class Player extends BattleStreams.BattlePlayer {
                 this.isActionRequired(chunk)
             ) {
                 this.requestCount += 1;
+
+                shiftBackup();
+                this.privateBattle.requestStatus = "received";
+                this.updateRequest();
+
                 const key = await this.send(this);
                 const action = await this.recv(key!);
                 if (action !== undefined) {

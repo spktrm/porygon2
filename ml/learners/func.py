@@ -10,7 +10,7 @@ from flax.training import train_state
 from ml.func import get_average_logit_value, get_loss_entropy, renormalize
 from rlenv.data import ACTION_STRINGS
 from rlenv.interfaces import TimeStep
-from rlenv.protos.features_pb2 import MovesetFeature
+from rlenv.protos.features_pb2 import AbsoluteEdgeFeature, MovesetFeature
 
 
 def conditional_breakpoint(pred):
@@ -60,6 +60,10 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     valid = batch.env.valid
     lengths = valid.sum(0)
 
+    history_lengths = batch.history.major_history.absolute_edges[
+        ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+    ].sum(0)
+
     can_move = batch.env.legal[..., :4].any(axis=-1)
     can_switch = batch.env.legal[..., 4:].any(axis=-1)
 
@@ -71,6 +75,7 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
         trajectory_length_mean=lengths.mean(),
         trajectory_length_min=lengths.min(),
         trajectory_length_max=lengths.max(),
+        history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         draw_ratio=batch.env.draw.any(axis=0).astype(float).mean(),
@@ -92,6 +97,7 @@ def collect_parameter_and_gradient_telemetry_data(
         param_norm=optax.global_norm(params),
         gradient_norm=optax.global_norm(grads),
     )
+    # logs.update(per_module_gradient_stats(grads))
     return logs
 
 
@@ -219,6 +225,96 @@ def efficient_per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]
     return stats
 
 
+def _calculate_stats_for_tree(
+    grads_tree: chex.ArrayTree, prefix: str = ""
+) -> Dict[str, jnp.ndarray] | None:
+    """
+    Helper function to calculate gradient statistics for a given PyTree of gradients.
+
+    It flattens all gradients within the tree into a single vector for analysis.
+    """
+    # Get all gradient arrays from the PyTree
+    leaves = jax.tree_util.tree_leaves(grads_tree)
+
+    # If there are no parameters in this submodule, skip it
+    if not leaves:
+        return None
+
+    # Flatten all gradient arrays into a single 1D vector
+    flat_grads = jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+
+    # Calculate statistics on the entire flattened array
+    abs_grads = jnp.abs(flat_grads)
+
+    norm = jnp.linalg.norm(flat_grads)
+    mean = jnp.mean(abs_grads)
+    std = jnp.std(abs_grads)
+    grad_min = jnp.min(abs_grads)
+    grad_max = jnp.max(abs_grads)
+    p25, p50, p75 = jnp.percentile(abs_grads, jnp.array([25, 50, 75]))
+    snr = jnp.mean(flat_grads) / (jnp.std(flat_grads) + 1e-8)
+    zero_pct = jnp.mean(abs_grads < 1e-8)
+
+    return {
+        f"{prefix}grad_norm": norm,
+        f"{prefix}grad_mean": mean,
+        f"{prefix}grad_std": std,
+        f"{prefix}grad_min": grad_min,
+        f"{prefix}grad_max": grad_max,
+        f"{prefix}grad_p25": p25,
+        f"{prefix}grad_p50": p50,
+        f"{prefix}grad_p75": p75,
+        f"{prefix}grad_signal_to_noise": snr,
+        f"{prefix}grad_zero_percentage": zero_pct,
+    }
+
+
+@jax.jit
+def per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]:
+    """
+    Calculates gradient statistics for high-level modules and their direct sub-modules.
+
+    This function iterates through 'encoder', 'policy_head', and 'value_head',
+    calculating stats for the entire module and then for each sub-module
+    one level deep.
+
+    Args:
+        grads: A PyTree of gradients, expected to have a 'params' key
+               containing the module parameters.
+
+    Returns:
+        A dictionary containing gradient statistics, with keys prefixed
+        by module and sub-module names.
+    """
+    stats = {}
+    top_level_modules = ["encoder", "policy_head", "value_head"]
+
+    for module_name in top_level_modules:
+        if module_name not in grads.get("params", {}):
+            continue
+
+        module_grads_tree = grads["params"][module_name]
+
+        # 1. Calculate and store stats for the entire top-level module
+        prefix = f"{module_name}_"
+        top_level_stats = _calculate_stats_for_tree(module_grads_tree, prefix)
+        if top_level_stats is not None:
+            stats.update(top_level_stats)
+
+        # 2. Iterate through sub-modules (1 level deep)
+        for sub_module_name, sub_module_grads_tree in module_grads_tree.items():
+            # Ensure the item is a sub-module (a dict-like PyTree) and not a direct parameter array
+            if isinstance(sub_module_grads_tree, dict):
+                prefix = f"{module_name}_{sub_module_name}_"
+                sub_module_stats = _calculate_stats_for_tree(
+                    sub_module_grads_tree, prefix
+                )
+                if sub_module_stats is not None:
+                    stats.update(sub_module_stats)
+
+    return stats
+
+
 @jax.jit
 def collect_nn_telemetry_data(state: train_state.TrainState) -> Dict[str, Any]:
     return dict(
@@ -266,7 +362,6 @@ def collect_policy_stats_telemetry_data(
     state_mask: chex.Array,
     prev_policy: chex.Array,
     ratio: chex.Array,
-    policy_target: chex.Array,
     adv_pi: chex.Array,
 ) -> dict[str, Any]:
     move_mask = legal_mask[..., :4]
@@ -282,17 +377,10 @@ def collect_policy_stats_telemetry_data(
     avg_logit_value = get_average_logit_value(logits, legal_mask, state_mask)
     kl_div = optax.kl_divergence(log_policy, prev_policy)
 
-    target_mask = legal_mask * state_mask[..., None]
-
-    mean_target = policy_target.mean(where=target_mask)
-    std_target = policy_target.std(where=target_mask)
-    max_target = jnp.where(target_mask, policy_target, -1e9).max()
-    min_target = jnp.where(target_mask, policy_target, 1e9).min()
-
-    mean_adv_pi = adv_pi.mean(where=target_mask)
-    std_adv_pi = adv_pi.std(where=target_mask)
-    max_adv_pi = jnp.where(target_mask, adv_pi, -1e9).max()
-    min_adv_pi = jnp.where(target_mask, adv_pi, 1e9).min()
+    mean_adv_pi = adv_pi.mean(where=state_mask)
+    std_adv_pi = adv_pi.std(where=state_mask)
+    max_adv_pi = jnp.where(state_mask, adv_pi, -1e9).max()
+    min_adv_pi = jnp.where(state_mask, adv_pi, 1e9).min()
 
     return {
         "move_entropy": move_entropy,
@@ -300,10 +388,6 @@ def collect_policy_stats_telemetry_data(
         "avg_logit_value": avg_logit_value,
         "kl_div": renormalize(kl_div, state_mask),
         "ratio": renormalize(ratio, state_mask),
-        "mean_policy_target": mean_target,
-        "std_policy_target": std_target,
-        "max_policy_target": max_target,
-        "min_policy_target": min_target,
         "mean_adv_pi": mean_adv_pi,
         "std_adv_pi": std_adv_pi,
         "max_adv_pi": max_adv_pi,

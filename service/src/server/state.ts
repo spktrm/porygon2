@@ -436,7 +436,10 @@ function getArrayFromPokemon(
     }
 
     let pokemon: Pokemon;
-    if (candidate.volatiles.transform !== undefined) {
+    if (
+        candidate.volatiles.transform !== undefined &&
+        candidate.volatiles.transform.pokemon !== undefined
+    ) {
         pokemon = candidate.volatiles.transform.pokemon as Pokemon;
     } else {
         pokemon = candidate;
@@ -642,14 +645,14 @@ class Edge {
         this.entityData.set(data, offset);
     }
 
-    setPoke(poke: Pokemon | null) {
+    setPoke(pokemon: Pokemon | null) {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error();
         }
-        if (poke !== null) {
-            const data = getArrayFromPokemon(poke, playerIndex);
-            const offset = isMySide(poke.side.n, playerIndex)
+        if (pokemon !== null) {
+            const data = getArrayFromPokemon(pokemon, playerIndex);
+            const offset = isMySide(pokemon!.side.n, playerIndex)
                 ? 0
                 : numPokemonFeatures;
             this.setPokeFromData(data, offset);
@@ -903,6 +906,7 @@ class EdgeBuffer {
                 : getArrayFromPokemon(onlyActive, playerIndex);
         this.entityData.set(activePokemonBuffer, entityOffset);
     }
+
     updateLatestSideConditionData(
         side: Side,
         relativeEdgeOffset: number,
@@ -1209,10 +1213,16 @@ class EdgeBuffer {
                 (historyIndex + 1) * numAbsoluteEdgeFeatures,
             );
             historyItems.push({
-                entites: [
-                    entityArrayToObject(stepEntity0),
-                    entityArrayToObject(stepEntity1),
-                ],
+                myEntites: [0].map((memberIndex) => {
+                    const start = memberIndex * numPokemonFeatures;
+                    const end = (memberIndex + 1) * numPokemonFeatures;
+                    return entityArrayToObject(stepEntity0.slice(start, end));
+                }),
+                oppEntites: [0].map((memberIndex) => {
+                    const start = memberIndex * numPokemonFeatures;
+                    const end = (memberIndex + 1) * numPokemonFeatures;
+                    return entityArrayToObject(stepEntity1.slice(start, end));
+                }),
                 relativeEdges: [
                     relativeArrayToObject(stepRelativeEdge0),
                     relativeArrayToObject(stepRelativeEdge1),
@@ -1245,27 +1255,43 @@ export class EventHandler implements Protocol.Handler {
         this.timestamp = 0;
     }
 
-    getPokemon(pokemonid: PokemonIdent) {
+    getPokemon(
+        pokemonid: PokemonIdent,
+        isPublic: boolean = true,
+    ): {
+        pokemon: Pokemon | null;
+        index: number;
+    } {
         if (
             !pokemonid ||
             pokemonid === "??" ||
             pokemonid === "null" ||
             pokemonid === "false"
         ) {
-            return null;
+            return { pokemon: null, index: -1 };
         }
-        const { siden, pokemonid: parsedPokemonid } =
-            this.player.publicBattle.parsePokemonId(pokemonid);
 
-        const side = this.player.publicBattle.sides[siden];
-
-        for (const pokemon of side.team) {
-            if (pokemon.originalIdent === parsedPokemonid) {
-                return pokemon;
+        if (isPublic) {
+            const { siden, pokemonid: parsedPokemonid } =
+                this.player.publicBattle.parsePokemonId(pokemonid);
+            const side = this.player.publicBattle.sides[siden];
+            for (const [index, pokemon] of side.team.entries()) {
+                if (pokemon.originalIdent === parsedPokemonid) {
+                    return { pokemon, index };
+                }
+            }
+        } else {
+            const { siden, pokemonid: parsedPokemonid } =
+                this.player.privateBattle.parsePokemonId(pokemonid);
+            const side = this.player.privateBattle.sides[siden];
+            for (const [index, pokemon] of side.team.entries()) {
+                if (pokemon.originalIdent === parsedPokemonid) {
+                    return { pokemon, index };
+                }
             }
         }
 
-        return null;
+        return { pokemon: null, index: -1 };
     }
 
     getMove(ident?: string) {
@@ -1334,8 +1360,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident as PokemonIdent)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident as PokemonIdent);
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const move = this.getMove(moveId);
 
@@ -1371,8 +1397,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const edge = new Edge(this.player);
         edge.addMajorArg(argName, isMe);
@@ -1403,8 +1429,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         if (moveId) {
             const move = this.getMove(moveId);
@@ -1440,8 +1466,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         edge.addMajorArg(argName, isMe);
         this.addEdge(edge);
@@ -1455,8 +1481,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1472,8 +1498,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1490,8 +1516,8 @@ export class EventHandler implements Protocol.Handler {
         }
 
         if (poke1Ident !== undefined) {
-            const poke = this.getPokemon(poke1Ident)!;
-            const isMe = isMySide(poke.side.n, playerIndex);
+            const { pokemon } = this.getPokemon(poke1Ident)!;
+            const isMe = isMySide(pokemon!.side.n, playerIndex);
             this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         } else {
             for (const isMe of [0, 1]) {
@@ -1508,8 +1534,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident ?? poke2Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident ?? poke2Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1525,9 +1551,9 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
-        const trueIdent = poke.originalIdent;
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
+        const trueIdent = pokemon!.originalIdent;
 
         if (kwArgs.from) {
             const fromEffect = this.getCondition(kwArgs.from);
@@ -1538,7 +1564,7 @@ export class EventHandler implements Protocol.Handler {
             this.prevHp.set(trueIdent, 1);
         }
         const prevHp = this.prevHp.get(trueIdent) ?? 1;
-        const currHp = poke.hp / poke.maxhp;
+        const currHp = pokemon!.hp / pokemon!.maxhp;
         const diffRatio = currHp - prevHp;
         this.prevHp.set(trueIdent, currHp);
         const addedDamageToken = Math.abs(
@@ -1570,9 +1596,9 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
-        const trueIdent = poke.originalIdent;
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
+        const trueIdent = pokemon!.originalIdent;
 
         if (kwArgs.from) {
             const fromEffect = this.getCondition(kwArgs.from);
@@ -1583,7 +1609,7 @@ export class EventHandler implements Protocol.Handler {
             this.prevHp.set(trueIdent, 1);
         }
         const prevHp = this.prevHp.get(trueIdent) ?? 1;
-        const currHp = poke.hp / poke.maxhp;
+        const currHp = pokemon!.hp / pokemon!.maxhp;
         const diffRatio = currHp - prevHp;
         this.prevHp.set(trueIdent, currHp);
         const addedHealToken = Math.abs(
@@ -1611,8 +1637,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
         const statusToken = IndexValueFromEnum(StatusEnum, statusId);
@@ -1635,8 +1661,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const statusToken = IndexValueFromEnum(StatusEnum, statusId);
 
@@ -1657,8 +1683,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1679,8 +1705,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.setLatestRelativeEdgeFeature({
@@ -1700,8 +1726,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.setLatestRelativeEdgeFeature({
@@ -1722,8 +1748,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.setLatestRelativeEdgeFeature({
@@ -1742,8 +1768,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1762,8 +1788,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1782,8 +1808,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1802,8 +1828,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -1886,8 +1912,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1900,8 +1926,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1914,8 +1940,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1928,8 +1954,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1942,8 +1968,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -1958,8 +1984,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
@@ -1973,8 +1999,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident as PokemonIdent)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident as PokemonIdent)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const itemIndex = IndexValueFromEnum(ItemsEnum, itemId);
         const fromEffect = this.getCondition(kwArgs.from);
@@ -1996,8 +2022,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const itemIndex = IndexValueFromEnum(ItemsEnum, itemId);
         const fromEffect = this.getCondition(kwArgs.from);
@@ -2019,8 +2045,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const abilityIndex = IndexValueFromEnum(AbilitiesEnum, abilityId);
 
@@ -2049,8 +2075,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         const fromEffect = this.getCondition(kwArgs.from);
 
@@ -2081,8 +2107,8 @@ export class EventHandler implements Protocol.Handler {
                 throw new Error();
             }
 
-            const poke = this.getPokemon(poke1Ident)!;
-            const isMe = isMySide(poke.side.n, playerIndex);
+            const { pokemon } = this.getPokemon(poke1Ident)!;
+            const isMe = isMySide(pokemon!.side.n, playerIndex);
 
             this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
             this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
@@ -2097,8 +2123,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -2111,8 +2137,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -2125,8 +2151,8 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const poke = this.getPokemon(poke1Ident)!;
-        const isMe = isMySide(poke.side.n, playerIndex);
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
@@ -2285,6 +2311,21 @@ export class StateHandler {
             actionBuffer[bufferOffset + index] = value;
         };
 
+        const switchIndices = switches.map((poke) => {
+            const { index } = this.player.eventHandler.getPokemon(
+                poke.ident,
+                false,
+            );
+            return index;
+        });
+        let activeIndex = 0;
+        for (const [index, poke] of switches.entries()) {
+            if (poke.active) {
+                activeIndex = switchIndices[index];
+                break;
+            }
+        }
+
         const pushMoveAction = (
             action:
                 | { name: "Recharge"; id: "recharge" }
@@ -2337,7 +2378,10 @@ export class StateHandler {
                 MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
                 MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
             );
-            assignActionBuffer(MovesetFeature.MOVESET_FEATURE__ENTITY_IDX, 0);
+            assignActionBuffer(
+                MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+                activeIndex,
+            );
         };
 
         const pushSwitchAction = (action: Protocol.Request.Pokemon) => {
@@ -2379,7 +2423,18 @@ export class StateHandler {
             bufferOffset += numMoveFields;
         }
         bufferOffset += (4 - activeMoves.length) * numMoveFields;
-        for (const [entityIndex, action] of switches.entries()) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for (const [_, action] of switches.entries()) {
+            const { index: entityIndex } = this.player.eventHandler.getPokemon(
+                action.ident,
+                false,
+            );
+            // This was to check a test
+            // if (actionIndex !== entityIndex) {
+            //     throw new Error(
+            //         `Switch action index ${actionIndex} does not match entity index ${entityIndex} for ${action.ident}`,
+            //     );
+            // }
             pushSwitchAction(action);
             assignActionBuffer(
                 MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
@@ -2727,7 +2782,8 @@ export class StateHandler {
 
     static toReadableTeam(buffer: Int16Array) {
         const entityDatums = [];
-        for (let entityIndex = 0; entityIndex < 12; entityIndex++) {
+        const numEntites = buffer.length / numPokemonFeatures;
+        for (let entityIndex = 0; entityIndex < numEntites; entityIndex++) {
             const start = entityIndex * numPokemonFeatures;
             const end = (entityIndex + 1) * numPokemonFeatures;
             entityDatums.push(entityArrayToObject(buffer.slice(start, end)));
@@ -2745,24 +2801,24 @@ export class StateHandler {
             throw new Error("Need Request");
         }
 
-        if (request !== undefined) {
-            const side = request.side;
-            if (side !== undefined) {
-                const mySide =
-                    this.player.privateBattle.sides[
-                        this.player.getPlayerIndex()!
-                    ];
-                for (const [index, pokemon] of side.pokemon.entries()) {
-                    const sidePokemon = mySide.team[index];
-                    if (
-                        pokemon.speciesForme.toLowerCase() !==
-                        sidePokemon.baseSpecies.toString().toLowerCase()
-                    ) {
-                        throw new Error("Pokemon name mismatch");
-                    }
-                }
-            }
-        }
+        // if (request !== undefined) {
+        //     const side = request.side;
+        //     if (side !== undefined) {
+        //         const mySide =
+        //             this.player.privateBattle.sides[
+        //                 this.player.getPlayerIndex()!
+        //             ];
+        //         for (const [index, pokemon] of side.pokemon.entries()) {
+        //             const sidePokemon = mySide.team[index];
+        //             if (
+        //                 pokemon.speciesForme.toLowerCase() !==
+        //                 sidePokemon.baseSpecies.toString().toLowerCase()
+        //             ) {
+        //                 throw new Error("Pokemon name mismatch");
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     getState(numHistory: number = NUM_HISTORY): State {
@@ -2791,12 +2847,6 @@ export class StateHandler {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
-
-        // const allMyMoves = this.getAllMyMoves();
-        // const allOppMoves = this.getAllOppMoves();
-
-        // state.setAllMyMoves(new Uint8Array(allMyMoves.buffer));
-        // state.setAllOppMoves(new Uint8Array(allOppMoves.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars

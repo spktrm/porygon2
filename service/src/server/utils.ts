@@ -107,6 +107,15 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         this.sum = 0;
     }
 
+    setBuffer(buffer: T): void {
+        if (buffer.length < this.data.length) {
+            throw new Error(
+                `Buffer length ${buffer.length} is less than required length ${this.data.length}`,
+            );
+        }
+        this.data.set(buffer.subarray(0, this.data.length));
+    }
+
     private getElementAndBit(index: number): [number, number] {
         const element = (index / this.bitsPerElement) | 0;
         const bit = this.bitsPerElement - 1 - (index & this.mask); // Big-endian adjustment
