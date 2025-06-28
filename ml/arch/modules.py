@@ -1,4 +1,3 @@
-import math
 from typing import List, Literal, Optional, Sequence, Tuple, get_args
 
 import chex
@@ -9,6 +8,21 @@ import numpy as np
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
+
+
+class RMSNorm(nn.Module):
+    """RMSNorm layer."""
+
+    @nn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],))
+        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
+        # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
+        # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
+        # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
+        normed_inputs = normed_inputs * (1 + scale)
+        return normed_inputs
 
 
 def activation_fn(array: chex.Array) -> chex.Array:
@@ -34,7 +48,7 @@ def layer_norm(array: chex.Array) -> chex.Array:
     Returns:
         chex.Array: Normalized array.
     """
-    return nn.RMSNorm()(array)
+    return RMSNorm()(array)
 
 
 def softcap(array: chex.Array, max_value: int = 50) -> chex.Array:
@@ -151,41 +165,6 @@ def apply_rope(x: chex.Array, max_wavelength: int = 10_000) -> chex.Array:
     return out.astype(x.dtype)
 
 
-def l2_normalize(x: chex.Array, epsilon: float = 1e-6) -> chex.Array:
-    """
-    Apply L2 normalization.
-
-    Args:
-        x (chex.Array): Input array.
-        epsilon (float, optional): Small value to avoid division by zero. Defaults to 1e-6.
-
-    Returns:
-        chex.Array: Normalized array.
-    """
-    return x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + epsilon)
-
-
-def escort_transform(
-    x: chex.Array, mask: chex.Array, p: int = 2, axis: int = -1, eps: float = 1e-8
-) -> chex.Array:
-    """
-    Apply escort transformation.
-
-    Args:
-        x (chex.Array): Input array.
-        mask (chex.Array): Mask array.
-        p (int, optional): Power value. Defaults to 2.
-        axis (int, optional): Axis value. Defaults to -1.
-        eps (float, optional): Small value to avoid division by zero. Defaults to 1e-8.
-
-    Returns:
-        chex.Array: Transformed array.
-    """
-    abs_x = jnp.power(jnp.abs(x), p)
-    denom = abs_x.sum(axis=axis, where=mask, keepdims=True)
-    return abs_x / (denom + eps)
-
-
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
 
@@ -240,13 +219,15 @@ class MultiHeadAttention(nn.Module):
         value_size = self.value_size or self.key_size
         model_size = self.model_size or self.key_size * self.num_heads
 
+        dense_kwargs = dict(kernel_init=nn.initializers.normal(), use_bias=False)
+
         def _linear_projection(
             x: chex.Array,
             head_size: int,
             use_layer_norm: bool = False,
             need_pos: bool = False,
         ) -> chex.Array:
-            y = nn.Dense(self.num_heads * head_size)(x)
+            y = nn.Dense(self.num_heads * head_size, **dense_kwargs)(x)
             *leading_dims, _ = x.shape
             y = y.reshape((*leading_dims, self.num_heads, head_size))
             if use_layer_norm:
@@ -286,7 +267,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(model_size)
+        final_projection = nn.Dense(model_size, **dense_kwargs)
         return final_projection(attn)  # [T', D']
 
 
@@ -319,13 +300,15 @@ class FeedForward(nn.Module):
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        ff_gate = nn.Dense(self.hidden_dim, use_bias=False)(x)
+        dense_kwargs = dict(kernel_init=nn.initializers.normal(), use_bias=False)
+
+        ff_gate = nn.Dense(self.hidden_dim, **dense_kwargs)(x)
         gate_value = nn.gelu(ff_gate)
 
-        ff1 = nn.Dense(self.hidden_dim, use_bias=False)(x)
+        ff1 = nn.Dense(self.hidden_dim, **dense_kwargs)(x)
         activations = gate_value * ff1
 
-        outputs = nn.Dense(x.shape[-1], use_bias=False)(activations)
+        outputs = nn.Dense(x.shape[-1], **dense_kwargs)(activations)
         return outputs
 
 
@@ -341,6 +324,8 @@ class TransformerEncoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
+    use_post_attn_norm: bool = True
+    use_post_ffw_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -370,7 +355,7 @@ class TransformerEncoder(nn.Module):
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
-                x_ln = layer_norm(x)
+                x_ln = jax.vmap(layer_norm)(x)
             else:
                 x_ln = x
             mha = MultiHeadAttention(
@@ -381,12 +366,16 @@ class TransformerEncoder(nn.Module):
                 qk_layer_norm=self.qk_layer_norm,
                 need_pos=self.need_pos,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
+            if self.use_post_attn_norm:
+                mha = jax.vmap(layer_norm)(mha)
             x = x + mha
             if self.use_layer_norm:
-                x_ln = layer_norm(x)
+                x_ln = jax.vmap(layer_norm)(x)
             else:
                 x_ln = x
             ffn = jax.vmap(FeedForward(self.resblocks_hidden_size))(x_ln)
+            if self.use_post_ffw_norm:
+                ffn = jax.vmap(layer_norm)(ffn)
             x = x + ffn
             x = jnp.where(positionwise_mask, x, 0)
 
@@ -405,6 +394,8 @@ class TransformerDecoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
+    use_post_attn_norm: bool = True
+    use_post_ffw_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -440,13 +431,13 @@ class TransformerDecoder(nn.Module):
         positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         if self.use_layer_norm:
-            y_ln = layer_norm(y)
+            y_ln = jax.vmap(layer_norm)(y)
         else:
             y_ln = y
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
-                x_ln = layer_norm(x)
+                x_ln = jax.vmap(layer_norm)(x)
             else:
                 x_ln = x
             ca = MultiHeadAttention(
@@ -457,12 +448,16 @@ class TransformerDecoder(nn.Module):
                 qk_layer_norm=self.qk_layer_norm,
                 need_pos=self.need_pos,
             )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
+            if self.use_post_attn_norm:
+                ca = jax.vmap(layer_norm)(ca)
             x = x + ca
             if self.use_layer_norm:
-                x_ln = layer_norm(x)
+                x_ln = jax.vmap(layer_norm)(x)
             else:
                 x_ln = x
             ffn = jax.vmap(FeedForward(self.resblocks_hidden_size))(x_ln)
+            if self.use_post_ffw_norm:
+                ffn = jax.vmap(layer_norm)(ffn)
             x = x + ffn
             x = jnp.where(positionwise_mask, x, 0)
 
@@ -565,67 +560,11 @@ class BinaryEncoder:
         return jnp.take(self.encodings, indices, axis=0)
 
 
-class SwiGLU(nn.Module):
-    hidden_size: int = None
-
-    @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
-        """
-        Apply SwiGLU activation.
-
-        Args:
-            x (chex.Array): Input array.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        feature_dim = x.shape[-1]
-        hidden_size = self.hidden_size or feature_dim
-
-        w1 = nn.Dense(hidden_size, use_bias=False)
-        w2 = nn.Dense(hidden_size, use_bias=False)
-        w3 = nn.Dense(feature_dim, use_bias=False)
-
-        x1 = w1(x)
-        x2 = w2(x)
-        h = nn.silu(x1) * x2
-
-        return w3(h)
-
-
-class GLU(nn.Module):
-    hidden_size: int = None
-
-    @nn.compact
-    def __call__(self, a: chex.Array, b: chex.Array) -> chex.Array:
-        """
-        Apply GLU activation.
-
-        Args:
-            a (chex.Array): Input array a.
-            b (chex.Array): Input array b.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        feature_dim = a.shape[-1]
-        hidden_size = self.hidden_size or feature_dim
-
-        w1 = nn.Dense(hidden_size, use_bias=False)
-        w2 = nn.Dense(hidden_size, use_bias=False)
-        w3 = nn.Dense(feature_dim, use_bias=False)
-
-        a = w1(a)
-        b = w2(b)
-        h = nn.silu(a) * b
-
-        return w3(h)
-
-
 class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int = None
     use_layer_norm: bool = True
+    use_post_ffw_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -645,12 +584,16 @@ class SumEmbeddings(nn.Module):
         """
         module_embeddings = []
         if encodings is not None:
-            for _, encoding in enumerate(encodings):
-                transformed = nn.Dense(self.output_size, use_bias=False)(encoding)
+            for encoding in encodings:
+                transformed = nn.Dense(
+                    self.output_size,
+                    kernel_init=nn.initializers.normal(),
+                    use_bias=False,
+                )(encoding)
                 module_embeddings.append(transformed)
 
         if embeddings is not None:
-            for _, embedding in enumerate(embeddings):
+            for embedding in embeddings:
                 module_embeddings.append(embedding)
 
         num_module_embeddings = len(module_embeddings)
@@ -660,8 +603,7 @@ class SumEmbeddings(nn.Module):
         bias = self.param("bias", nn.initializers.zeros, (self.output_size,))
 
         # divide by the number of embeddings to normalize
-        scale_factor = 1 / math.sqrt(num_module_embeddings)
-        x = sum(module_embeddings) * scale_factor + bias
+        x = sum(module_embeddings) + bias
 
         if self.use_layer_norm:
             x_ln = layer_norm(x)
@@ -669,7 +611,9 @@ class SumEmbeddings(nn.Module):
             x_ln = x
 
         ffn = FeedForward(self.hidden_size or self.output_size)(x_ln)
-        return x + ffn
+        if self.use_post_ffw_norm:
+            ffn = layer_norm(ffn)
+        return x_ln + ffn
 
 
 class MergeEmbeddings(nn.Module):

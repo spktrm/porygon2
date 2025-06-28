@@ -3,7 +3,7 @@ import flax.linen as nn
 import jax
 from ml_collections import ConfigDict
 
-from ml.arch.modules import Logits, TransformerDecoder
+from ml.arch.modules import RMSNorm, TransformerDecoder
 from ml.func import legal_log_policy, legal_policy
 
 
@@ -12,7 +12,10 @@ class PolicyHead(nn.Module):
 
     def setup(self):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.logits = Logits(**self.cfg.logits.to_dict())
+        self.final_norm = RMSNorm()
+        self.final_layer = nn.Dense(
+            features=1, use_bias=False, kernel_init=nn.initializers.normal()
+        )
 
     def __call__(
         self,
@@ -24,7 +27,9 @@ class PolicyHead(nn.Module):
             action_embeddings, latent_embeddings, action_mask, None
         )
 
-        logits = jax.vmap(self.logits)(action_embeddings)
+        logits = jax.vmap(lambda x: self.final_layer(self.final_norm(x)))(
+            action_embeddings
+        )
         logits = logits.reshape(-1)
         logits = logits - logits.mean(where=action_mask)
 
@@ -39,12 +44,16 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.logits = Logits(**self.cfg.logits.to_dict())
+        self.final_norm = RMSNorm()
+        self.final_layer = nn.Dense(
+            features=1, use_bias=False, kernel_init=nn.initializers.normal()
+        )
 
     def __call__(self, latent_embeddings: chex.Array):
         query = latent_embeddings.mean(axis=0, keepdims=True)
 
         pooled = self.decoder(query, latent_embeddings)
-        value = self.logits(pooled)
+        pooled = self.final_norm(pooled)
+        value = self.final_layer(pooled)
 
         return value.reshape(-1)
