@@ -7,7 +7,6 @@ import numpy as np
 
 from inference.interfaces import PredictionResponse
 from ml.arch.model import get_model
-from ml.config import FineTuning
 from ml.utils import get_most_recent_file
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
@@ -21,7 +20,6 @@ class InferenceModel:
         self.np_rng = np.random.RandomState(seed)
 
         self.network = get_model()
-        self.finetuning = FineTuning()
 
         if not fpath:
             fpath = get_most_recent_file("./ckpts")
@@ -41,14 +39,13 @@ class InferenceModel:
 
     def predict(self, env_step: EnvStep, history_step: HistoryStep):
         output: ModelOutput = self._network_jit_apply(env_step, history_step)
-        finetuned_pi = self.finetuning._threshold(output.pi, env_step.legal)
         action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(finetuned_pi.shape[-1]), p=x),
+            lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
             axis=-1,
-            arr=finetuned_pi,
+            arr=output.pi,
         )
         return PredictionResponse(
-            pi=finetuned_pi.flatten().tolist(),
+            pi=output.pi.flatten().tolist(),
             log_pi=output.log_pi.flatten().tolist(),
             logit=output.logit.flatten().tolist(),
             v=output.v.item(),

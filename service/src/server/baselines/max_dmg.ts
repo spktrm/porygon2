@@ -48,63 +48,72 @@ export const GetMoveDamange: (args: {
 
     const Calc = (isCrit: boolean) => {
         const generation = Generations.get(battle.gen.num);
-        const result = calculateADV(
-            generation,
-            new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
-                item: attacker.item,
-                ability: attacker.ability,
-                abilityOn: true,
-                nature: attacker.nature ?? "Hardy",
-                ivs: attacker.ivs,
-                level: attacker.level,
-                evs: attacker.evs ?? {
-                    hp: 84,
-                    atk: 84,
-                    def: 84,
-                    spa: 84,
-                    spd: 84,
-                    spe: 84,
-                },
-                boosts: attacker.boosts,
-            }),
-            new SmogonPoke(generation, defender.baseSpecies.baseSpecies, {
-                item: defender.item,
-                ability: defenderAbility,
-                abilityOn: true,
-                nature: defender.nature ?? "Hardy",
-                ivs: attacker.ivs,
-                level: defender.level,
-                evs: defender.evs ?? {
-                    hp: 84,
-                    atk: 84,
-                    def: 84,
-                    spa: 84,
-                    spd: 84,
-                    spe: 84,
-                },
-                boosts: defender.boosts,
-            }),
-            new Move(generation, moveId, {
-                species: attacker.baseSpecies.baseSpecies,
-                item: attacker.item,
-                ability: attacker.ability,
-                isCrit,
-            }),
-            new Field({
-                weather: battle.field.weather,
-                terrain: battle.field.terrain,
-                attackerSide: new Side({
-                    isReflect:
-                        attacker.side.sideConditions?.reflect?.level !==
-                        undefined,
+        let result: Result;
+        try {
+            result = calculateADV(
+                generation,
+                new SmogonPoke(generation, attacker.baseSpecies.baseSpecies, {
+                    item: attacker.item,
+                    ability: attacker.ability,
+                    abilityOn: true,
+                    nature: attacker.nature ?? "Hardy",
+                    ivs: attacker.ivs,
+                    level: attacker.level,
+                    evs: attacker.evs ?? {
+                        hp: 84,
+                        atk: 84,
+                        def: 84,
+                        spa: 84,
+                        spd: 84,
+                        spe: 84,
+                    },
+                    boosts: attacker.boosts,
                 }),
-                defenderSide: new Side({
-                    isReflect:
-                        attacker.side.sideConditions?.reflect?.level !==
-                        undefined,
+                new SmogonPoke(generation, defender.baseSpecies.baseSpecies, {
+                    item: defender.item,
+                    ability: defenderAbility,
+                    abilityOn: true,
+                    nature: defender.nature ?? "Hardy",
+                    ivs: attacker.ivs,
+                    level: defender.level,
+                    evs: defender.evs ?? {
+                        hp: 84,
+                        atk: 84,
+                        def: 84,
+                        spa: 84,
+                        spd: 84,
+                        spe: 84,
+                    },
+                    boosts: defender.boosts,
                 }),
-            }),
-        ) as Result;
+                new Move(generation, moveId, {
+                    species: attacker.baseSpecies.baseSpecies,
+                    item: attacker.item,
+                    ability: attacker.ability,
+                    isCrit,
+                }),
+                new Field({
+                    weather: battle.field.weather,
+                    terrain: battle.field.terrain,
+                    attackerSide: new Side({
+                        isReflect:
+                            attacker.side.sideConditions?.reflect?.level !==
+                            undefined,
+                    }),
+                    defenderSide: new Side({
+                        isReflect:
+                            attacker.side.sideConditions?.reflect?.level !==
+                            undefined,
+                    }),
+                }),
+            ) as Result;
+        } catch (err) {
+            console.log(
+                `Error calculating damage for move ${moveId} in gen ${battle.gen.num}`,
+                err,
+            );
+            return 0;
+        }
         const damage = result.damage as number[];
         if (typeof damage === "object") {
             return (

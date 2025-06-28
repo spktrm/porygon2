@@ -28,17 +28,22 @@ def main():
         key = jax.random.key(42)
         params = network.init(key, ex, hx)
 
-    # @jax.jit
+    @jax.jit
     def call_network(ex, hx):
         return network.apply(params, ex, hx)
 
-    for _ in range(5):
-        output = call_network(ex, hx)
+    compiled = call_network.lower(ex, hx).compile()
+    flops = compiled.cost_analysis()[0]["flops"]
 
-    with jax.profiler.trace("/tmp/tensorboard"):
-        # Run the operations to be profiled
-        output = call_network(ex, hx)
-        block_all(output)
+    print(flops)
+
+    # for _ in range(5):
+    #     output = call_network(ex, hx)
+
+    # with jax.profiler.trace("/tmp/tensorboard"):
+    #     # Run the operations to be profiled
+    #     output = call_network(ex, hx)
+    #     block_all(output)
 
 
 if __name__ == "__main__":

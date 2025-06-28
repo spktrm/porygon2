@@ -12,13 +12,14 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.utils import Params
-from rlenv.env import get_ex_step
+from ml.utils import Params, get_most_recent_file
+from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
 
 
 class Model(nn.Module):
     cfg: ConfigDict
+    training: bool = True
 
     def setup(self):
         """
@@ -28,34 +29,52 @@ class Model(nn.Module):
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
-    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
+    def _shared_forward(self, env_step: EnvStep, history_step: HistoryStep):
         """
-        Forward pass for the Model. It first processes the env_step through the encoder,
-        and then applies the policy and value heads to generate the output.
+        Shared forward pass for encoder and policy head.
         """
-
         # Get current state and action embeddings from the encoder
-        entity_embeddings, entity_mask, action_embeddings = self.encoder(
-            env_step, history_step
-        )
+        latent_embeddings, action_embeddings = self.encoder(env_step, history_step)
 
         # Apply action argument heads
         logit, pi, log_pi = jax.vmap(self.policy_head)(
-            action_embeddings, env_step.legal
+            latent_embeddings, action_embeddings, env_step.legal
+        )
+        return logit, pi, log_pi, latent_embeddings, action_embeddings
+
+    def train_step(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
+        """
+        Forward pass for training. Computes policy and value.
+        """
+        logit, pi, log_pi, latent_embeddings, _ = self._shared_forward(
+            env_step, history_step
         )
 
         # Apply the value head
-        value = jax.vmap(self.value_head)(
-            entity_embeddings, entity_mask, action_embeddings, env_step.legal
-        )
+        value = jax.vmap(self.value_head)(latent_embeddings)
+        value = jnp.tanh(value)
 
         # Return the model output
-        return ModelOutput(
-            logit=logit,
-            pi=pi,
-            log_pi=log_pi,
-            v=value,
-        )
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
+
+    def predict_step(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
+        """
+        Forward pass for inference. Computes policy only. Value is None.
+        """
+        logit, pi, log_pi, _ = self._shared_forward(env_step, history_step)
+
+        # Return the model output, value is not computed
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=None)
+
+    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
+        """
+        Default forward pass.
+        Calls train_step if training is True, otherwise calls predict_step.
+        """
+        if self.training:
+            return self.train_step(env_step, history_step)
+        else:
+            return self.predict_step(env_step, history_step)
 
 
 class DummyModel(nn.Module):
@@ -106,10 +125,10 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     return build_param_dict(vars, total_params, 0)
 
 
-def get_model(config: ConfigDict = None) -> nn.Module:
+def get_model(config: ConfigDict = None, training: bool = True) -> nn.Module:
     if config is None:
         config = get_model_cfg()
-    return Model(config)
+    return Model(config, training)
 
 
 def get_dummy_model() -> nn.Module:
@@ -127,10 +146,13 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 
 def main():
-    network = get_model()
+    network = get_model(training=True)
     ex, hx = get_ex_step()
+    hx = jax.tree.map(lambda x: x[:, None], hx)
+    hx = clip_history(hx, resolution=8)
+    hx = jax.tree.map(lambda x: x[:, 0], hx)
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

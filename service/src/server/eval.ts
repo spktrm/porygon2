@@ -29,5 +29,17 @@ export function getEvalAction(player: Player): Action {
     if (player.playerId) {
         console.error("Evaluation playerId should be undefined");
     }
-    return evalActionMapping[player.gameId - EVAL_GAME_ID_OFFSET]({ player });
+    try {
+        return evalActionMapping[player.gameId - EVAL_GAME_ID_OFFSET]({
+            player,
+        });
+    } catch (err) {
+        console.error(
+            `Error getting eval action for gameId ${player.gameId}`,
+            err,
+        );
+        const action = new Action();
+        action.setValue(-1);
+        return action;
+    }
 }
