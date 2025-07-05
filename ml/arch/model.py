@@ -12,6 +12,7 @@ from ml_collections import ConfigDict
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
+from ml.func import legal_log_policy, legal_policy
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
@@ -61,7 +62,7 @@ class Model(nn.Module):
         """
         Forward pass for inference. Computes policy only. Value is None.
         """
-        logit, pi, log_pi, _ = self._shared_forward(env_step, history_step)
+        logit, pi, log_pi, *_ = self._shared_forward(env_step, history_step)
 
         # Return the model output, value is not computed
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=None)
@@ -81,10 +82,16 @@ class DummyModel(nn.Module):
 
     @nn.compact
     def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
-        mask = env_step.legal.astype(jnp.float32)
-        v = nn.Dense(1)(mask)
-        logit = log_pi = pi = mask / mask.sum()
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
+
+        def _forward(env_step: EnvStep) -> ModelOutput:
+            mask = env_step.legal.astype(jnp.float32)
+            v = jnp.tanh(nn.Dense(1)(mask))
+            logit = nn.Dense(mask.shape[-1])(mask)
+            pi = legal_policy(logit, env_step.legal)
+            log_pi = legal_log_policy(logit, env_step.legal)
+            return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
+
+        return jax.vmap(_forward)(env_step)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -149,7 +156,7 @@ def main():
     network = get_model(training=True)
     ex, hx = get_ex_step()
     hx = jax.tree.map(lambda x: x[:, None], hx)
-    hx = clip_history(hx, resolution=8)
+    hx = clip_history(hx, resolution=64)
     hx = jax.tree.map(lambda x: x[:, 0], hx)
 
     latest_ckpt = get_most_recent_file("./ckpts")

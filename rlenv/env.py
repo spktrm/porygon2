@@ -55,6 +55,20 @@ def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
+def clip_env_action(history: HistoryStep, resolution: int = 64) -> HistoryStep:
+    history_length = np.max(
+        history.major_history.absolute_edges[
+            ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+        ].sum(0),
+        axis=0,
+    ).item()
+
+    # Round history length up to the nearest multiple of resolution
+    rounded_length = int(np.ceil(history_length / resolution) * resolution)
+
+    return jax.tree.map(lambda x: x[:rounded_length], history)
+
+
 def get_legal_mask(state: State):
     buffer = np.frombuffer(state.legal_actions, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)

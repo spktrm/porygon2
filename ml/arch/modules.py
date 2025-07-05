@@ -6,8 +6,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-np.set_printoptions(precision=2, suppress=True)
-jnp.set_printoptions(precision=2, suppress=True)
+np.set_printoptions(precision=3, suppress=True)
+jnp.set_printoptions(precision=3, suppress=True)
 
 
 class RMSNorm(nn.Module):
@@ -15,12 +15,17 @@ class RMSNorm(nn.Module):
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],))
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
+
+        # Jax.lax.rsqrt is used because it returns different floats than
+        # jnp.reciprocal(jnp.sqrt(var + 1e-06))
+        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         normed_inputs = normed_inputs * (1 + scale)
         return normed_inputs
 
@@ -219,15 +224,13 @@ class MultiHeadAttention(nn.Module):
         value_size = self.value_size or self.key_size
         model_size = self.model_size or self.key_size * self.num_heads
 
-        dense_kwargs = dict(kernel_init=nn.initializers.normal(), use_bias=False)
-
         def _linear_projection(
             x: chex.Array,
             head_size: int,
             use_layer_norm: bool = False,
             need_pos: bool = False,
         ) -> chex.Array:
-            y = nn.Dense(self.num_heads * head_size, **dense_kwargs)(x)
+            y = nn.Dense(self.num_heads * head_size, use_bias=False)(x)
             *leading_dims, _ = x.shape
             y = y.reshape((*leading_dims, self.num_heads, head_size))
             if use_layer_norm:
@@ -267,7 +270,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(model_size, **dense_kwargs)
+        final_projection = nn.Dense(model_size, use_bias=False)
         return final_projection(attn)  # [T', D']
 
 
@@ -300,16 +303,27 @@ class FeedForward(nn.Module):
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        dense_kwargs = dict(kernel_init=nn.initializers.normal(), use_bias=False)
-
-        ff_gate = nn.Dense(self.hidden_dim, **dense_kwargs)(x)
+        ff_gate = nn.Dense(self.hidden_dim, use_bias=False)(x)
         gate_value = nn.gelu(ff_gate)
 
-        ff1 = nn.Dense(self.hidden_dim, **dense_kwargs)(x)
+        ff1 = nn.Dense(self.hidden_dim, use_bias=False)(x)
         activations = gate_value * ff1
 
-        outputs = nn.Dense(x.shape[-1], **dense_kwargs)(activations)
+        outputs = nn.Dense(x.shape[-1], use_bias=False)(activations)
         return outputs
+
+
+class FeedForwardResidual(nn.Module):
+
+    hidden_dim: int
+    post_ffw_norm: bool = True
+
+    @nn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        ffw = FeedForward(self.hidden_dim)(layer_norm(x))
+        if self.post_ffw_norm:
+            ffw = layer_norm(ffw)
+        return x + ffw
 
 
 class TransformerEncoder(nn.Module):
@@ -562,16 +576,18 @@ class BinaryEncoder:
 
 class SumEmbeddings(nn.Module):
     output_size: int
-    hidden_size: int = None
-    use_layer_norm: bool = True
-    use_post_ffw_norm: bool = True
 
     @nn.compact
-    def __call__(
-        self,
-        encodings: Optional[List[chex.Array]] = None,
-        embeddings: Optional[List[chex.Array]] = None,
-    ) -> chex.Array:
+    def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
+        """Sum embeddings."""
+        return sum([nn.Dense(self.output_size)(embedding) for embedding in embeddings])
+
+
+class MergeEmbeddings(nn.Module):
+    output_size: int
+
+    @nn.compact
+    def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
         """
         Sum embeddings.
 
@@ -582,50 +598,33 @@ class SumEmbeddings(nn.Module):
         Returns:
             chex.Array: Summed embeddings array.
         """
-        module_embeddings = []
-        if encodings is not None:
-            for encoding in encodings:
-                transformed = nn.Dense(
-                    self.output_size,
-                    kernel_init=nn.initializers.normal(),
-                    use_bias=False,
-                )(encoding)
-                module_embeddings.append(transformed)
-
-        if embeddings is not None:
-            for embedding in embeddings:
-                module_embeddings.append(embedding)
-
-        num_module_embeddings = len(module_embeddings)
+        num_module_embeddings = len(embeddings)
         if num_module_embeddings == 0:
             raise ValueError("No embeddings or encodings provided")
 
-        bias = self.param("bias", nn.initializers.zeros, (self.output_size,))
+        outputs = []
+        gates = []
 
-        # divide by the number of embeddings to normalize
-        x = sum(module_embeddings) + bias
+        def _gate_layer_fn():
+            return nn.Dense(
+                num_module_embeddings, kernel_init=nn.initializers.normal(5e-3)
+            )
 
-        if self.use_layer_norm:
-            x_ln = layer_norm(x)
-        else:
-            x_ln = x
+        def _output_layer_fn():
+            return nn.Dense(self.output_size)
 
-        ffn = FeedForward(self.hidden_size or self.output_size)(x_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        return x_ln + ffn
+        for embedding in embeddings:
+            feature = layer_norm(embedding)
+            feature = activation_fn(feature)
+            gates.append(_gate_layer_fn()(feature))
+            outputs.append(_output_layer_fn()(feature))
 
+        stacked_outputs = jnp.stack(outputs, axis=0)
+        gate = sum(gates)
+        weights = nn.softmax(gate.reshape(-1), axis=-1)
 
-class MergeEmbeddings(nn.Module):
-    output_size: int
-    hidden_size: int = None
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, embeddings: List[chex.Array]) -> chex.Array:
-        return SumEmbeddings(self.output_size, self.hidden_size, self.use_layer_norm)(
-            encodings=[activation_fn(layer_norm(emb)) for emb in embeddings],
-        )
+        scale = jax.lax.rsqrt((weights**2).sum())
+        return (weights @ stacked_outputs).reshape(-1) * scale
 
 
 def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> chex.Array:

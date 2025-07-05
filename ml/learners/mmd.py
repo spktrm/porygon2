@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 import wandb
 from ml.arch.config import get_model_cfg
-from ml.arch.model import get_model, get_num_params
+from ml.arch.model import get_dummy_model, get_model, get_num_params
 from ml.config import AdamConfig
 from ml.learners.func import (
     collect_batch_telemetry_data,
@@ -69,7 +69,6 @@ def get_config():
 
 
 class TrainState(train_state.TrainState):
-
     actor_steps: int = 0
 
 
@@ -192,7 +191,7 @@ def compute_returns(state: TrainState, batch: TimeStep, config: MMDConfig):
     valid = batch.env.valid
 
     rewards = jnp.take_along_axis(
-        batch.actor.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
+        batch.env.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
     ).squeeze()
 
     value_pred = jnp.squeeze(pred.v, axis=-1)
@@ -359,7 +358,8 @@ def main():
     pprint(learner_config)
 
     training_network = get_model(model_config)
-    inference_network = get_model(model_config)
+    inference_network = get_model(model_config, training=False)
+    # training_network = inference_network = get_dummy_model()
 
     training_collector = DoubleTrajectoryTrainingBatchCollector(
         inference_network, learner_config.num_actors

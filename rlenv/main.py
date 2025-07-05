@@ -232,6 +232,8 @@ class BatchSinglePlayerEnvironment(BatchEnvironment):
 
         self.envs: List[SinglePlayerEnvironment] = []
         self.player_id_count = 0
+        self.is_eval = is_eval
+
         if is_eval:
             for game_id in range(num_envs):
                 env = self.loop.run_until_complete(
@@ -376,6 +378,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
         self.episode_lengths = []
         self.batch_length = 0
+        self.lock = asyncio.Lock()
         self.sync_point = asyncio.Barrier(batch_size * 2)
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -434,36 +437,32 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                     action=actor_step.action,
                     policy=actor_step.policy,
                     log_policy=actor_step.log_policy,
-                    rewards=pex.rewards,
                 ),
             )
             trajectory.append(timestep)
 
             if env.is_done():
-                # Store episode length for future estimation
-                self.episode_lengths.append(steps)
-                # Keep only recent history
-                if len(self.episode_lengths) > 100:
-                    self.episode_lengths.pop(0)
-
                 break
 
         trajectory_length = (
             (len(trajectory) + resolution - 1) // resolution
         ) * resolution
-        self.batch_length = max(trajectory_length, self.batch_length)
+        async with self.lock:
+            self.batch_length = max(trajectory_length, self.batch_length)
         await self.sync_point.wait()
 
         # Pad trajectory to batch_length
         while len(trajectory) < self.batch_length:
+            pex = ex
+            phx = hx
+
             ex, hx = await env.step(a.item())
             timestep = TimeStep(
-                env=ex,
+                env=pex,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
                     log_policy=actor_step.log_policy,
-                    rewards=ex.rewards,
                 ),
             )
             trajectory.append(timestep)
@@ -507,7 +506,7 @@ def main():
     # training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
     training_env = DoubleTrajectoryTrainingBatchCollector(network, num_envs)
 
-    evaluation_env = EvalBatchCollector(network, 4)
+    EvalBatchCollector(network, 4)
 
     ex, hx = get_ex_step()
     params = network.init(jax.random.PRNGKey(42), ex, hx)
@@ -524,7 +523,7 @@ def main():
         collect_batch_telemetry_data(batch)
 
         # training_progress.update(batch.env.valid.sum())
-        batch = evaluation_env.collect_batch_trajectory(params)
+        # batch = evaluation_env.collect_batch_trajectory(params)
         # evaluation_progress.update(batch.env.valid.sum())
         collect_batch_telemetry_data(batch)
 
