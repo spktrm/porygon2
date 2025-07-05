@@ -294,6 +294,7 @@ export class Player extends BattleStreams.BattlePlayer {
         const key = Protocol.key(args);
         if (!key) return;
         if (key in this.eventHandler) {
+            this.eventHandler.addLine(line);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (this.eventHandler as any)[key](args, kwArgs);
         }
@@ -400,9 +401,9 @@ export class Player extends BattleStreams.BattlePlayer {
 
             if (this.hasRequest && this.started) {
                 shiftBackup();
-                for (const line of chunk.split("\n")) {
-                    this.addLine(line);
-                }
+                // for (const line of chunk.split("\n")) {
+                //     this.addLine(line);
+                // }
                 this.updateRequest();
                 if (this.privateBattle.turn === 1) {
                     this.privateBattle.requestStatus = "received";
@@ -416,8 +417,6 @@ export class Player extends BattleStreams.BattlePlayer {
                 (this.offline || this.checkStreamBuffer()) &&
                 this.isActionRequired(chunk)
             ) {
-                this.requestCount += 1;
-
                 shiftBackup();
                 this.privateBattle.requestStatus = "received";
                 this.updateRequest();
@@ -430,6 +429,8 @@ export class Player extends BattleStreams.BattlePlayer {
                     this.choose(actionStrings[actionValue] ?? "default");
                     this.privateBattle.request = undefined;
                 }
+
+                this.requestCount += 1;
             }
         }
 

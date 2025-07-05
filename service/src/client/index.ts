@@ -188,11 +188,15 @@ class ClientStream extends ObjectReadWriteStream<string> {
                 );
             }
 
-            const active = (request?.active ??
-                [])[0] as Protocol.MoveRequest["active"][0];
-            const activeMoves = (active ?? {})?.moves ?? [];
+            const active = (request?.active ?? [])[0] as
+                | Protocol.MoveRequest["active"][0]
+                | null;
+            const activeMoves = active && active.moves ? active.moves : [];
             const switches = (request?.side?.pokemon ??
                 []) as Protocol.Request.SideInfo["pokemon"];
+
+            console.log(active?.moves.map((move) => move.id));
+            console.log(switches.map((poke) => poke.speciesForme));
 
             const moveLabels = [
                 ...activeMoves.map((action) => `use ${action.id}`),
@@ -361,7 +365,7 @@ class Battle {
 
         this.prevMessage = undefined;
 
-        this.ws.send(`${this.battleId}|/timer on`);
+        // this.ws.send(`${this.battleId}|/timer on`);
         this.ws.send(`${this.battleId}|${welcomeMessage}`);
         this.stream = new ClientStream({
             roomId,

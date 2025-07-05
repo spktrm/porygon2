@@ -171,8 +171,8 @@ const relativeArrayToObject = (array: Int16Array) => {
         minorArgs: minorArgIndices.map(
             (index) => jsonDatum["battleMinorArgs"][index],
         ),
-        action: jsonDatum["Actions"][
-            array[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
+        move: jsonDatum["moves"][
+            array[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
         ],
         damage:
             array[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO] /
@@ -668,7 +668,7 @@ class Edge {
             const sideConditionOffset =
                 (isMe ? 0 : numRelativeEdgeFeatures) +
                 RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS0;
-            this.updateEntityData(side.active, entityOffset, playerIndex);
+            this.updateEntityData(side, entityOffset, playerIndex);
             this.updateSideConditionData(
                 side,
                 sideConditionOffset,
@@ -677,12 +677,8 @@ class Edge {
         }
     }
 
-    updateEntityData(
-        activePokemon: (Pokemon | null)[],
-        entityOffset: number,
-        playerIndex: number,
-    ) {
-        const onlyActive = activePokemon[0];
+    updateEntityData(side: Side, entityOffset: number, playerIndex: number) {
+        const onlyActive = side.active[0];
         const activePokemonBuffer = getArrayFromPokemon(
             onlyActive,
             playerIndex,
@@ -1243,6 +1239,7 @@ export class EventHandler implements Protocol.Handler {
     turnNum: number;
     timestamp: number;
     edgeBuffer: EdgeBuffer;
+    log: string[];
 
     constructor(player: Player) {
         this.player = player;
@@ -1253,6 +1250,11 @@ export class EventHandler implements Protocol.Handler {
         this.turnOrder = 0;
         this.turnNum = 0;
         this.timestamp = 0;
+        this.log = [];
+    }
+
+    addLine(line: string) {
+        this.log.push(line);
     }
 
     getPokemon(
@@ -1904,8 +1906,8 @@ export class EventHandler implements Protocol.Handler {
 
     "|-swapsideconditions|"() {}
 
-    "|-start|"(args: Args["|-start|"]) {
-        const [argName, poke1Ident] = args;
+    "|-start|"(args: Args["|-start|"], kwArgs: KWArgs["|-start|"]) {
+        const [argName, poke1Ident, conditionId] = args;
 
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -1916,10 +1918,20 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(kwArgs.from),
+            isMe,
+        );
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(
+                conditionId.startsWith("perish") ? "perishsong" : conditionId,
+            ),
+            isMe,
+        );
     }
 
-    "|-end|"(args: Args["|-end|"]) {
-        const [argName, poke1Ident] = args;
+    "|-end|"(args: Args["|-end|"], kwArgs: KWArgs["|-end|"]) {
+        const [argName, poke1Ident, conditionId] = args;
 
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -1930,6 +1942,14 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(kwArgs.from),
+            isMe,
+        );
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(conditionId),
+            isMe,
+        );
     }
 
     "|-crit|"(args: Args["|-crit|"]) {
@@ -1975,9 +1995,7 @@ export class EventHandler implements Protocol.Handler {
     }
 
     "|-immune|"(args: Args["|-immune|"], kwArgs: KWArgs["|-immune|"]) {
-        const [argName, poke1Ident] = args;
-
-        const fromEffect = this.getCondition(kwArgs.from);
+        const [argName, poke1Ident, conditionId] = args;
 
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -1988,7 +2006,14 @@ export class EventHandler implements Protocol.Handler {
         const isMe = isMySide(pokemon!.side.n, playerIndex);
 
         this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-        this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(kwArgs.from),
+            isMe,
+        );
+        this.edgeBuffer.updateLatestEdgeFromOf(
+            this.getCondition(conditionId),
+            isMe,
+        );
     }
 
     "|-item|"(args: Args["|-item|"], kwArgs: KWArgs["|-item|"]) {
@@ -2097,9 +2122,7 @@ export class EventHandler implements Protocol.Handler {
     "|-zbroken|"() {}
 
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
-        const [argName, poke1Ident] = args;
-
-        const fromEffect = this.getCondition(kwArgs.from);
+        const [argName, poke1Ident, conditionId1, conditionId2] = args;
 
         if (poke1Ident) {
             const playerIndex = this.player.getPlayerIndex();
@@ -2111,7 +2134,13 @@ export class EventHandler implements Protocol.Handler {
             const isMe = isMySide(pokemon!.side.n, playerIndex);
 
             this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-            this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+            for (const fromEffect of [
+                this.getCondition(kwArgs.from),
+                this.getCondition(conditionId1),
+                this.getCondition(conditionId2),
+            ]) {
+                this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+            }
         }
     }
 
@@ -2834,8 +2863,6 @@ export class StateHandler {
         state.setLegalActions(legalActions.buffer);
 
         const history = this.getHistory(numHistory);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readableHistory = EdgeBuffer.toReadableHistory(history);
         state.setHistory(history);
 
         const playerIndex = this.player.getPlayerIndex();
@@ -2844,16 +2871,19 @@ export class StateHandler {
         }
 
         const privateTeam = this.getPrivateTeam(playerIndex);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
         const publicTeam = this.getPublicTeam(playerIndex);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());
+
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const readableHistory = EdgeBuffer.toReadableHistory(history);
 
         return state;
     }

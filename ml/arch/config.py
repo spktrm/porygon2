@@ -53,8 +53,8 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 512
-    num_latents = 64
+    entity_size = 256
+    num_latents = 32
 
     cfg.entity_size = entity_size
     cfg.num_latents = num_latents
@@ -74,7 +74,7 @@ def get_model_cfg():
     cfg.encoder.latent_encoder = ConfigDict()
 
     encoder_num_layers = 1
-    encoder_num_heads = 8
+    encoder_num_heads = 4
     encoder_hidden_size_scale = 1
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_key_value_scale = 1 / encoder_num_heads
@@ -82,7 +82,7 @@ def get_model_cfg():
     encoder_qk_layer_norm = True
 
     decoder_num_layers = 1
-    decoder_num_heads = 8
+    decoder_num_heads = 4
     decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_key_value_scale = 1 / decoder_num_heads
@@ -134,25 +134,15 @@ def get_model_cfg():
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()
     cfg.policy_head.transformer = ConfigDict()
-    cfg.policy_head.logits = ConfigDict()
 
     set_attributes(cfg.policy_head.transformer, **transformer_encoder_kwargs)
-
-    cfg.policy_head.logits.num_logits = 1
-    cfg.policy_head.logits.num_linear_layers = 1
-    cfg.policy_head.logits.use_layer_norm = use_layer_norm
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
-    cfg.value_head.logits = ConfigDict()
     cfg.value_head.entity_size = entity_size
 
     set_attributes(cfg.value_head.transformer, **transformer_encoder_kwargs)
-
-    cfg.value_head.logits.num_logits = 1
-    cfg.value_head.logits.num_linear_layers = 1
-    cfg.value_head.logits.use_layer_norm = use_layer_norm
 
     return cfg
 
