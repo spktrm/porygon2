@@ -32,7 +32,7 @@ async function worker(gameId: number, playerIds: number[]) {
             action.setValue(-1);
             game.tasks.submitResult(rqid, action);
         }
-        if (rqid >= 10) {
+        if (rqid >= 30) {
             writeFileSync("../rlenv/ex", gameState.getState_asU8());
             game.reset();
             exit(0);

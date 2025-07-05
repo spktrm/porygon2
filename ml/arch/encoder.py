@@ -10,7 +10,10 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from ml.arch.modules import (
+    MLP,
     BinaryEncoder,
+    FeedForwardResidual,
+    MergeEmbeddings,
     PretrainedEmbedding,
     SumEmbeddings,
     TransformerDecoder,
@@ -22,11 +25,8 @@ from rlenv.data import (
     ACTION_MAX_VALUES,
     ENTITY_MAX_VALUES,
     MAX_RATIO_TOKEN,
-    NUM_ABILITIES,
     NUM_FROM_SOURCE_EFFECTS,
-    NUM_ITEMS,
     NUM_MOVES,
-    NUM_SPECIES,
     RELATIVE_EDGE_MAX_VALUES,
 )
 from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
@@ -209,30 +209,13 @@ class Encoder(nn.Module):
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
 
-        embed_kwargs = dict(
-            features=entity_size, embedding_init=nn.initializers.normal()
-        )
-        dense_kwargs = dict(
-            features=entity_size, kernel_init=nn.initializers.normal(), use_bias=False
-        )
+        embed_kwargs = dense_kwargs = dict(features=entity_size)
 
         # Initialize embeddings for various entities and features.
-        self.species_embedding = nn.Embed(
-            num_embeddings=NUM_SPECIES, name="species_embedding", **embed_kwargs
-        )
-        self.items_embedding = nn.Embed(
-            num_embeddings=NUM_ITEMS, name="items_embedding", **embed_kwargs
-        )
-        self.abilities_embedding = nn.Embed(
-            num_embeddings=NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
-        )
-        self.moves_embedding = nn.Embed(
-            num_embeddings=NUM_MOVES, name="moves_embedding", **embed_kwargs
-        )
         self.effect_from_source_embedding = nn.Embed(
             num_embeddings=NUM_FROM_SOURCE_EFFECTS,
             name="effect_from_source_embedding",
-            **embed_kwargs
+            **embed_kwargs,
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -242,24 +225,23 @@ class Encoder(nn.Module):
         self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
 
         # Initialize aggregation modules for combining feature embeddings.
-        self.entity_combine = SumEmbeddings(
-            output_size=entity_size, name="entity_combine"
+        self.entity_sum = SumEmbeddings(output_size=entity_size, name="entity_sum")
+        self.relative_edge_sum = SumEmbeddings(
+            output_size=entity_size, name="relative_edge_sum"
         )
-        self.relative_edge_combine = SumEmbeddings(
-            output_size=entity_size, name="relative_edge_combine"
+        self.absolute_edge_sum = SumEmbeddings(
+            output_size=entity_size, name="absolute_edge_sum"
         )
-        self.absolute_edge_combine = SumEmbeddings(
-            output_size=entity_size, name="absolute_edge_combine"
+        self.timestep_linear = MLP(layer_sizes=(entity_size,), use_layer_norm=True)
+        self.action_sum = SumEmbeddings(output_size=entity_size, name="action_sum")
+        self.latent_merge = MergeEmbeddings(
+            output_size=entity_size, name="latent_merge"
         )
-        self.timestep_combine = SumEmbeddings(
-            output_size=entity_size, name="timestep_combine"
-        )
-        self.action_combine = SumEmbeddings(
-            output_size=entity_size, name="action_combine"
-        )
-        self.latent_combine = SumEmbeddings(
-            output_size=entity_size, name="latent_combine"
-        )
+
+        # Feed-forward layers for processing entity and timestep features.
+        self.entity_ff = FeedForwardResidual(hidden_dim=entity_size)
+        self.timestep_ff = FeedForwardResidual(hidden_dim=entity_size)
+        self.action_ff = FeedForwardResidual(hidden_dim=entity_size)
 
         # Transformer encoders for processing sequences of entities and edges.
         self.entity_encoder = TransformerEncoder(**self.cfg.entity_encoder.to_dict())
@@ -440,7 +422,6 @@ class Encoder(nn.Module):
             .clip(min=0, max=1)
         )
 
-        move_embeddings = self.moves_embedding(move_tokens)
         move_encodings = jax.vmap(self._encode_move)(move_tokens)
 
         species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
@@ -448,24 +429,16 @@ class Encoder(nn.Module):
         item_token = entity[EntityFeature.ENTITY_FEATURE__ITEM]
         # last_move_token = entity[EntityFeature.ENTITY_FEATURE__LAST_MOVE]
 
-        embedding = self.entity_combine(
-            encodings=[
-                boolean_code,
-                volatiles_encoding,
-                typechange_encoding,
-                move_pp_onehot,
-                hp_features,
-            ],
-            embeddings=[
-                self._encode_species(species_token),
-                self._encode_ability(ability_token),
-                self._encode_item(item_token),
-                self.species_embedding(species_token),
-                self.abilities_embedding(ability_token),
-                self.items_embedding(item_token),
-                move_embeddings.sum(axis=0),
-                move_encodings.sum(axis=0),
-            ],
+        embedding = self.entity_sum(
+            boolean_code,
+            volatiles_encoding,
+            typechange_encoding,
+            move_pp_onehot,
+            hp_features,
+            self._encode_species(species_token),
+            self._encode_ability(ability_token),
+            self._encode_item(item_token),
+            move_encodings.sum(axis=0),
         )
 
         # Apply mask to filter out invalid entities.
@@ -574,23 +547,16 @@ class Encoder(nn.Module):
         ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
         move_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
-        action_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
+        edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
 
-        embedding = self.relative_edge_combine(
-            encodings=[
-                minor_args_encoding,
-                side_condition_encoding,
-                boolean_code,
-            ],
-            embeddings=[
-                self._encode_ability(ability_token),
-                self._encode_item(item_token),
-                self._encode_move(move_token),
-                self.items_embedding(item_token),
-                self.abilities_embedding(ability_token),
-                self.moves_embedding(action_token),
-                effect_from_source_embedding,
-            ],
+        embedding = self.relative_edge_sum(
+            minor_args_encoding,
+            side_condition_encoding,
+            boolean_code,
+            self._encode_ability(ability_token),
+            self._encode_item(item_token),
+            self._encode_move(move_token),
+            effect_from_source_embedding,
         )
 
         return embedding
@@ -645,14 +611,12 @@ class Encoder(nn.Module):
             ]
         )
 
-        embedding = self.absolute_edge_combine(
-            encodings=[
-                boolean_code,
-                _binary_scale_encoding(
-                    edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE],
-                    32,
-                ),
-            ]
+        embedding = self.absolute_edge_sum(
+            boolean_code,
+            _binary_scale_encoding(
+                edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE],
+                32,
+            ),
         )
 
         # Apply mask to filter out invalid edges.
@@ -666,13 +630,12 @@ class Encoder(nn.Module):
         """
         Encode features of a single timestep, including entities and edges.
         """
-        # Encode entities and their masks.
-        entity_embeddings, entity_mask = jax.vmap(self._encode_entity)(
-            history_container.entities
-        )
+
+        # Encode entities.
+        entity_embedding, _ = jax.vmap(self._encode_entity)(history_container.entities)
 
         # Encode relative edges.
-        relative_edge_embeddings = jax.vmap(self._encode_relative_edge)(
+        relative_edge_embedding = jax.vmap(self._encode_relative_edge)(
             history_container.relative_edges
         )
 
@@ -681,14 +644,19 @@ class Encoder(nn.Module):
             self._encode_absolute_edge(history_container.absolute_edges)
         )
 
-        return (
-            entity_embeddings,
-            entity_mask,
-            relative_edge_embeddings,
-            absolute_edge_embedding,
-            valid_timestep_mask,
-            history_request_count,
+        timestep_embedding = (
+            entity_embedding + relative_edge_embedding + absolute_edge_embedding[None]
+        ).reshape(-1)
+
+        timestep_embedding = self.timestep_linear(timestep_embedding)
+        timestep_embedding = self.timestep_ff(timestep_embedding)
+
+        # Apply mask to the timestep embeddings.
+        timestep_embedding = jnp.where(
+            valid_timestep_mask[..., None], timestep_embedding, 0
         )
+
+        return timestep_embedding, valid_timestep_mask, history_request_count
 
     def _encode_entities(self, env_step: EnvStep):
         _encode_entities = jax.vmap(jax.vmap(self._encode_entity))
@@ -705,36 +673,18 @@ class Encoder(nn.Module):
         entity_embeddings = jnp.concatenate(
             (private_entity_embeddings, public_entity_embeddings), axis=-2
         )
+        entity_embeddings = jax.vmap(self.entity_ff)(entity_embeddings)
         entity_embeddings = jax.vmap(self.entity_encoder)(
             entity_embeddings, entity_mask
         )
         return entity_embeddings[:, :6], entity_mask, entity_embeddings
 
     def _encode_timesteps(self, history_container: HistoryContainer):
-        (
-            entity_embeddings,
-            _,
-            relative_edge_embeddings,
-            absolute_edge_embedding,
-            valid_timestep_mask,
-            history_request_count,
-        ) = jax.vmap(self._encode_timestep)(history_container)
+        timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
+            self._encode_timestep
+        )(history_container)
 
-        seq_len, *_ = entity_embeddings.shape
-
-        # Combine all embeddings for the timestep.
-        timestep_embedding = jax.vmap(self.timestep_combine)(
-            [
-                *jnp.split(entity_embeddings.reshape(seq_len, -1), 2, axis=-1),
-                *jnp.split(relative_edge_embeddings.reshape(seq_len, -1), 2, axis=-1),
-                absolute_edge_embedding,
-            ],
-        )
-
-        # Apply mask to the timestep embeddings.
-        timestep_embedding = jnp.where(
-            valid_timestep_mask[..., None], timestep_embedding, 0
-        )
+        seq_len = timestep_embedding.shape[0]
 
         timestep_embedding = self.timestep_encoder(
             timestep_embedding,
@@ -764,13 +714,10 @@ class Encoder(nn.Module):
             ]
         )
 
-        embedding = self.action_combine(
-            encodings=[boolean_code],
-            embeddings=[
-                self._encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
-                self.moves_embedding(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
-                entity_embedding[action[MovesetFeature.MOVESET_FEATURE__ENTITY_IDX]],
-            ],
+        embedding = self.action_sum(
+            boolean_code,
+            entity_embedding[action[MovesetFeature.MOVESET_FEATURE__ENTITY_IDX]],
+            self._encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
         return embedding
@@ -781,6 +728,7 @@ class Encoder(nn.Module):
         action_embeddings = jax.vmap(
             jax.vmap(self._encode_action, in_axes=(0, 0, None))
         )(env_step.moveset, env_step.legal.astype(int), entity_embeddings)
+        action_embeddings = jax.vmap(self.action_ff)(action_embeddings)
         return jax.vmap(self.action_encoder)(action_embeddings, env_step.legal)
 
     def __call__(
@@ -797,7 +745,7 @@ class Encoder(nn.Module):
         timestep_embeddings, history_request_count = self._encode_timesteps(
             history_step.major_history
         )
-        timestep_mask = env_step.request_count[..., None] > history_request_count
+        timestep_mask = env_step.request_count[..., None] >= history_request_count
 
         action_embeddings = self._encode_actions(env_step, private_entity_embeddings)
 
@@ -813,8 +761,8 @@ class Encoder(nn.Module):
             self.latent_action_decoder, in_axes=(None, 0, None, 0)
         )(self.latent_embeddings, action_embeddings, None, env_step.legal)
 
-        latent_embeddings = jax.vmap(jax.vmap(self.latent_combine))(
-            embeddings=[latent_timesteps, latent_entities, latent_actions]
+        latent_embeddings = jax.vmap(jax.vmap(self.latent_merge))(
+            latent_timesteps, latent_entities, latent_actions
         )
         contextual_latent_embeddings = jax.vmap(self.latent_encoder)(latent_embeddings)
 
