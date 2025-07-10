@@ -1383,6 +1383,15 @@ export class EventHandler implements Protocol.Handler {
         this.addEdge(edge);
     }
 
+    "|player|"(args: Args["|player|"]) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const [argName, playerId, userName] = args;
+        const playerIndex = playerId.at(1);
+        if (playerIndex !== undefined && this.player.userName === userName) {
+            this.player.playerIndex = parseInt(playerIndex) - 1;
+        }
+    }
+
     "|drag|"(args: Args["|drag|"]) {
         this.handleSwitch(args);
     }
@@ -1545,7 +1554,10 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
     }
 
-    "|-damage|"(args: Args["|-damage|"], kwArgs: KWArgs["|-damage|"]) {
+    "|-damage|"(
+        args: Args["|-damage|"] | Args["|-sethp|"],
+        kwArgs: KWArgs["|-damage|"] | KWArgs["|-sethp|"],
+    ) {
         const [argName, poke1Ident] = args;
 
         const playerIndex = this.player.getPlayerIndex();
@@ -1590,7 +1602,10 @@ export class EventHandler implements Protocol.Handler {
         });
     }
 
-    "|-heal|"(args: Args["|-heal|"], kwArgs: KWArgs["|-heal|"]) {
+    "|-heal|"(
+        args: Args["|-heal|"] | Args["|-sethp|"],
+        kwArgs: KWArgs["|-heal|"] | KWArgs["|-sethp|"],
+    ) {
         const [argName, poke1Ident] = args;
 
         const playerIndex = this.player.getPlayerIndex();
@@ -1629,6 +1644,35 @@ export class EventHandler implements Protocol.Handler {
             isMe,
             value: Math.min(MAX_RATIO_TOKEN, currentHealToken + addedHealToken),
         });
+    }
+
+    "|-sethp|"(args: Args["|-sethp|"], kwArgs: KWArgs["|-sethp|"]) {
+        const [argName, poke1Ident] = args;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
+        const trueIdent = pokemon!.originalIdent;
+        if (!this.prevHp.has(trueIdent)) {
+            this.prevHp.set(trueIdent, 1);
+        }
+        const prevHp = this.prevHp.get(trueIdent) ?? 1;
+        const currHp = pokemon!.hp / pokemon!.maxhp;
+        const diffRatio = currHp - prevHp;
+        if (diffRatio < 0) {
+            this["|-damage|"](
+                ["-damage", args[1], args[2]] as Args["|-damage|"],
+                kwArgs,
+            );
+        } else if (diffRatio > 0) {
+            this["|-heal|"](
+                ["-heal", args[1], args[2]] as Args["|-heal|"],
+                kwArgs,
+            );
+        }
+        this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {

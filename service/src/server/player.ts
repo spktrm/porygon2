@@ -205,6 +205,8 @@ export class Player extends BattleStreams.BattlePlayer {
     offline: boolean;
     hasRequest: boolean;
 
+    userName: string;
+
     constructor(
         workerIndex: number,
         gameId: number,
@@ -213,6 +215,7 @@ export class Player extends BattleStreams.BattlePlayer {
         send: sendFnType,
         recv: recvFnType,
         worldStream: BattleStreams.BattleStream | null,
+        userName: string,
         choose?: (action: string) => void,
         offline: boolean = false,
         playerIndex: number | undefined = undefined,
@@ -255,6 +258,8 @@ export class Player extends BattleStreams.BattlePlayer {
         this.worldStream = worldStream;
         this.offline = offline;
         this.hasRequest = false;
+
+        this.userName = userName;
     }
 
     getPlayerIndex(): number | undefined {
@@ -335,6 +340,11 @@ export class Player extends BattleStreams.BattlePlayer {
         return true;
     }
 
+    isActionRequired2(chunk: string) {
+        const request = this.getRequest()! as AnyObject;
+        return chunk.includes("|request") && !request?.wait;
+    }
+
     isWorldReady() {
         if (this.worldStream !== null) {
             return this.worldStream!.buf.length === 0;
@@ -372,8 +382,9 @@ export class Player extends BattleStreams.BattlePlayer {
                 if (line) this.addLine(line);
             }
         };
-
+        const lines = [];
         for await (const chunk of this.stream) {
+            lines.push(...chunk.split("\n"));
             if (this.done || this.draw) {
                 // Early finish
                 break;
@@ -416,6 +427,7 @@ export class Player extends BattleStreams.BattlePlayer {
                 this.isWorldReady() &&
                 (this.offline || this.checkStreamBuffer()) &&
                 this.isActionRequired(chunk)
+                // this.isActionRequired2(chunk)
             ) {
                 shiftBackup();
                 this.privateBattle.requestStatus = "received";

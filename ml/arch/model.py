@@ -27,7 +27,7 @@ class Model(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.policy_head = PolicyHead(self.cfg.policy_head)
+        self.policy_head = PolicyHead(self.cfg.policy_head, self.training)
         self.value_head = ValueHead(self.cfg.value_head)
 
     def _shared_forward(self, env_step: EnvStep, history_step: HistoryStep):

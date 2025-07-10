@@ -9,6 +9,7 @@ from ml.func import legal_log_policy, legal_policy
 
 class PolicyHead(nn.Module):
     cfg: ConfigDict
+    training: bool
 
     def setup(self):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
@@ -16,6 +17,7 @@ class PolicyHead(nn.Module):
         self.final_layer = nn.Dense(
             features=1, kernel_init=nn.initializers.normal(5e-3)
         )
+        self.temp = 1 if self.training else 0.1
 
     def __call__(
         self,
@@ -33,8 +35,8 @@ class PolicyHead(nn.Module):
         logits = logits.reshape(-1)
         logits = logits - logits.mean(where=action_mask)
 
-        policy = legal_policy(logits, action_mask)
-        log_policy = legal_log_policy(logits, action_mask)
+        policy = legal_policy(logits, action_mask, self.temp)
+        log_policy = legal_log_policy(logits, action_mask, self.temp)
 
         return logits, policy, log_policy
 
