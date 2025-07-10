@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 import wandb
 from ml.arch.config import get_model_cfg
-from ml.arch.model import get_dummy_model, get_model, get_num_params
+from ml.arch.model import get_model, get_num_params
 from ml.config import AdamConfig
 from ml.learners.func import (
     collect_batch_telemetry_data,
@@ -28,7 +28,7 @@ from ml.learners.func import (
     collect_value_stats_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
-from rlenv.env import clip_history, get_ex_step
+from rlenv.env import get_ex_step
 from rlenv.interfaces import ModelOutput, Targets, TimeStep
 from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollector
 
@@ -51,8 +51,8 @@ class MMDConfig:
 
     # PPO params
     clip_coef: float = 0.2
-    gae_lambda: float = 0.95
-    gamma: float = 0.99
+    lambda_: float = 0.95
+    gamma: float = 1.0
 
     # Loss coefficients
     value_loss_coef: float = 0.25
@@ -70,6 +70,9 @@ def get_config():
 
 class TrainState(train_state.TrainState):
     actor_steps: int = 0
+
+    target_adv_mean: float = 0
+    target_adv_std: float = 1
 
 
 def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
@@ -101,6 +104,8 @@ def save(state: TrainState):
                 opt_state=state.opt_state,
                 step=state.step,
                 actor_steps=state.actor_steps,
+                target_adv_mean=state.target_adv_mean,
+                target_adv_std=state.target_adv_std,
             ),
             f,
         )
@@ -123,70 +128,46 @@ def load(state: TrainState, path: str):
         params=params,
         actor_steps=actor_steps,
         opt_state=step["opt_state"],
+        target_adv_mean=step.get("target_adv_mean", 0),
+        target_adv_std=step.get("target_adv_std", 1),
     )
 
     return state
 
 
-def compute_gae(
+def compute_vtrace(
     r_t: chex.Array,
     discount_t: chex.Array,
-    lambda_: float,
+    rhos: chex.Array,
     values: chex.Array,
+    lambda_t: chex.Array,
     stop_target_gradients: bool = False,
 ) -> chex.Array:
-    """Computes truncated generalized advantage estimates for a sequence length k.
-
-    The advantages are computed in a backwards fashion according to the equation:
-    Âₜ = δₜ + (γλ) * δₜ₊₁ + ... + ... + (γλ)ᵏ⁻ᵗ⁺¹ * δₖ₋₁
-    where δₜ = rₜ₊₁ + γₜ₊₁ * v(sₜ₊₁) - v(sₜ).
-
-    See Proximal Policy Optimization Algorithms, Schulman et al.:
-    https://arxiv.org/abs/1707.06347
-
-    Note: This paper uses a different notation than the RLax standard
-    convention that follows Sutton & Barto. We use rₜ₊₁ to denote the reward
-    received after acting in state sₜ, while the PPO paper uses rₜ.
-
-    Args:
-      r_t: Sequence of rewards at times [1, k]
-      discount_t: Sequence of discounts at times [1, k]
-      lambda_: Mixing parameter; a scalar or sequence of lambda_t at times [1, k]
-      values: Sequence of values under π at times [0, k]
-      stop_target_gradients: bool indicating whether or not to apply stop gradient
-        to targets.
-
-    Returns:
-      Multistep truncated generalized advantage estimation at times [0, k-1].
-    """
+    """Computes vtrace for a sequence length k."""
     chex.assert_rank([r_t, values, discount_t], 1)
     chex.assert_type([r_t, values, discount_t], float)
-    lambda_ = jnp.ones_like(discount_t) * lambda_  # If scalar, make into vector.
+    # lambda_ = jnp.ones_like(discount_t) * lambda_  # If scalar, make into vector.
 
-    delta_t = r_t + discount_t * values[1:] - values[:-1]
+    rho_t = jnp.minimum(1.0, rhos)
+    c_t = jnp.minimum(1.0, rhos) * lambda_t
+
+    delta_t = rho_t * (r_t + discount_t * values[1:] - values[:-1])
 
     # Iterate backwards to calculate advantages.
     def _body(acc, xs):
-        deltas, discounts, lambda_ = xs
-        acc = deltas + discounts * lambda_ * acc
+        deltas, discounts, cs = xs
+        acc = deltas + discounts * acc * cs
         return acc, acc
 
-    _, advantage_t = jax.lax.scan(
-        _body, 0.0, (delta_t, discount_t, lambda_), reverse=True
-    )
+    _, advantage_t = jax.lax.scan(_body, 0.0, (delta_t, discount_t, c_t), reverse=True)
 
     return jax.lax.select(
         stop_target_gradients, jax.lax.stop_gradient(advantage_t), advantage_t
     )
 
 
-@functools.partial(jax.jit, static_argnums=(2,))
-def compute_returns(state: TrainState, batch: TimeStep, config: MMDConfig):
+def compute_returns(pred: ModelOutput, batch: TimeStep, config: MMDConfig):
     """Train for a single step."""
-
-    pred: ModelOutput = jax.vmap(state.apply_fn, (None, 1, 1), 1)(
-        state.params, batch.env, batch.history
-    )
 
     valid = batch.env.valid
 
@@ -194,16 +175,34 @@ def compute_returns(state: TrainState, batch: TimeStep, config: MMDConfig):
         batch.env.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
     ).squeeze()
 
+    expanded_action = batch.actor.action[..., None]
+    log_rhos = jnp.take_along_axis(
+        pred.log_pi, expanded_action, axis=-1
+    ) - jnp.take_along_axis(batch.actor.log_policy, expanded_action, axis=-1)
+    rhos = jnp.exp(log_rhos).squeeze(-1)
     value_pred = jnp.squeeze(pred.v, axis=-1)
-    baselines = jnp.concatenate([value_pred, jnp.zeros_like(value_pred[-1:])])
+    baselines = jnp.concatenate([value_pred, value_pred[-1:]])
     discounts = valid * config.gamma
-    lambda_ = jnp.ones_like(valid) * config.gae_lambda
+    lambda_t = valid * config.lambda_
 
-    advantages = jax.vmap(
-        functools.partial(compute_gae, stop_target_gradients=True),
-        in_axes=(1, 1, 1, 1),
-    )(rewards, discounts, lambda_, baselines).T
-    returns = jax.lax.stop_gradient(advantages + baselines[:-1])
+    errors = jax.vmap(
+        functools.partial(compute_vtrace, stop_target_gradients=True),
+        in_axes=(1, 1, 1, 1, 1),
+    )(rewards, discounts, rhos, baselines, lambda_t).T
+
+    returns = jax.lax.stop_gradient(errors + baselines[:-1])
+    q_bootstrap = jnp.concatenate(
+        [
+            lambda_t[:-1] * returns[1:] + (1 - lambda_t[:-1]) * value_pred[1:],
+            baselines[-1:],
+        ],
+        axis=0,
+    )
+    q_estimate = rewards + discounts * q_bootstrap
+
+    advantages = jax.lax.stop_gradient(
+        jnp.minimum(1.0, rhos) * (q_estimate - baselines[:-1])
+    )
 
     return Targets(advantages=advantages, returns=returns)
 
@@ -228,8 +227,8 @@ def compute_target_statistics(
     return target_adv_mean, target_adv_std
 
 
-@functools.partial(jax.jit, static_argnums=(3,))
-def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMDConfig):
+@functools.partial(jax.jit, static_argnums=(2,))
+def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
     """Train for a single step."""
 
     def loss_fn(params: Params):
@@ -237,6 +236,8 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         pred: ModelOutput = jax.vmap(state.apply_fn, (None, 1, 1), 1)(
             params, batch.env, batch.history
         )
+
+        targets = compute_returns(pred, batch, config)
 
         valid = batch.env.valid
         value_pred = jnp.squeeze(pred.v, axis=-1)
@@ -247,23 +248,26 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
 
-        advantages = (targets.advantages - targets.advantage_mean) / (
-            targets.advantage_std + 1e-8
+        adv_mean = targets.advantages.mean(where=valid)
+        adv_std = targets.advantages.std(where=valid)
+        advantages = (targets.advantages - state.target_adv_mean) / (
+            state.target_adv_std + 1e-8
         )
 
-        pg_loss1 = -advantages * ratio
-        pg_loss2 = -advantages * ratio.clip(
-            min=1 - config.clip_coef, max=1 + config.clip_coef
-        )
+        pg_loss = -advantages * ratio
+        # pg_loss2 = -advantages * ratio.clip(
+        #     min=1 - config.clip_coef, max=1 + config.clip_coef
+        # )
 
-        loss_pg = jnp.maximum(pg_loss1, pg_loss2).mean(where=valid)
+        # loss_pg = jnp.maximum(pg1_loss, pg_loss2).mean(where=valid)
+        loss_pg = pg_loss.mean(where=valid)
         loss_v = jnp.square(targets.returns - value_pred).mean(where=valid)
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        ent_kl_coef_mult = 1  # jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(100_000_000 / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
@@ -303,6 +307,12 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
         logs.update(
             collect_value_stats_telemetry_data(value_pred, targets.returns, valid)
         )
+        logs.update(
+            dict(
+                adv_mean=adv_mean,
+                adv_std=adv_std,
+            )
+        )
 
         return loss, logs
 
@@ -313,8 +323,13 @@ def train_step(state: TrainState, batch: TimeStep, targets: Targets, config: MMD
     logs.update(collect_parameter_and_gradient_telemetry_data(state.params, grads))
 
     state = state.apply_gradients(grads=grads)
+
+    adv_tau = 1e-1
     state = state.replace(
         actor_steps=state.actor_steps + batch.env.valid.sum(),
+        target_adv_mean=state.target_adv_mean * (1 - adv_tau)
+        + logs["adv_mean"] * adv_tau,
+        target_adv_std=state.target_adv_std * (1 - adv_tau) + logs["adv_std"] * adv_tau,
     )
 
     return state, logs
@@ -394,25 +409,8 @@ def main():
         for _ in range(learner_config.num_epochs):
             should_early_stop = False
 
-            # Compute targets for the batch
-            # This is done outside the minibatch loop to avoid recomputing the
-            # model output for each minibatch.
-            iterations: list[tuple[TimeStep, Targets]] = []
-            for minibatch in iterate(batch, learner_config.minibatch_size):
-                minibatch = TimeStep(
-                    env=minibatch.env,
-                    history=clip_history(minibatch.history, resolution=64),
-                    actor=minibatch.actor,
-                )
-                targets = compute_returns(state, minibatch, learner_config)
-                iterations.append((minibatch, targets))
-
-            target_adv_mean, target_adv_std = compute_target_statistics(
-                batch, iterations
-            )
-
             # Do the learning updates
-            for minibatch, target in iterations:
+            for minibatch in iterate(batch, learner_config.minibatch_size):
                 winrates = {}
 
                 time_to_eval = (
@@ -421,17 +419,7 @@ def main():
                 if time_to_eval and learner_config.do_eval:
                     winrates = evaluate(evaluation_collector, state)
 
-                new_state, logs = train_step(
-                    state,
-                    minibatch,
-                    Targets(
-                        advantages=target.advantages,
-                        returns=target.returns,
-                        advantage_mean=target_adv_mean,
-                        advantage_std=target_adv_std,
-                    ),
-                    learner_config,
-                )
+                new_state, logs = train_step(state, minibatch, learner_config)
 
                 should_early_stop = (
                     logs["approx_kl"] > learner_config.kl_target * 1.5

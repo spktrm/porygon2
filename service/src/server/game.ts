@@ -178,6 +178,7 @@ export class Game {
                 sendFn,
                 recvFn,
                 stream,
+                p1spec.name,
             ),
             new Player(
                 this.workerIndex,
@@ -187,6 +188,7 @@ export class Game {
                 sendFn,
                 recvFn,
                 stream,
+                p2spec.name,
             ),
         ];
 

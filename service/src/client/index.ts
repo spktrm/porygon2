@@ -27,17 +27,23 @@ class ClientStream extends ObjectReadWriteStream<string> {
     player: Player;
     tasks: TaskQueueSystem<Action>;
     modelOutput: Record<string, unknown>;
+    userName: string;
 
     constructor(
         options: {
             debug?: boolean;
             roomId?: string;
+            config?: BotConfig;
             choose?: (action: string) => void;
         } = {},
     ) {
         super();
         this.debug = !!options.debug;
         this.roomId = options?.roomId;
+        if (options?.config?.username === undefined) {
+            throw new Error("bad");
+        }
+        this.userName = options?.config?.username;
         this.modelOutput = {};
 
         this.tasks = new TaskQueueSystem();
@@ -88,6 +94,7 @@ class ClientStream extends ObjectReadWriteStream<string> {
             sendFn,
             recvFn,
             null,
+            this.userName,
             options.choose!,
         );
         this.player.start();
@@ -354,21 +361,23 @@ const welcomeMessage =
 class Battle {
     private battleId: string;
     private ws: WebSocket;
+    private config: BotConfig;
     stream: ClientStream;
     prevMessage: string | undefined;
     active: boolean;
 
-    constructor(roomId: string, ws: WebSocket) {
+    constructor(roomId: string, ws: WebSocket, config: BotConfig) {
         this.battleId = roomId;
         this.ws = ws;
         this.active = true;
-
+        this.config = config;
         this.prevMessage = undefined;
 
         // this.ws.send(`${this.battleId}|/timer on`);
         this.ws.send(`${this.battleId}|${welcomeMessage}`);
         this.stream = new ClientStream({
             roomId,
+            config: this.config,
             choose: (message: string) => {
                 this.send(`${message}`);
             },
@@ -488,7 +497,10 @@ export class ShowdownBot {
             const roomId = lines[0].slice(1);
             if (!this.state.battles.has(roomId)) {
                 // This is a new battle starting
-                this.state.battles.set(roomId, new Battle(roomId, this.ws!));
+                this.state.battles.set(
+                    roomId,
+                    new Battle(roomId, this.ws!, this.config),
+                );
                 this.state.activeBattles++;
                 this.state.isSearchingLadder = false; // A battle started, so we are no longer just "searching"
                 console.log(
@@ -644,6 +656,7 @@ export class ShowdownBot {
             }
 
             case "deinit": {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 const roomTypeOrId = parts[1]; // Sometimes this is just 'battle', other times it's the full room ID.
                 // If it's just 'battle', then parts[2] is the room ID.
                 // Let's assume for now it's the room ID or not relevant if just 'battle'.

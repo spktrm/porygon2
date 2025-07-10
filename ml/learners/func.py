@@ -71,7 +71,6 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
     switch_ratio = renormalize(batch.actor.action >= 4, can_move & can_switch & valid)
 
     return dict(
-        actor_steps=valid.sum(),
         trajectory_length_mean=lengths.mean(),
         trajectory_length_min=lengths.min(),
         trajectory_length_max=lengths.max(),
@@ -318,6 +317,7 @@ def per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]:
 def collect_nn_telemetry_data(state: train_state.TrainState) -> Dict[str, Any]:
     return dict(
         param_norm=optax.global_norm(state.params),
+        actor_steps=state.actor_steps,
     )
 
 
