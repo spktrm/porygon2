@@ -1161,7 +1161,8 @@ proto.rlenv.State.toObject = function(includeInstance, msg) {
     moveset: msg.getMoveset_asB64(),
     publicTeam: msg.getPublicTeam_asB64(),
     privateTeam: msg.getPrivateTeam_asB64(),
-    key: jspb.Message.getFieldWithDefault(msg, 7, "")
+    key: jspb.Message.getFieldWithDefault(msg, 7, ""),
+    currentContext: msg.getCurrentContext_asB64()
   };
 
   if (includeInstance) {
@@ -1227,6 +1228,10 @@ proto.rlenv.State.deserializeBinaryFromReader = function(msg, reader) {
     case 7:
       var value = /** @type {string} */ (reader.readString());
       msg.setKey(value);
+      break;
+    case 8:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setCurrentContext(value);
       break;
     default:
       reader.skipField();
@@ -1305,6 +1310,13 @@ proto.rlenv.State.serializeBinaryToWriter = function(message, writer) {
   if (f.length > 0) {
     writer.writeString(
       7,
+      f
+    );
+  }
+  f = message.getCurrentContext_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      8,
       f
     );
   }
@@ -1568,6 +1580,48 @@ proto.rlenv.State.prototype.getKey = function() {
  */
 proto.rlenv.State.prototype.setKey = function(value) {
   return jspb.Message.setProto3StringField(this, 7, value);
+};
+
+
+/**
+ * optional bytes current_context = 8;
+ * @return {!(string|Uint8Array)}
+ */
+proto.rlenv.State.prototype.getCurrentContext = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
+};
+
+
+/**
+ * optional bytes current_context = 8;
+ * This is a type-conversion wrapper around `getCurrentContext()`
+ * @return {string}
+ */
+proto.rlenv.State.prototype.getCurrentContext_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getCurrentContext()));
+};
+
+
+/**
+ * optional bytes current_context = 8;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getCurrentContext()`
+ * @return {!Uint8Array}
+ */
+proto.rlenv.State.prototype.getCurrentContext_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getCurrentContext()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.rlenv.State} returns this
+ */
+proto.rlenv.State.prototype.setCurrentContext = function(value) {
+  return jspb.Message.setProto3BytesField(this, 8, value);
 };
 
 

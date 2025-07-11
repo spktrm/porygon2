@@ -15,9 +15,7 @@ class RewardStep:
 @chex.dataclass(frozen=True)
 class Targets:
     advantages: chex.Array = ()
-    returns: chex.Array = ()
-    advantage_mean: chex.Array = ()
-    advantage_std: chex.Array = ()
+    errors: chex.Array = ()
 
 
 @chex.dataclass(frozen=True)
@@ -34,6 +32,7 @@ class EnvStep:
     seed_hash: chex.Array = ()
     request_count: chex.Array = ()
     public_team: chex.Array = ()
+    current_context: chex.Array = ()
     # all_my_moves: chex.Array = ()
     # all_opp_moves: chex.Array = ()
 

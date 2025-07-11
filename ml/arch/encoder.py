@@ -15,6 +15,7 @@ from ml.arch.modules import (
     FeedForwardResidual,
     MergeEmbeddings,
     PretrainedEmbedding,
+    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
@@ -40,6 +41,7 @@ from rlenv.protos.enums_pb2 import (
 )
 from rlenv.protos.features_pb2 import (
     AbsoluteEdgeFeature,
+    ContextFeature,
     EntityFeature,
     MovesetFeature,
     RelativeEdgeFeature,
@@ -223,6 +225,9 @@ class Encoder(nn.Module):
         self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
         self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
         self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
+
+        # layer norm for entity action
+        self.private_entity_ln = RMSNorm()
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(output_size=entity_size, name="entity_sum")
@@ -547,7 +552,7 @@ class Encoder(nn.Module):
         ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
         move_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
-        edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
+        # edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
 
         embedding = self.relative_edge_sum(
             minor_args_encoding,
@@ -677,7 +682,10 @@ class Encoder(nn.Module):
         entity_embeddings = jax.vmap(self.entity_encoder)(
             entity_embeddings, entity_mask
         )
-        return entity_embeddings[:, :6], entity_mask, entity_embeddings
+        private_entity_embeddings = jax.vmap(self.private_entity_ln)(
+            entity_embeddings[:, :6]
+        )
+        return private_entity_embeddings, entity_mask, entity_embeddings
 
     def _encode_timesteps(self, history_container: HistoryContainer):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
@@ -696,7 +704,11 @@ class Encoder(nn.Module):
 
     # Encode actions for the current environment step.
     def _encode_action(
-        self, action: chex.Array, legal: chex.Array, entity_embedding: chex.Array
+        self,
+        action: chex.Array,
+        legal: chex.Array,
+        entity_embedding: chex.Array,
+        context_encoding: chex.Array,
     ) -> chex.Array:
         """
         Encode features of a move, including its type, species, and action ID.
@@ -716,18 +728,85 @@ class Encoder(nn.Module):
 
         embedding = self.action_sum(
             boolean_code,
+            context_encoding,
             entity_embedding[action[MovesetFeature.MOVESET_FEATURE__ENTITY_IDX]],
             self._encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
         return embedding
 
+    def _encode_context(self, context_vector: chex.Array) -> chex.Array:
+        my_side_condition_indices = context_vector[
+            ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS1
+            + 1
+        ]
+        opp_side_condition_indices = context_vector[
+            ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS1
+            + 1
+        ]
+        my_side_condition_encoding = HEX_ENCODER(
+            my_side_condition_indices.astype(jnp.uint16)
+        ).reshape(-1)
+        opp_side_condition_encoding = HEX_ENCODER(
+            opp_side_condition_indices.astype(jnp.uint16)
+        ).reshape(-1)
+        boolean_code = one_hot_concat_jax(
+            [
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_ID,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION,
+                ),
+                _encode_one_hot_absolute_edge(
+                    context_vector,
+                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION,
+                ),
+            ]
+        )
+        return jnp.concatenate(
+            (my_side_condition_encoding, opp_side_condition_encoding, boolean_code),
+            axis=-1,
+        )
+
     def _encode_actions(
         self, env_step: EnvStep, entity_embeddings: chex.Array
     ) -> chex.Array:
+        context_encoding = jax.vmap(self._encode_context)(env_step.current_context)
         action_embeddings = jax.vmap(
-            jax.vmap(self._encode_action, in_axes=(0, 0, None))
-        )(env_step.moveset, env_step.legal.astype(int), entity_embeddings)
+            jax.vmap(self._encode_action, in_axes=(0, 0, None, None))
+        )(
+            env_step.moveset,
+            env_step.legal.astype(int),
+            entity_embeddings,
+            context_encoding,
+        )
         action_embeddings = jax.vmap(self.action_ff)(action_embeddings)
         return jax.vmap(self.action_encoder)(action_embeddings, env_step.legal)
 

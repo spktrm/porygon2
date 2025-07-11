@@ -53,8 +53,9 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 def get_model_cfg():
     cfg = ConfigDict()
 
-    entity_size = 256
-    num_latents = 32
+    num_heads = 6
+    entity_size = 64 * num_heads
+    num_latents = 8 * num_heads
 
     cfg.entity_size = entity_size
     cfg.num_latents = num_latents
@@ -74,7 +75,7 @@ def get_model_cfg():
     cfg.encoder.latent_encoder = ConfigDict()
 
     encoder_num_layers = 1
-    encoder_num_heads = 4
+    encoder_num_heads = num_heads
     encoder_hidden_size_scale = 1
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_key_value_scale = 1 / encoder_num_heads
@@ -82,7 +83,7 @@ def get_model_cfg():
     encoder_qk_layer_norm = True
 
     decoder_num_layers = 1
-    decoder_num_heads = 4
+    decoder_num_heads = num_heads
     decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_key_value_scale = 1 / decoder_num_heads

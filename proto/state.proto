@@ -44,6 +44,7 @@ message State {
   bytes public_team = 5;
   bytes private_team = 6;
   string key = 7;
+  bytes current_context = 8;
 }
 
 message Trajectory {

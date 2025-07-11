@@ -420,19 +420,11 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
         """Collect a single trajectory using batched inference."""
         trajectory = []
         ex, hx = await env.reset()
-        steps = 0
 
         while True:
-
-            pex = ex
-            phx = hx
-            steps += 1
-
-            a, actor_step = await self.get_actor_inference(params, pex, phx)
-            ex, hx = await env.step(a.item())
-
+            a, actor_step = await self.get_actor_inference(params, ex, hx)
             timestep = TimeStep(
-                env=pex,
+                env=ex,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
@@ -440,9 +432,10 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 ),
             )
             trajectory.append(timestep)
-
             if env.is_done():
                 break
+
+            ex, hx = await env.step(a.item())
 
         trajectory_length = (
             (len(trajectory) + resolution - 1) // resolution
@@ -453,12 +446,8 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
 
         # Pad trajectory to batch_length
         while len(trajectory) < self.batch_length:
-            pex = ex
-            phx = hx
-
-            ex, hx = await env.step(a.item())
             timestep = TimeStep(
-                env=pex,
+                env=ex,
                 actor=ActorStep(
                     action=actor_step.action,
                     policy=actor_step.policy,
@@ -466,6 +455,7 @@ class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
                 ),
             )
             trajectory.append(timestep)
+            ex, hx = await env.step(a.item())
 
         trajectory = stack_steps(trajectory, 0)
         return TimeStep(

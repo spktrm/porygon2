@@ -175,6 +175,11 @@ export class State extends jspb.Message {
   getKey(): string;
   setKey(value: string): void;
 
+  getCurrentContext(): Uint8Array | string;
+  getCurrentContext_asU8(): Uint8Array;
+  getCurrentContext_asB64(): string;
+  setCurrentContext(value: Uint8Array | string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): State.AsObject;
   static toObject(includeInstance: boolean, msg: State): State.AsObject;
@@ -194,6 +199,7 @@ export namespace State {
     publicTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
     key: string,
+    currentContext: Uint8Array | string,
   }
 }
 

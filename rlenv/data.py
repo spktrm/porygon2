@@ -25,6 +25,7 @@ from rlenv.protos.enums_pb2 import (
 )
 from rlenv.protos.features_pb2 import (
     AbsoluteEdgeFeature,
+    ContextFeature,
     EntityFeature,
     MovesetActionTypeEnum,
     MovesetFeature,
@@ -65,6 +66,7 @@ NUM_MOVE_FIELDS = len(MovesetFeature.keys())
 NUM_RELATIVE_EDGE_FIELDS = len(RelativeEdgeFeature.keys())
 NUM_ABSOLUTE_EDGE_FIELDS = len(AbsoluteEdgeFeature.keys())
 NUM_ENTITY_FIELDS = len(EntityFeature.keys())
+NUM_CONTEXT_FIELDS = len(ContextFeature.keys())
 
 NUM_HISTORY = 768
 
