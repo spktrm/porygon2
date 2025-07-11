@@ -17,7 +17,7 @@ class PolicyHead(nn.Module):
         self.final_layer = nn.Dense(
             features=1, kernel_init=nn.initializers.normal(5e-3)
         )
-        self.temp = 1 if self.training else 0.1
+        self.temp = 1 if self.training else 0.8
 
     def __call__(
         self,

@@ -34,6 +34,7 @@ import {
     numMoveFields,
     NUM_HISTORY,
     jsonDatum,
+    numContextFields,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -47,6 +48,7 @@ import { GetHeuristicAction } from "./baselines/heuristic";
 import {
     AbsoluteEdgeFeature,
     AbsoluteEdgeFeatureMap,
+    ContextFeature,
     EntityFeature,
     MovesetActionTypeEnum,
     MovesetFeature,
@@ -2894,6 +2896,59 @@ export class StateHandler {
         // }
     }
 
+    getCurrentContext() {
+        const currentContextBuffer = new Int16Array(numContextFields);
+        const playerIndex = this.player.getPlayerIndex()!;
+        for (const side of this.player.privateBattle.sides) {
+            const mySide = isMySide(side.n, playerIndex) === 1;
+            const sideOffset = mySide
+                ? ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS0
+                : ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS0;
+            const spikesOffset = mySide
+                ? ContextFeature.CONTEXT_FEATURE__MY_SPIKES
+                : ContextFeature.CONTEXT_FEATURE__OPP_SPIKES;
+            const toxisSpikesOffset = mySide
+                ? ContextFeature.CONTEXT_FEATURE__MY_TOXIC_SPIKES
+                : ContextFeature.CONTEXT_FEATURE__OPP_TOXIC_SPIKES;
+
+            let sideConditionBuffer = BigInt(0b0);
+            for (const [id] of Object.entries(side.sideConditions)) {
+                const featureIndex = IndexValueFromEnum(SideconditionEnum, id);
+                sideConditionBuffer |= BigInt(1) << BigInt(featureIndex);
+            }
+            currentContextBuffer.set(
+                bigIntToInt16Array(sideConditionBuffer),
+                sideOffset,
+            );
+            if (side.sideConditions.spikes) {
+                currentContextBuffer[spikesOffset] =
+                    side.sideConditions.spikes.level;
+            }
+            if (side.sideConditions.toxicspikes) {
+                currentContextBuffer[toxisSpikesOffset] =
+                    side.sideConditions.toxicspikes.level;
+            }
+        }
+        const field = this.player.publicBattle.field;
+        const weatherIndex = field.weatherState.id
+            ? IndexValueFromEnum(
+                  WeatherEnum,
+                  WEATHERS[field.weatherState.id as never],
+              )
+            : WeatherEnum.WEATHER_ENUM___NULL;
+
+        currentContextBuffer[
+            AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID
+        ] = weatherIndex;
+        currentContextBuffer[
+            AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION
+        ] = field.weatherState.maxDuration;
+        currentContextBuffer[
+            AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION
+        ] = field.weatherState.minDuration;
+        return new Uint8Array(currentContextBuffer.buffer);
+    }
+
     getState(numHistory: number = NUM_HISTORY): State {
         this.checkRequest();
 
@@ -2921,6 +2976,8 @@ export class StateHandler {
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
         state.setMoveset(this.getMoveset());
+
+        state.setCurrentContext(this.getCurrentContext());
 
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);

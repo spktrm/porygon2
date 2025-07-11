@@ -5,6 +5,7 @@ import numpy as np
 from rlenv.data import (
     EX_STATE,
     NUM_ABSOLUTE_EDGE_FIELDS,
+    NUM_CONTEXT_FIELDS,
     NUM_ENTITY_FIELDS,
     NUM_HISTORY,
     NUM_MOVE_FIELDS,
@@ -96,6 +97,12 @@ def process_state(state: State):
         .astype(int)
     )
 
+    current_context = (
+        np.frombuffer(state.current_context, dtype=np.int16)
+        .reshape(NUM_CONTEXT_FIELDS)
+        .astype(int)
+    )
+
     rewards = state.info.rewards
     heuristics = state.info.heuristics
 
@@ -124,8 +131,9 @@ def process_state(state: State):
         timestamp=np.array(state.info.timestamp, dtype=int),
         legal=get_legal_mask(state),
         rewards=reward_step,
-        private_team=private_team.astype(int),
-        public_team=public_team.astype(int),
+        private_team=private_team,
+        public_team=public_team,
+        current_context=current_context,
         moveset=moveset.astype(int),
         seed_hash=np.array(state.info.seed).astype(int),
         request_count=np.array(state.info.request_count).astype(int),

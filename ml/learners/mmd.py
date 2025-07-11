@@ -1,3 +1,4 @@
+import collections
 import functools
 import json
 import math
@@ -25,17 +26,16 @@ from ml.learners.func import (
     collect_nn_telemetry_data,
     collect_parameter_and_gradient_telemetry_data,
     collect_policy_stats_telemetry_data,
-    collect_value_stats_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
-from rlenv.interfaces import ModelOutput, Targets, TimeStep
+from rlenv.interfaces import ModelOutput, TimeStep
 from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollector
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
-    num_steps = 1_000_000
+    num_steps = 10_000_000
     num_actors: int = 32
     do_eval: bool = True
     num_eval_games: int = 200
@@ -49,8 +49,7 @@ class MMDConfig:
     learning_rate: float = 3e-5
     clip_gradient: float = 1
 
-    # PPO params
-    clip_coef: float = 0.2
+    # Vtrace params
     lambda_: float = 0.95
     gamma: float = 1.0
 
@@ -61,7 +60,7 @@ class MMDConfig:
     kl_loss_coef: float = 0.05
 
     # Stopping param
-    kl_target: float = 0.025
+    kl_target: float = 0.05
 
 
 def get_config():
@@ -135,38 +134,146 @@ def load(state: TrainState, path: str):
     return state
 
 
-def compute_vtrace(
-    r_t: chex.Array,
-    discount_t: chex.Array,
-    rhos: chex.Array,
-    values: chex.Array,
-    lambda_t: chex.Array,
-    stop_target_gradients: bool = False,
-) -> chex.Array:
-    """Computes vtrace for a sequence length k."""
-    chex.assert_rank([r_t, values, discount_t], 1)
-    chex.assert_type([r_t, values, discount_t], float)
-    # lambda_ = jnp.ones_like(discount_t) * lambda_  # If scalar, make into vector.
+VTraceOutput = collections.namedtuple(
+    "vtrace_output", ["errors", "pg_advantage", "q_estimate"]
+)
 
-    rho_t = jnp.minimum(1.0, rhos)
-    c_t = jnp.minimum(1.0, rhos) * lambda_t
 
-    delta_t = rho_t * (r_t + discount_t * values[1:] - values[:-1])
+def vtrace(
+    v_tm1: jax.Array,
+    v_t: jax.Array,
+    r_t: jax.Array,
+    discount_t: jax.Array,
+    rho_tm1: jax.Array,
+    lambda_: float = 1.0,
+    clip_rho_threshold: float = 1.0,
+    stop_target_gradients: bool = True,
+) -> jax.Array:
+    """Calculates V-Trace errors from importance weights.
 
-    # Iterate backwards to calculate advantages.
+    V-trace computes TD-errors from multistep trajectories by applying
+    off-policy corrections based on clipped importance sampling ratios.
+
+    See "IMPALA: Scalable Distributed Deep-RL with Importance Weighted Actor
+    Learner Architectures" by Espeholt et al. (https://arxiv.org/abs/1802.01561).
+
+    Args:
+      v_tm1: values at time t-1.
+      v_t: values at time t.
+      r_t: reward at time t.
+      discount_t: discount at time t.
+      rho_tm1: importance sampling ratios at time t-1.
+      lambda_: mixing parameter; a scalar or a vector for timesteps t.
+      clip_rho_threshold: clip threshold for importance weights.
+      stop_target_gradients: whether or not to apply stop gradient to targets.
+
+    Returns:
+      V-Trace error.
+    """
+    chex.assert_rank(
+        [v_tm1, v_t, r_t, discount_t, rho_tm1, lambda_], [1, 1, 1, 1, 1, {0, 1}]
+    )
+    chex.assert_type(
+        [v_tm1, v_t, r_t, discount_t, rho_tm1, lambda_],
+        [float, float, float, float, float, float],
+    )
+    chex.assert_equal_shape([v_tm1, v_t, r_t, discount_t, rho_tm1])
+
+    # Clip importance sampling ratios.
+    c_tm1 = jnp.minimum(1.0, rho_tm1) * lambda_
+    clipped_rhos_tm1 = jnp.minimum(clip_rho_threshold, rho_tm1)
+
+    # Compute the temporal difference errors.
+    td_errors = clipped_rhos_tm1 * (r_t + discount_t * v_t - v_tm1)
+
+    # Work backwards computing the td-errors.
     def _body(acc, xs):
-        deltas, discounts, cs = xs
-        acc = deltas + discounts * acc * cs
+        td_error, discount, c = xs
+        acc = td_error + discount * c * acc
         return acc, acc
 
-    _, advantage_t = jax.lax.scan(_body, 0.0, (delta_t, discount_t, c_t), reverse=True)
+    _, errors = jax.lax.scan(_body, 0.0, (td_errors, discount_t, c_tm1), reverse=True)
 
+    # Return errors, maybe disabling gradient flow through bootstrap targets.
     return jax.lax.select(
-        stop_target_gradients, jax.lax.stop_gradient(advantage_t), advantage_t
+        stop_target_gradients, jax.lax.stop_gradient(errors + v_tm1) - v_tm1, errors
     )
 
 
-def compute_returns(pred: ModelOutput, batch: TimeStep, config: MMDConfig):
+def vtrace_td_error_and_advantage(
+    v_tm1: jax.Array,
+    v_t: jax.Array,
+    r_t: jax.Array,
+    discount_t: jax.Array,
+    rho_tm1: jax.Array,
+    lambda_: float = 1.0,
+    clip_rho_threshold: float = 1.0,
+    clip_pg_rho_threshold: float = 1.0,
+    stop_target_gradients: bool = True,
+) -> VTraceOutput:
+    """Calculates V-Trace errors and PG advantage from importance weights.
+
+    This functions computes the TD-errors and policy gradient Advantage terms
+    as used by the IMPALA distributed actor-critic agent.
+
+    See "IMPALA: Scalable Distributed Deep-RL with Importance Weighted Actor
+    Learner Architectures" by Espeholt et al. (https://arxiv.org/abs/1802.01561)
+
+    Args:
+      v_tm1: values at time t-1.
+      v_t: values at time t.
+      r_t: reward at time t.
+      discount_t: discount at time t.
+      rho_tm1: importance weights at time t-1.
+      lambda_: mixing parameter; a scalar or a vector for timesteps t.
+      clip_rho_threshold: clip threshold for importance ratios.
+      clip_pg_rho_threshold: clip threshold for policy gradient importance ratios.
+      stop_target_gradients: whether or not to apply stop gradient to targets.
+
+    Returns:
+      a tuple of V-Trace error, policy gradient advantage, and estimated Q-values.
+    """
+    chex.assert_rank(
+        [v_tm1, v_t, r_t, discount_t, rho_tm1, lambda_], [1, 1, 1, 1, 1, {0, 1}]
+    )
+    chex.assert_type(
+        [v_tm1, v_t, r_t, discount_t, rho_tm1, lambda_],
+        [float, float, float, float, float, float],
+    )
+    chex.assert_equal_shape([v_tm1, v_t, r_t, discount_t, rho_tm1])
+
+    # If scalar make into vector.
+    lambda_ = jnp.ones_like(discount_t) * lambda_
+
+    errors = vtrace(
+        v_tm1,
+        v_t,
+        r_t,
+        discount_t,
+        rho_tm1,
+        lambda_,
+        clip_rho_threshold,
+        stop_target_gradients,
+    )
+    targets_tm1 = errors + v_tm1
+    q_bootstrap = jnp.concatenate(
+        [
+            lambda_[:-1] * targets_tm1[1:] + (1 - lambda_[:-1]) * v_tm1[1:],
+            v_t[-1:],
+        ],
+        axis=0,
+    )
+    q_estimate = r_t + discount_t * q_bootstrap
+    clipped_pg_rho_tm1 = jnp.minimum(clip_pg_rho_threshold, rho_tm1)
+    pg_advantages = clipped_pg_rho_tm1 * (q_estimate - v_tm1)
+    return VTraceOutput(
+        errors=errors, pg_advantage=pg_advantages, q_estimate=q_estimate
+    )
+
+
+def compute_returns(
+    v_tm1: chex.Array, rho_tm1: chex.Array, batch: TimeStep, config: MMDConfig
+):
     """Train for a single step."""
 
     valid = batch.env.valid
@@ -175,56 +282,16 @@ def compute_returns(pred: ModelOutput, batch: TimeStep, config: MMDConfig):
         batch.env.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
     ).squeeze()
 
-    expanded_action = batch.actor.action[..., None]
-    log_rhos = jnp.take_along_axis(
-        pred.log_pi, expanded_action, axis=-1
-    ) - jnp.take_along_axis(batch.actor.log_policy, expanded_action, axis=-1)
-    rhos = jnp.exp(log_rhos).squeeze(-1)
-    value_pred = jnp.squeeze(pred.v, axis=-1)
-    baselines = jnp.concatenate([value_pred, value_pred[-1:]])
-    discounts = valid * config.gamma
-    lambda_t = valid * config.lambda_
+    rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
+    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
+    valids = jnp.concatenate((valid[1:], valid[-1:]))
 
-    errors = jax.vmap(
-        functools.partial(compute_vtrace, stop_target_gradients=True),
-        in_axes=(1, 1, 1, 1, 1),
-    )(rewards, discounts, rhos, baselines, lambda_t).T
+    discount_t = valids * config.gamma
+    lambda_ = valids * config.lambda_
 
-    returns = jax.lax.stop_gradient(errors + baselines[:-1])
-    q_bootstrap = jnp.concatenate(
-        [
-            lambda_t[:-1] * returns[1:] + (1 - lambda_t[:-1]) * value_pred[1:],
-            baselines[-1:],
-        ],
-        axis=0,
+    return jax.vmap(vtrace_td_error_and_advantage, in_axes=1, out_axes=1)(
+        v_tm1, v_t, rewards, discount_t, rho_tm1, lambda_
     )
-    q_estimate = rewards + discounts * q_bootstrap
-
-    advantages = jax.lax.stop_gradient(
-        jnp.minimum(1.0, rhos) * (q_estimate - baselines[:-1])
-    )
-
-    return Targets(advantages=advantages, returns=returns)
-
-
-def compute_target_statistics(
-    batch: TimeStep, iterations: list[tuple[TimeStep, Targets]]
-):
-    valid_sum = batch.env.valid.sum()
-    target_adv_mean = (
-        sum([jnp.sum(t.advantages, where=m.env.valid) for m, t in iterations])
-        / valid_sum
-    )
-    target_adv_std = jnp.sqrt(
-        sum(
-            [
-                jnp.square(t.advantages - target_adv_mean).sum(where=m.env.valid)
-                for m, t in iterations
-            ]
-        )
-        / valid_sum
-    )
-    return target_adv_mean, target_adv_std
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
@@ -237,37 +304,32 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
             params, batch.env, batch.history
         )
 
-        targets = compute_returns(pred, batch, config)
-
         valid = batch.env.valid
-        value_pred = jnp.squeeze(pred.v, axis=-1)
 
-        action = batch.actor.action[..., None]
+        action = jax.lax.stop_gradient(batch.actor.action[..., None])
         log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
         log_mu = jnp.take_along_axis(batch.actor.log_policy, action, axis=-1).squeeze()
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
 
-        adv_mean = targets.advantages.mean(where=valid)
-        adv_std = targets.advantages.std(where=valid)
-        advantages = (targets.advantages - state.target_adv_mean) / (
+        targets = compute_returns(pred.v, ratio, batch, config)
+
+        advantages: jax.Array = jax.lax.stop_gradient(targets.pg_advantage)
+        adv_mean = advantages.mean(where=valid)
+        adv_std = advantages.std(where=valid)
+        advantages = (advantages - state.target_adv_mean) / (
             state.target_adv_std + 1e-8
         )
 
-        pg_loss = -advantages * ratio
-        # pg_loss2 = -advantages * ratio.clip(
-        #     min=1 - config.clip_coef, max=1 + config.clip_coef
-        # )
-
-        # loss_pg = jnp.maximum(pg1_loss, pg_loss2).mean(where=valid)
+        pg_loss = -advantages * log_pi
         loss_pg = pg_loss.mean(where=valid)
-        loss_v = jnp.square(targets.returns - value_pred).mean(where=valid)
+        loss_v = jnp.square(targets.errors).mean(where=valid)
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        ent_kl_coef_mult = jnp.sqrt(100_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(1_000_000 / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
@@ -278,14 +340,10 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
 
         old_approx_kl = (-log_ratio).mean(where=valid)
         approx_kl = ((ratio - 1) - log_ratio).mean(where=valid)
-        clipfracs = (
-            ~jnp.isclose(ratio.clip(1 - config.clip_coef, 1 + config.clip_coef), ratio)
-        ).mean(where=valid)
 
         logs = dict(
             old_approx_kl=old_approx_kl,
             approx_kl=approx_kl,
-            clipfracs=clipfracs,
             ent_kl_coef_mult=ent_kl_coef_mult,
             loss_pg=loss_pg,
             loss_v=loss_v,
@@ -304,15 +362,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
                 advantages,
             )
         )
-        logs.update(
-            collect_value_stats_telemetry_data(value_pred, targets.returns, valid)
-        )
-        logs.update(
-            dict(
-                adv_mean=adv_mean,
-                adv_std=adv_std,
-            )
-        )
+        logs.update(dict(adv_mean=adv_mean, adv_std=adv_std))
 
         return loss, logs
 
@@ -372,8 +422,7 @@ def main():
     model_config = get_model_cfg()
     pprint(learner_config)
 
-    training_network = get_model(model_config)
-    inference_network = get_model(model_config, training=False)
+    training_network = inference_network = get_model(model_config)
     # training_network = inference_network = get_dummy_model()
 
     training_collector = DoubleTrajectoryTrainingBatchCollector(

@@ -16,6 +16,7 @@ var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
 goog.exportSymbol('proto.AbsoluteEdgeFeature', null, global);
+goog.exportSymbol('proto.ContextFeature', null, global);
 goog.exportSymbol('proto.EntityFeature', null, global);
 goog.exportSymbol('proto.MovesetActionTypeEnum', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
@@ -173,6 +174,30 @@ proto.AbsoluteEdgeFeature = {
   ABSOLUTE_EDGE_FEATURE__VALID: 13,
   ABSOLUTE_EDGE_FEATURE__INDEX: 14,
   ABSOLUTE_EDGE_FEATURE__TURN_VALUE: 15
+};
+
+/**
+ * @enum {number}
+ */
+proto.ContextFeature = {
+  CONTEXT_FEATURE___UNSPECIFIED: 0,
+  CONTEXT_FEATURE__WEATHER_ID: 1,
+  CONTEXT_FEATURE__WEATHER_MIN_DURATION: 2,
+  CONTEXT_FEATURE__WEATHER_MAX_DURATION: 3,
+  CONTEXT_FEATURE__TERRAIN_ID: 4,
+  CONTEXT_FEATURE__TERRAIN_MIN_DURATION: 5,
+  CONTEXT_FEATURE__TERRAIN_MAX_DURATION: 6,
+  CONTEXT_FEATURE__PSEUDOWEATHER_ID: 7,
+  CONTEXT_FEATURE__PSEUDOWEATHER_MIN_DURATION: 8,
+  CONTEXT_FEATURE__PSEUDOWEATHER_MAX_DURATION: 9,
+  CONTEXT_FEATURE__MY_SIDECONDITIONS0: 10,
+  CONTEXT_FEATURE__MY_SIDECONDITIONS1: 11,
+  CONTEXT_FEATURE__MY_TOXIC_SPIKES: 12,
+  CONTEXT_FEATURE__MY_SPIKES: 13,
+  CONTEXT_FEATURE__OPP_SIDECONDITIONS0: 14,
+  CONTEXT_FEATURE__OPP_SIDECONDITIONS1: 15,
+  CONTEXT_FEATURE__OPP_TOXIC_SPIKES: 16,
+  CONTEXT_FEATURE__OPP_SPIKES: 17
 };
 
 goog.object.extend(exports, proto);

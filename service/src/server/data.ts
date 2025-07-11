@@ -30,7 +30,11 @@ import {
     WeatherEnumMap,
 } from "../../protos/enums_pb";
 import { OneDBoolean } from "./utils";
-import { EntityFeature, MovesetFeature } from "../../protos/features_pb";
+import {
+    EntityFeature,
+    MovesetFeature,
+    ContextFeature,
+} from "../../protos/features_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -86,6 +90,7 @@ export const sideIdMapping: {
 };
 
 export const numPokemonFields = Object.keys(EntityFeature).length;
+export const numContextFields = Object.keys(ContextFeature).length;
 export const numMoveFields = Object.keys(MovesetFeature).length;
 export const numMovesetFields = 10 * numMoveFields;
 
