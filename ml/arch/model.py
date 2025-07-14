@@ -13,24 +13,24 @@ from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.func import legal_log_policy, legal_policy
-from ml.utils import Params
+from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
+import functools
 
 
 class Model(nn.Module):
     cfg: ConfigDict
-    training: bool = True
 
     def setup(self):
         """
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.policy_head = PolicyHead(self.cfg.policy_head, self.training)
+        self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
-    def _shared_forward(self, env_step: EnvStep, history_step: HistoryStep):
+    def __call__(self, env_step: EnvStep, history_step: HistoryStep, temp: float = 1):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -38,17 +38,8 @@ class Model(nn.Module):
         latent_embeddings, action_embeddings = self.encoder(env_step, history_step)
 
         # Apply action argument heads
-        logit, pi, log_pi = jax.vmap(self.policy_head)(
+        logit, pi, log_pi = jax.vmap(functools.partial(self.policy_head, temp=temp))(
             latent_embeddings, action_embeddings, env_step.legal
-        )
-        return logit, pi, log_pi, latent_embeddings, action_embeddings
-
-    def train_step(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
-        """
-        Forward pass for training. Computes policy and value.
-        """
-        logit, pi, log_pi, latent_embeddings, _ = self._shared_forward(
-            env_step, history_step
         )
 
         # Apply the value head
@@ -57,25 +48,6 @@ class Model(nn.Module):
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
-
-    def predict_step(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
-        """
-        Forward pass for inference. Computes policy only. Value is None.
-        """
-        logit, pi, log_pi, *_ = self._shared_forward(env_step, history_step)
-
-        # Return the model output, value is not computed
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=None)
-
-    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
-        """
-        Default forward pass.
-        Calls train_step if training is True, otherwise calls predict_step.
-        """
-        if self.training:
-            return self.train_step(env_step, history_step)
-        else:
-            return self.predict_step(env_step, history_step)
 
 
 class DummyModel(nn.Module):
@@ -132,10 +104,10 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     return build_param_dict(vars, total_params, 0)
 
 
-def get_model(config: ConfigDict = None, training: bool = True) -> nn.Module:
+def get_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
         config = get_model_cfg()
-    return Model(config, training)
+    return Model(config)
 
 
 def get_dummy_model() -> nn.Module:
@@ -153,13 +125,13 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 
 def main():
-    network = get_model(training=True)
+    network = get_model()
     ex, hx = get_ex_step()
     hx = jax.tree.map(lambda x: x[:, None], hx)
     hx = clip_history(hx, resolution=64)
     hx = jax.tree.map(lambda x: x[:, 0], hx)
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

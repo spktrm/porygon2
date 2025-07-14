@@ -438,29 +438,41 @@ function getArrayFromPokemon(
     }
 
     let pokemon: Pokemon;
+    let isTransformed = false;
     if (
         candidate.volatiles.transform !== undefined &&
         candidate.volatiles.transform.pokemon !== undefined
     ) {
         pokemon = candidate.volatiles.transform.pokemon as Pokemon;
+        isTransformed = true;
     } else {
         pokemon = candidate;
     }
 
     const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
-    const item = pokemon.item ?? pokemon.lastItem;
-    const itemEffect = pokemon.itemEffect ?? pokemon.lastItemEffect;
     const ability = pokemon.ability;
 
-    const moveSlots = pokemon.moveSlots.slice(0, 4);
+    // We take candidate item here instead of pokemons since
+    // transformed does not copy item
+    const item = candidate.item ?? candidate.lastItem;
+    const itemEffect = candidate.itemEffect ?? candidate.lastItemEffect;
+
+    // Moves are stored on candidate
+    const moveSlots = candidate.moveSlots.slice(0, 4);
     const moveIds = [];
     const movePps = [];
 
     if (moveSlots) {
         for (const move of moveSlots) {
             const { id, ppUsed } = move;
-            const maxPP = pokemon.side.battle.gens.dex.moves.get(id).pp;
-            const correctUsed = ((isNaN(ppUsed) ? +!!ppUsed : ppUsed) * 5) / 8;
+            const maxPP = isTransformed
+                ? 5
+                : pokemon.side.battle.gens.dex.moves.get(id).pp;
+
+            // Remove pp up assumption (5/8)
+            const correctUsed =
+                (isNaN(ppUsed) ? +!!ppUsed : ppUsed) *
+                (isTransformed ? 1 : 5 / 8);
 
             moveIds.push(IndexValueFromEnum(MovesEnum, id));
             movePps.push(Math.floor((31 * correctUsed) / maxPP));
@@ -509,16 +521,18 @@ function getArrayFromPokemon(
             AbilitiesEnum.ABILITIES_ENUM___UNK;
     }
 
-    if (pokemon.lastMove === "") {
+    // We take candidate lastMove here instead of pokemons since
+    // transformed does not lastMove
+    if (candidate.lastMove === "") {
         dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] =
             MovesEnum.MOVES_ENUM___NULL;
-    } else if (pokemon.lastMove === "switch-in") {
+    } else if (candidate.lastMove === "switch-in") {
         dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] =
             MovesEnum.MOVES_ENUM___SWITCH;
     } else {
         dataArr[EntityFeature.ENTITY_FEATURE__LAST_MOVE] = IndexValueFromEnum(
             MovesEnum,
-            pokemon.lastMove,
+            candidate.lastMove,
         );
     }
 
@@ -526,12 +540,16 @@ function getArrayFromPokemon(
         GendernameEnum,
         pokemon.gender,
     );
-    dataArr[EntityFeature.ENTITY_FEATURE__ACTIVE] = pokemon.isActive() ? 1 : 0;
-    dataArr[EntityFeature.ENTITY_FEATURE__FAINTED] = pokemon.fainted ? 1 : 0;
+    dataArr[EntityFeature.ENTITY_FEATURE__ACTIVE] = candidate.isActive()
+        ? 1
+        : 0;
+    dataArr[EntityFeature.ENTITY_FEATURE__FAINTED] = candidate.fainted ? 1 : 0;
 
-    const isHpBug = !pokemon.fainted && pokemon.hp === 0;
-    const hp = isHpBug ? 100 : pokemon.hp;
-    const maxHp = isHpBug ? 100 : pokemon.maxhp;
+    // We take candidate HP here instead of pokemons since
+    // transformed does not copy HP
+    const isHpBug = !candidate.fainted && candidate.hp === 0;
+    const hp = isHpBug ? 100 : candidate.hp;
+    const maxHp = isHpBug ? 100 : candidate.maxhp;
     const hpRatio = hp / maxHp;
     dataArr[EntityFeature.ENTITY_FEATURE__HP] = hp;
     dataArr[EntityFeature.ENTITY_FEATURE__MAXHP] = maxHp;
@@ -539,19 +557,25 @@ function getArrayFromPokemon(
         MAX_RATIO_TOKEN * hpRatio,
     );
 
-    dataArr[EntityFeature.ENTITY_FEATURE__STATUS] = pokemon.status
-        ? IndexValueFromEnum(StatusEnum, pokemon.status)
+    // We take candidate status here instead of pokemons since
+    // transformed does not copy status
+    dataArr[EntityFeature.ENTITY_FEATURE__STATUS] = candidate.status
+        ? IndexValueFromEnum(StatusEnum, candidate.status)
         : StatusEnum.STATUS_ENUM___NULL;
-    dataArr[EntityFeature.ENTITY_FEATURE__HAS_STATUS] = pokemon.status ? 1 : 0;
+    dataArr[EntityFeature.ENTITY_FEATURE__HAS_STATUS] = candidate.status
+        ? 1
+        : 0;
     dataArr[EntityFeature.ENTITY_FEATURE__TOXIC_TURNS] =
-        pokemon.statusState.toxicTurns;
+        candidate.statusState.toxicTurns;
     dataArr[EntityFeature.ENTITY_FEATURE__SLEEP_TURNS] =
-        pokemon.statusState.sleepTurns;
+        candidate.statusState.sleepTurns;
     dataArr[EntityFeature.ENTITY_FEATURE__BEING_CALLED_BACK] =
-        pokemon.beingCalledBack ? 1 : 0;
-    dataArr[EntityFeature.ENTITY_FEATURE__TRAPPED] = pokemon.trapped ? 1 : 0;
+        candidate.beingCalledBack ? 1 : 0;
+    dataArr[EntityFeature.ENTITY_FEATURE__TRAPPED] = candidate.trapped ? 1 : 0;
     dataArr[EntityFeature.ENTITY_FEATURE__NEWLY_SWITCHED] =
-        pokemon.newlySwitched ? 1 : 0;
+        candidate.newlySwitched ? 1 : 0;
+
+    // We take pokemon level here
     dataArr[EntityFeature.ENTITY_FEATURE__LEVEL] = pokemon.level;
 
     for (let moveIndex = 0; moveIndex < 4; moveIndex++) {
@@ -563,11 +587,9 @@ function getArrayFromPokemon(
         ] = movePps[moveIndex];
     }
 
+    // Only copy candidate volatiles
     let volatiles = BigInt(0b0);
-    for (const [key] of Object.entries({
-        ...pokemon.volatiles,
-        ...candidate.volatiles,
-    })) {
+    for (const [key] of Object.entries(candidate.volatiles)) {
         const index = IndexValueFromEnum(VolatilestatusEnum, key);
         volatiles |= BigInt(1) << BigInt(index);
     }
@@ -581,6 +603,7 @@ function getArrayFromPokemon(
         playerIndex,
     );
 
+    // Only copy pokemon boosts
     dataArr[EntityFeature.ENTITY_FEATURE__BOOST_ATK_VALUE] =
         pokemon.boosts.atk ?? 0;
     dataArr[EntityFeature.ENTITY_FEATURE__BOOST_DEF_VALUE] =
@@ -596,9 +619,9 @@ function getArrayFromPokemon(
     dataArr[EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE] =
         pokemon.boosts.accuracy ?? 0;
 
+    // Copy candidate type change
     let typeChanged = BigInt(0b0);
-    const typechangeVolatile =
-        pokemon.volatiles.typechange ?? candidate.volatiles.typechange;
+    const typechangeVolatile = candidate.volatiles.typechange;
     if (typechangeVolatile) {
         if (typechangeVolatile.apparentType) {
             for (const type of typechangeVolatile.apparentType.split("/")) {
@@ -1063,11 +1086,12 @@ class EdgeBuffer {
     }
 
     updateLatestEdgeFromOf(effect: Partial<Effect>, isMe: number) {
-        const { effectType } = effect;
-        if (effectType) {
+        const { id, effectType, kind } = effect;
+        const trueEffectType = effectType === undefined ? kind : effectType;
+        if (trueEffectType !== undefined && id !== undefined) {
             const fromTypeToken = IndexValueFromEnum(
                 EffecttypesEnum,
-                effectType,
+                trueEffectType,
             );
             const fromSourceToken = getEffectToken(effect);
             const numFromTypes =
@@ -1356,7 +1380,7 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer.addEdge(preprocessedEdge);
     }
 
-    "|move|"(args: Args["|move|"]) {
+    "|move|"(args: Args["|move|"], kwArgs: KWArgs["|move|"]) {
         const [argName, poke1Ident, moveId] = args;
 
         const playerIndex = this.player.getPlayerIndex();
@@ -1383,6 +1407,11 @@ export class EventHandler implements Protocol.Handler {
             value: IndexValueFromEnum(MovesEnum, move.id),
         });
         this.addEdge(edge);
+
+        if (kwArgs.from) {
+            const fromEffect = this.getCondition(kwArgs.from);
+            this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+        }
     }
 
     "|player|"(args: Args["|player|"]) {
@@ -1395,14 +1424,17 @@ export class EventHandler implements Protocol.Handler {
     }
 
     "|drag|"(args: Args["|drag|"]) {
-        this.handleSwitch(args);
+        this.handleSwitch(args, {});
     }
 
-    "|switch|"(args: Args["|switch|"]) {
-        this.handleSwitch(args);
+    "|switch|"(args: Args["|switch|"], kwArgs: KWArgs["|switch|"]) {
+        this.handleSwitch(args, kwArgs);
     }
 
-    handleSwitch(args: Args["|switch|" | "|drag|"]) {
+    handleSwitch(
+        args: Args["|switch|" | "|drag|"],
+        kwArgs: KWArgs["|switch|" | "|drag|"],
+    ) {
         const [argName, poke1Ident] = args;
 
         const playerIndex = this.player.getPlayerIndex();
@@ -1430,6 +1462,14 @@ export class EventHandler implements Protocol.Handler {
             value: MovesEnum.MOVES_ENUM___SWITCH,
         });
         this.addEdge(edge);
+
+        if (argName === "switch") {
+            const from = (kwArgs as KWArgs["|switch|"]).from;
+            if (from) {
+                const fromEffect = this.getCondition(from);
+                this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+            }
+        }
     }
 
     "|cant|"(args: Args["|cant|"]) {
@@ -1898,7 +1938,8 @@ export class EventHandler implements Protocol.Handler {
                 : IndexValueFromEnum(WeatherEnum, weatherId);
         for (const isMe of [0, 1]) {
             this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
-            this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
+            if (weatherId !== "none")
+                this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
         }
         this.edgeBuffer.setLatestAbsoluteEdgeFeature(
             AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID,
@@ -2155,7 +2196,44 @@ export class EventHandler implements Protocol.Handler {
         this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
     }
 
-    "|-transform|"() {}
+    rememberTransformed(
+        poke1Ident: Protocol.PokemonIdent,
+        poke2Ident: Protocol.PokemonIdent,
+    ) {
+        const { pokemon: srcPokemon } = this.getPokemon(poke1Ident, false)!;
+        const { pokemon: tgtPokemon } = this.getPokemon(poke2Ident)!;
+
+        if (srcPokemon !== null && tgtPokemon !== null) {
+            const transformedPokemon =
+                srcPokemon?.volatiles?.transform?.pokemon;
+            if (transformedPokemon === undefined) {
+                return;
+            }
+            const currentRememberedMoves = new Set(
+                tgtPokemon.moveSlots.map((x) => x.id),
+            );
+            for (const { id } of srcPokemon.moveSlots.slice(0, 4)) {
+                if (!currentRememberedMoves.has(id)) {
+                    tgtPokemon.rememberMove(id);
+                }
+            }
+            tgtPokemon.rememberAbility(transformedPokemon.ability);
+        }
+    }
+
+    "|-transform|"(args: Args["|-transform|"], kwArgs: KWArgs["|-transform|"]) {
+        const [argName, poke1Ident, poke2Ident] = args;
+        const { pokemon } = this.getPokemon(poke1Ident)!;
+
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+        const isMe = isMySide(pokemon!.side.n, playerIndex);
+
+        this.edgeBuffer.updateLatestMinorArgs(argName, isMe);
+        this.rememberTransformed(poke1Ident, poke2Ident);
+    }
 
     "|-mega|"() {}
 
@@ -2183,7 +2261,7 @@ export class EventHandler implements Protocol.Handler {
             for (const fromEffect of [
                 this.getCondition(kwArgs.from),
                 this.getCondition(conditionId1),
-                this.getCondition(conditionId2),
+                // this.getCondition(conditionId2),
             ]) {
                 this.edgeBuffer.updateLatestEdgeFromOf(fromEffect, isMe);
             }
@@ -2979,12 +3057,12 @@ export class StateHandler {
 
         state.setCurrentContext(this.getCurrentContext());
 
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const readableHistory = EdgeBuffer.toReadableHistory(history);
+        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // const readablePublicTeam = StateHandler.toReadableTeam(publicTeam);
+        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // const readablePrivateTeam = StateHandler.toReadableTeam(privateTeam);
+        // // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // const readableHistory = EdgeBuffer.toReadableHistory(history);
 
         return state;
     }

@@ -15,6 +15,11 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
+def threshold(arr: np.ndarray, thresh: float = 0.1):
+    pi = np.where(arr < thresh, 0, arr)
+    return pi / pi.sum(axis=-1, keepdims=True)
+
+
 class InferenceModel:
     def __init__(self, fpath: str = None, seed: int = 42):
         self.np_rng = np.random.RandomState(seed)
@@ -39,15 +44,16 @@ class InferenceModel:
 
     def predict(self, env_step: EnvStep, history_step: HistoryStep):
         output: ModelOutput = self._network_jit_apply(env_step, history_step)
+        pi = threshold(output.pi, 1e-2)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
             axis=-1,
-            arr=output.pi,
+            arr=pi,
         )
         return PredictionResponse(
             pi=output.pi.flatten().tolist(),
             log_pi=output.log_pi.flatten().tolist(),
             logit=output.logit.flatten().tolist(),
-            v=output.v.item(),
+            v=0 if output.v is None else output.v.item(),
             action=action.item(),
         )
