@@ -82,11 +82,11 @@ async function worker(gameId: number, playerIds: number[]) {
 
 async function main() {
     for (const { gameId, playerIds } of [
-        // { gameId: 0, playerIds: [0, 1] },
+        { gameId: 0, playerIds: [0, 1] },
         // { gameId: 1, playerIds: [2, 3] },
         // { gameId: 10000, playerIds: [10000] },
         // { gameId: 10001, playerIds: [10001] },
-        { gameId: 10002, playerIds: [10002] },
+        // { gameId: 10002, playerIds: [10002] },
         // { gameId: 10003, playerIds: [10003] },
     ]) {
         await worker(gameId, playerIds);

@@ -36,7 +36,7 @@ from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollecto
 @chex.dataclass(frozen=True)
 class MMDConfig:
     num_steps = 10_000_000
-    num_actors: int = 32
+    num_actors: int = 64
     do_eval: bool = True
     num_eval_games: int = 200
 
@@ -60,7 +60,7 @@ class MMDConfig:
     kl_loss_coef: float = 0.05
 
     # Stopping param
-    kl_target: float = 0.05
+    kl_target: float = 0.15
 
 
 def get_config():
@@ -312,7 +312,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
 
-        targets = compute_returns(pred.v, ratio, batch, config)
+        targets = compute_returns(pred.v.reshape(*valid.shape), ratio, batch, config)
 
         advantages: jax.Array = jax.lax.stop_gradient(targets.pg_advantage)
         adv_mean = advantages.mean(where=valid)
@@ -329,7 +329,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        ent_kl_coef_mult = jnp.sqrt(1_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
