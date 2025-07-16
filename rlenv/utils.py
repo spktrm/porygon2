@@ -95,3 +95,22 @@ class FairLock:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
+
+
+class NoOpLock:
+    """
+    A no-op lock that does nothing.
+    Useful for cases where a lock is required but no locking is needed.
+    """
+
+    def acquire(self, blocking=True, timeout=-1):
+        return True
+
+    def release(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
