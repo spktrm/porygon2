@@ -426,8 +426,8 @@ export class Player extends BattleStreams.BattlePlayer {
             if (
                 this.isWorldReady() &&
                 (this.offline || this.checkStreamBuffer()) &&
-                // this.isActionRequired(chunk)
-                this.isActionRequired2(chunk)
+                this.isActionRequired(chunk)
+                // this.isActionRequired2(chunk)
             ) {
                 shiftBackup();
                 this.privateBattle.requestStatus = "received";

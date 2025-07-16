@@ -44,7 +44,7 @@ class InferenceModel:
 
     def predict(self, env_step: EnvStep, history_step: HistoryStep):
         output: ModelOutput = self._network_jit_apply(env_step, history_step)
-        pi = threshold(output.pi, 1e-2)
+        pi = threshold(output.pi, 3e-2)
         action = np.apply_along_axis(
             lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
             axis=-1,

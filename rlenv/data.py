@@ -68,7 +68,7 @@ NUM_ABSOLUTE_EDGE_FIELDS = len(AbsoluteEdgeFeature.keys())
 NUM_ENTITY_FIELDS = len(EntityFeature.keys())
 NUM_CONTEXT_FIELDS = len(ContextFeature.keys())
 
-NUM_HISTORY = 768
+NUM_HISTORY = 384
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES

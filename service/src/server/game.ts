@@ -12,7 +12,7 @@ import { getEvalAction } from "./eval";
 const formatId = "gen3randombattle";
 const generator = TeamGenerators.getTeamGenerator(formatId);
 
-export const DRAW_TURNS = 150;
+export const DRAW_TURNS = 100;
 
 export class Game {
     gameId: number;

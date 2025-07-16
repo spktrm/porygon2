@@ -11,7 +11,13 @@ from rlenv.data import (
     NUM_MOVE_FIELDS,
     NUM_RELATIVE_EDGE_FIELDS,
 )
-from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep, RewardStep
+from rlenv.interfaces import (
+    EnvStep,
+    HistoryContainer,
+    HistoryStep,
+    RewardStep,
+    TimeStep,
+)
 from rlenv.protos.features_pb2 import AbsoluteEdgeFeature
 from rlenv.protos.history_pb2 import History
 from rlenv.protos.state_pb2 import State
@@ -56,27 +62,13 @@ def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def clip_env_action(history: HistoryStep, resolution: int = 64) -> HistoryStep:
-    history_length = np.max(
-        history.major_history.absolute_edges[
-            ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
-        ].sum(0),
-        axis=0,
-    ).item()
-
-    # Round history length up to the nearest multiple of resolution
-    rounded_length = int(np.ceil(history_length / resolution) * resolution)
-
-    return jax.tree.map(lambda x: x[:rounded_length], history)
-
-
 def get_legal_mask(state: State):
     buffer = np.frombuffer(state.legal_actions, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)
     return mask[:10].astype(bool)
 
 
-def process_state(state: State):
+def process_state(state: State) -> tuple[EnvStep, HistoryStep]:
     player_index = int(state.info.player_index)
 
     history_step = get_history(state.history, NUM_HISTORY)
@@ -143,7 +135,7 @@ def process_state(state: State):
         major_history=history_step,
     )
 
-    return expand_dims(env_step, axis=0), history_step
+    return env_step, history_step
 
 
 def as_jax_arr(x):
@@ -152,6 +144,6 @@ def as_jax_arr(x):
 
 def get_ex_step():
     ex, hx = process_state(EX_STATE)
-    ex = as_jax_arr(ex)
-    hx = as_jax_arr(hx)
-    return ex, hx
+    ex = jax.tree.map(lambda x: x[None, None, ...], ex)
+    hx = jax.tree.map(lambda x: x[:, None, ...], hx)
+    return TimeStep(env=ex, history=hx)

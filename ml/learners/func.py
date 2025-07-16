@@ -7,9 +7,8 @@ import numpy as np
 import optax
 from flax.training import train_state
 
-from ml.func import get_average_logit_value, get_loss_entropy, renormalize
 from rlenv.data import ACTION_STRINGS
-from rlenv.interfaces import TimeStep
+from rlenv.interfaces import TimeStep, Transition
 from rlenv.protos.features_pb2 import AbsoluteEdgeFeature, MovesetFeature
 
 
@@ -21,6 +20,28 @@ def conditional_breakpoint(pred):
         jax.debug.breakpoint()
 
     jax.lax.cond(pred, true_fn, false_fn)
+
+
+def renormalize(loss: chex.Array, mask: chex.Array) -> chex.Array:
+    """The `normalization` is the number of steps over which loss is computed."""
+    chex.assert_equal_shape((loss, mask))
+    loss = jnp.sum(loss * mask)
+    normalization = jnp.sum(mask)
+    return loss / (normalization + (normalization == 0.0))
+
+
+def get_loss_entropy(policy: chex.Array, valid: chex.Array) -> chex.Array:
+    policy_sum = policy.sum(axis=-1, keepdims=True)
+    policy_sum = policy_sum + (policy_sum == 0)
+    policy = policy / policy_sum
+    log_policy = jnp.where(policy > 0, jnp.log(policy), 1)
+    loss_entropy = (policy * log_policy).sum(-1)
+    return renormalize(loss_entropy, valid)
+
+
+def get_average_logit_value(logit: chex.Array, legal: chex.Array, valid: chex.Array):
+    logit = logit - logit.mean(keepdims=True, axis=-1, where=legal)
+    return renormalize(jnp.abs(logit).mean(axis=-1, where=legal), valid)
 
 
 def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
@@ -56,19 +77,21 @@ def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
 
 
 @jax.jit
-def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
-    valid = batch.env.valid
+def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
+    valid = batch.timestep.env.valid
     lengths = valid.sum(0)
 
-    history_lengths = batch.history.major_history.absolute_edges[
+    history_lengths = batch.timestep.history.major_history.absolute_edges[
         ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
     ].sum(0)
 
-    can_move = batch.env.legal[..., :4].any(axis=-1)
-    can_switch = batch.env.legal[..., 4:].any(axis=-1)
+    can_move = batch.timestep.env.legal[..., :4].any(axis=-1)
+    can_switch = batch.timestep.env.legal[..., 4:].any(axis=-1)
 
-    move_ratio = renormalize(batch.actor.action < 4, can_move & can_switch & valid)
-    switch_ratio = renormalize(batch.actor.action >= 4, can_move & can_switch & valid)
+    move_ratio = renormalize(batch.actorstep.action < 4, can_move & can_switch & valid)
+    switch_ratio = renormalize(
+        batch.actorstep.action >= 4, can_move & can_switch & valid
+    )
 
     return dict(
         trajectory_length_mean=lengths.mean(),
@@ -77,11 +100,11 @@ def collect_batch_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
-        draw_ratio=batch.env.draw.any(axis=0).astype(float).mean(),
+        draw_ratio=batch.timestep.env.draw.any(axis=0).astype(float).mean(),
         early_finish_ratio=(
-            jnp.abs(batch.env.rewards.win_rewards[..., 0] * batch.env.valid).sum(0) != 1
+            jnp.abs(batch.timestep.env.rewards.win_rewards[..., 0] * valid).sum(0) != 1
         ).mean(),
-        reward_sum=jnp.abs(batch.env.rewards.win_rewards * batch.env.valid[..., None])
+        reward_sum=jnp.abs(batch.timestep.env.rewards.win_rewards * valid[..., None])
         .sum(0)
         .mean(),
     )
@@ -314,43 +337,10 @@ def per_module_gradient_stats(grads: chex.ArrayTree) -> Dict[str, Any]:
 
 
 @jax.jit
-def collect_nn_telemetry_data(state: train_state.TrainState) -> Dict[str, Any]:
+def collect_state_telemetry_data(state: train_state.TrainState) -> Dict[str, Any]:
     return dict(
-        param_norm=optax.global_norm(state.params),
         actor_steps=state.actor_steps,
     )
-
-
-def collect_loss_value_telemetry_data(
-    value_loss: chex.Array,
-    policy_loss: chex.Array,
-    entropy_loss: chex.Array = None,
-) -> dict[str, Any]:
-    logs = {
-        "value_loss": value_loss,
-        "policy_loss": policy_loss,
-    }
-    if entropy_loss is not None:
-        logs["entropy_loss"] = entropy_loss
-    return logs
-
-
-def collect_regularisation_telemetry_data(
-    policy: chex.Array,
-    regularisation_policy: chex.Array,
-    legal_mask: chex.Array,
-    state_mask: chex.Array,
-) -> dict[str, Any]:
-    raw_reg_rewards = regularisation_policy.mean(where=legal_mask, axis=-1).mean(
-        where=state_mask
-    )
-    norm_reg_rewards = jnp.squeeze((policy * regularisation_policy).sum(axis=-1)).mean(
-        where=state_mask
-    )
-    return {
-        "raw_reg_rewards": raw_reg_rewards,
-        "norm_reg_rewards": norm_reg_rewards,
-    }
 
 
 def collect_policy_stats_telemetry_data(

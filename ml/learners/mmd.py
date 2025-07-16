@@ -1,15 +1,20 @@
 import collections
 import functools
 import json
-import math
 import os
 import pickle
+import queue
+import random
+import threading
+import traceback
 from pprint import pprint
-from typing import Iterator
 
 import chex
 import flax.linen as nn
 import jax
+import jax.experimental
+import jax.experimental.compilation_cache
+import jax.experimental.compilation_cache.compilation_cache
 import jax.numpy as jnp
 import numpy as np
 import optax
@@ -23,26 +28,29 @@ from ml.arch.model import get_model, get_num_params
 from ml.config import AdamConfig
 from ml.learners.func import (
     collect_batch_telemetry_data,
-    collect_nn_telemetry_data,
     collect_parameter_and_gradient_telemetry_data,
     collect_policy_stats_telemetry_data,
+    collect_state_telemetry_data,
+    collect_value_stats_telemetry_data,
 )
 from ml.utils import Params, get_most_recent_file
-from rlenv.env import get_ex_step
-from rlenv.interfaces import ModelOutput, TimeStep
-from rlenv.main import DoubleTrajectoryTrainingBatchCollector, EvalBatchCollector
+from rlenv.env import clip_history, get_ex_step
+from rlenv.interfaces import ModelOutput, TimeStep, Transition
+from rlenv.main import Actor, Agent, SinglePlayerSyncEnvironment
+from rlenv.utils import FairLock
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
     num_steps = 10_000_000
-    num_actors: int = 64
+    num_actors: int = 32
     do_eval: bool = True
     num_eval_games: int = 200
+    unroll_length: int = 192
+    replay_buffer_capacity: int = 512
 
     # Batch iteration params
-    num_epochs: int = 40
-    minibatch_size: int = 4
+    batch_size: int = 2
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0, b2=0.999, eps=1e-8, weight_decay=0)
@@ -76,11 +84,13 @@ class TrainState(train_state.TrainState):
 
 def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     """Creates an initial `TrainState`."""
-    ex, hx = get_ex_step()
+    ts = get_ex_step()
+    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
-    params = module.init(rng, ex, hx)
+    params = module.init(rng, ts)
 
     tx = optax.chain(
+        optax.clip_by_global_norm(config.clip_gradient),
         optax.adamw(
             learning_rate=config.learning_rate,
             eps_root=0.0,
@@ -89,10 +99,13 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
             eps=config.adam.eps,
             weight_decay=config.adam.weight_decay,
         ),
-        optax.clip_by_global_norm(config.clip_gradient),
     )
 
-    return TrainState.create(apply_fn=module.apply, params=params, tx=tx)
+    return TrainState.create(
+        apply_fn=jax.vmap(module.apply, in_axes=(None, 1), out_axes=1),
+        params=params,
+        tx=tx,
+    )
 
 
 def save(state: TrainState):
@@ -135,7 +148,7 @@ def load(state: TrainState, path: str):
 
 
 VTraceOutput = collections.namedtuple(
-    "vtrace_output", ["errors", "pg_advantage", "q_estimate"]
+    "vtrace_output", ["returns", "pg_advantage", "q_estimate"]
 )
 
 
@@ -267,19 +280,21 @@ def vtrace_td_error_and_advantage(
     clipped_pg_rho_tm1 = jnp.minimum(clip_pg_rho_threshold, rho_tm1)
     pg_advantages = clipped_pg_rho_tm1 * (q_estimate - v_tm1)
     return VTraceOutput(
-        errors=errors, pg_advantage=pg_advantages, q_estimate=q_estimate
+        returns=targets_tm1, pg_advantage=pg_advantages, q_estimate=q_estimate
     )
 
 
-def compute_returns(
-    v_tm1: chex.Array, rho_tm1: chex.Array, batch: TimeStep, config: MMDConfig
+def _compute_returns(
+    v_tm1: chex.Array, rho_tm1: chex.Array, batch: Transition, config: MMDConfig
 ):
     """Train for a single step."""
 
-    valid = batch.env.valid
+    valid = batch.timestep.env.valid
 
     rewards = jnp.take_along_axis(
-        batch.env.rewards.win_rewards, batch.env.player_id[..., None], axis=-1
+        batch.timestep.env.rewards.win_rewards,
+        batch.timestep.env.player_id[..., None],
+        axis=-1,
     ).squeeze()
 
     rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
@@ -295,24 +310,42 @@ def compute_returns(
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
-def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
+def compute_returns(state: TrainState, batch: Transition, config: MMDConfig):
+
+    pred: ModelOutput = state.apply_fn(state.params, batch.timestep)
+
+    valid = batch.timestep.env.valid
+
+    action = jax.lax.stop_gradient(batch.actorstep.action[..., None])
+    log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
+    log_mu = jnp.take_along_axis(
+        batch.actorstep.model_output.log_pi, action, axis=-1
+    ).squeeze()
+    log_ratio = log_pi - log_mu
+    ratio = jnp.exp(log_ratio)
+
+    return _compute_returns(pred.v.reshape(*valid.shape), ratio, batch, config)
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def train_step(
+    state: TrainState, batch: Transition, targets: VTraceOutput, config: MMDConfig
+):
     """Train for a single step."""
 
     def loss_fn(params: Params):
 
-        pred: ModelOutput = jax.vmap(state.apply_fn, (None, 1, 1), 1)(
-            params, batch.env, batch.history
-        )
+        pred: ModelOutput = state.apply_fn(params, batch.timestep)
 
-        valid = batch.env.valid
+        valid = batch.timestep.env.valid
 
-        action = jax.lax.stop_gradient(batch.actor.action[..., None])
+        action = jax.lax.stop_gradient(batch.actorstep.action[..., None])
         log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
-        log_mu = jnp.take_along_axis(batch.actor.log_policy, action, axis=-1).squeeze()
+        log_mu = jnp.take_along_axis(
+            batch.actorstep.model_output.log_pi, action, axis=-1
+        ).squeeze()
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
-
-        targets = compute_returns(pred.v.reshape(*valid.shape), ratio, batch, config)
 
         advantages: jax.Array = jax.lax.stop_gradient(targets.pg_advantage)
         adv_mean = advantages.mean(where=valid)
@@ -323,7 +356,9 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
 
         pg_loss = -advantages * log_pi
         loss_pg = pg_loss.mean(where=valid)
-        loss_v = jnp.square(targets.errors).mean(where=valid)
+        loss_v = jnp.square(pred.v.reshape(*valid.shape) - targets.returns).mean(
+            where=valid
+        )
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         backward_kl_approx = ratio * log_ratio - (ratio - 1)
@@ -355,13 +390,14 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
                 pred.logit,
                 pred.pi,
                 pred.log_pi,
-                batch.env.legal,
+                batch.timestep.env.legal,
                 valid,
-                batch.actor.policy,
+                batch.actorstep.model_output.pi,
                 ratio,
                 advantages,
             )
         )
+        logs.update(collect_value_stats_telemetry_data(pred.v, targets.returns, valid))
         logs.update(dict(adv_mean=adv_mean, adv_std=adv_std))
 
         return loss, logs
@@ -376,7 +412,7 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
 
     adv_tau = 1e-1
     state = state.replace(
-        actor_steps=state.actor_steps + batch.env.valid.sum(),
+        actor_steps=state.actor_steps + batch.timestep.env.valid.sum(),
         target_adv_mean=state.target_adv_mean * (1 - adv_tau)
         + logs["adv_mean"] * adv_tau,
         target_adv_std=state.target_adv_std * (1 - adv_tau) + logs["adv_std"] * adv_tau,
@@ -385,52 +421,220 @@ def train_step(state: TrainState, batch: TimeStep, config: MMDConfig):
     return state, logs
 
 
-def iterate(batch: TimeStep, minibatch_size: int = 4) -> Iterator[TimeStep]:
-    _, batch_size, *__ = batch.env.valid.shape
-    indices = np.arange(batch_size)
-    np.random.shuffle(indices)
-    for batch_index in range(math.ceil(batch_size / minibatch_size)):
-        minibatch_indices = indices[
-            batch_index * minibatch_size : (batch_index + 1) * minibatch_size
-        ]
-        yield jax.tree.map(lambda x: x[:, minibatch_indices], batch)
+def run_training_actor(actor: Actor, stop_signal: list[bool]):
+    """Runs an actor to produce num_trajectories trajectories."""
+    old_step_count = 0
+    while not stop_signal[0]:
+        step_count, params = actor.pull_params()
+        assert step_count >= old_step_count, (
+            f"Actor {actor._env.game_id} tried to pull params with frame count "
+            f"{step_count} but expected at least {old_step_count}."
+        )
+        actor.unroll_and_push(step_count, params)
+        old_step_count = step_count
 
 
-def evaluate(evaluation_collector: EvalBatchCollector, state: train_state.TrainState):
-    eval_batch = evaluation_collector.collect_batch_trajectory(state.params)
+def run_eval_actor(actor: Actor, stop_signal: list[bool]):
+    """Runs an actor to produce num_trajectories trajectories."""
+    old_step_count = 0
+    game_id = actor._env.game_id - 10_000
+    win_reward_sum = {}
+    while not stop_signal[0]:
+        step_count, params = actor.pull_params()
+        assert step_count >= old_step_count, (
+            f"Actor {actor._env.game_id} tried to pull params with frame count "
+            f"{step_count} but expected at least {old_step_count}."
+        )
+        if step_count not in win_reward_sum:
+            win_reward_sum[step_count] = (0, 0)
+        params = jax.device_put(params)
+        subkey = actor.split_rng()
+        eval_trajectory = actor.unroll(subkey, step_count, params)
+        win_rewards = np.sign(
+            (eval_trajectory.timestep.env.rewards.win_rewards[..., 0].squeeze()).sum(0)
+        )
+        # Update the win reward sum for this step count.
+        reward_count, reward_sum = win_reward_sum[step_count]
+        win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
 
-    win_rewards = np.sign(
-        (
-            eval_batch.actor.rewards.win_rewards[..., 0].squeeze()
-            * eval_batch.env.valid.squeeze()
-        ).sum(0)
+        # Log the win reward mean for this step count if we have enough data.
+        if old_step_count < step_count:
+            reward_count, reward_sum = win_reward_sum.pop(old_step_count)
+            wandb.log(
+                {
+                    "Step": old_step_count,
+                    f"wr{game_id}": reward_sum / max(1, reward_count),
+                }
+            )
+            old_step_count = step_count
+
+
+class ReplayBuffer:
+    """A simple, thread-safe FIFO experience replay buffer."""
+
+    def __init__(self, capacity: int):
+        self._capacity = capacity
+        self._buffer = collections.deque(maxlen=capacity)
+        self._lock = FairLock()
+        self._pbar = tqdm(desc="producer", smoothing=0.1)
+
+    def is_ready(self):
+        return len(self) > (self._capacity // 2)
+
+    def __len__(self) -> int:
+        return len(self._buffer)
+
+    def add(self, transition: Transition):
+        with self._lock:
+            self._buffer.append(transition)
+            self._pbar.update(1)
+
+    def sample(self, batch_size: int) -> Transition:
+        with self._lock:
+            if len(self._buffer) < batch_size:
+                raise ValueError(
+                    f"Not enough transitions in buffer to sample batch of size {batch_size}."
+                    f" Buffer size: {len(self._buffer)}"
+                )
+            batch = random.sample(self._buffer, batch_size)
+
+        stacked_batch: Transition = jax.tree.map(
+            lambda *xs: np.stack(xs, axis=1), *batch
+        )
+
+        resolution = 64
+        num_valid = stacked_batch.timestep.env.valid.sum(0).max().item() + 1
+        num_valid = int(np.ceil(num_valid / resolution) * resolution)
+
+        stacked_batch = Transition(
+            timestep=TimeStep(
+                env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
+                history=clip_history(
+                    stacked_batch.timestep.history, resolution=resolution
+                ),
+            ),
+            actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
+        )
+
+        return jax.device_put(stacked_batch)
+
+
+def host_to_device_worker(
+    trajectory_queue: queue.Queue[Transition],
+    stop_signal: list[bool],
+    replay_buffer: ReplayBuffer,
+    start_condition: threading.Condition,
+):
+    """Elementary data pipeline."""
+
+    # Wait for the buffer to be filled by other threads/processes if necessary
+    with start_condition:
+        while not replay_buffer.is_ready():
+            try:
+                # We can still help fill the buffer from our assigned queue
+                transition = trajectory_queue.get(timeout=1)
+            except queue.Empty:
+                if stop_signal[0]:
+                    return
+                # Wait for a signal that the buffer might be ready
+                start_condition.wait(timeout=1)
+                continue
+            else:
+                replay_buffer.add(transition)
+                # If we made it ready, notify others
+                if replay_buffer.is_ready():
+                    start_condition.notify_all()
+
+    while not stop_signal[0]:
+        # 1. Add new transitions to the replay buffer as they come in.
+        try:
+            transition = trajectory_queue.get(timeout=10)
+        except queue.Empty:
+            continue
+        else:
+            replay_buffer.add(transition)
+
+
+JAX_JIT_CACHE_PATH = os.path.join(os.path.dirname(__file__), "../../.jax_jit_cache")
+
+
+def init_jax_jit_cache(jax_jit_cache_path: str = JAX_JIT_CACHE_PATH):
+    if not os.path.exists(jax_jit_cache_path):
+        os.mkdir(jax_jit_cache_path)
+    jax.experimental.compilation_cache.compilation_cache.set_cache_dir(
+        jax_jit_cache_path
     )
 
-    fainted_rewards = (
-        eval_batch.actor.rewards.fainted_rewards[..., 0].squeeze()
-        * eval_batch.env.valid.squeeze()
-    ).sum(0)
 
-    winrates = {f"wr{i}": wr for i, wr in enumerate(win_rewards)}
-    winrates.update({f"hp{i}": f for i, f in enumerate(fainted_rewards)})
-
-    return winrates
+def set_jax_env_vars():
+    os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 
 def main():
+    """Main function to run the MMD learner."""
+    set_jax_env_vars()
+    init_jax_jit_cache()
+
     learner_config = get_config()
     model_config = get_model_cfg()
     pprint(learner_config)
 
-    training_network = inference_network = get_model(model_config)
-    # training_network = inference_network = get_dummy_model()
+    network = get_model(model_config)
+    # network = get_dummy_model()
 
-    training_collector = DoubleTrajectoryTrainingBatchCollector(
-        inference_network, learner_config.num_actors
+    actor_threads: list[threading.Thread] = []
+    stop_signal = [False]
+
+    num_eval_actors = 4
+    trajectory_queue: queue.Queue[Transition] = queue.Queue(
+        maxsize=2 * learner_config.num_actors
     )
-    evaluation_collector = EvalBatchCollector(inference_network, 4)
 
-    state = create_train_state(training_network, jax.random.PRNGKey(42), learner_config)
+    state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
+
+    # We use a fair lock here to avoid actor threads being starved by the learner
+    gpu_lock = FairLock()
+
+    agent = Agent(state.apply_fn, gpu_lock=gpu_lock)
+    replay_buffer = ReplayBuffer(
+        capacity=max(
+            learner_config.replay_buffer_capacity, learner_config.batch_size * 2
+        )
+    )
+
+    def get_params():
+        return int(state.step), jax.device_get(state.params)
+
+    def calc_rng_seed(game_id: int, player_id: int) -> int:
+        return int(f"{game_id}{player_id}")
+
+    player_id = 0
+    for game_id in range(learner_config.num_actors // 2):
+        for _ in range(2):
+            actor = Actor(
+                agent=agent,
+                env=SinglePlayerSyncEnvironment(player_id=player_id, game_id=game_id),
+                unroll_length=learner_config.unroll_length,
+                queue=trajectory_queue,
+                params_for_actor=get_params,
+                rng_seed=calc_rng_seed(game_id, player_id),
+            )
+            args = (actor, stop_signal)
+            actor_threads.append(threading.Thread(target=run_training_actor, args=args))
+            player_id += 1
+
+    for eval_id in range(num_eval_actors):
+        game_id = player_id = 10_000 + eval_id
+        actor = Actor(
+            agent=agent,
+            env=SinglePlayerSyncEnvironment(player_id=player_id, game_id=game_id),
+            unroll_length=learner_config.unroll_length,
+            params_for_actor=get_params,
+            rng_seed=calc_rng_seed(game_id, player_id),
+        )
+        args = (actor, stop_signal)
+        actor_threads.append(threading.Thread(target=run_eval_actor, args=args))
 
     latest_ckpt = get_most_recent_file("./ckpts", "mmd")
     if latest_ckpt:
@@ -445,55 +649,61 @@ def main():
         },
     )
 
-    eval_freq = 5000
-    save_freq = 1000
+    # Start the actors and learner.
+    for t in actor_threads:
+        t.start()
 
-    train_progress = tqdm(desc="training", smoothing=0)
+    start_condition = threading.Condition()
 
-    for _ in range(learner_config.num_steps):
-        logs: dict
+    transfer_thread = threading.Thread(
+        target=host_to_device_worker,
+        args=(trajectory_queue, stop_signal, replay_buffer, start_condition),
+    )
+    transfer_thread.start()
 
-        batch = training_collector.collect_batch_trajectory(state.params)
+    with start_condition:
+        start_condition.wait()
 
-        for _ in range(learner_config.num_epochs):
-            should_early_stop = False
+    consumer_progress = tqdm(desc="consumer", smoothing=0.1)
+    train_progress = tqdm(desc="batches", smoothing=0.1)
 
-            # Do the learning updates
-            for minibatch in iterate(batch, learner_config.minibatch_size):
-                winrates = {}
+    try:
+        for _ in range(learner_config.num_steps):
+            batch = replay_buffer.sample(learner_config.batch_size)
 
-                time_to_eval = (
-                    state.step % (eval_freq // learner_config.num_eval_games) == 0
-                )
-                if time_to_eval and learner_config.do_eval:
-                    winrates = evaluate(evaluation_collector, state)
+            with gpu_lock:
+                targets = compute_returns(state, batch, learner_config)
 
-                new_state, logs = train_step(state, minibatch, learner_config)
+            with gpu_lock:
+                new_state, logs = train_step(state, batch, targets, learner_config)
 
-                should_early_stop = (
-                    logs["approx_kl"] > learner_config.kl_target * 1.5
-                ).item()
-                if should_early_stop:
-                    break
-
+            # dont step forward if new state changes too much
+            if logs["approx_kl"] <= learner_config.kl_target:
                 state = new_state
 
-                logs.update(collect_nn_telemetry_data(state))
-                logs.update(collect_batch_telemetry_data(minibatch))
+                logs.update(collect_state_telemetry_data(state))
+                logs.update(collect_batch_telemetry_data(batch))
                 # logs.update(collect_action_prob_telemetry_data(minibatch))
 
                 logs["Step"] = state.step
-                wandb.log({**logs, **winrates})
+                wandb.log(logs)
+
+                # Update the tqdm progress bars.
+                consumer_progress.update(learner_config.batch_size)
                 train_progress.update(1)
 
-                if state.step % save_freq == 0 and state.step > 0:
+                if state.step % 5000 == 0:
                     save(state)
 
-            if should_early_stop:
-                print("Early stopping")
-                break
+    except Exception:
+        traceback.print_exc()
+    finally:
+        # Stop.
+        stop_signal[0] = True
+        for t in actor_threads:
+            t.join()
 
-    print("done")
+        print("done")
 
 
 if __name__ == "__main__":
