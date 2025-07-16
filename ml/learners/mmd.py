@@ -9,6 +9,8 @@ import threading
 import traceback
 from pprint import pprint
 
+import threading, sys, time, traceback, logging
+
 import chex
 import flax.linen as nn
 import jax
@@ -37,13 +39,13 @@ from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep, Transition
 from rlenv.main import Actor, Agent, SinglePlayerSyncEnvironment
-from rlenv.utils import FairLock
+from rlenv.utils import FairLock, NoOpLock
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
     num_steps = 10_000_000
-    num_actors: int = 32
+    num_actors: int = 16
     do_eval: bool = True
     num_eval_games: int = 200
     unroll_length: int = 192
@@ -421,52 +423,95 @@ def train_step(
     return state, logs
 
 
+def start_deadlock_watchdog(timeout_s: int = 60):
+    """
+    If no thread makes progress for `timeout_s`, dump all stack traces.
+    """
+    last_progress = {"t": time.time()}
+
+    def touch():  # call this whenever work is done
+        last_progress["t"] = time.time()
+
+    def watchdog():
+        while True:
+            time.sleep(timeout_s)
+            if time.time() - last_progress["t"] > timeout_s:
+                logging.error("⚠️  Possible deadlock – dumping stacks")
+                for tid, frame in sys._current_frames().items():
+                    logging.error(
+                        "Thread %s\n%s", tid, "".join(traceback.format_stack(frame))
+                    )
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    return touch
+
+
 def run_training_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce num_trajectories trajectories."""
+    touch = start_deadlock_watchdog(60)
+
     old_step_count = 0
     while not stop_signal[0]:
-        step_count, params = actor.pull_params()
-        assert step_count >= old_step_count, (
-            f"Actor {actor._env.game_id} tried to pull params with frame count "
-            f"{step_count} but expected at least {old_step_count}."
-        )
-        actor.unroll_and_push(step_count, params)
-        old_step_count = step_count
+        try:
+            step_count, params = actor.pull_params()
+            assert step_count >= old_step_count, (
+                f"Actor {actor._env.game_id} tried to pull params with frame count "
+                f"{step_count} but expected at least {old_step_count}."
+            )
+            actor.unroll_and_push(step_count, params)
+            old_step_count = step_count
+        except Exception as e:
+            traceback.print_exc()
+            raise e
+
+        touch()
 
 
 def run_eval_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce num_trajectories trajectories."""
-    old_step_count = 0
-    game_id = actor._env.game_id - 10_000
-    win_reward_sum = {}
-    while not stop_signal[0]:
-        step_count, params = actor.pull_params()
-        assert step_count >= old_step_count, (
-            f"Actor {actor._env.game_id} tried to pull params with frame count "
-            f"{step_count} but expected at least {old_step_count}."
-        )
-        if step_count not in win_reward_sum:
-            win_reward_sum[step_count] = (0, 0)
-        params = jax.device_put(params)
-        subkey = actor.split_rng()
-        eval_trajectory = actor.unroll(subkey, step_count, params)
-        win_rewards = np.sign(
-            (eval_trajectory.timestep.env.rewards.win_rewards[..., 0].squeeze()).sum(0)
-        )
-        # Update the win reward sum for this step count.
-        reward_count, reward_sum = win_reward_sum[step_count]
-        win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
+    touch = start_deadlock_watchdog(60)
 
-        # Log the win reward mean for this step count if we have enough data.
-        if old_step_count < step_count:
-            reward_count, reward_sum = win_reward_sum.pop(old_step_count)
-            wandb.log(
-                {
-                    "Step": old_step_count,
-                    f"wr{game_id}": reward_sum / max(1, reward_count),
-                }
+    old_step_count, params = actor.pull_params()
+    game_id = actor._env.game_id - 10_000
+    win_reward_sum = {old_step_count: (0, 0)}
+    while not stop_signal[0]:
+        try:
+            step_count, params = actor.pull_params()
+            assert step_count >= old_step_count, (
+                f"Actor {actor._env.game_id} tried to pull params with frame count "
+                f"{step_count} but expected at least {old_step_count}."
             )
-            old_step_count = step_count
+            if step_count not in win_reward_sum:
+                win_reward_sum[step_count] = (0, 0)
+
+            if step_count > old_step_count:
+                reward_count, reward_sum = win_reward_sum.pop(old_step_count)
+                wandb.log(
+                    {
+                        "Step": old_step_count,
+                        f"wr{game_id}": reward_sum / max(1, reward_count),
+                    }
+                )
+                old_step_count = step_count
+
+            params = jax.device_put(params)
+            subkey = actor.split_rng()
+            eval_trajectory = actor.unroll(subkey, step_count, params)
+            win_rewards = np.sign(
+                (
+                    eval_trajectory.timestep.env.rewards.win_rewards[..., 0].squeeze()
+                ).sum(0)
+            )
+            # Update the win reward sum for this step count.
+            reward_count, reward_sum = win_reward_sum[step_count]
+            win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
+
+            # Log the win reward mean for this step count if we have enough data.
+        except Exception as e:
+            traceback.print_exc()
+            continue
+
+        touch()
 
 
 class ReplayBuffer:
@@ -475,7 +520,7 @@ class ReplayBuffer:
     def __init__(self, capacity: int):
         self._capacity = capacity
         self._buffer = collections.deque(maxlen=capacity)
-        self._lock = FairLock()
+        self._lock = threading.Lock()
         self._pbar = tqdm(desc="producer", smoothing=0.1)
 
     def is_ready(self):
@@ -594,7 +639,8 @@ def main():
     state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
     # We use a fair lock here to avoid actor threads being starved by the learner
-    gpu_lock = FairLock()
+    gpu_lock = NoOpLock()
+    params_lock = threading.Lock()
 
     agent = Agent(state.apply_fn, gpu_lock=gpu_lock)
     replay_buffer = ReplayBuffer(
@@ -604,7 +650,8 @@ def main():
     )
 
     def get_params():
-        return int(state.step), jax.device_get(state.params)
+        with params_lock:
+            return int(state.step), jax.device_get(state.params)
 
     def calc_rng_seed(game_id: int, player_id: int) -> int:
         return int(f"{game_id}{player_id}")
@@ -679,7 +726,8 @@ def main():
 
             # dont step forward if new state changes too much
             if logs["approx_kl"] <= learner_config.kl_target:
-                state = new_state
+                with params_lock:
+                    state = new_state
 
                 logs.update(collect_state_telemetry_data(state))
                 logs.update(collect_batch_telemetry_data(batch))

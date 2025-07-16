@@ -23,7 +23,7 @@ from rlenv.protos.service_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import FairLock
+from rlenv.utils import FairLock, NoOpLock
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
@@ -107,7 +107,9 @@ class SinglePlayerSyncEnvironment:
 class Agent:
     """A stateless agent interface."""
 
-    def __init__(self, apply_fn: Callable[[TimeStep], ModelOutput], gpu_lock: FairLock):
+    def __init__(
+        self, apply_fn: Callable[[TimeStep], ModelOutput], gpu_lock: FairLock | NoOpLock
+    ):
         """Constructs an Agent object.
 
         Args:
