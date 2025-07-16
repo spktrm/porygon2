@@ -1,3 +1,4 @@
+import functools
 import math
 import pickle
 from pprint import pprint
@@ -14,9 +15,8 @@ from ml.arch.encoder import Encoder
 from ml.arch.heads import PolicyHead, ValueHead
 from ml.func import legal_log_policy, legal_policy
 from ml.utils import Params, get_most_recent_file
-from rlenv.env import clip_history, get_ex_step
-from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
-import functools
+from rlenv.env import get_ex_step
+from rlenv.interfaces import EnvStep, ModelOutput, TimeStep
 
 
 class Model(nn.Module):
@@ -30,16 +30,18 @@ class Model(nn.Module):
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
-    def __call__(self, env_step: EnvStep, history_step: HistoryStep, temp: float = 1):
+    def __call__(self, timestep: TimeStep, temp: float = 1):
         """
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        latent_embeddings, action_embeddings = self.encoder(env_step, history_step)
+        latent_embeddings, action_embeddings = self.encoder(
+            timestep.env, timestep.history
+        )
 
         # Apply action argument heads
         logit, pi, log_pi = jax.vmap(functools.partial(self.policy_head, temp=temp))(
-            latent_embeddings, action_embeddings, env_step.legal
+            latent_embeddings, action_embeddings, timestep.env.legal
         )
 
         # Apply the value head
@@ -53,17 +55,18 @@ class Model(nn.Module):
 class DummyModel(nn.Module):
 
     @nn.compact
-    def __call__(self, env_step: EnvStep, history_step: HistoryStep) -> ModelOutput:
+    def __call__(self, timestep: TimeStep) -> ModelOutput:
 
         def _forward(env_step: EnvStep) -> ModelOutput:
             mask = env_step.legal.astype(jnp.float32)
             v = jnp.tanh(nn.Dense(1)(mask))
             logit = nn.Dense(mask.shape[-1])(mask)
+            masked_logits = jnp.where(mask, logit, -1e30)
             pi = legal_policy(logit, env_step.legal)
             log_pi = legal_log_policy(logit, env_step.legal)
-            return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=v)
+            return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
 
-        return jax.vmap(_forward)(env_step)
+        return jax.vmap(_forward)(timestep.env)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -126,10 +129,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 def main():
     network = get_model()
-    ex, hx = get_ex_step()
-    hx = jax.tree.map(lambda x: x[:, None], hx)
-    hx = clip_history(hx, resolution=64)
-    hx = jax.tree.map(lambda x: x[:, 0], hx)
+    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -139,9 +139,9 @@ def main():
         params = step["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, ex, hx)
+        params = network.init(key, ts)
 
-    network.apply(params, ex, hx)
+    network.apply(params, ts)
     pprint(get_num_params(params))
 
 

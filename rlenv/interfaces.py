@@ -1,83 +1,79 @@
-import chex
+from typing import NamedTuple
+
+from jaxtyping import ArrayLike
+
+ArrayLike
 
 
-@chex.dataclass(frozen=True)
-class RewardStep:
-    win_rewards: chex.Array = ()
+class RewardStep(NamedTuple):
+    win_rewards: ArrayLike = ()
 
-    fainted_rewards: chex.Array = ()
-    scaled_fainted_rewards: chex.Array = ()
+    fainted_rewards: ArrayLike = ()
+    scaled_fainted_rewards: ArrayLike = ()
 
-    hp_rewards: chex.Array = ()
-    scaled_hp_rewards: chex.Array = ()
-
-
-@chex.dataclass(frozen=True)
-class Targets:
-    advantages: chex.Array = ()
-    errors: chex.Array = ()
+    hp_rewards: ArrayLike = ()
+    scaled_hp_rewards: ArrayLike = ()
 
 
-@chex.dataclass(frozen=True)
-class EnvStep:
+class Targets(NamedTuple):
+    advantages: ArrayLike = ()
+    errors: ArrayLike = ()
+
+
+class EnvStep(NamedTuple):
     # Standard Info
-    ts: chex.Array = ()
-    timestamp: chex.Array = ()
-    draw_ratio: chex.Array = ()
-    valid: chex.Array = ()
-    draw: chex.Array = ()
-    turn: chex.Array = ()
-    game_id: chex.Array = ()
-    player_id: chex.Array = ()
-    seed_hash: chex.Array = ()
-    request_count: chex.Array = ()
-    public_team: chex.Array = ()
-    current_context: chex.Array = ()
-    # all_my_moves: chex.Array = ()
-    # all_opp_moves: chex.Array = ()
+    ts: ArrayLike = ()
+    timestamp: ArrayLike = ()
+    draw_ratio: ArrayLike = ()
+    valid: ArrayLike = ()
+    draw: ArrayLike = ()
+    turn: ArrayLike = ()
+    game_id: ArrayLike = ()
+    player_id: ArrayLike = ()
+    seed_hash: ArrayLike = ()
+    request_count: ArrayLike = ()
+    public_team: ArrayLike = ()
+    current_context: ArrayLike = ()
+    # all_my_moves: ArrayLike = ()
+    # all_opp_moves: ArrayLike = ()
 
     # Private Info
-    moveset: chex.Array = ()
-    legal: chex.Array = ()
-    private_team: chex.Array = ()
-    heuristic_action: chex.Array = ()
+    moveset: ArrayLike = ()
+    legal: ArrayLike = ()
+    private_team: ArrayLike = ()
+    heuristic_action: ArrayLike = ()
 
     # Reward
     rewards: RewardStep = RewardStep()
 
 
-@chex.dataclass(frozen=True)
-class HistoryContainer:
-    entities: chex.Array = ()
-    relative_edges: chex.Array = ()
-    absolute_edges: chex.Array = ()
+class HistoryContainer(NamedTuple):
+    entities: ArrayLike = ()
+    relative_edges: ArrayLike = ()
+    absolute_edges: ArrayLike = ()
 
 
-@chex.dataclass(frozen=True)
-class HistoryStep:
+class HistoryStep(NamedTuple):
     major_history: HistoryContainer = HistoryContainer()
 
 
-@chex.dataclass(frozen=True)
-class ActorStep:
-    action: chex.Array = ()
-    policy: chex.Array = ()
-    log_policy: chex.Array = ()
-
-    # rewards
-    rewards: RewardStep = RewardStep()
+class ModelOutput(NamedTuple):
+    pi: ArrayLike = ()
+    v: ArrayLike = ()
+    log_pi: ArrayLike = ()
+    logit: ArrayLike = ()
 
 
-@chex.dataclass(frozen=True)
-class TimeStep:
+class ActorStep(NamedTuple):
+    action: ArrayLike = ()
+    model_output: ModelOutput = ModelOutput()
+
+
+class TimeStep(NamedTuple):
     env: EnvStep = EnvStep()
-    actor: ActorStep = ActorStep()
     history: HistoryStep = HistoryStep()
 
 
-@chex.dataclass(frozen=True)
-class ModelOutput:
-    pi: chex.Array = ()
-    v: chex.Array = ()
-    log_pi: chex.Array = ()
-    logit: chex.Array = ()
+class Transition(NamedTuple):
+    timestep: TimeStep = TimeStep()
+    actorstep: ActorStep = ActorStep()

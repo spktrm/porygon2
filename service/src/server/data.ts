@@ -94,7 +94,7 @@ export const numContextFields = Object.keys(ContextFeature).length;
 export const numMoveFields = Object.keys(MovesetFeature).length;
 export const numMovesetFields = 10 * numMoveFields;
 
-export const NUM_HISTORY = 768;
+export const NUM_HISTORY = 384;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {

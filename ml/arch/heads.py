@@ -1,6 +1,7 @@
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from ml.arch.modules import RMSNorm, TransformerDecoder
@@ -33,11 +34,12 @@ class PolicyHead(nn.Module):
         )
         logits = logits.reshape(-1)
         logits = logits - logits.mean(where=action_mask)
+        masked_logits = jnp.where(action_mask, logits, -1e30)
 
         policy = legal_policy(logits, action_mask, temp)
         log_policy = legal_log_policy(logits, action_mask, temp)
 
-        return logits, policy, log_policy
+        return masked_logits, policy, log_policy
 
 
 class ValueHead(nn.Module):

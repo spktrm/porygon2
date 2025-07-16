@@ -1,21 +1,19 @@
-import asyncio
 import functools
-from abc import ABC, abstractmethod
-from typing import Callable, List, Sequence, Tuple
+import logging
+import queue
+import threading
+from typing import Callable, overload
 
-import chex
-import flax.linen as nn
 import jax
+import jax.numpy as jnp
 import numpy as np
 import uvloop
-import websockets
-from tqdm import tqdm
+from websockets.sync.client import connect
 
 from ml.arch.model import get_dummy_model
-from ml.learners.func import collect_batch_telemetry_data
 from ml.utils import Params
-from rlenv.env import as_jax_arr, clip_history, expand_dims, get_ex_step, process_state
-from rlenv.interfaces import ActorStep, EnvStep, HistoryStep, ModelOutput, TimeStep
+from rlenv.env import clip_history, get_ex_step, process_state
+from rlenv.interfaces import ActorStep, ModelOutput, TimeStep, Transition
 from rlenv.protos.service_pb2 import (
     Action,
     ClientMessage,
@@ -25,506 +23,359 @@ from rlenv.protos.service_pb2 import (
     StepMessage,
 )
 from rlenv.protos.state_pb2 import State
-from rlenv.utils import concatenate_steps, stack_steps
+from rlenv.utils import FairLock
 
 # Define the server URI
 SERVER_URI = "ws://localhost:8080"
 
 uvloop.install()
 
+logging.basicConfig()
+logger = logging.getLogger(__name__)
 
-class SinglePlayerEnvironment:
-    websocket: websockets.WebSocketClientProtocol
 
+class NullLogger:
+    """Logger that does nothing."""
+
+    def write(self, _):
+        pass
+
+    def close(self):
+        pass
+
+
+class AbslLogger:
+    """Writes to logging.info."""
+
+    def write(self, d):
+        logging.info(d)
+
+    def close(self):
+        pass
+
+
+class SinglePlayerSyncEnvironment:
     def __init__(self, player_id: int, game_id: int):
         self.player_id = player_id
         self.game_id = game_id
-        self.state = None
-        self.mess = None
-        self.queue = asyncio.Queue()
 
-    def is_done(self):
-        return self.state.info.done
+        self.rqid = None
+        self.last_state = None
 
-    @classmethod
-    async def create(cls, player_id: int, game_id: int):
-        """Async factory method for initialization."""
-        self = cls(player_id, game_id)
-        await self._init()
-        return self
+        self.websocket = connect(SERVER_URI)
+        self._connect()
 
-    async def _init(self):
-        self.websocket = await websockets.connect(
-            SERVER_URI, ping_interval=3600, ping_timeout=3600
-        )
+    def _connect(self):
         connect_message = ClientMessage(
             player_id=self.player_id, game_id=self.game_id, connect=ConnectMessage()
         )
-        await self.websocket.send(connect_message.SerializeToString())
-        asyncio.create_task(self.read_continuously())
+        self.websocket.send(connect_message.SerializeToString())
 
-    async def read_continuously(self):
-        while True:
-            async with asyncio.timeout(60 * 60):
-                incoming_message = await self.websocket.recv()
-            await self.queue.put(incoming_message)
+    def _recv(self):
+        server_message_data = self.websocket.recv()
+        server_message = ServerMessage.FromString(server_message_data)
+        self.rqid = server_message.game_state.rqid
+        state = State.FromString(server_message.game_state.state)
+        ex, hx = process_state(state)
+        self.last_state = TimeStep(env=ex, history=hx)
+        return self.last_state
 
-    async def reset(self):
-        await self._reset()
-        return process_state(self.state)
-
-    async def _reset(self):
+    def reset(self):
         reset_message = ClientMessage(
             player_id=self.player_id, game_id=self.game_id, reset=ResetMessage()
         )
-        await self.websocket.send(reset_message.SerializeToString())
+        self.websocket.send(reset_message.SerializeToString())
+        return self._recv()
 
-        return await self._recv()
+    def _is_done(self):
+        if self.last_state is None:
+            return False
+        return not (self.last_state.env.valid.item())
 
-    async def step(self, action: int):
-        await self._step(action)
-        return process_state(self.state)
-
-    async def _step(self, action: int):
-        if self.state and self.state.info.done:
-            return self.state
+    def step(self, action: int):
+        if self._is_done():
+            return self.last_state
         step_message = ClientMessage(
             player_id=self.player_id,
             game_id=self.game_id,
-            step=StepMessage(
-                action=Action(rqid=self.mess.game_state.rqid, value=action)
-            ),
+            step=StepMessage(action=Action(rqid=self.rqid, value=action)),
         )
-        await self.websocket.send(step_message.SerializeToString())
-        return await self._recv()
-
-    async def _recv(self):
-        server_message_data = await self.queue.get()
-        server_message = ServerMessage.FromString(server_message_data)
-        self.mess = server_message
-        self.state = State.FromString(server_message.game_state.state)
-        return self.state
+        self.websocket.send(step_message.SerializeToString())
+        return self._recv()
 
 
-class TwoPlayerEnvironment:
-    def __init__(self, game_id: int, player_ids: List[int]):
-        self.game_id = game_id
-        self.player_ids = player_ids
-        self.players = []
-        self.state_queue = asyncio.Queue()
-        self.current_state: State = None
-        self.current_step: Tuple[EnvStep, HistoryStep] = None
-        self.current_player = None
-        self.dones = np.zeros(2)
+class Agent:
+    """A stateless agent interface."""
 
-    async def initialize_players(self):
-        """Initialize both players asynchronously."""
-        self.players = await asyncio.gather(
-            *[
-                SinglePlayerEnvironment.create(pid, self.game_id)
-                for pid in self.player_ids
-            ]
+    def __init__(self, apply_fn: Callable[[TimeStep], ModelOutput], gpu_lock: FairLock):
+        """Constructs an Agent object.
+
+        Args:
+          num_actions: Number of possible actions for the agent. Assumes a flat,
+            discrete, 0-indexed action space.
+          obs_spec: The observation spec of the environment.
+          net_factory: A function from num_actions to a Haiku module representing
+            the agent. This module should have an initial_state() function and an
+            unroll function.
+        """
+        self._apply_fn = apply_fn
+        self._gpu_lock = gpu_lock
+
+    def step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep:
+        with self._gpu_lock:
+            return self._step(rng_key, params, timestep)
+
+    @overload
+    def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep: ...
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep:
+        """For a given single-step, unbatched timestep, output the chosen action."""
+        # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
+
+        timestep = TimeStep(
+            env=jax.tree.map(lambda t: t[None, None, ...], timestep.env),
+            history=jax.tree.map(lambda t: t[:, None, ...], timestep.history),
         )
-        self.current_player = self.players[0]  # Start with the first player
 
-    def is_done(self):
-        return self.dones.all()
+        model_output = self._apply_fn(params, timestep)
+        # Remove the padding from above.
+        model_output = jax.tree.map(lambda t: jnp.squeeze(t, axis=(0, 1)), model_output)
+        # Sample an action and return.
+        action = jax.random.categorical(rng_key, model_output.logit)
+        return ActorStep(action=action, model_output=model_output)
 
-    async def _reset(self):
-        """Reset both players, enqueue their initial states, and return the first state to act on."""
-        # Reset both players and add their states to the queue
-        while not self.state_queue.empty():
-            await self.state_queue.get()
-        self.dones = np.zeros(2)
-
-        states = await asyncio.gather(*[player._reset() for player in self.players])
-
-        for player, state in zip(self.players, states):
-            await self.state_queue.put((player, state))
-
-        # Retrieve the first state to act on and set the corresponding player
-        self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state)
-        return self.current_step
-
-    async def _step(self, action: int):
-        """Process the action for the current player asynchronously."""
-        # Start the action processing in the background without waiting for it to complete
-        asyncio.create_task(self._perform_action(self.current_player, action))
-
-        # Retrieve the next player and state from the queue, waiting if necessary
-        self.current_player, self.current_state = await self.state_queue.get()
-        self.current_step = process_state(self.current_state)
-        return self.current_step
-
-    async def _perform_action(self, player: SinglePlayerEnvironment, action: int):
-        """Helper method to send the action to the player and enqueue the resulting state."""
-        # Perform the step and add the resulting state along with the player back into the queue
-        if not player.is_done():
-            state = await player._step(action)
-            self.dones[int(state.info.player_index)] = state.info.done
-            await self.state_queue.put((player, state))
-
-        if self.is_done():
-            await self.state_queue.put((self.current_player, self.current_state))
+    def unroll(self, params: Params, trajectory: TimeStep) -> ActorStep:
+        """Unroll the agent along trajectory."""
+        model_output = self._apply_fn(params, trajectory)
+        return ActorStep(model_output=model_output)
 
 
-class BatchEnvironment(ABC):
-    def __init__(self, num_envs: int):
-        self.num_envs = num_envs
+class Actor:
+    """Manages the state of a single agent/environment interaction loop."""
 
-    @abstractmethod
-    def is_done(self) -> bool:
-        raise NotImplementedError
-
-    @abstractmethod
-    def step(self, actions: List[int]) -> Tuple[List[EnvStep], List[HistoryStep]]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def reset(self) -> Tuple[List[EnvStep], List[HistoryStep]]:
-        raise NotImplementedError
-
-
-class BatchTwoPlayerEnvironment(BatchEnvironment):
-    def __init__(self, num_envs: int):
-        super().__init__(num_envs)
-        try:
-            self.loop = asyncio.get_event_loop()
-        except:
-            self.loop = asyncio.new_event_loop()
-
-        self.envs: List[TwoPlayerEnvironment] = []
-        self.player_id_count = 0
-        for game_id in range(num_envs):
-            env = TwoPlayerEnvironment(
-                game_id, [self.player_id_count, self.player_id_count + 1]
-            )
-            self.loop.run_until_complete(env.initialize_players())
-            self.envs.append(env)
-            self.player_id_count += 2
-
-    def is_done(self):
-        return np.array([env.is_done() for env in self.envs]).all()
-
-    def step(self, actions: List[int]):
-        out = self.loop.run_until_complete(
-            asyncio.gather(
-                *[env._step(action) for env, action in zip(self.envs, actions)]
-            ),
-        )
-        return list(zip(*out))
-
-    def reset(self):
-        out = self.loop.run_until_complete(
-            asyncio.gather(*[env._reset() for env in self.envs])
-        )
-        return list(zip(*out))
-
-
-class BatchSinglePlayerEnvironment(BatchEnvironment):
-    def __init__(self, num_envs: int, is_eval: bool = True):
-        super().__init__(num_envs)
-        try:
-            self.loop = asyncio.get_event_loop()
-        except:
-            self.loop = asyncio.new_event_loop()
-
-        self.envs: List[SinglePlayerEnvironment] = []
-        self.player_id_count = 0
-        self.is_eval = is_eval
-
-        if is_eval:
-            for game_id in range(num_envs):
-                env = self.loop.run_until_complete(
-                    SinglePlayerEnvironment.create(10_000 + game_id, 10_000 + game_id)
-                )
-                self.envs.append(env)
-                self.player_id_count += 1
-        else:
-            for game_id in range(num_envs):
-                for _ in range(2):
-                    env = self.loop.run_until_complete(
-                        SinglePlayerEnvironment.create(self.player_id_count, game_id)
-                    )
-                    self.envs.append(env)
-                    self.player_id_count = self.player_id_count + 1
-
-    def is_done(self):
-        return np.array([env.is_done() for env in self.envs]).all()
-
-    def step(self, actions: List[int]):
-        states = self.loop.run_until_complete(
-            asyncio.gather(
-                *[env._step(action) for env, action in zip(self.envs, actions)]
-            ),
-        )
-        return zip(*[process_state(state) for state in states])
-
-    def reset(self):
-        states = self.loop.run_until_complete(
-            asyncio.gather(*[env._reset() for env in self.envs])
-        )
-        return zip(*[process_state(state) for state in states])
-
-
-class BatchCollectorV2:
     def __init__(
         self,
-        network: nn.Module,
-        batch_size: int,
-        env_constructor: BatchEnvironment = BatchTwoPlayerEnvironment,
+        agent: Agent,
+        env: SinglePlayerSyncEnvironment,
+        unroll_length: int,
+        params_for_actor: Callable[[], tuple[int, Params]],
+        queue: queue.Queue | None = None,
+        rng_seed: int = 42,
+        logger=None,
     ):
-        self.game: BatchEnvironment = env_constructor(batch_size)
-        self.network = network
-        self.batch_size = batch_size
-        self.num_steps = 0
+        self._agent = agent
+        self._env = env
+        self._unroll_length = unroll_length
+        self._queue = queue
+        self._params_for_actor = params_for_actor
+        self._rng_key = jax.random.PRNGKey(rng_seed)
 
-    def _batch_of_states_apply_action(self, actions: chex.Array) -> Sequence[EnvStep]:
-        """Apply a batch of `actions` to a parallel list of `states`."""
-        return self.game.step(list(actions.reshape(-1)))
+        if logger is None:
+            logger = NullLogger()
+        self._logger = logger
 
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(
-        self, params: Params, env_steps: EnvStep, history_step: HistoryStep
-    ) -> chex.Array:
-        rollout: Callable[[Params, EnvStep], ModelOutput] = jax.vmap(
-            self.network.apply, (None, 0, 0), 0
-        )
-        output = rollout(params, env_steps, history_step)
-        return output.pi, output.log_pi
-
-    def actor_step(self, params: Params, env_step: EnvStep, history_step: HistoryStep):
-        env_step = as_jax_arr(env_step)
-        history_step = as_jax_arr(history_step)
-        pi, log_pi = self._network_jit_apply(params, env_step, history_step)
-        action = np.apply_along_axis(
-            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
-        )
-        return action, ActorStep(
-            action=action, policy=pi, log_policy=log_pi, rewards=()
-        )
-
-    def collect_batch_trajectory(
-        self, params: Params, resolution: int = 64
-    ) -> TimeStep:
-        timesteps = []
-
-        ex, hx = self.game.reset()
-        env_step: EnvStep = stack_steps(ex)
-        history_step: HistoryStep = stack_steps(hx)
-
-        state_index = 0
-        while True:
-            prev_env_step = env_step
-            prev_history_step = history_step
-
-            a, actor_step = self.actor_step(params, env_step, history_step)
-
-            ex, hx = self._batch_of_states_apply_action(a)
-            env_step = stack_steps(ex)
-            history_step = stack_steps(hx)
-
-            timestep = TimeStep(
-                env=prev_env_step,
-                history=prev_history_step,
-                actor=ActorStep(
-                    action=actor_step.action,
-                    policy=actor_step.policy,
-                    log_policy=actor_step.log_policy,
-                    rewards=env_step.rewards,
-                ),
-            )
-            timesteps.append(timestep)
-
-            if self.game.is_done() and state_index % resolution == 0:
-                break
-
-            state_index += 1
-
-        # Concatenate all the timesteps together to form a single rollout [T, B, ..]
-        batch: TimeStep = stack_steps(timesteps)
-        self.num_steps += batch.env.valid.sum()
-
-        if (batch.env.turn[1:] < batch.env.turn[:-1]).any():
-            raise ValueError
-
-        if (batch.env.seed_hash != batch.env.seed_hash[0]).any():
-            raise ValueError
-
-        if not np.all(np.array([env.is_done() for env in self.game.envs])):
-            raise ValueError
-
-        # if not np.all(
-        #     np.abs((batch.actor.win_rewards * batch.env.valid[..., None]).sum(0)) == 1
-        # ):
-        #     raise ValueError
-
-        return as_jax_arr(batch)
-
-
-class SingleTrajectoryTrainingBatchCollector(BatchCollectorV2):
-    def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(network, batch_size, BatchTwoPlayerEnvironment)
-
-
-class DoubleTrajectoryTrainingBatchCollector(BatchSinglePlayerEnvironment):
-    def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(batch_size, False)
-
-        self.network = network
-        self.batch_size = batch_size
-        self.num_steps = 0
-
-        self.episode_lengths = []
-        self.batch_length = 0
-        self.lock = asyncio.Lock()
-        self.sync_point = asyncio.Barrier(batch_size * 2)
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(
-        self, params: Params, ex: EnvStep, hx: HistoryStep
-    ) -> chex.Array:
-        output = self.network.apply(params, ex, hx)
-        return output.pi, output.log_pi
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_batch_inference(
-        self, params: Params, ex_batch: EnvStep, hx_batch: HistoryStep
-    ) -> tuple:
-        outputs = jax.vmap(self.network.apply, (None, 1, 1), 1)(
-            params, ex_batch, hx_batch
-        )
-        return outputs.pi, outputs.log_pi
-
-    async def get_actor_inference(
-        self, params: Params, env_step: EnvStep, history_step: HistoryStep
-    ):
-        env_step_jax = as_jax_arr(env_step)
-        history_step_jax = as_jax_arr(clip_history(history_step, resolution=64))
-
-        pi, log_pi = self._network_jit_apply(params, env_step_jax, history_step_jax)
-
-        # Sample action from policy
-        action = np.apply_along_axis(
-            lambda x: np.random.choice(range(pi.shape[-1]), p=x), axis=-1, arr=pi
-        )
-
-        return action, ActorStep(
-            action=action, policy=pi, log_policy=log_pi, rewards=()
-        )
-
-    async def collect_trajectory(
-        self, params, env: SinglePlayerEnvironment, resolution: int = 64
-    ):
-        """Collect a single trajectory using batched inference."""
-        trajectory = []
-        ex, hx = await env.reset()
-
-        while True:
-            a, actor_step = await self.get_actor_inference(params, ex, hx)
-            timestep = TimeStep(
-                env=ex,
-                actor=ActorStep(
-                    action=actor_step.action,
-                    policy=actor_step.policy,
-                    log_policy=actor_step.log_policy,
-                ),
-            )
-            trajectory.append(timestep)
-            if env.is_done():
-                break
-
-            ex, hx = await env.step(a.item())
-
-        trajectory_length = (
-            (len(trajectory) + resolution - 1) // resolution
-        ) * resolution
-        async with self.lock:
-            self.batch_length = max(trajectory_length, self.batch_length)
-        await self.sync_point.wait()
-
-        # Pad trajectory to batch_length
-        while len(trajectory) < self.batch_length:
-            timestep = TimeStep(
-                env=ex,
-                actor=ActorStep(
-                    action=actor_step.action,
-                    policy=actor_step.policy,
-                    log_policy=actor_step.log_policy,
-                ),
-            )
-            trajectory.append(timestep)
-            ex, hx = await env.step(a.item())
-
-        trajectory = stack_steps(trajectory, 0)
+    def _preprocess_timestep(self, timestep: TimeStep):
         return TimeStep(
-            env=trajectory.env,
-            actor=trajectory.actor,
-            history=expand_dims(hx, axis=1),
+            env=timestep.env,
+            history=clip_history(timestep.history, resolution=64),
         )
 
-    async def collect_trajectories(self, params: Params, resolution: int = 64):
-        """Collect trajectories from all environments in parallel."""
-        return await asyncio.gather(
-            *[self.collect_trajectory(params, env, resolution) for env in self.envs]
+    def unroll(self, rng_key: jax.Array, frame_count: int, params: Params):
+        """Run unroll_length agent/environment steps, returning the trajectory."""
+        unprocessed_timestep = self._env.reset()
+        traj = []
+        # Unroll one longer if trajectory is empty.
+        subkeys = jax.random.split(rng_key, self._unroll_length)
+        for i in range(self._unroll_length):
+            timestep = self._preprocess_timestep(unprocessed_timestep)
+            actorstep = self._agent.step(subkeys[i], params, timestep)
+            transition = Transition(
+                timestep=TimeStep(env=timestep.env), actorstep=actorstep
+            )
+            traj.append(transition)
+            if not timestep.env.valid.item():
+                break
+            unprocessed_timestep = self._env.step(actorstep.action.item())
+
+        if len(traj) < self._unroll_length:
+            traj += [transition] * (self._unroll_length - len(traj))
+
+        # Pack the trajectory and reset parent state.
+        trajectory = jax.device_get(traj)
+        trajectory: Transition = jax.tree.map(lambda *xs: np.stack(xs), *trajectory)
+        trajectory = Transition(
+            timestep=TimeStep(
+                env=trajectory.timestep.env,
+                history=unprocessed_timestep.history,
+            ),
+            actorstep=trajectory.actorstep,
         )
 
-    def collect_batch_trajectory(
-        self, params: Params, resolution: int = 64
-    ) -> TimeStep:
-        """Collect and stack trajectories from all environments."""
-        trajectories = self.loop.run_until_complete(
-            self.collect_trajectories(params, resolution)
+        return trajectory
+
+    def split_rng(self) -> jax.Array:
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        return subkey
+
+    def unroll_and_push(self, frame_count: int, params: Params):
+        """Run one unroll and send trajectory to learner."""
+        params = jax.device_put(params)
+        subkey = self.split_rng()
+        act_out = self.unroll(rng_key=subkey, frame_count=frame_count, params=params)
+        if self._queue is not None:
+            self._queue.put(act_out)
+
+    def pull_params(self):
+        return self._params_for_actor()
+
+
+def run_actor(actor: Actor, stop_signal: list[bool]):
+    """Runs an actor to produce num_trajectories trajectories."""
+    while not stop_signal[0]:
+        frame_count, params = actor.pull_params()
+        print(frame_count)
+        actor.unroll_and_push(frame_count, params)
+
+
+def host_to_device_worker(
+    batch_size: int,
+    trajectory_queue: queue.Queue[Transition],
+    batch_queue: queue.Queue,
+    stop_signal: list[bool],
+):
+    """Elementary data pipeline."""
+    batch = []
+    while not stop_signal[0]:
+        # Try to get a batch. Skip the iteration if we couldn't.
+        try:
+            for _ in range(len(batch), batch_size):
+                # As long as possible while keeping learner_test time reasonable.
+                batch.append(trajectory_queue.get(timeout=10))
+        except queue.Empty:
+            continue
+
+        assert len(batch) == batch_size
+        # Prepare for consumption, then put batch onto device.
+        stacked_batch: Transition = jax.tree.map(
+            lambda *xs: np.stack(xs, axis=1), *batch
         )
-        self.state_index = 0
-        return as_jax_arr(concatenate_steps(trajectories, 1))
+
+        resolution = 64
+        num_valid = stacked_batch.timestep.env.valid.sum(0).max().item() + 1
+        num_valid = int(np.ceil(num_valid / resolution) * resolution)
+
+        stacked_batch = Transition(
+            timestep=TimeStep(
+                env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
+                history=clip_history(
+                    stacked_batch.timestep.history, resolution=resolution
+                ),
+            ),
+            actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
+        )
+
+        batch_queue.put(stacked_batch)
+
+        # Clean out the built-up batch.
+        batch = []
 
 
-class EvalBatchCollector(BatchCollectorV2):
-    def __init__(self, network: nn.Module, batch_size: int):
-        super().__init__(network, batch_size, BatchSinglePlayerEnvironment)
+def evaluate(trajectory_queue: queue.Queue[Transition], stop_signal: list[bool]):
+    while not stop_signal[0]:
+        try:
+            eval_trajectory = trajectory_queue.get(timeout=10)
+        except queue.Empty:
+            continue
+        else:
+            print(eval_trajectory.timestep.env.valid.sum())
 
 
 def main():
-    batch_progress = tqdm(desc="Batch: ")
-    game_progress = tqdm(desc="Games: ")
-    state_progress = tqdm(desc="States: ")
+    # A thunk that builds a new environment.
+    # Substitute your environment here!
 
-    num_envs = 32
     network = get_dummy_model()
-    # training_env = SingleTrajectoryTrainingBatchCollector(network, num_envs)
-    training_env = DoubleTrajectoryTrainingBatchCollector(network, num_envs)
+    ts = get_ex_step()
+    params = network.init(jax.random.PRNGKey(42), ts)
 
-    EvalBatchCollector(network, 4)
+    apply_fn = jax.vmap(network.apply, in_axes=(None, 1), out_axes=1)
 
-    ex, hx = get_ex_step()
-    params = network.init(jax.random.PRNGKey(42), ex, hx)
+    lock = threading.Lock()
+    agent = Agent(apply_fn, lock)
 
-    np.zeros(num_envs)
-    batch = training_env.collect_batch_trajectory(params)
+    # Construct the actors on different threads.
+    # stop_signal in a list so the reference is shared.
+    actor_threads: list[threading.Thread] = []
+    stop_signal = [False]
+    NUM_GAMES = 32
+    UNROLL_LENGTH = 192
+    batch_size = 4
+    num_eval_actors = 4
 
-    while True:
+    eval_queue: queue.Queue[Transition] = queue.Queue(maxsize=num_eval_actors)
+    trajectory_queue: queue.Queue[Transition] = queue.Queue(maxsize=batch_size)
+    batch_queue: queue.Queue[Transition] = queue.Queue(maxsize=1)
 
-        batch = training_env.collect_batch_trajectory(params)
-        # with open("rlenv/ex_batch", "wb") as f:
-        #     pickle.dump(batch, f)
+    steps = 0
 
-        collect_batch_telemetry_data(batch)
+    def get_params():
+        return steps, params
 
-        # training_progress.update(batch.env.valid.sum())
-        # batch = evaluation_env.collect_batch_trajectory(params)
-        # evaluation_progress.update(batch.env.valid.sum())
-        collect_batch_telemetry_data(batch)
+    player_id = 0
+    for game_id in range(NUM_GAMES):
+        for _ in range(2):
+            actor = Actor(
+                agent,
+                SinglePlayerSyncEnvironment(player_id, game_id),
+                UNROLL_LENGTH,
+                trajectory_queue,
+                get_params,
+                rng_seed=int(str(game_id) + str(player_id)),
+                logger=logger,
+            )
+            args = (actor, stop_signal)
+            actor_threads.append(threading.Thread(target=run_actor, args=args))
+            player_id += 1
 
-        # win_rewards = np.sign(
-        #     (batch.actor.win_rewards[..., 0] * batch.env.valid).sum(0)
-        # )
-        # avg_reward = avg_reward * (1 - tau) + win_rewards.astype(float) * tau
-        state_progress.update(batch.env.valid.sum())
-        game_progress.update(num_envs)
-        batch_progress.update(1)
-        # batch_progress.set_description(np.array2string(avg_reward))
+    for eval_id in range(num_eval_actors):
+        game_id = player_id = 10_000 + eval_id
+        actor = Actor(
+            agent,
+            SinglePlayerSyncEnvironment(game_id, player_id),
+            UNROLL_LENGTH,
+            eval_queue,
+            get_params,
+            rng_seed=int(str(game_id) + str(player_id)),
+            logger=logger,
+        )
+        args = (actor, stop_signal)
+        actor_threads.append(threading.Thread(target=run_actor, args=args))
+
+    # Start the actors and learner.
+    for t in actor_threads:
+        t.start()
+
+    transfer_thread = threading.Thread(
+        target=host_to_device_worker,
+        args=(batch_size, trajectory_queue, batch_queue, stop_signal),
+    )
+    transfer_thread.start()
+
+    eval_thread = threading.Thread(
+        target=evaluate,
+        args=(eval_queue, stop_signal),
+    )
+    eval_thread.start()
+
+    for step_index in range(10000):
+        batch = batch_queue.get()
+        valid_count = batch.timestep.env.valid.sum()
+        steps += valid_count
+
+    # Stop.
+    stop_signal[0] = True
+    for t in actor_threads:
+        t.join()
 
 
 if __name__ == "__main__":
