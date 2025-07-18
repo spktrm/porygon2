@@ -1,4 +1,3 @@
-import { Action } from "../../../protos/service_pb";
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
 
@@ -29,7 +28,6 @@ export const GetRandomAction: EvalActionFnType = ({ player }) => {
     );
     const legalIndices = legalActions.toBinaryVector();
     const randIndex = getRandomOneIndex(legalIndices);
-    const action = new Action();
-    action.setValue(randIndex);
-    return action;
+
+    return { actionIndex: randIndex };
 };

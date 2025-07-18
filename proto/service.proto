@@ -2,45 +2,56 @@ syntax = "proto3";
 
 package servicev2;
 
-message ClientMessage {
-  int32 player_id = 1;
-  int32 game_id = 2;
+message ClientRequest {
   oneof message_type {
-    ConnectMessage connect = 3;
-    StepMessage step = 4;
-    ResetMessage reset = 5;
+    StepRequest step = 1;
+    ResetRequest reset = 2;
   }
 }
 
-message Action {
-  int32 rqid = 1;
-  int32 value = 2;
-  string text = 3;
+message StepRequest {
+  string username = 1;
+  int32 action = 2;
+  int32 rqid = 3;
 }
 
-message StepMessage {
-  Action action = 1;
+message ResetRequest {
+  string username = 1;
 }
 
-message ResetMessage {
+message EnvironmentState {
+  bytes info = 1;
+  bytes legal_actions = 2;
+  bytes history_entities = 3;
+  bytes history_absolute_edge = 4;
+  bytes history_relative_edges = 5;
+  int32 history_length = 6;
+  bytes moveset = 7;
+  bytes public_team = 8;
+  bytes private_team = 9;
+  bytes current_context = 10;
+  int32 rqid = 11;
 }
 
-message ConnectMessage {
+message EnvironmentResponse {
+  string username = 1;
+  EnvironmentState state = 2;
 }
 
-message ServerMessage {
-  oneof message_type {
-    GameState game_state = 1;
-    ErrorMessage error = 2;
+message ErrorResponse {
+  string trace = 1;
+}
+
+message WorkerRequest {
+  int32 task_id = 1;
+  oneof request {
+    StepRequest step_request = 2;
+    ResetRequest reset_request = 3;
   }
 }
 
-message GameState {
-  int32 player_id = 1;
-  int32 rqid = 2;
-  bytes state = 3;
-}
-
-message ErrorMessage {
-  string error_message = 1;
+message WorkerResponse {
+  int32 task_id = 1;
+  EnvironmentResponse environment_response = 2; 
+  ErrorResponse error_response = 3; 
 }

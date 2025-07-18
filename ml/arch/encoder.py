@@ -30,7 +30,7 @@ from rlenv.data import (
     NUM_MOVES,
     RELATIVE_EDGE_MAX_VALUES,
 )
-from rlenv.interfaces import EnvStep, HistoryContainer, HistoryStep
+from rlenv.interfaces import EnvStep, HistoryStep
 from rlenv.protos.enums_pb2 import (
     AbilitiesEnum,
     ActionsEnum,
@@ -43,6 +43,7 @@ from rlenv.protos.features_pb2 import (
     AbsoluteEdgeFeature,
     ContextFeature,
     EntityFeature,
+    InfoFeature,
     MovesetFeature,
     RelativeEdgeFeature,
 )
@@ -631,22 +632,22 @@ class Encoder(nn.Module):
         return embedding, mask, request_count
 
     # Encode each timestep's features, including nodes and edges.
-    def _encode_timestep(self, history_container: HistoryContainer):
+    def _encode_timestep(self, history: HistoryStep):
         """
         Encode features of a single timestep, including entities and edges.
         """
 
         # Encode entities.
-        entity_embedding, _ = jax.vmap(self._encode_entity)(history_container.entities)
+        entity_embedding, _ = jax.vmap(self._encode_entity)(history.entities)
 
         # Encode relative edges.
         relative_edge_embedding = jax.vmap(self._encode_relative_edge)(
-            history_container.relative_edges
+            history.relative_edges
         )
 
         # Encode absolute edges.
         absolute_edge_embedding, valid_timestep_mask, history_request_count = (
-            self._encode_absolute_edge(history_container.absolute_edges)
+            self._encode_absolute_edge(history.absolute_edges)
         )
 
         timestep_embedding = (
@@ -687,10 +688,10 @@ class Encoder(nn.Module):
         )
         return private_entity_embeddings, entity_mask, entity_embeddings
 
-    def _encode_timesteps(self, history_container: HistoryContainer):
+    def _encode_timesteps(self, history: HistoryStep):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
             self._encode_timestep
-        )(history_container)
+        )(history)
 
         seq_len = timestep_embedding.shape[0]
 
@@ -822,9 +823,10 @@ class Encoder(nn.Module):
         )
 
         timestep_embeddings, history_request_count = self._encode_timesteps(
-            history_step.major_history
+            history_step
         )
-        timestep_mask = env_step.request_count[..., None] >= history_request_count
+        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        timestep_mask = request_count[..., None] >= history_request_count
 
         action_embeddings = self._encode_actions(env_step, private_entity_embeddings)
 

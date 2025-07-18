@@ -22,39 +22,22 @@ class Targets(NamedTuple):
 
 class EnvStep(NamedTuple):
     # Standard Info
-    ts: ArrayLike = ()
-    timestamp: ArrayLike = ()
-    draw_ratio: ArrayLike = ()
-    valid: ArrayLike = ()
-    draw: ArrayLike = ()
-    turn: ArrayLike = ()
-    game_id: ArrayLike = ()
-    player_id: ArrayLike = ()
-    seed_hash: ArrayLike = ()
-    request_count: ArrayLike = ()
+    info: ArrayLike = ()
+    done: ArrayLike = ()
+    win_reward: ArrayLike = ()
     public_team: ArrayLike = ()
     current_context: ArrayLike = ()
-    # all_my_moves: ArrayLike = ()
-    # all_opp_moves: ArrayLike = ()
 
     # Private Info
     moveset: ArrayLike = ()
     legal: ArrayLike = ()
     private_team: ArrayLike = ()
-    heuristic_action: ArrayLike = ()
-
-    # Reward
-    rewards: RewardStep = RewardStep()
-
-
-class HistoryContainer(NamedTuple):
-    entities: ArrayLike = ()
-    relative_edges: ArrayLike = ()
-    absolute_edges: ArrayLike = ()
 
 
 class HistoryStep(NamedTuple):
-    major_history: HistoryContainer = HistoryContainer()
+    entities: ArrayLike = ()
+    relative_edges: ArrayLike = ()
+    absolute_edges: ArrayLike = ()
 
 
 class ModelOutput(NamedTuple):

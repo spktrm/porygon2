@@ -78,10 +78,10 @@ def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
 
 @jax.jit
 def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
-    valid = batch.timestep.env.valid
+    valid = jnp.bitwise_not(batch.timestep.env.done)
     lengths = valid.sum(0)
 
-    history_lengths = batch.timestep.history.major_history.absolute_edges[
+    history_lengths = batch.timestep.history.absolute_edges[
         ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
     ].sum(0)
 
@@ -100,13 +100,7 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
-        draw_ratio=batch.timestep.env.draw.any(axis=0).astype(float).mean(),
-        early_finish_ratio=(
-            jnp.abs(batch.timestep.env.rewards.win_rewards[..., 0] * valid).sum(0) != 1
-        ).mean(),
-        reward_sum=jnp.abs(batch.timestep.env.rewards.win_rewards * valid[..., None])
-        .sum(0)
-        .mean(),
+        reward_mean=batch.timestep.env.win_reward[-1].mean(),
     )
 
 

@@ -34,6 +34,7 @@ import {
     EntityFeature,
     MovesetFeature,
     ContextFeature,
+    InfoFeature,
 } from "../../protos/features_pb";
 
 export type EnumMappings =
@@ -90,6 +91,7 @@ export const sideIdMapping: {
 };
 
 export const numPokemonFields = Object.keys(EntityFeature).length;
+export const numInfoFields = Object.keys(InfoFeature).length;
 export const numContextFields = Object.keys(ContextFeature).length;
 export const numMoveFields = Object.keys(MovesetFeature).length;
 export const numMovesetFields = 10 * numMoveFields;

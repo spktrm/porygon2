@@ -1,6 +1,5 @@
 import { AnyObject } from "@pkmn/sim";
 import { Pokemon } from "@pkmn/client";
-import { Action } from "../../../protos/service_pb";
 import { EvalActionFnType } from "../eval";
 import { GetMoveDamange } from "./max_dmg";
 
@@ -22,7 +21,8 @@ function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
         (offensivePower + defensivePower) * hpFactor * (1 + speedFactor);
 
     // Factor in Pokémon's status condition, if any
-    if (poke1.status === "par") score *= 0.8; // Paralysis reduces utility
+    if (poke1.status === "par")
+        score *= 0.8; // Paralysis reduces utility
     else if (poke1.status === "slp" || poke1.status === "frz")
         score *= 0.5; // Sleep/freeze significantly reduce utility
     else if (poke1.status === "brn" || poke1.status === "psn")
@@ -68,9 +68,7 @@ function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
 
 export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
     if (player.done) {
-        const action = new Action();
-        action.setValue(-1);
-        return action;
+        return { actionIndex: -1 };
     }
     const battle = player.privateBattle;
     const request = player.getRequest() as AnyObject;
@@ -87,8 +85,6 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
 
     const attacker = mySide.active[0];
     const defender = oppSide.active[0];
-
-    const action = new Action();
 
     const argMax = (arr: number[]) => {
         return arr.reduce((maxIndex, currentElement, currentIndex, arr) => {
@@ -120,12 +116,10 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
                 console.error("fainted");
             }
             if (attacker === null) {
-                action.setValue(4 + maxScoreIdx);
-                return action;
+                return { actionIndex: 4 + maxScoreIdx };
             }
             if (scorePokemon(attacker, defender) < scores[maxScoreIdx]) {
-                action.setValue(4 + maxScoreIdx);
-                return action;
+                return { actionIndex: 4 + maxScoreIdx };
             }
         }
     }
@@ -143,10 +137,7 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
                 return disabled ? -Infinity : damage;
             },
         );
-        action.setValue(argMax(moveData));
-        return action;
+        return { actionIndex: argMax(moveData) };
     }
-
-    action.setValue(-1);
-    return action;
+    return { actionIndex: -1 };
 };
