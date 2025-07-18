@@ -12,8 +12,8 @@ from ml_collections import ConfigDict
 
 from ml.arch.config import get_model_cfg
 from ml.arch.encoder import Encoder
+from ml.arch.func import legal_log_policy, legal_policy
 from ml.arch.heads import PolicyHead, ValueHead
-from ml.func import legal_log_policy, legal_policy
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import get_ex_step
 from rlenv.interfaces import EnvStep, ModelOutput, TimeStep
