@@ -6,6 +6,8 @@ run_in_dir_or_file() {
     black "$@"
 }
 
+npx prettier service/src/server/*.ts -w
+
 run_in_dir_or_file rlenv/*.py
 run_in_dir_or_file ml/**/*.py
 run_in_dir_or_file embeddings/*.py
