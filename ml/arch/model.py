@@ -30,6 +30,24 @@ class Model(nn.Module):
         self.policy_head = PolicyHead(self.cfg.policy_head)
         self.value_head = ValueHead(self.cfg.value_head)
 
+    def get_head_outputs(
+        self,
+        latent_embeddings: jax.Array,
+        action_embeddings: jax.Array,
+        legal: jax.Array,
+        temp: float = 1.0,
+    ):
+        # Apply action argument heads
+        logit, pi, log_pi = self.policy_head(
+            latent_embeddings, action_embeddings, legal, temp
+        )
+
+        # Apply the value head
+        value = jnp.tanh(self.value_head(latent_embeddings))
+
+        # Return the model output
+        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
+
     def __call__(self, timestep: TimeStep, temp: float = 1):
         """
         Shared forward pass for encoder and policy head.
@@ -39,17 +57,9 @@ class Model(nn.Module):
             timestep.env, timestep.history
         )
 
-        # Apply action argument heads
-        logit, pi, log_pi = jax.vmap(functools.partial(self.policy_head, temp=temp))(
+        return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
             latent_embeddings, action_embeddings, timestep.env.legal
         )
-
-        # Apply the value head
-        value = jax.vmap(self.value_head)(latent_embeddings)
-        value = jnp.tanh(value)
-
-        # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
 
 class DummyModel(nn.Module):

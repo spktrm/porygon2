@@ -133,15 +133,6 @@ class Agent:
         return ActorStep(model_output=model_output)
 
 
-class NetworkContainer:
-    def __init__(self, state: train_state.TrainState):
-        self._params_for_actor = (int(state.step), jax.device_get(state.params))
-
-    def update(self, state: train_state.TrainState):
-        """Update the internal state with a new TrainState."""
-        self._params_for_actor = (int(state.step), jax.device_get(state.params))
-
-
 class Actor:
     """Manages the state of a single agent/environment interaction loop."""
 
@@ -150,7 +141,7 @@ class Actor:
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
-        learner_state: NetworkContainer,
+        params_for_actor: Callable[[], tuple[int, Params]],
         queue: queue.Queue | None = None,
         rng_seed: int = 42,
         logger=None,
@@ -159,7 +150,7 @@ class Actor:
         self._env = env
         self._unroll_length = unroll_length
         self._queue = queue
-        self._learner_state = learner_state
+        self._params_for_actor = params_for_actor
         self._rng_key = jax.random.PRNGKey(rng_seed)
 
         if logger is None:
@@ -224,4 +215,4 @@ class Actor:
             self._queue.put(act_out)
 
     def pull_params(self):
-        return self._learner_state._params_for_actor
+        return self._params_for_actor()
