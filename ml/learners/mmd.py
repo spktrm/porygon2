@@ -32,7 +32,6 @@ from tqdm import tqdm
 import wandb
 from ml.arch.config import get_model_cfg
 from ml.arch.model import get_model, get_num_params
-from ml.config import AdamConfig
 from ml.learners.func import (
     collect_batch_telemetry_data,
     collect_parameter_and_gradient_telemetry_data,
@@ -44,7 +43,16 @@ from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep, Transition
 from rlenv.main import Actor, Agent, SinglePlayerSyncEnvironment
-from rlenv.utils import NoOpLock
+
+
+@chex.dataclass(frozen=True)
+class AdamConfig:
+    """Adam optimizer related params."""
+
+    b1: float
+    b2: float
+    eps: float
+    weight_decay: float
 
 
 @chex.dataclass(frozen=True)

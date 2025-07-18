@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import uvloop
-from flax.training import train_state
 from websockets.sync.client import connect
 
 from ml.utils import Params

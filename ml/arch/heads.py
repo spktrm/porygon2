@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from ml.arch.func import legal_log_policy, legal_policy
 from ml.arch.modules import RMSNorm, TransformerDecoder
-from ml.func import legal_log_policy, legal_policy
 
 
 class PolicyHead(nn.Module):
