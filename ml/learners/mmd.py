@@ -43,7 +43,7 @@ from ml.learners.func import (
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep, Transition
-from rlenv.main import Actor, Agent, NetworkContainer, SinglePlayerSyncEnvironment
+from rlenv.main import Actor, Agent, SinglePlayerSyncEnvironment
 from rlenv.utils import NoOpLock
 
 
@@ -53,7 +53,7 @@ class MMDConfig:
     num_actors: int = 32
     do_eval: bool = True
     num_eval_games: int = 200
-    unroll_length: int = 192
+    unroll_length: int = 108
     replay_buffer_capacity: int = 512
 
     # Batch iteration params
@@ -510,9 +510,10 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce num_trajectories trajectories."""
     touch = start_deadlock_watchdog()
 
-    old_step_count, params = actor.pull_params()
+    old_step_count, _ = actor.pull_params()
     session_id = actor._env.username
     win_reward_sum = {old_step_count: (0, 0)}
+
     while not stop_signal[0]:
         try:
             step_count, params = actor.pull_params()
@@ -536,6 +537,7 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
             params = jax.device_put(params)
             subkey = actor.split_rng()
             eval_trajectory = actor.unroll(subkey, step_count, params)
+
             win_rewards = np.sign(eval_trajectory.timestep.env.win_reward.sum(0))
             # Update the win reward sum for this step count.
             reward_count, reward_sum = win_reward_sum[step_count]
@@ -642,8 +644,8 @@ def init_jax_jit_cache(jax_jit_cache_path: str = JAX_JIT_CACHE_PATH):
 
 
 def set_jax_env_vars():
-    os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 
 
 def main():
@@ -668,7 +670,7 @@ def main():
 
     state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
-    gpu_lock = NoOpLock()
+    gpu_lock = threading.Lock()
     agent = Agent(state.apply_fn, gpu_lock)
     replay_buffer = ReplayBuffer(
         capacity=max(
@@ -680,7 +682,8 @@ def main():
     if latest_ckpt:
         state, replay_buffer = load(state, replay_buffer, latest_ckpt)
 
-    learner_state = NetworkContainer(state)
+    def params_for_actor():
+        return int(state.step), jax.device_get(state.params)
 
     for game_id in range(learner_config.num_actors // 2):
         for player_id in range(2):
@@ -689,7 +692,7 @@ def main():
                 env=SinglePlayerSyncEnvironment(f"train-{game_id:02d}{player_id:02d}"),
                 unroll_length=learner_config.unroll_length,
                 queue=trajectory_queue,
-                learner_state=learner_state,
+                params_for_actor=params_for_actor,
                 rng_seed=len(actor_threads),
             )
             args = (actor, stop_signal)
@@ -706,15 +709,13 @@ def main():
             agent=agent,
             env=SinglePlayerSyncEnvironment(f"eval-{eval_id:04d}"),
             unroll_length=learner_config.unroll_length,
-            learner_state=learner_state,
+            params_for_actor=params_for_actor,
             rng_seed=len(actor_threads),
         )
         args = (actor, stop_signal)
         actor_threads.append(
             threading.Thread(
-                target=run_eval_actor,
-                args=args,
-                name=f"EvalActor-{eval_id}",
+                target=run_eval_actor, args=args, name=f"EvalActor-{eval_id}"
             )
         )
 
@@ -745,8 +746,8 @@ def main():
     consumer_progress = tqdm(desc="consumer", smoothing=0.1)
     train_progress = tqdm(desc="batches", smoothing=0.1)
 
-    try:
-        for _ in range(learner_config.num_steps):
+    for _ in range(learner_config.num_steps):
+        try:
             batch = replay_buffer.sample(learner_config.batch_size)
 
             with gpu_lock:
@@ -754,7 +755,6 @@ def main():
 
             with gpu_lock:
                 state, logs = train_step(state, batch, targets, learner_config)
-                learner_state.update(state)
 
             logs.update(collect_state_telemetry_data(state))
             logs.update(collect_batch_telemetry_data(batch))
@@ -770,15 +770,14 @@ def main():
             if state.step % 5000 == 0:
                 save(state, replay_buffer)
 
-    except Exception:
-        traceback.print_exc()
-    finally:
-        # Stop.
-        stop_signal[0] = True
-        for t in actor_threads:
-            t.join()
+        except Exception:
+            traceback.print_exc()
 
-        print("done")
+    stop_signal[0] = True
+    for t in actor_threads:
+        t.join()
+
+    print("done")
 
 
 if __name__ == "__main__":

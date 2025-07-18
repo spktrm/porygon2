@@ -650,9 +650,44 @@ class Encoder(nn.Module):
             self._encode_absolute_edge(history.absolute_edges)
         )
 
+        return (
+            entity_embedding,
+            relative_edge_embedding,
+            absolute_edge_embedding,
+            valid_timestep_mask,
+            history_request_count,
+        )
+
+    def _encode_entities(self, env_step: EnvStep):
+        entity_encodings = entity_embeddings = jnp.concatenate(
+            (env_step.private_team, env_step.public_team), axis=-2
+        )
+        encode_entities = jax.vmap(self._encode_entity)
+
+        def _batched_fn(encodings: jax.Array):
+            embeddings, mask = encode_entities(encodings)
+            embeddings = self.entity_ff(embeddings)
+            return self.entity_encoder(embeddings, mask), mask
+
+        entity_embeddings, entity_mask = jax.vmap(_batched_fn)(entity_encodings)
+
+        private_entity_embeddings = self.private_entity_ln(entity_embeddings[:, :6])
+        return private_entity_embeddings, entity_mask, entity_embeddings
+
+    def _encode_timesteps(self, history: HistoryStep):
+        (
+            entity_embedding,
+            relative_edge_embedding,
+            absolute_edge_embedding,
+            valid_timestep_mask,
+            history_request_count,
+        ) = jax.vmap(self._encode_timestep)(history)
+
         timestep_embedding = (
-            entity_embedding + relative_edge_embedding + absolute_edge_embedding[None]
-        ).reshape(-1)
+            entity_embedding
+            + relative_edge_embedding
+            + jnp.expand_dims(absolute_edge_embedding, axis=1)
+        ).reshape(-1, 2 * entity_embedding.shape[-1])
 
         timestep_embedding = self.timestep_linear(timestep_embedding)
         timestep_embedding = self.timestep_ff(timestep_embedding)
@@ -661,37 +696,6 @@ class Encoder(nn.Module):
         timestep_embedding = jnp.where(
             valid_timestep_mask[..., None], timestep_embedding, 0
         )
-
-        return timestep_embedding, valid_timestep_mask, history_request_count
-
-    def _encode_entities(self, env_step: EnvStep):
-        _encode_entities = jax.vmap(jax.vmap(self._encode_entity))
-        private_entity_embeddings, private_entity_mask = _encode_entities(
-            env_step.private_team
-        )
-        public_entity_embeddings, public_entity_mask = _encode_entities(
-            env_step.public_team
-        )
-
-        entity_mask = jnp.concatenate(
-            (private_entity_mask, public_entity_mask), axis=-1
-        )
-        entity_embeddings = jnp.concatenate(
-            (private_entity_embeddings, public_entity_embeddings), axis=-2
-        )
-        entity_embeddings = jax.vmap(self.entity_ff)(entity_embeddings)
-        entity_embeddings = jax.vmap(self.entity_encoder)(
-            entity_embeddings, entity_mask
-        )
-        private_entity_embeddings = jax.vmap(self.private_entity_ln)(
-            entity_embeddings[:, :6]
-        )
-        return private_entity_embeddings, entity_mask, entity_embeddings
-
-    def _encode_timesteps(self, history: HistoryStep):
-        timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
-            self._encode_timestep
-        )(history)
 
         seq_len = timestep_embedding.shape[0]
 
@@ -730,7 +734,7 @@ class Encoder(nn.Module):
         embedding = self.action_sum(
             boolean_code,
             context_encoding,
-            entity_embedding[action[MovesetFeature.MOVESET_FEATURE__ENTITY_IDX]],
+            entity_embedding,
             self._encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
@@ -799,17 +803,24 @@ class Encoder(nn.Module):
     def _encode_actions(
         self, env_step: EnvStep, entity_embeddings: chex.Array
     ) -> chex.Array:
-        context_encoding = jax.vmap(self._encode_context)(env_step.current_context)
-        action_embeddings = jax.vmap(
-            jax.vmap(self._encode_action, in_axes=(0, 0, None, None))
-        )(
-            env_step.moveset,
-            env_step.legal.astype(int),
-            entity_embeddings,
-            context_encoding,
-        )
-        action_embeddings = jax.vmap(self.action_ff)(action_embeddings)
-        return jax.vmap(self.action_encoder)(action_embeddings, env_step.legal)
+
+        def _batched_forward(env_step: EnvStep, entity_embeddings: chex.Array):
+            context_encoding = self._encode_context(env_step.current_context)
+            action_entites = jnp.take(
+                entity_embeddings,
+                env_step.moveset[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
+                axis=0,
+            )
+            action_embeddings = jax.vmap(self._encode_action, in_axes=(0, 0, 0, None))(
+                env_step.moveset,
+                env_step.legal.astype(int),
+                action_entites,
+                context_encoding,
+            )
+            action_embeddings = self.action_ff(action_embeddings)
+            return self.action_encoder(action_embeddings, env_step.legal)
+
+        return jax.vmap(_batched_forward)(env_step, entity_embeddings)
 
     def __call__(
         self, env_step: EnvStep, history_step: HistoryStep
@@ -830,21 +841,36 @@ class Encoder(nn.Module):
 
         action_embeddings = self._encode_actions(env_step, private_entity_embeddings)
 
-        latent_timesteps = jax.vmap(
-            self.latent_timestep_decoder, in_axes=(None, None, None, 0)
-        )(self.latent_embeddings, timestep_embeddings, None, timestep_mask)
+        def _batched_forward(
+            timestep_mask: jax.Array,
+            entity_embeddings: jax.Array,
+            entity_mask: jax.Array,
+            action_embeddings: jax.Array,
+            legal_mask: jax.Array,
+        ):
+            latent_timesteps = (self.latent_timestep_decoder)(
+                self.latent_embeddings, timestep_embeddings, None, timestep_mask
+            )
 
-        latent_entities = jax.vmap(
-            self.latent_entity_decoder, in_axes=(None, 0, None, 0)
-        )(self.latent_embeddings, entity_embeddings, None, entity_mask)
+            latent_entities = self.latent_entity_decoder(
+                self.latent_embeddings, entity_embeddings, None, entity_mask
+            )
 
-        latent_actions = jax.vmap(
-            self.latent_action_decoder, in_axes=(None, 0, None, 0)
-        )(self.latent_embeddings, action_embeddings, None, env_step.legal)
+            latent_actions = self.latent_action_decoder(
+                self.latent_embeddings, action_embeddings, None, legal_mask
+            )
 
-        latent_embeddings = jax.vmap(jax.vmap(self.latent_merge))(
-            latent_timesteps, latent_entities, latent_actions
+            latent_embeddings = jax.vmap(self.latent_merge)(
+                latent_timesteps, latent_entities, latent_actions
+            )
+            contextual_latent_embeddings = self.latent_encoder(latent_embeddings)
+
+            return contextual_latent_embeddings, action_embeddings
+
+        return jax.vmap(_batched_forward)(
+            timestep_mask,
+            entity_embeddings,
+            entity_mask,
+            action_embeddings,
+            env_step.legal,
         )
-        contextual_latent_embeddings = jax.vmap(self.latent_encoder)(latent_embeddings)
-
-        return contextual_latent_embeddings, action_embeddings

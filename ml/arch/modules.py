@@ -580,7 +580,9 @@ class SumEmbeddings(nn.Module):
     @nn.compact
     def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
         """Sum embeddings."""
-        return sum([nn.Dense(self.output_size)(embedding) for embedding in embeddings])
+        return jnp.stack(
+            [nn.Dense(self.output_size)(embedding) for embedding in embeddings]
+        ).sum(axis=0)
 
 
 class MergeEmbeddings(nn.Module):
