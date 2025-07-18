@@ -174,3 +174,14 @@ export interface ContextFeatureMap {
 
 export const ContextFeature: ContextFeatureMap;
 
+export interface InfoFeatureMap {
+  INFO_FEATURE___UNSPECIFIED: 0;
+  INFO_FEATURE__DONE: 1;
+  INFO_FEATURE__PLAYER_INDEX: 2;
+  INFO_FEATURE__TURN: 3;
+  INFO_FEATURE__WIN_REWARD: 4;
+  INFO_FEATURE__REQUEST_COUNT: 5;
+}
+
+export const InfoFeature: InfoFeatureMap;
+

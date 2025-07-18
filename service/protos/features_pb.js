@@ -18,6 +18,7 @@ var global = (function() { return this || window || global || self || Function('
 goog.exportSymbol('proto.AbsoluteEdgeFeature', null, global);
 goog.exportSymbol('proto.ContextFeature', null, global);
 goog.exportSymbol('proto.EntityFeature', null, global);
+goog.exportSymbol('proto.InfoFeature', null, global);
 goog.exportSymbol('proto.MovesetActionTypeEnum', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
 goog.exportSymbol('proto.MovesetHasPPEnum', null, global);
@@ -198,6 +199,18 @@ proto.ContextFeature = {
   CONTEXT_FEATURE__OPP_SIDECONDITIONS1: 15,
   CONTEXT_FEATURE__OPP_TOXIC_SPIKES: 16,
   CONTEXT_FEATURE__OPP_SPIKES: 17
+};
+
+/**
+ * @enum {number}
+ */
+proto.InfoFeature = {
+  INFO_FEATURE___UNSPECIFIED: 0,
+  INFO_FEATURE__DONE: 1,
+  INFO_FEATURE__PLAYER_INDEX: 2,
+  INFO_FEATURE__TURN: 3,
+  INFO_FEATURE__WIN_REWARD: 4,
+  INFO_FEATURE__REQUEST_COUNT: 5
 };
 
 goog.object.extend(exports, proto);

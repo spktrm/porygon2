@@ -32,12 +32,12 @@ from rlenv.protos.features_pb2 import (
     MovesetHasPPEnum,
     RelativeEdgeFeature,
 )
-from rlenv.protos.state_pb2 import State
+from rlenv.protos.service_pb2 import EnvironmentState
 
 with open(os.path.join(os.path.dirname(__file__), "ex"), "rb") as f:
     EX_BUFFER = f.read()
 
-EX_STATE = State.FromString(EX_BUFFER)
+EX_STATE = EnvironmentState.FromString(EX_BUFFER)
 
 NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())

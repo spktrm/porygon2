@@ -247,3 +247,13 @@ enum ContextFeature {
   // Number of Spikes layers
   CONTEXT_FEATURE__OPP_SPIKES = 17;
 }
+
+
+enum InfoFeature {
+  INFO_FEATURE___UNSPECIFIED = 0;
+  INFO_FEATURE__DONE = 1;
+  INFO_FEATURE__PLAYER_INDEX = 2;
+  INFO_FEATURE__TURN = 3;
+  INFO_FEATURE__WIN_REWARD = 4;
+  INFO_FEATURE__REQUEST_COUNT = 5;
+}

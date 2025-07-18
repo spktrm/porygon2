@@ -160,6 +160,15 @@ class ContextFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONTEXT_FEATURE__OPP_SIDECONDITIONS1: _ClassVar[ContextFeature]
     CONTEXT_FEATURE__OPP_TOXIC_SPIKES: _ClassVar[ContextFeature]
     CONTEXT_FEATURE__OPP_SPIKES: _ClassVar[ContextFeature]
+
+class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    INFO_FEATURE___UNSPECIFIED: _ClassVar[InfoFeature]
+    INFO_FEATURE__DONE: _ClassVar[InfoFeature]
+    INFO_FEATURE__PLAYER_INDEX: _ClassVar[InfoFeature]
+    INFO_FEATURE__TURN: _ClassVar[InfoFeature]
+    INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
+    INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
 ENTITY_FEATURE___UNSPECIFIED: EntityFeature
 ENTITY_FEATURE__SPECIES: EntityFeature
 ENTITY_FEATURE__ITEM: EntityFeature
@@ -296,3 +305,9 @@ CONTEXT_FEATURE__OPP_SIDECONDITIONS0: ContextFeature
 CONTEXT_FEATURE__OPP_SIDECONDITIONS1: ContextFeature
 CONTEXT_FEATURE__OPP_TOXIC_SPIKES: ContextFeature
 CONTEXT_FEATURE__OPP_SPIKES: ContextFeature
+INFO_FEATURE___UNSPECIFIED: InfoFeature
+INFO_FEATURE__DONE: InfoFeature
+INFO_FEATURE__PLAYER_INDEX: InfoFeature
+INFO_FEATURE__TURN: InfoFeature
+INFO_FEATURE__WIN_REWARD: InfoFeature
+INFO_FEATURE__REQUEST_COUNT: InfoFeature

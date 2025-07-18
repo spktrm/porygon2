@@ -24,27 +24,27 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rservice.proto\x12\tservicev2\"\xc3\x01\n\rClientMessage\x12\x11\n\tplayer_id\x18\x01 \x01(\x05\x12\x0f\n\x07game_id\x18\x02 \x01(\x05\x12,\n\x07\x63onnect\x18\x03 \x01(\x0b\x32\x19.servicev2.ConnectMessageH\x00\x12&\n\x04step\x18\x04 \x01(\x0b\x32\x16.servicev2.StepMessageH\x00\x12(\n\x05reset\x18\x05 \x01(\x0b\x32\x17.servicev2.ResetMessageH\x00\x42\x0e\n\x0cmessage_type\"3\n\x06\x41\x63tion\x12\x0c\n\x04rqid\x18\x01 \x01(\x05\x12\r\n\x05value\x18\x02 \x01(\x05\x12\x0c\n\x04text\x18\x03 \x01(\t\"0\n\x0bStepMessage\x12!\n\x06\x61\x63tion\x18\x01 \x01(\x0b\x32\x11.servicev2.Action\"\x0e\n\x0cResetMessage\"\x10\n\x0e\x43onnectMessage\"u\n\rServerMessage\x12*\n\ngame_state\x18\x01 \x01(\x0b\x32\x14.servicev2.GameStateH\x00\x12(\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x17.servicev2.ErrorMessageH\x00\x42\x0e\n\x0cmessage_type\";\n\tGameState\x12\x11\n\tplayer_id\x18\x01 \x01(\x05\x12\x0c\n\x04rqid\x18\x02 \x01(\x05\x12\r\n\x05state\x18\x03 \x01(\x0c\"%\n\x0c\x45rrorMessage\x12\x15\n\rerror_message\x18\x01 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rservice.proto\x12\tservicev2\"q\n\rClientRequest\x12&\n\x04step\x18\x01 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12(\n\x05reset\x18\x02 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\x0e\n\x0cmessage_type\"=\n\x0bStepRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x0e\n\x06\x61\x63tion\x18\x02 \x01(\x05\x12\x0c\n\x04rqid\x18\x03 \x01(\x05\" \n\x0cResetRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"\x8b\x02\n\x10\x45nvironmentState\x12\x0c\n\x04info\x18\x01 \x01(\x0c\x12\x15\n\rlegal_actions\x18\x02 \x01(\x0c\x12\x18\n\x10history_entities\x18\x03 \x01(\x0c\x12\x1d\n\x15history_absolute_edge\x18\x04 \x01(\x0c\x12\x1e\n\x16history_relative_edges\x18\x05 \x01(\x0c\x12\x16\n\x0ehistory_length\x18\x06 \x01(\x05\x12\x0f\n\x07moveset\x18\x07 \x01(\x0c\x12\x13\n\x0bpublic_team\x18\x08 \x01(\x0c\x12\x14\n\x0cprivate_team\x18\t \x01(\x0c\x12\x17\n\x0f\x63urrent_context\x18\n \x01(\x0c\x12\x0c\n\x04rqid\x18\x0b \x01(\x05\"S\n\x13\x45nvironmentResponse\x12\x10\n\x08username\x18\x01 \x01(\t\x12*\n\x05state\x18\x02 \x01(\x0b\x32\x1b.servicev2.EnvironmentState\"\x1e\n\rErrorResponse\x12\r\n\x05trace\x18\x01 \x01(\t\"\x8d\x01\n\rWorkerRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12.\n\x0cstep_request\x18\x02 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12\x30\n\rreset_request\x18\x03 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\t\n\x07request\"\x91\x01\n\x0eWorkerResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12<\n\x14\x65nvironment_response\x18\x02 \x01(\x0b\x32\x1e.servicev2.EnvironmentResponse\x12\x30\n\x0e\x65rror_response\x18\x03 \x01(\x0b\x32\x18.servicev2.ErrorResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'service_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_CLIENTMESSAGE']._serialized_start=29
-  _globals['_CLIENTMESSAGE']._serialized_end=224
-  _globals['_ACTION']._serialized_start=226
-  _globals['_ACTION']._serialized_end=277
-  _globals['_STEPMESSAGE']._serialized_start=279
-  _globals['_STEPMESSAGE']._serialized_end=327
-  _globals['_RESETMESSAGE']._serialized_start=329
-  _globals['_RESETMESSAGE']._serialized_end=343
-  _globals['_CONNECTMESSAGE']._serialized_start=345
-  _globals['_CONNECTMESSAGE']._serialized_end=361
-  _globals['_SERVERMESSAGE']._serialized_start=363
-  _globals['_SERVERMESSAGE']._serialized_end=480
-  _globals['_GAMESTATE']._serialized_start=482
-  _globals['_GAMESTATE']._serialized_end=541
-  _globals['_ERRORMESSAGE']._serialized_start=543
-  _globals['_ERRORMESSAGE']._serialized_end=580
+  _globals['_CLIENTREQUEST']._serialized_start=28
+  _globals['_CLIENTREQUEST']._serialized_end=141
+  _globals['_STEPREQUEST']._serialized_start=143
+  _globals['_STEPREQUEST']._serialized_end=204
+  _globals['_RESETREQUEST']._serialized_start=206
+  _globals['_RESETREQUEST']._serialized_end=238
+  _globals['_ENVIRONMENTSTATE']._serialized_start=241
+  _globals['_ENVIRONMENTSTATE']._serialized_end=508
+  _globals['_ENVIRONMENTRESPONSE']._serialized_start=510
+  _globals['_ENVIRONMENTRESPONSE']._serialized_end=593
+  _globals['_ERRORRESPONSE']._serialized_start=595
+  _globals['_ERRORRESPONSE']._serialized_end=625
+  _globals['_WORKERREQUEST']._serialized_start=628
+  _globals['_WORKERREQUEST']._serialized_end=769
+  _globals['_WORKERRESPONSE']._serialized_start=772
+  _globals['_WORKERRESPONSE']._serialized_end=917
 # @@protoc_insertion_point(module_scope)

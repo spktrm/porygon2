@@ -1,15 +1,20 @@
 import collections
 import functools
 import json
+import logging
 import os
 import pickle
 import queue
 import random
+import sys
+import tempfile
 import threading
+import time
 import traceback
+from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
 from pprint import pprint
-
-import threading, sys, time, traceback, logging
 
 import chex
 import flax.linen as nn
@@ -38,14 +43,14 @@ from ml.learners.func import (
 from ml.utils import Params, get_most_recent_file
 from rlenv.env import clip_history, get_ex_step
 from rlenv.interfaces import ModelOutput, TimeStep, Transition
-from rlenv.main import Actor, Agent, SinglePlayerSyncEnvironment
-from rlenv.utils import FairLock, NoOpLock
+from rlenv.main import Actor, Agent, NetworkContainer, SinglePlayerSyncEnvironment
+from rlenv.utils import NoOpLock
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
     num_steps = 10_000_000
-    num_actors: int = 16
+    num_actors: int = 32
     do_eval: bool = True
     num_eval_games: int = 200
     unroll_length: int = 192
@@ -110,43 +115,49 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     )
 
 
-def save(state: TrainState):
-    with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.step:08}"), "wb") as f:
-        pickle.dump(
-            dict(
-                params=state.params,
-                opt_state=state.opt_state,
-                step=state.step,
-                actor_steps=state.actor_steps,
-                target_adv_mean=state.target_adv_mean,
-                target_adv_std=state.target_adv_std,
-            ),
-            f,
-        )
+def save(state: TrainState, replay_buffer: "ReplayBuffer"):
+    with replay_buffer._lock:
+        with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.step:08}"), "wb") as f:
+            pickle.dump(
+                dict(
+                    params=state.params,
+                    opt_state=state.opt_state,
+                    step=state.step,
+                    actor_steps=state.actor_steps,
+                    target_adv_mean=state.target_adv_mean,
+                    target_adv_std=state.target_adv_std,
+                    replay_buffer_deque=deepcopy(replay_buffer._buffer),
+                ),
+                f,
+            )
 
 
-def load(state: TrainState, path: str):
+def load(state: TrainState, replay_buffer: "ReplayBuffer", path: str):
     print(f"loading checkpoint from {path}")
     with open(path, "rb") as f:
-        step: TrainState = pickle.load(f)
+        ckpt_data = pickle.load(f)
 
-    step_no = step.get("step", 0)
+    step_no = ckpt_data.get("step", 0)
     print(f"Learner steps: {step_no:08}")
 
-    actor_steps = step.get("actor_steps", 0)
+    actor_steps = ckpt_data.get("actor_steps", 0)
     print("Actor steps: ", actor_steps)
 
-    params = step["params"]
+    params = ckpt_data["params"]
     state = state.replace(
         step=step_no,
         params=params,
         actor_steps=actor_steps,
-        opt_state=step["opt_state"],
-        target_adv_mean=step.get("target_adv_mean", 0),
-        target_adv_std=step.get("target_adv_std", 1),
+        opt_state=ckpt_data["opt_state"],
+        target_adv_mean=ckpt_data.get("target_adv_mean", 0),
+        target_adv_std=ckpt_data.get("target_adv_std", 1),
     )
 
-    return state
+    if "replay_buffer_deque" in ckpt_data:
+        replay_buffer = ReplayBuffer.from_deque(ckpt_data["replay_buffer_deque"])
+        print(f"Loaded replay buffer with {len(replay_buffer)} transitions.")
+
+    return state, replay_buffer
 
 
 VTraceOutput = collections.namedtuple(
@@ -291,17 +302,12 @@ def _compute_returns(
 ):
     """Train for a single step."""
 
-    valid = batch.timestep.env.valid
-
-    rewards = jnp.take_along_axis(
-        batch.timestep.env.rewards.win_rewards,
-        batch.timestep.env.player_id[..., None],
-        axis=-1,
-    ).squeeze()
+    valid = jnp.bitwise_not(batch.timestep.env.done)
+    rewards = batch.timestep.env.win_reward
 
     rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
-    valids = jnp.concatenate((valid[1:], valid[-1:]))
+    valids = jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:])))
 
     discount_t = valids * config.gamma
     lambda_ = valids * config.lambda_
@@ -316,7 +322,7 @@ def compute_returns(state: TrainState, batch: Transition, config: MMDConfig):
 
     pred: ModelOutput = state.apply_fn(state.params, batch.timestep)
 
-    valid = batch.timestep.env.valid
+    valid = jnp.bitwise_not(batch.timestep.env.done)
 
     action = jax.lax.stop_gradient(batch.actorstep.action[..., None])
     log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
@@ -339,8 +345,6 @@ def train_step(
 
         pred: ModelOutput = state.apply_fn(params, batch.timestep)
 
-        valid = batch.timestep.env.valid
-
         action = jax.lax.stop_gradient(batch.actorstep.action[..., None])
         log_pi = jnp.take_along_axis(pred.log_pi, action, axis=-1).squeeze()
         log_mu = jnp.take_along_axis(
@@ -348,6 +352,12 @@ def train_step(
         ).squeeze()
         log_ratio = log_pi - log_mu
         ratio = jnp.exp(log_ratio)
+
+        approx_kl = (ratio - 1) - log_ratio
+
+        valid = jnp.bitwise_not(batch.timestep.env.done) & (
+            approx_kl <= config.kl_target
+        )
 
         advantages: jax.Array = jax.lax.stop_gradient(targets.pg_advantage)
         adv_mean = advantages.mean(where=valid)
@@ -376,11 +386,10 @@ def train_step(
         )
 
         old_approx_kl = (-log_ratio).mean(where=valid)
-        approx_kl = ((ratio - 1) - log_ratio).mean(where=valid)
 
         logs = dict(
             old_approx_kl=old_approx_kl,
-            approx_kl=approx_kl,
+            approx_kl=approx_kl.mean(where=valid),
             ent_kl_coef_mult=ent_kl_coef_mult,
             loss_pg=loss_pg,
             loss_v=loss_v,
@@ -413,8 +422,10 @@ def train_step(
     state = state.apply_gradients(grads=grads)
 
     adv_tau = 1e-1
+    # Add 1 for the final step in each trajectory
+    new_steps = (jnp.bitwise_not(batch.timestep.env.done).sum(0) + 1).sum()
     state = state.replace(
-        actor_steps=state.actor_steps + batch.timestep.env.valid.sum(),
+        actor_steps=state.actor_steps + new_steps,
         target_adv_mean=state.target_adv_mean * (1 - adv_tau)
         + logs["adv_mean"] * adv_tau,
         target_adv_std=state.target_adv_std * (1 - adv_tau) + logs["adv_std"] * adv_tau,
@@ -423,39 +434,67 @@ def train_step(
     return state, logs
 
 
-def start_deadlock_watchdog(timeout_s: int = 60):
+DEADLOCK_TIMEOUT_S = 60 * 5  # 5 minutes
+
+
+def start_deadlock_watchdog(timeout_s: int = DEADLOCK_TIMEOUT_S) -> callable:
     """
-    If no thread makes progress for `timeout_s`, dump all stack traces.
+    Starts a watchdog thread that monitors for deadlock-like pauses.
+    If no thread makes progress for `timeout_s`, it writes every live
+    thread's stack trace to a file inside a tmp directory and tells you
+    where to find them.
+
+    Returns
+    -------
+    touch : callable
+        Call this whenever meaningful work is completed to reset the timer.
     """
     last_progress = {"t": time.time()}
 
-    def touch():  # call this whenever work is done
+    def touch() -> None:
+        """Reset the watchdog timer — call after each unit of work."""
         last_progress["t"] = time.time()
 
-    def watchdog():
+    def watchdog() -> None:
+        # One temp dir per watchdog lifetime, so all dumps live together
+        dump_root = Path(
+            tempfile.mkdtemp(prefix="deadlock_watchdog_", dir=tempfile.gettempdir())
+        )
+
+        logging.info("🛡️  Deadlock watchdog armed; dumps will go to %s", dump_root)
+
         while True:
             time.sleep(timeout_s)
             if time.time() - last_progress["t"] > timeout_s:
-                logging.error("⚠️  Possible deadlock – dumping stacks")
-                for tid, frame in sys._current_frames().items():
-                    logging.error(
-                        "Thread %s\n%s", tid, "".join(traceback.format_stack(frame))
-                    )
+                logging.error("⚠️  Possible deadlock – dumping stacks to %s", dump_root)
 
-    threading.Thread(target=watchdog, daemon=True).start()
+                timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                dump_path = dump_root / f"{timestamp}_thread.txt"
+                with dump_path.open("w", encoding="utf-8") as fh:
+                    for tid, frame in sys._current_frames().items():
+                        fh.write(f"Thread {tid} at {timestamp} UTC\n")
+                        fh.write("".join(traceback.format_stack(frame)))
+
+                # Point the user at the folder once per dump cycle
+                logging.error(
+                    "📄  Stack traces written. Inspect files in %s", dump_root
+                )
+
+    threading.Thread(target=watchdog, daemon=True, name="DeadlockWatchdog").start()
     return touch
 
 
 def run_training_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce num_trajectories trajectories."""
-    touch = start_deadlock_watchdog(60)
+    touch = start_deadlock_watchdog()
 
     old_step_count = 0
     while not stop_signal[0]:
         try:
+            session_id = actor._env.username
             step_count, params = actor.pull_params()
             assert step_count >= old_step_count, (
-                f"Actor {actor._env.game_id} tried to pull params with frame count "
+                f"Actor {session_id} tried to pull params with frame count "
                 f"{step_count} but expected at least {old_step_count}."
             )
             actor.unroll_and_push(step_count, params)
@@ -469,16 +508,16 @@ def run_training_actor(actor: Actor, stop_signal: list[bool]):
 
 def run_eval_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce num_trajectories trajectories."""
-    touch = start_deadlock_watchdog(60)
+    touch = start_deadlock_watchdog()
 
     old_step_count, params = actor.pull_params()
-    game_id = actor._env.game_id - 10_000
+    session_id = actor._env.username
     win_reward_sum = {old_step_count: (0, 0)}
     while not stop_signal[0]:
         try:
             step_count, params = actor.pull_params()
             assert step_count >= old_step_count, (
-                f"Actor {actor._env.game_id} tried to pull params with frame count "
+                f"Actor {session_id} tried to pull params with frame count "
                 f"{step_count} but expected at least {old_step_count}."
             )
             if step_count not in win_reward_sum:
@@ -489,7 +528,7 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
                 wandb.log(
                     {
                         "Step": old_step_count,
-                        f"wr{game_id}": reward_sum / max(1, reward_count),
+                        f"wr-{session_id}": reward_sum / max(1, reward_count),
                     }
                 )
                 old_step_count = step_count
@@ -497,17 +536,13 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
             params = jax.device_put(params)
             subkey = actor.split_rng()
             eval_trajectory = actor.unroll(subkey, step_count, params)
-            win_rewards = np.sign(
-                (
-                    eval_trajectory.timestep.env.rewards.win_rewards[..., 0].squeeze()
-                ).sum(0)
-            )
+            win_rewards = np.sign(eval_trajectory.timestep.env.win_reward.sum(0))
             # Update the win reward sum for this step count.
             reward_count, reward_sum = win_reward_sum[step_count]
             win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
 
             # Log the win reward mean for this step count if we have enough data.
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
             continue
 
@@ -522,6 +557,13 @@ class ReplayBuffer:
         self._buffer = collections.deque(maxlen=capacity)
         self._lock = threading.Lock()
         self._pbar = tqdm(desc="producer", smoothing=0.1)
+
+    @classmethod
+    def from_deque(cls, deque_buffer: collections.deque):
+        instance = cls(deque_buffer.maxlen)
+        instance._buffer = deque_buffer
+        instance._pbar.update(len(instance._buffer))
+        return instance
 
     def is_ready(self):
         return len(self) > (self._capacity // 2)
@@ -548,7 +590,8 @@ class ReplayBuffer:
         )
 
         resolution = 64
-        num_valid = stacked_batch.timestep.env.valid.sum(0).max().item() + 1
+        valid = valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
+        num_valid = valid.sum(0).max().item() + 1
         num_valid = int(np.ceil(num_valid / resolution) * resolution)
 
         stacked_batch = Transition(
@@ -572,32 +615,19 @@ def host_to_device_worker(
 ):
     """Elementary data pipeline."""
 
-    # Wait for the buffer to be filled by other threads/processes if necessary
-    with start_condition:
-        while not replay_buffer.is_ready():
-            try:
-                # We can still help fill the buffer from our assigned queue
-                transition = trajectory_queue.get(timeout=1)
-            except queue.Empty:
-                if stop_signal[0]:
-                    return
-                # Wait for a signal that the buffer might be ready
-                start_condition.wait(timeout=1)
-                continue
-            else:
-                replay_buffer.add(transition)
-                # If we made it ready, notify others
-                if replay_buffer.is_ready():
-                    start_condition.notify_all()
-
+    notified = False
     while not stop_signal[0]:
-        # 1. Add new transitions to the replay buffer as they come in.
         try:
-            transition = trajectory_queue.get(timeout=10)
+            trajectory = trajectory_queue.get(timeout=10)
         except queue.Empty:
             continue
-        else:
-            replay_buffer.add(transition)
+
+        replay_buffer.add(trajectory)
+
+        if not notified and replay_buffer.is_ready():
+            with start_condition:
+                start_condition.notify_all()
+            notified = True
 
 
 JAX_JIT_CACHE_PATH = os.path.join(os.path.dirname(__file__), "../../.jax_jit_cache")
@@ -638,54 +668,55 @@ def main():
 
     state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
 
-    # We use a fair lock here to avoid actor threads being starved by the learner
     gpu_lock = NoOpLock()
-    params_lock = threading.Lock()
-
-    agent = Agent(state.apply_fn, gpu_lock=gpu_lock)
+    agent = Agent(state.apply_fn, gpu_lock)
     replay_buffer = ReplayBuffer(
         capacity=max(
             learner_config.replay_buffer_capacity, learner_config.batch_size * 2
         )
     )
 
-    def get_params():
-        with params_lock:
-            return int(state.step), jax.device_get(state.params)
-
-    def calc_rng_seed(game_id: int, player_id: int) -> int:
-        return int(f"{game_id}{player_id}")
-
-    player_id = 0
-    for game_id in range(learner_config.num_actors // 2):
-        for _ in range(2):
-            actor = Actor(
-                agent=agent,
-                env=SinglePlayerSyncEnvironment(player_id=player_id, game_id=game_id),
-                unroll_length=learner_config.unroll_length,
-                queue=trajectory_queue,
-                params_for_actor=get_params,
-                rng_seed=calc_rng_seed(game_id, player_id),
-            )
-            args = (actor, stop_signal)
-            actor_threads.append(threading.Thread(target=run_training_actor, args=args))
-            player_id += 1
-
-    for eval_id in range(num_eval_actors):
-        game_id = player_id = 10_000 + eval_id
-        actor = Actor(
-            agent=agent,
-            env=SinglePlayerSyncEnvironment(player_id=player_id, game_id=game_id),
-            unroll_length=learner_config.unroll_length,
-            params_for_actor=get_params,
-            rng_seed=calc_rng_seed(game_id, player_id),
-        )
-        args = (actor, stop_signal)
-        actor_threads.append(threading.Thread(target=run_eval_actor, args=args))
-
     latest_ckpt = get_most_recent_file("./ckpts", "mmd")
     if latest_ckpt:
-        state = load(state, latest_ckpt)
+        state, replay_buffer = load(state, replay_buffer, latest_ckpt)
+
+    learner_state = NetworkContainer(state)
+
+    for game_id in range(learner_config.num_actors // 2):
+        for player_id in range(2):
+            actor = Actor(
+                agent=agent,
+                env=SinglePlayerSyncEnvironment(f"train-{game_id:02d}{player_id:02d}"),
+                unroll_length=learner_config.unroll_length,
+                queue=trajectory_queue,
+                learner_state=learner_state,
+                rng_seed=len(actor_threads),
+            )
+            args = (actor, stop_signal)
+            actor_threads.append(
+                threading.Thread(
+                    target=run_training_actor,
+                    args=args,
+                    name=f"Actor-{game_id}-{player_id}",
+                )
+            )
+
+    for eval_id in range(num_eval_actors):
+        actor = Actor(
+            agent=agent,
+            env=SinglePlayerSyncEnvironment(f"eval-{eval_id:04d}"),
+            unroll_length=learner_config.unroll_length,
+            learner_state=learner_state,
+            rng_seed=len(actor_threads),
+        )
+        args = (actor, stop_signal)
+        actor_threads.append(
+            threading.Thread(
+                target=run_eval_actor,
+                args=args,
+                name=f"EvalActor-{eval_id}",
+            )
+        )
 
     wandb.init(
         project="pokemon-rl",
@@ -722,26 +753,22 @@ def main():
                 targets = compute_returns(state, batch, learner_config)
 
             with gpu_lock:
-                new_state, logs = train_step(state, batch, targets, learner_config)
+                state, logs = train_step(state, batch, targets, learner_config)
+                learner_state.update(state)
 
-            # dont step forward if new state changes too much
-            if logs["approx_kl"] <= learner_config.kl_target:
-                with params_lock:
-                    state = new_state
+            logs.update(collect_state_telemetry_data(state))
+            logs.update(collect_batch_telemetry_data(batch))
+            # logs.update(collect_action_prob_telemetry_data(minibatch))
 
-                logs.update(collect_state_telemetry_data(state))
-                logs.update(collect_batch_telemetry_data(batch))
-                # logs.update(collect_action_prob_telemetry_data(minibatch))
+            logs["Step"] = state.step
+            wandb.log(logs)
 
-                logs["Step"] = state.step
-                wandb.log(logs)
+            # Update the tqdm progress bars.
+            consumer_progress.update(learner_config.batch_size)
+            train_progress.update(1)
 
-                # Update the tqdm progress bars.
-                consumer_progress.update(learner_config.batch_size)
-                train_progress.update(1)
-
-                if state.step % 5000 == 0:
-                    save(state)
+            if state.step % 5000 == 0:
+                save(state, replay_buffer)
 
     except Exception:
         traceback.print_exc()
