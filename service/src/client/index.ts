@@ -402,6 +402,7 @@
 //         this.ws.send(`${this.battleId}|/choose ${message}`);
 //         this.prevMessage = message;
 //     }
+
 //     public isActive(): boolean {
 //         return !this.stream.player.done;
 //     }
