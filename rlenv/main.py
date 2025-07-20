@@ -140,7 +140,7 @@ class Actor:
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
-        params_for_actor: Callable[[], tuple[int, Params]],
+        params_for_actor: Callable[[], tuple[int, int, Params]],
         queue: queue.Queue | None = None,
         rng_seed: int = 42,
         logger=None,
