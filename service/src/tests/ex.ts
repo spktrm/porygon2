@@ -71,7 +71,7 @@ async function runBattle() {
 
     // Save the very last state that was recorded.
     if (stateTracker.lastState) {
-        const filePath = path.join(__dirname, "../../../rlenv/ex");
+        const filePath = path.join(__dirname, "../../../rl/environment/ex");
         console.log(`Saving latest environment response to ${filePath}`);
         try {
             fs.writeFileSync(

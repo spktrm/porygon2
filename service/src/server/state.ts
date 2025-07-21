@@ -40,7 +40,6 @@ import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
 import { ID, MoveTarget } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
-import { History } from "../../protos/history_pb";
 import { OneDBoolean, TypedArray } from "./utils";
 import {
     AbsoluteEdgeFeature,
@@ -1176,17 +1175,25 @@ class EdgeBuffer {
         };
     }
 
-    static toReadableHistory(history: History) {
+    static toReadableHistory(args: {
+        historyEntitiesBuffer: Uint8Array;
+        historyRelativeEdgesBuffer: Uint8Array;
+        historyAbsoluteEdgeBuffer: Uint8Array;
+        historyLength: number;
+    }) {
+        const {
+            historyEntitiesBuffer,
+            historyRelativeEdgesBuffer,
+            historyAbsoluteEdgeBuffer,
+            historyLength,
+        } = args;
         const historyItems = [];
-        const historyLength = history.getLength() ?? 0;
-        const historyEntities = new Int16Array(
-            history.getEntities_asU8().buffer,
-        );
+        const historyEntities = new Int16Array(historyEntitiesBuffer.buffer);
         const historyRelativeEdges = new Int16Array(
-            history.getRelativeEdges_asU8().buffer,
+            historyRelativeEdgesBuffer.buffer,
         );
         const historyAbsoluteEdges = new Int16Array(
-            history.getAbsoluteEdge_asU8().buffer,
+            historyAbsoluteEdgeBuffer.buffer,
         );
 
         for (
