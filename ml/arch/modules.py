@@ -13,9 +13,13 @@ jnp.set_printoptions(precision=3, suppress=True)
 class RMSNorm(nn.Module):
     """RMSNorm layer."""
 
+    dtype: jnp.dtype = jnp.float32
+
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
+        scale = self.param(
+            "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.dtype
+        )
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
@@ -43,7 +47,7 @@ def activation_fn(array: chex.Array) -> chex.Array:
     return nn.gelu(array)
 
 
-def layer_norm(array: chex.Array) -> chex.Array:
+def layer_norm(array: chex.Array, dtype: jnp.dtype) -> chex.Array:
     """
     Apply layer normalization.
 
@@ -53,7 +57,7 @@ def layer_norm(array: chex.Array) -> chex.Array:
     Returns:
         chex.Array: Normalized array.
     """
-    return RMSNorm()(array)
+    return RMSNorm(dtype=dtype)(array)
 
 
 def softcap(array: chex.Array, max_value: int = 50) -> chex.Array:
@@ -76,29 +80,11 @@ class Logits(nn.Module):
     num_logits: int = None
     num_linear_layers: int = 3
     use_layer_norm: bool = True
-    kernel_init: Literal["zeros", "lecun", "small"] = "lecun"
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        """
-        Logits for scalar heads.
-
-        Args:
-            x (chex.Array): Input array.
-
-        Returns:
-            chex.Array: Output array.
-        """
-        if self.kernel_init == "lecun":
-            kernel_init_fn = nn.initializers.lecun_normal()
-        elif self.kernel_init == "zeros":
-            kernel_init_fn = nn.initializers.zeros_init()
-        elif self.kernel_init == "small":
-            kernel_init_fn = nn.initializers.uniform(1e-2)
-        else:
-            raise ValueError(
-                f"{self.kernel_init} must be one of {get_args(self.kernel_init)}"
-            )
+        """Logits for scalar heads."""
 
         for i in range(self.num_linear_layers):
             if i == self.num_linear_layers - 1:
@@ -108,11 +94,11 @@ class Logits(nn.Module):
 
             # Optionally apply LayerNorm
             if self.use_layer_norm:
-                x = layer_norm(x)
+                x = layer_norm(x, self.dtype)
 
             # Apply activation and dense layer with custom kernel initializer
             x = activation_fn(x)
-            x = nn.Dense(features=output_size, kernel_init=kernel_init_fn)(x)
+            x = nn.Dense(features=output_size, dtype=self.dtype)(x)
         return x
 
 
@@ -195,6 +181,7 @@ class MultiHeadAttention(nn.Module):
     model_size: Optional[int] = None
     qk_layer_norm: bool = False
     need_pos: bool = False
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(
@@ -230,11 +217,13 @@ class MultiHeadAttention(nn.Module):
             use_layer_norm: bool = False,
             need_pos: bool = False,
         ) -> chex.Array:
-            y = nn.Dense(self.num_heads * head_size, use_bias=False)(x)
+            y = nn.Dense(self.num_heads * head_size, use_bias=False, dtype=self.dtype)(
+                x
+            )
             *leading_dims, _ = x.shape
             y = y.reshape((*leading_dims, self.num_heads, head_size))
             if use_layer_norm:
-                y = layer_norm(y)
+                y = layer_norm(y, self.dtype)
             if need_pos:
                 y = apply_rope(y)
             return y
@@ -270,7 +259,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(model_size, use_bias=False)
+        final_projection = nn.Dense(model_size, use_bias=False, dtype=self.dtype)
         return final_projection(attn)  # [T', D']
 
 
@@ -300,16 +289,17 @@ class FeedForward(nn.Module):
     """Feed forward module."""
 
     hidden_dim: int
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        ff_gate = nn.Dense(self.hidden_dim, use_bias=False)(x)
+        ff_gate = nn.Dense(self.hidden_dim, use_bias=False, dtype=self.dtype)(x)
         gate_value = nn.gelu(ff_gate)
 
-        ff1 = nn.Dense(self.hidden_dim, use_bias=False)(x)
+        ff1 = nn.Dense(self.hidden_dim, use_bias=False, dtype=self.dtype)(x)
         activations = gate_value * ff1
 
-        outputs = nn.Dense(x.shape[-1], use_bias=False)(activations)
+        outputs = nn.Dense(x.shape[-1], use_bias=False, dtype=self.dtype)(activations)
         return outputs
 
 
@@ -317,12 +307,13 @@ class FeedForwardResidual(nn.Module):
 
     hidden_dim: int
     post_ffw_norm: bool = True
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        ffw = FeedForward(self.hidden_dim)(layer_norm(x))
+        ffw = FeedForward(self.hidden_dim, dtype=self.dtype)(layer_norm(x, self.dtype))
         if self.post_ffw_norm:
-            ffw = layer_norm(ffw)
+            ffw = layer_norm(ffw, self.dtype)
         return x + ffw
 
 
@@ -340,6 +331,7 @@ class TransformerEncoder(nn.Module):
     resblocks_hidden_size: Optional[int] = None
     use_post_attn_norm: bool = True
     use_post_ffw_norm: bool = True
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(
@@ -369,7 +361,7 @@ class TransformerEncoder(nn.Module):
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
-                x_ln = jax.vmap(layer_norm)(x)
+                x_ln = layer_norm(x, self.dtype)
             else:
                 x_ln = x
             mha = MultiHeadAttention(
@@ -379,17 +371,18 @@ class TransformerEncoder(nn.Module):
                 model_size=self.model_size,
                 qk_layer_norm=self.qk_layer_norm,
                 need_pos=self.need_pos,
+                dtype=self.dtype,
             )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
             if self.use_post_attn_norm:
-                mha = jax.vmap(layer_norm)(mha)
+                mha = layer_norm(mha, self.dtype)
             x = x + mha
             if self.use_layer_norm:
-                x_ln = jax.vmap(layer_norm)(x)
+                x_ln = layer_norm(x, self.dtype)
             else:
                 x_ln = x
-            ffn = jax.vmap(FeedForward(self.resblocks_hidden_size))(x_ln)
+            ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(x_ln)
             if self.use_post_ffw_norm:
-                ffn = jax.vmap(layer_norm)(ffn)
+                ffn = layer_norm(ffn, self.dtype)
             x = x + ffn
             x = jnp.where(positionwise_mask, x, 0)
 
@@ -410,6 +403,7 @@ class TransformerDecoder(nn.Module):
     resblocks_hidden_size: Optional[int] = None
     use_post_attn_norm: bool = True
     use_post_ffw_norm: bool = True
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(
@@ -445,13 +439,13 @@ class TransformerDecoder(nn.Module):
         positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         if self.use_layer_norm:
-            y_ln = jax.vmap(layer_norm)(y)
+            y_ln = layer_norm(y, self.dtype)
         else:
             y_ln = y
 
         for _ in range(self.num_layers):
             if self.use_layer_norm:
-                x_ln = jax.vmap(layer_norm)(x)
+                x_ln = layer_norm(x, self.dtype)
             else:
                 x_ln = x
             ca = MultiHeadAttention(
@@ -461,17 +455,18 @@ class TransformerDecoder(nn.Module):
                 model_size=self.model_size,
                 qk_layer_norm=self.qk_layer_norm,
                 need_pos=self.need_pos,
+                dtype=self.dtype,
             )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
             if self.use_post_attn_norm:
-                ca = jax.vmap(layer_norm)(ca)
+                ca = layer_norm(ca, self.dtype)
             x = x + ca
             if self.use_layer_norm:
-                x_ln = jax.vmap(layer_norm)(x)
+                x_ln = layer_norm(x, self.dtype)
             else:
                 x_ln = x
-            ffn = jax.vmap(FeedForward(self.resblocks_hidden_size))(x_ln)
+            ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(x_ln)
             if self.use_post_ffw_norm:
-                ffn = jax.vmap(layer_norm)(ffn)
+                ffn = layer_norm(ffn, self.dtype)
             x = x + ffn
             x = jnp.where(positionwise_mask, x, 0)
 
@@ -484,6 +479,7 @@ class MLP(nn.Module):
     layer_sizes: Sequence[int]
     use_layer_norm: bool = True
     activate_first: bool = True
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
@@ -499,17 +495,17 @@ class MLP(nn.Module):
         for layer_index, size in enumerate(self.layer_sizes):
             if layer_index == 0 and not self.activate_first:
                 # Skip layer normalization and activation for the first layer
-                x = nn.Dense(size)(x)
+                x = nn.Dense(size, dtype=self.dtype)(x)
             else:
                 if self.use_layer_norm:
-                    x = layer_norm(x)
+                    x = layer_norm(x, self.dtype)
                 x = activation_fn(x)
-                x = nn.Dense(size)(x)
+                x = nn.Dense(size, dtype=self.dtype)(x)
         return x
 
 
 class PretrainedEmbedding:
-    def __init__(self, fpath: str):
+    def __init__(self, fpath: str, dtype: jnp.dtype = jnp.float32):
         """
         Initialize the PretrainedEmbedding with a specified file path.
 
@@ -518,7 +514,7 @@ class PretrainedEmbedding:
         """
         with open(fpath, "rb") as f:
             arr = np.load(f)
-        self.embeddings = jnp.array(arr)
+        self.embeddings = jnp.asarray(arr, dtype=dtype)
 
     def __call__(self, indices: chex.Array) -> chex.Array:
         """
@@ -533,60 +529,26 @@ class PretrainedEmbedding:
         return jnp.take(self.embeddings, indices, axis=0)
 
 
-class BinaryEncoder:
-    def __init__(self, num_bits: int, max_encodings: Optional[int] = None):
-        """
-        Initialize the BinaryEncoder with a specified number of bits.
-
-        Args:
-            num_bits (int): The length of the binary vector.
-            max_encodings (Optional[int], optional): Maximum number of encodings. Defaults to None.
-        """
-        self.num_bits = num_bits
-        self.max_encodings = max_encodings
-
-        self.encodings = jnp.asarray(self._precompute_vectors())
-
-    def _precompute_vectors(self) -> np.ndarray:
-        """
-        Precompute all binary vectors for values in the range [0, 2**num_bits - 1] using numpy operations.
-
-        Returns:
-            np.ndarray: A 2D array where each row is a binary vector representing a value.
-        """
-        total_values = self.max_encodings or 2**self.num_bits
-        # Create a range of integers and convert to binary using numpy unpacking
-        values = np.arange(total_values, dtype=int)[:, None]
-        powers_of_two = 2 ** np.arange(self.num_bits - 1, -1, -1, dtype=int)
-        vectors = (values & powers_of_two) > 0
-        return vectors.astype(float)
-
-    def __call__(self, indices: chex.Array) -> chex.Array:
-        """
-        Encode the given value into a binary vector.
-
-        Args:
-            indices (chex.Array): Indices array.
-
-        Returns:
-            chex.Array: Binary encoded array.
-        """
-        return jnp.take(self.encodings, indices, axis=0)
-
-
 class SumEmbeddings(nn.Module):
     output_size: int
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
         """Sum embeddings."""
-        return jnp.stack(
-            [nn.Dense(self.output_size)(embedding) for embedding in embeddings]
-        ).sum(axis=0)
+        return sum(
+            [
+                nn.Dense(self.output_size, use_bias=False, dtype=self.dtype)(embedding)
+                for embedding in embeddings
+            ]
+        ) + self.param(
+            "bias", nn.initializers.zeros_init(), (self.output_size,), self.dtype
+        )
 
 
 class MergeEmbeddings(nn.Module):
     output_size: int
+    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
@@ -609,14 +571,16 @@ class MergeEmbeddings(nn.Module):
 
         def _gate_layer_fn():
             return nn.Dense(
-                num_module_embeddings, kernel_init=nn.initializers.normal(5e-3)
+                num_module_embeddings,
+                kernel_init=nn.initializers.normal(5e-3),
+                dtype=self.dtype,
             )
 
         def _output_layer_fn():
-            return nn.Dense(self.output_size)
+            return nn.Dense(self.output_size, dtype=self.dtype)
 
         for embedding in embeddings:
-            feature = layer_norm(embedding)
+            feature = layer_norm(embedding, self.dtype)
             feature = activation_fn(feature)
             gates.append(_gate_layer_fn()(feature))
             outputs.append(_output_layer_fn()(feature))
@@ -629,7 +593,9 @@ class MergeEmbeddings(nn.Module):
         return (weights @ stacked_outputs).reshape(-1) * scale
 
 
-def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> chex.Array:
+def one_hot_concat_jax(
+    one_hot_encoded: List[Tuple[int, int]], dtype: jnp.dtype = jnp.float32
+) -> chex.Array:
     """
     Concatenate one-hot encoded arrays.
 
@@ -644,6 +610,6 @@ def one_hot_concat_jax(one_hot_encoded: List[Tuple[int, int]]) -> chex.Array:
         [idx + offset for (idx, _), offset in zip(one_hot_encoded, sum_offsets[:-1])]
     )
     return jnp.matmul(
-        jnp.ones((len(indices),), jnp.float32),
+        jnp.ones((len(indices),), dtype),
         indices[:, jnp.newaxis] == jnp.arange(sum_offsets[-1]),
     )

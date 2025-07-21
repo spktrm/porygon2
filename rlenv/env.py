@@ -4,6 +4,7 @@ import numpy as np
 
 from rlenv.data import (
     EX_STATE,
+    MAX_RATIO_TOKEN,
     NUM_ABSOLUTE_EDGE_FIELDS,
     NUM_CONTEXT_FIELDS,
     NUM_ENTITY_FIELDS,
@@ -51,52 +52,56 @@ def process_state(state: EnvironmentState) -> tuple[EnvStep, HistoryStep]:
             (history_length, 2, NUM_ENTITY_FIELDS)
         ),
         NUM_HISTORY,
-    ).astype(int)
+    ).astype(np.int32)
 
     history_relative_edges = padnstack(
         np.frombuffer(state.history_relative_edges, dtype=np.int16).reshape(
             (history_length, 2, NUM_RELATIVE_EDGE_FIELDS)
         ),
         NUM_HISTORY,
-    ).astype(int)
+    ).astype(np.int32)
 
     history_absolute_edge = padnstack(
         np.frombuffer(state.history_absolute_edge, dtype=np.int16).reshape(
             (history_length, NUM_ABSOLUTE_EDGE_FIELDS)
         ),
         NUM_HISTORY,
-    ).astype(int)
+    ).astype(np.int32)
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
         .reshape(10, NUM_MOVE_FIELDS)
-        .astype(int)
+        .astype(np.int32)
     )
     private_team = (
         np.frombuffer(state.private_team, dtype=np.int16)
         .reshape(6, NUM_ENTITY_FIELDS)
-        .astype(int)
+        .astype(np.int32)
     )
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
         .reshape(12, NUM_ENTITY_FIELDS)
-        .astype(int)
+        .astype(np.int32)
     )
 
     current_context = (
         np.frombuffer(state.current_context, dtype=np.int16)
         .reshape(NUM_CONTEXT_FIELDS)
-        .astype(int)
+        .astype(np.int32)
     )
+
+    win_reward_token = info[InfoFeature.INFO_FEATURE__WIN_REWARD]
+    # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
+    win_reward = win_reward_token / MAX_RATIO_TOKEN
 
     env_step = EnvStep(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
-        win_reward=info[InfoFeature.INFO_FEATURE__WIN_REWARD].astype(np.float32),
+        win_reward=win_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         current_context=current_context,
-        moveset=moveset.astype(int),
+        moveset=moveset.astype(np.int32),
         legal=get_legal_mask(state),
     )
     history_step = HistoryStep(
@@ -106,10 +111,6 @@ def process_state(state: EnvironmentState) -> tuple[EnvStep, HistoryStep]:
     )
 
     return env_step, history_step
-
-
-def as_jax_arr(x):
-    return jax.tree.map(lambda i: jnp.asarray(i), x)
 
 
 def get_ex_step():

@@ -1,3 +1,4 @@
+import functools
 import math
 from functools import partial
 from typing import Dict, Mapping, Tuple
@@ -11,7 +12,6 @@ from ml_collections import ConfigDict
 
 from ml.arch.modules import (
     MLP,
-    BinaryEncoder,
     FeedForwardResidual,
     MergeEmbeddings,
     PretrainedEmbedding,
@@ -49,14 +49,14 @@ from rlenv.protos.features_pb2 import (
 )
 
 # Load pretrained embeddings for various features.
-SPECIES_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/species.npy")
-ABILITY_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/abilities.npy")
-ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy")
-MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy")
-
-# # Initialize a binary encoder for specific features.
-OCT_ENCODER = BinaryEncoder(num_bits=8)
-HEX_ENCODER = BinaryEncoder(num_bits=16)
+SPECIES_ONEHOT = PretrainedEmbedding(
+    fpath="data/data/gen3/species.npy", dtype=jnp.bfloat16
+)
+ABILITY_ONEHOT = PretrainedEmbedding(
+    fpath="data/data/gen3/abilities.npy", dtype=jnp.bfloat16
+)
+ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy", dtype=jnp.bfloat16)
+MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bfloat16)
 
 
 def get_move_mask(move: chex.Array) -> chex.Array:
@@ -212,7 +212,7 @@ class Encoder(nn.Module):
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
 
-        embed_kwargs = dense_kwargs = dict(features=entity_size)
+        embed_kwargs = dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         # Initialize embeddings for various entities and features.
         self.effect_from_source_embedding = nn.Embed(
@@ -231,23 +231,35 @@ class Encoder(nn.Module):
         self.private_entity_ln = RMSNorm()
 
         # Initialize aggregation modules for combining feature embeddings.
-        self.entity_sum = SumEmbeddings(output_size=entity_size, name="entity_sum")
+        self.entity_sum = SumEmbeddings(
+            output_size=entity_size, dtype=self.cfg.dtype, name="entity_sum"
+        )
         self.relative_edge_sum = SumEmbeddings(
-            output_size=entity_size, name="relative_edge_sum"
+            output_size=entity_size, dtype=self.cfg.dtype, name="relative_edge_sum"
         )
         self.absolute_edge_sum = SumEmbeddings(
-            output_size=entity_size, name="absolute_edge_sum"
+            output_size=entity_size, dtype=self.cfg.dtype, name="absolute_edge_sum"
         )
-        self.timestep_linear = MLP(layer_sizes=(entity_size,), use_layer_norm=True)
-        self.action_sum = SumEmbeddings(output_size=entity_size, name="action_sum")
+        self.timestep_linear = MLP(
+            layer_sizes=(entity_size,), use_layer_norm=True, dtype=self.cfg.dtype
+        )
+        self.action_sum = SumEmbeddings(
+            output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
+        )
         self.latent_merge = MergeEmbeddings(
-            output_size=entity_size, name="latent_merge"
+            output_size=entity_size, dtype=self.cfg.dtype, name="latent_merge"
         )
 
         # Feed-forward layers for processing entity and timestep features.
-        self.entity_ff = FeedForwardResidual(hidden_dim=entity_size)
-        self.timestep_ff = FeedForwardResidual(hidden_dim=entity_size)
-        self.action_ff = FeedForwardResidual(hidden_dim=entity_size)
+        self.entity_ff = FeedForwardResidual(
+            hidden_dim=entity_size, dtype=self.cfg.dtype
+        )
+        self.timestep_ff = FeedForwardResidual(
+            hidden_dim=entity_size, dtype=self.cfg.dtype
+        )
+        self.action_ff = FeedForwardResidual(
+            hidden_dim=entity_size, dtype=self.cfg.dtype
+        )
 
         # Transformer encoders for processing sequences of entities and edges.
         self.entity_encoder = TransformerEncoder(**self.cfg.entity_encoder.to_dict())
@@ -271,7 +283,7 @@ class Encoder(nn.Module):
         # Latents
         self.latent_embeddings = self.param(
             "latent_embeddings",
-            nn.initializers.normal(),
+            nn.initializers.normal(dtype=self.cfg.dtype),
             (self.cfg.num_latents, entity_size),
         )
 
@@ -308,21 +320,20 @@ class Encoder(nn.Module):
 
     def _encode_entity(self, entity: chex.Array):
         # Encode volatile and type-change indices using the binary encoder.
+        _encode_hex = jax.vmap(
+            functools.partial(_binary_scale_encoding, world_dim=65535)
+        )
         volatiles_indices = entity[
             EntityFeature.ENTITY_FEATURE__VOLATILES0 : EntityFeature.ENTITY_FEATURE__VOLATILES8
             + 1
         ]
-        volatiles_encoding = HEX_ENCODER(volatiles_indices.astype(jnp.uint16)).reshape(
-            -1
-        )
+        volatiles_encoding = _encode_hex(volatiles_indices).reshape(-1)
 
         typechange_indices = entity[
             EntityFeature.ENTITY_FEATURE__TYPECHANGE0 : EntityFeature.ENTITY_FEATURE__TYPECHANGE1
             + 1
         ]
-        typechange_encoding = HEX_ENCODER(
-            typechange_indices.astype(jnp.uint16)
-        ).reshape(-1)
+        typechange_encoding = _encode_hex(typechange_indices).reshape(-1)
 
         hp_ratio_token = entity[EntityFeature.ENTITY_FEATURE__HP_RATIO]
         hp_ratio = entity[EntityFeature.ENTITY_FEATURE__HP_RATIO] / MAX_RATIO_TOKEN
@@ -413,17 +424,13 @@ class Encoder(nn.Module):
         )
         move_tokens = entity[move_indices]
 
+        moves_onehot = jax.nn.one_hot(move_tokens, NUM_MOVES)
+        is_valid_move = (move_tokens != MovesEnum.MOVES_ENUM___NULL) | (
+            move_tokens != MovesEnum.MOVES_ENUM___UNSPECIFIED
+        )
+        move_pp_ratios = move_pp_indices[..., None] / 31
         move_pp_onehot = (
-            jnp.where(
-                (
-                    (move_tokens != MovesEnum.MOVES_ENUM___NULL)
-                    | (move_tokens != MovesEnum.MOVES_ENUM___UNSPECIFIED)
-                )[..., None],
-                jax.nn.one_hot(move_tokens, NUM_MOVES)
-                * move_pp_indices[..., None]
-                / 31,
-                0,
-            )
+            jnp.where(is_valid_move[..., None], moves_onehot * move_pp_ratios, 0)
             .sum(0)
             .clip(min=0, max=1)
         )
@@ -454,22 +461,21 @@ class Encoder(nn.Module):
         return embedding, mask
 
     def _encode_relative_edge(self, edge: chex.Array) -> chex.Array:
-        # Encode minor arguments and side conditions using the binary encoder.
+        _encode_hex = jax.vmap(
+            functools.partial(_binary_scale_encoding, world_dim=65535)
+        )
+
         minor_args_indices = edge[
             RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG3
             + 1
         ]
-        minor_args_encoding = HEX_ENCODER(
-            minor_args_indices.astype(jnp.uint16)
-        ).reshape(-1)
+        minor_args_encoding = _encode_hex(minor_args_indices).reshape(-1)
 
         side_condition_indices = edge[
             RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS1
             + 1
         ]
-        side_condition_encoding = HEX_ENCODER(
-            side_condition_indices.astype(jnp.uint16)
-        ).reshape(-1)
+        side_condition_encoding = _encode_hex(side_condition_indices).reshape(-1)
 
         # Aggregate embeddings for the relative edge.
         boolean_code = one_hot_concat_jax(
@@ -741,6 +747,10 @@ class Encoder(nn.Module):
         return embedding
 
     def _encode_context(self, context_vector: chex.Array) -> chex.Array:
+        _encode_hex = jax.vmap(
+            functools.partial(_binary_scale_encoding, world_dim=65535)
+        )
+
         my_side_condition_indices = context_vector[
             ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS1
             + 1
@@ -749,12 +759,10 @@ class Encoder(nn.Module):
             ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS1
             + 1
         ]
-        my_side_condition_encoding = HEX_ENCODER(
-            my_side_condition_indices.astype(jnp.uint16)
-        ).reshape(-1)
-        opp_side_condition_encoding = HEX_ENCODER(
-            opp_side_condition_indices.astype(jnp.uint16)
-        ).reshape(-1)
+        my_side_condition_encoding = _encode_hex(my_side_condition_indices).reshape(-1)
+        opp_side_condition_encoding = _encode_hex(opp_side_condition_indices).reshape(
+            -1
+        )
         boolean_code = one_hot_concat_jax(
             [
                 _encode_one_hot_absolute_edge(

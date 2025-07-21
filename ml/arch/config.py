@@ -1,6 +1,7 @@
 import pprint
 
 from ml_collections import ConfigDict
+import jax.numpy as jnp
 
 
 def camel_case_path(path_list):
@@ -56,6 +57,7 @@ def get_model_cfg():
     num_heads = 6
     entity_size = 64 * num_heads
     num_latents = 8 * num_heads
+    dtype = jnp.bfloat16
 
     cfg.entity_size = entity_size
     cfg.num_latents = num_latents
@@ -65,6 +67,7 @@ def get_model_cfg():
     cfg.encoder = ConfigDict()
     cfg.encoder.entity_size = entity_size
     cfg.encoder.num_latents = num_latents
+    cfg.encoder.dtype = dtype
 
     cfg.encoder.entity_encoder = ConfigDict()
     cfg.encoder.timestep_encoder = ConfigDict()
@@ -99,6 +102,7 @@ def get_model_cfg():
         use_layer_norm=use_layer_norm,
         resblocks_hidden_size=encoder_hidden_size,
         qk_layer_norm=encoder_qk_layer_norm,
+        dtype=dtype,
     )
 
     transformer_decoder_kwargs = dict(
@@ -110,6 +114,7 @@ def get_model_cfg():
         use_layer_norm=use_layer_norm,
         resblocks_hidden_size=decoder_hidden_size,
         qk_layer_norm=decoder_qk_layer_norm,
+        dtype=dtype,
     )
 
     set_attributes(cfg.encoder.entity_encoder, **transformer_encoder_kwargs)
@@ -135,6 +140,7 @@ def get_model_cfg():
     # Policy Head Configuration
     cfg.policy_head = ConfigDict()
     cfg.policy_head.transformer = ConfigDict()
+    cfg.policy_head.dtype = dtype
 
     set_attributes(cfg.policy_head.transformer, **transformer_encoder_kwargs)
 
@@ -142,6 +148,7 @@ def get_model_cfg():
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
     cfg.value_head.entity_size = entity_size
+    cfg.value_head.dtype = dtype
 
     set_attributes(cfg.value_head.transformer, **transformer_encoder_kwargs)
 
