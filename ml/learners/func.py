@@ -72,39 +72,32 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         reward_mean=batch.timestep.env.win_reward[-1].mean(),
+        early_finish_rate=(jnp.abs(batch.timestep.env.win_reward[-1]) < 1)
+        .astype(jnp.float32)
+        .mean(),
     )
 
 
 def calculate_r2(
-    value_prediction: chex.Array, value_target: chex.Array, mask: chex.Array = None
+    value_prediction: chex.Array,
+    value_target: chex.Array,
+    mask: chex.Array = None,
+    eps: float = 1e-8,
 ) -> chex.Array:
-    """
-    Calculate the R-squared (coefficient of determination) value.
+    """Calculate the R-squared (coefficient of determination) value."""
 
-    Args:
-        value_prediction: Predicted values (chex.Array).
-        value_target: True target values (chex.Array).
-        mask: Optional mask to include/exclude certain values (chex.Array, default is None).
-
-    Returns:
-        R-squared value as a chex.Array.
-    """
     chex.assert_rank(value_prediction, 2)
     chex.assert_rank(value_target, 2)
     chex.assert_rank(mask, 2)
 
     if mask is None:
         mask = jnp.ones_like(value_prediction)
-    else:
-        mask = jnp.squeeze(mask)
 
     # Calculate residual sum of squares (SS_residual)
-    ss_residual = jnp.sum(jnp.square(value_target - value_prediction), where=mask)
+    ss_residual = jnp.sum((value_target - value_prediction) ** 2, where=mask)
 
     # Calculate total sum of squares (SS_total)
     mean_target = jnp.mean(value_target, where=mask)
-    ss_total = jnp.sum(jnp.square(value_target - mean_target), where=mask)
+    ss_total = jnp.sum((value_target - mean_target) ** 2, where=mask)
 
-    # Add epsilon to avoid division by zero
-    epsilon = 1e-8
-    return 1 - (ss_residual / (ss_total + epsilon))
+    return 1 - (ss_residual / (ss_total + eps))

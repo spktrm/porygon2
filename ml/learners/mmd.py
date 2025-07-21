@@ -44,34 +44,31 @@ class AdamConfig:
     b1: float
     b2: float
     eps: float
-    weight_decay: float
 
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
     num_steps = 10_000_000
     num_actors: int = 32
-    do_eval: bool = True
-    num_eval_games: int = 200
     unroll_length: int = 108
-    replay_buffer_capacity: int = 512
+    replay_buffer_capacity: int = 16
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: int = 2.5
+    target_replay_ratio: int = 2
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
-    learning_rate: float = 5e-5
+    learning_rate: float = 3e-5
     clip_gradient: float = 1
-    tau: float = 1e-3
+    tau: float = 1e-2
 
     # Vtrace params
-    lambda_: float = 0.995
+    lambda_: float = 0.95
     gamma: float = 1.0
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
-    clip_ppo: float = 0.4
+    clip_ppo: float = 0.2
 
     # Loss coefficients
     value_loss_coef: float = 0.5
@@ -121,7 +118,7 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     )
 
 
-def save(state: TrainState):
+def save(state: TrainState, replay_buffer: "ReplayBuffer"):
     with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.step:08}"), "wb") as f:
         pickle.dump(
             dict(
@@ -129,36 +126,44 @@ def save(state: TrainState):
                 target_params=state.target_params,
                 opt_state=state.opt_state,
                 step=state.step,
+                num_samples=state.num_samples,
                 actor_steps=state.actor_steps,
                 target_adv_mean=state.target_adv_mean,
                 target_adv_std=state.target_adv_std,
+                total_added=replay_buffer.total_added,
             ),
             f,
         )
 
 
-def load(state: TrainState, path: str):
+def load(state: TrainState, replay_buffer: "ReplayBuffer", path: str):
     print(f"loading checkpoint from {path}")
     with open(path, "rb") as f:
         ckpt_data = pickle.load(f)
 
-    step_no = ckpt_data.get("step", 0)
-    print(f"Learner steps: {step_no:08}")
-
-    actor_steps = ckpt_data.get("actor_steps", 0)
-    print("Actor steps: ", actor_steps)
-
-    params = ckpt_data["params"]
-    state = state.replace(
-        step=step_no,
-        params=params,
-        actor_steps=actor_steps,
-        opt_state=ckpt_data["opt_state"],
-        target_adv_mean=ckpt_data.get("target_adv_mean", 0),
-        target_adv_std=ckpt_data.get("target_adv_std", 1),
+    print("Checkpoint data:")
+    pprint(
+        {
+            k: v
+            for k, v in ckpt_data.items()
+            if k not in ["opt_state", "params", "target_params"]
+        }
     )
 
-    return state
+    state = state.replace(
+        params=ckpt_data["params"],
+        target_params=ckpt_data["target_params"],
+        opt_state=ckpt_data["opt_state"],
+        step=ckpt_data["step"],
+        num_samples=ckpt_data["num_samples"],
+        actor_steps=ckpt_data["actor_steps"],
+        target_adv_mean=ckpt_data.get("target_adv_mean", 0.0),
+        target_adv_std=ckpt_data.get("target_adv_std", 1.0),
+    )
+
+    replay_buffer._total_added = ckpt_data.get["total_added"]
+
+    return state, replay_buffer
 
 
 class VTraceOutput(NamedTuple):
@@ -384,7 +389,7 @@ def train_step(
 
         valid = jnp.bitwise_not(batch.timestep.env.done)
 
-        advantages: jax.Array = jax.lax.stop_gradient(targets.vtrace.pg_advantage)
+        advantages = jax.lax.stop_gradient(targets.vtrace.pg_advantage)
         adv_mean = advantages.mean(where=valid)
         adv_std = advantages.std(where=valid)
 
@@ -408,20 +413,21 @@ def train_step(
         # Calculate the value loss.
         pred_v = pred.v.reshape(*valid.shape)
         target_v = targets.vtrace.returns
-        loss_v = 0.5 * jnp.square(pred_v + target_v).mean(where=valid)
+        loss_v = 0.5 * jnp.square(pred_v - target_v).mean(where=valid)
 
         # Calculate the entropy loss.
         loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
 
         # Calculate the Backward KL loss.
         # Taken from the MMD paper: https://arxiv.org/pdf/2206.05825
+        # as well as: https://arxiv.org/pdf/2502.08938
         backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
             learner_target_ratio - 1
         )
         loss_kl = backward_kl_approx.mean(where=valid)
 
         # Update entropy schedule coefficient.
-        ent_kl_coef_mult = jnp.sqrt(10_000_000 / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(config.num_steps / (state.actor_steps + 1000))
 
         loss = (
             loss_pg
@@ -441,6 +447,7 @@ def train_step(
             # Ratios
             learner_actor_ratio=learner_actor_ratio.mean(where=valid),
             learner_target_ratio=learner_target_ratio.mean(where=valid),
+            is_ratio=is_ratio.mean(where=valid),
             # Approx KL values
             learner_actor_approx_kl=learner_actor_approx_kl,
             learner_target_approx_kl=learner_target_approx_kl,
@@ -469,32 +476,24 @@ def train_step(
             gradient_norm=optax.global_norm(grads),
             value_target_mean=targets.vtrace.returns.mean(where=valid),
             value_target_std=targets.vtrace.returns.std(where=valid),
+            Step=state.step,
         )
     )
 
     state = state.apply_gradients(grads=grads)
-
-    batch_size = valid.shape[1]
-    # Add 1 for the final step in each trajectory
-    new_steps = (valid.sum(0) + 1).sum()
-
-    # Update target params and adv mean/std.
-    new_adv_mean = (
-        state.target_adv_mean * (1 - config.tau) + logs["adv_mean"] * config.tau
-    )
-    new_adv_std = state.target_adv_std * (1 - config.tau) + logs["adv_std"] * config.tau
-    new_target_params = jax.tree.map(
-        lambda a, b: a * (1 - config.tau) + b * config.tau,
-        state.target_params,
-        state.params,
-    )
-
     state = state.replace(
-        target_params=new_target_params,
-        num_samples=state.num_samples + batch_size,
-        actor_steps=state.actor_steps + new_steps,
-        target_adv_mean=new_adv_mean,
-        target_adv_std=new_adv_std,
+        # Update target params and adv mean/std.
+        target_params=optax.incremental_update(
+            state.params, state.target_params, config.tau
+        ),
+        target_adv_mean=state.target_adv_mean * (1 - config.tau)
+        + logs["adv_mean"] * config.tau,
+        target_adv_std=state.target_adv_std * (1 - config.tau)
+        + logs["adv_std"] * config.tau,
+        # Update num trajectories sampled.
+        num_samples=state.num_samples + valid.shape[1],
+        # Add 1 for the final step in each trajectory
+        actor_steps=state.actor_steps + (valid.sum(0) + 1).sum(),
     )
 
     logs.update(dict(actor_steps=state.actor_steps))
@@ -549,7 +548,7 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
             subkey = actor.split_rng()
             eval_trajectory = actor.unroll(subkey, step_count, params)
 
-            win_rewards = np.sign(eval_trajectory.timestep.env.win_reward.sum(0))
+            win_rewards = np.sign(eval_trajectory.timestep.env.win_reward[-1])
             # Update the win reward sum for this step count.
             reward_count, reward_sum = win_reward_sum[step_count]
             win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
@@ -600,19 +599,19 @@ class ReplayBuffer:
             lambda *xs: np.stack(xs, axis=1), *batch
         )
 
-        resolution = 64
-        valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
-        num_valid = valid.sum(0).max().item() + 1
-        num_valid = int(np.ceil(num_valid / resolution) * resolution)
+        # resolution = 64
+        # valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
+        # num_valid = valid.sum(0).max().item() + 1
+        # num_valid = int(np.ceil(num_valid / resolution) * resolution)
 
         stacked_batch = Transition(
             timestep=TimeStep(
-                env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
-                history=clip_history(
-                    stacked_batch.timestep.history, resolution=resolution
-                ),
+                env=stacked_batch.timestep.env,
+                # env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
+                history=clip_history(stacked_batch.timestep.history, resolution=128),
             ),
-            actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
+            actorstep=stacked_batch.actorstep,
+            # actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
         )
 
         return jax.device_put(stacked_batch)
@@ -631,7 +630,6 @@ class ReplayRatioController:
         self.get_num_samples = get_num_samples
         self.target_replay_ratio = learner_config.target_replay_ratio
         self.batch_size = learner_config.batch_size
-        self.leway = 0.1
 
         # A condition to make the LEARNER wait
         self._learner_can_proceed = threading.Condition()
@@ -646,18 +644,15 @@ class ReplayRatioController:
 
     def _is_safe_to_train(self) -> bool:
         """Checks if the learner is allowed to proceed"""
-        ratio_ok = self._get_current_ratio() <= self.target_replay_ratio * (
-            1 + self.leway
-        )
+        not_enough_learning = self._get_current_ratio() <= self.target_replay_ratio
         buffer_ready = self.replay_buffer.is_ready(self.batch_size)
-        return ratio_ok and buffer_ready
+        return not_enough_learning and buffer_ready
 
     def _is_safe_to_produce(self) -> bool:
         """Checks if actors are allowed to produce"""
-        return (
-            self._get_current_ratio() > self.target_replay_ratio * (1 - self.leway)
-            or self.get_num_samples() == 0
-        )
+        too_much_learning = self._get_current_ratio() > self.target_replay_ratio
+        no_samples = self.get_num_samples() == 0
+        return too_much_learning or no_samples
 
     def learner_wait(self):
         """Called by the learner; blocks until it's safe to train."""
@@ -714,6 +709,10 @@ def init_jax_jit_cache(jax_jit_cache_path: str = JAX_JIT_CACHE_PATH):
 def set_jax_env_vars():
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["JAX_TRACEBACK_FILTERING"] = "off"
+    os.environ["XLA_FLAGS"] = (
+        "--xla_gpu_triton_gemm_any=True "
+        "--xla_gpu_enable_latency_hiding_scheduler=true "
+    )
 
 
 def main():
@@ -749,7 +748,7 @@ def main():
 
     latest_ckpt = get_most_recent_file("./ckpts", "mmd")
     if latest_ckpt:
-        state = load(state, latest_ckpt)
+        state, replay_buffer = load(state, replay_buffer, latest_ckpt)
 
     controller = ReplayRatioController(
         replay_buffer, lambda: int(state.num_samples), learner_config
@@ -826,7 +825,6 @@ def main():
             with gpu_lock:
                 state, logs = train_step(state, batch, targets, learner_config)
 
-            logs["Step"] = state.step
             wandb.log(logs)
 
             # Update the tqdm progress bars.
@@ -836,12 +834,12 @@ def main():
             controller.signal_actors()
 
             if state.step % 5000 == 0:
-                save(state)
+                save(state, replay_buffer)
 
         except Exception as e:
             traceback.print_exc()
             if "RESOURCE_EXHAUSTED" in str(e):
-                batch_size = max(1, batch_size // 2)
+                batch_size = max(2, batch_size // 2)
                 print(
                     f"Resource exhausted, reducing batch size to {batch_size} and retrying."
                 )

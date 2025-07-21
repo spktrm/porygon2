@@ -159,7 +159,7 @@ class Actor:
     def _preprocess_timestep(self, timestep: TimeStep):
         return TimeStep(
             env=timestep.env,
-            history=clip_history(timestep.history, resolution=64),
+            history=clip_history(timestep.history, resolution=128),
         )
 
     def unroll(self, rng_key: jax.Array, frame_count: int, params: Params):

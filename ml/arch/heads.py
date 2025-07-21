@@ -15,7 +15,7 @@ class PolicyHead(nn.Module):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
         self.final_norm = RMSNorm()
         self.final_layer = nn.Dense(
-            features=1, kernel_init=nn.initializers.normal(5e-3)
+            features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
         )
 
     def __call__(
@@ -49,7 +49,7 @@ class ValueHead(nn.Module):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
         self.final_norm = RMSNorm()
         self.final_layer = nn.Dense(
-            features=1, kernel_init=nn.initializers.normal(5e-3)
+            features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
         )
 
     def __call__(self, latent_embeddings: chex.Array):
