@@ -32,23 +32,21 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+cd ../
+
 # Run the Python Protobuf compilation command
 echo "Compiling Protobuf files for Python..."
-cd ../rlenv
 
-rm -rf protos/
-mkdir protos/
+rm -rf rl/environment/protos/
+mkdir rl/environment/protos/
 
-python -m grpc_tools.protoc -I../proto --python_out=protos/ --pyi_out=protos/ --grpc_python_out=protos/ ../proto/*.proto
+python -m grpc_tools.protoc -Iproto --python_out=rl/environment/protos/ --pyi_out=rl/environment/protos/ --grpc_python_out=rl/environment/protos/ proto/*.proto
 
 if [ $? -ne 0 ]; then
   echo "Python Protobuf compilation failed!"
   exit 1
 fi
 
-cd ../
-fix-protobuf-imports rlenv/protos/
-mkdir heuristics/protos/
-cp -r rlenv/protos/ heuristics/protos/
+fix-protobuf-imports rl/environment/protos/
 
 echo "Protobuf compilation completed successfully!"
