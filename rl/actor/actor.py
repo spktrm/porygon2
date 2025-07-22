@@ -1,5 +1,4 @@
 import queue
-from typing import Callable
 
 import jax
 import numpy as np
@@ -9,6 +8,7 @@ from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import TimeStep, Transition
 from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.utils import clip_history
+from rl.learner.learner import Learner
 from rl.model.utils import Params
 
 
@@ -20,7 +20,7 @@ class Actor:
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
-        params_for_actor: Callable[[], tuple[int, int, Params]],
+        learner: Learner,
         queue: queue.Queue | None = None,
         rng_seed: int = 42,
     ):
@@ -28,7 +28,7 @@ class Actor:
         self._env = env
         self._unroll_length = unroll_length
         self._queue = queue
-        self._params_for_actor = params_for_actor
+        self._learner = learner
         self._rng_key = jax.random.PRNGKey(rng_seed)
 
     def _preprocess_timestep(self, timestep: TimeStep):
@@ -89,4 +89,4 @@ class Actor:
             self._queue.put(act_out)
 
     def pull_params(self):
-        return self._params_for_actor()
+        return self._learner.params_for_actor

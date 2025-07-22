@@ -101,7 +101,7 @@ def load_train_state(state: TrainState, path: str):
         params=ckpt_data["params"],
         target_params=ckpt_data["target_params"],
         opt_state=ckpt_data["opt_state"],
-        num_steps=ckpt_data.get("num_steps", 0),
+        num_steps=ckpt_data["num_steps"],
         num_samples=ckpt_data["num_samples"],
         actor_steps=ckpt_data["actor_steps"],
         target_adv_mean=ckpt_data.get("target_adv_mean", 0.0),
@@ -252,56 +252,79 @@ def train_step(
     return state, logs
 
 
-def train(
-    state: TrainState,
-    learner_config: MMDConfig,
-    replay_buffer: ReplayBuffer,
-    controller: ReplayRatioController,
-    wandb_run: wandb.wandb_run.Run,
-    gpu_lock: threading.Lock,
-    num_samples: list[int],
-):
+class Learner:
+    def __init__(
+        self,
+        state: TrainState,
+        learner_config: MMDConfig,
+        replay_buffer: ReplayBuffer,
+        controller: ReplayRatioController,
+        wandb_run: wandb.wandb_run.Run,
+        gpu_lock: threading.Lock,
+        num_samples: list[int],
+    ):
+        self.state = state
+        self.learner_config = learner_config
+        self.replay_buffer = replay_buffer
+        self.controller = controller
+        self.wandb_run = wandb_run
+        self.gpu_lock = gpu_lock
+        self.num_samples = num_samples
 
-    consumer_progress = tqdm(desc="consumer", smoothing=0)
-    train_progress = tqdm(desc="batches", smoothing=0)
-    batch_size = learner_config.batch_size
-    last_oom = time.time()
+        self.update_params_for_actor()
 
-    for _ in range(learner_config.num_steps):
-        try:
-            controller.learner_wait()
+    def update_params_for_actor(self):
+        """Updates the parameters for the actor."""
+        self.params_for_actor = int(self.state.num_steps), jax.device_get(
+            self.state.params
+        )
 
-            batch = replay_buffer.sample(batch_size)
-            with gpu_lock:
-                targets = compute_returns(state, batch, learner_config)
-            with gpu_lock:
-                state, logs = train_step(state, batch, targets, learner_config)
+    def train(self):
+        consumer_progress = tqdm(desc="consumer", smoothing=0)
+        train_progress = tqdm(desc="batches", smoothing=0)
+        batch_size = self.learner_config.batch_size
+        last_oom = time.time()
 
-            wandb_run.log(logs)
+        for _ in range(self.learner_config.num_steps):
+            try:
+                self.controller.learner_wait()
 
-            # Update the tqdm progress bars.
-            consumer_progress.update(batch_size)
-            train_progress.update(1)
-            num_samples[0] += batch_size
+                batch = self.replay_buffer.sample(batch_size)
+                with self.gpu_lock:
+                    targets = compute_returns(self.state, batch, self.learner_config)
+                with self.gpu_lock:
+                    self.state, logs = train_step(
+                        self.state, batch, targets, self.learner_config
+                    )
 
-            controller.signal_actors()
+                self.update_params_for_actor()
+                self.wandb_run.log(logs)
 
-            if state.num_steps % 5000 == 0:
-                save_train_state(state)
+                # Update the tqdm progress bars.
+                consumer_progress.update(batch_size)
+                train_progress.update(1)
+                self.num_samples[0] += batch_size
 
-        except Exception as e:
-            traceback.print_exc()
-            if "RESOURCE_EXHAUSTED" in str(e):
-                batch_size = max(2, batch_size // 2)
-                print(
-                    f"Resource exhausted, reducing batch size to {batch_size} and retrying."
-                )
-                last_oom = time.time()
+                self.controller.signal_actors()
+
+                if self.state.num_steps % 5000 == 0:
+                    save_train_state(self.state)
+
+            except Exception as e:
+                traceback.print_exc()
+                if "RESOURCE_EXHAUSTED" in str(e):
+                    batch_size = max(2, batch_size // 2)
+                    print(
+                        f"Resource exhausted, reducing batch size to {batch_size} and retrying."
+                    )
+                    last_oom = time.time()
+                else:
+                    raise e
             else:
-                raise e
-        else:
-            # If no OOM for 60 minutes, double the batch size
-            if time.time() - last_oom > 60 * 60:
-                batch_size *= 2
-                print(f"No OOM for 60 minutes, doubling batch size to {batch_size}.")
-                last_oom = time.time()
+                # If no OOM for 60 minutes, double the batch size
+                if time.time() - last_oom > 60 * 60:
+                    batch_size *= 2
+                    print(
+                        f"No OOM for 60 minutes, doubling batch size to {batch_size}."
+                    )
+                    last_oom = time.time()

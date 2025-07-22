@@ -4,7 +4,6 @@ import threading
 from typing import Callable
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 
@@ -54,11 +53,11 @@ class ReplayBuffer:
         )
 
         resolution = 64
-        valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
+        valid = np.bitwise_not(stacked_batch.timestep.env.done)
         num_valid = valid.sum(0).max().item() + 1
         num_valid = int(np.ceil(num_valid / resolution) * resolution)
 
-        stacked_batch = Transition(
+        clipped_batch = Transition(
             timestep=TimeStep(
                 # env=stacked_batch.timestep.env,
                 env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
@@ -68,7 +67,7 @@ class ReplayBuffer:
             actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
         )
 
-        return jax.device_put(stacked_batch)
+        return jax.device_put(clipped_batch)
 
 
 class ReplayRatioController:

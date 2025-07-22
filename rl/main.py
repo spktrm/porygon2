@@ -23,7 +23,7 @@ from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import get_learner_config
-from rl.learner.learner import create_train_state, load_train_state, train
+from rl.learner.learner import Learner, create_train_state, load_train_state
 from rl.model.config import get_model_config
 from rl.model.model import get_model, get_num_params
 from rl.model.utils import get_most_recent_file
@@ -146,9 +146,6 @@ def main():
         replay_buffer, lambda: num_samples[0], learner_config
     )
 
-    def params_for_actor():
-        return int(state.step), jax.device_get(state.params)
-
     wandb_run = wandb.init(
         project="pokemon-rl",
         config={
@@ -158,6 +155,16 @@ def main():
         },
     )
 
+    learner = Learner(
+        state=state,
+        learner_config=learner_config,
+        replay_buffer=replay_buffer,
+        controller=controller,
+        wandb_run=wandb_run,
+        gpu_lock=gpu_lock,
+        num_samples=num_samples,
+    )
+
     for game_id in range(learner_config.num_actors // 2):
         for player_id in range(2):
             actor = Actor(
@@ -165,7 +172,7 @@ def main():
                 env=SinglePlayerSyncEnvironment(f"train-{game_id:02d}{player_id:02d}"),
                 unroll_length=learner_config.unroll_length,
                 queue=trajectory_queue,
-                params_for_actor=params_for_actor,
+                learner=learner,
                 rng_seed=len(actor_threads),
             )
             args = (actor, stop_signal, controller)
@@ -182,7 +189,7 @@ def main():
             agent=agent,
             env=SinglePlayerSyncEnvironment(f"eval-{eval_id:04d}"),
             unroll_length=learner_config.unroll_length,
-            params_for_actor=params_for_actor,
+            learner=learner,
             rng_seed=len(actor_threads),
         )
         args = (actor, wandb_run, stop_signal)
@@ -202,15 +209,7 @@ def main():
     )
     transfer_thread.start()
 
-    train(
-        state,
-        learner_config,
-        replay_buffer,
-        controller,
-        wandb_run,
-        gpu_lock,
-        num_samples,
-    )
+    learner.train()
 
     stop_signal[0] = True
     for t in actor_threads:
