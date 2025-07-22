@@ -1,65 +1,169 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Worker } from "worker_threads";
 import path from "path";
+import http from "http";
 import {
-    ClientMessage,
-    GameState,
-    ServerMessage,
+    ClientRequest,
+    EnvironmentResponse,
+    ResetRequest,
+    StepRequest,
+    WorkerRequest,
+    WorkerResponse,
 } from "../../protos/service_pb";
 import pino from "pino";
+import { isEvalUser, TaskQueueSystem } from "./utils";
+import { availableParallelism } from "node:os";
 
-class GameWorker {
+const WORKER_PATH = path.resolve(__dirname, "../server/worker.js");
+
+interface WorkerInfo {
     worker: Worker;
-    workerIndex: number;
-    playerCount: number;
-    players: Map<number, WebSocket>;
-    logger: pino.Logger;
+    id: number;
+}
 
-    constructor(workerIndex: number, logger: pino.Logger) {
-        const workerPath = path.resolve(__dirname, "../server/worker.js");
+export class WorkerPool {
+    private tasks: TaskQueueSystem<WorkerResponse>;
+    private readonly workerInfos: WorkerInfo[] = [];
+    private rr = 0; // round-robin counter for training actors
+    private er = 0; // round-robin counter for eval actors
 
-        this.players = new Map();
+    private readonly sessionToWorkerIndex = new Map<string, number>();
 
-        this.worker = new Worker(workerPath, {
-            workerData: { workerIndex },
-        });
+    constructor(
+        private readonly logger: pino.Logger,
+        private readonly numWorkers = 4,
+    ) {
+        this.tasks = new TaskQueueSystem();
+        this.spawnWorkers();
+    }
 
-        this.logger = logger.child({ workerIndex });
+    private spawnWorkers(): void {
+        for (let i = 0; i < this.numWorkers; i++) {
+            const worker = new Worker(WORKER_PATH);
+            const info: WorkerInfo = { worker, id: i };
 
-        this.worker.on("message", (stateBuffer: Buffer) => {
-            const gameState = GameState.deserializeBinary(stateBuffer);
-            const playerId = gameState.getPlayerId();
-            const player = this.players.get(playerId)!;
-            this.logger.debug(`Sending game state to player ${playerId}`);
-            const serverMessage = new ServerMessage();
-            serverMessage.setGameState(gameState);
-            player.send(serverMessage.serializeBinary());
-        });
+            worker.on("message", (buf: Buffer) => this.onWorkerMsg(buf));
+            worker.on("error", (err) =>
+                console.error(`[worker ${i}] error`, err),
+            );
+            worker.on("exit", (code) =>
+                console.log(`[worker ${i}] exited`, code),
+            );
 
-        this.worker.on("error", (err) => {
-            this.logger.error(err.stack?.toString());
-        });
+            this.workerInfos.push(info);
+        }
+    }
 
-        this.worker.on("exit", (code: number) => {
-            this.logger.info(`Worker exited with code ${code}`);
-        });
+    private nextTrainingWorker(sessionId: string): WorkerInfo {
+        // Increment by 0.5 so as to allocate groups of 2 players to a worker
+        const workerIndex = Math.floor(this.rr);
+        const workerInfo = this.workerInfos[workerIndex];
+        this.sessionToWorkerIndex.set(sessionId, workerIndex);
+        this.rr = (this.rr + 0.5) % this.workerInfos.length;
+        return workerInfo;
+    }
 
-        this.workerIndex = workerIndex;
-        this.playerCount = 0;
+    private nextEvalWorker(sessionId: string): WorkerInfo {
+        const workerIndex = Math.floor(this.er);
+        const workerInfo = this.workerInfos[workerIndex];
+        this.sessionToWorkerIndex.set(sessionId, workerIndex);
+        this.er = (this.er + 1) % this.workerInfos.length;
+        return workerInfo;
+    }
+
+    private routedWorker(key: string): WorkerInfo {
+        const workerIndex = this.sessionToWorkerIndex.get(key);
+        if (workerIndex === undefined) {
+            throw new Error("No worker found");
+        }
+        const info = this.workerInfos[workerIndex];
+        if (info === undefined) {
+            throw new Error("No worker found");
+        }
+        return info;
+    }
+
+    private onWorkerMsg(buf: Buffer): void {
+        const msg = WorkerResponse.deserializeBinary(buf);
+        const taskId = msg.getTaskId();
+
+        try {
+            this.tasks.submitResult(taskId, msg);
+        } catch (err) {
+            console.error("failed to handle worker message", err);
+        }
+    }
+
+    private async send(
+        workerInfo: WorkerInfo,
+        workerRequest: WorkerRequest,
+    ): Promise<WorkerResponse> {
+        const taskId = this.tasks.createJob();
+        workerRequest.setTaskId(taskId);
+        const binaryMessage = workerRequest.serializeBinary();
+        workerInfo.worker.postMessage(binaryMessage, [
+            binaryMessage.buffer as ArrayBuffer,
+        ]);
+        const workerResponse = await this.tasks.getResult(taskId);
+        workerResponse.setTaskId(taskId);
+        return workerResponse;
+    }
+
+    async step(stepRequest: StepRequest): Promise<EnvironmentResponse> {
+        const userName = stepRequest.getUsername();
+        if (!userName) {
+            throw new Error("Username must be provided in step request");
+        }
+        const info = this.routedWorker(userName);
+        const workerRequest = new WorkerRequest();
+        workerRequest.setStepRequest(stepRequest);
+        const workerResponse = await this.send(info, workerRequest);
+        const environmentResponse = workerResponse.getEnvironmentResponse();
+        if (environmentResponse) {
+            return environmentResponse;
+        } else {
+            throw new Error("No environment response found");
+        }
+    }
+
+    nextWorker(userName: string): WorkerInfo {
+        if (isEvalUser(userName)) {
+            return this.nextEvalWorker(userName);
+        } else {
+            return this.nextTrainingWorker(userName);
+        }
+    }
+
+    async reset(resetRequest: ResetRequest): Promise<EnvironmentResponse> {
+        const userName = resetRequest.getUsername();
+        if (!userName) {
+            throw new Error("Username must be provided in reset request");
+        }
+        const info = this.nextWorker(userName);
+        const workerRequest = new WorkerRequest();
+        workerRequest.setResetRequest(resetRequest);
+        const workerResponse = await this.send(info, workerRequest);
+        const environmentResponse = workerResponse.getEnvironmentResponse();
+        if (environmentResponse) {
+            return environmentResponse;
+        } else {
+            throw new Error("No environemnt response found");
+        }
+    }
+
+    /** Graceful shutdown */
+    shutdown(): void {
+        for (const { worker } of this.workerInfos) worker.terminate();
     }
 }
 
 export class GameServer {
     private wss: WebSocketServer;
-    private gameWorkerMap: Map<number, GameWorker>;
-    private socketWorkerMap: Map<WebSocket, GameWorker>;
-    private workers: GameWorker[];
-    private maxGamesPerWorker: number;
-    private maxWorkers: number;
     private actionCount: number;
     private throughputIntervalMs: number;
     private throughputInterval?: NodeJS.Timeout;
     private logger: pino.Logger;
+    private pool: WorkerPool;
 
     constructor(
         port = 8080,
@@ -72,8 +176,7 @@ export class GameServer {
         } = {},
     ) {
         const {
-            maxGamesPerWorker = 5,
-            maxWorkers = 10,
+            maxWorkers,
             loggingLevel = "info",
             logThroughput = false,
             throughputIntervalMs = 5000,
@@ -81,14 +184,15 @@ export class GameServer {
 
         this.logger = pino({ level: loggingLevel });
         this.wss = new WebSocketServer({ port });
-        this.gameWorkerMap = new Map();
-        this.socketWorkerMap = new Map();
-        this.workers = [];
-        this.maxGamesPerWorker = maxGamesPerWorker;
-        this.maxWorkers = maxWorkers;
         this.actionCount = 0;
+        this.pool = new WorkerPool(
+            this.logger,
+            Math.min(maxWorkers ?? 1, availableParallelism()),
+        );
 
-        this.wss.on("connection", (ws: WebSocket) => this.handleConnection(ws));
+        this.wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) =>
+            this.handleConnection(ws, req),
+        );
 
         this.logger.info(`Game server started on port ${port}`);
 
@@ -101,24 +205,37 @@ export class GameServer {
         }
     }
 
-    private handleConnection(ws: WebSocket): void {
-        ws.on("message", async (clientMessageData: Buffer) => {
-            const clientMessage =
-                ClientMessage.deserializeBinary(clientMessageData);
-            const messageType = clientMessage.getMessageTypeCase();
-            const playerId = clientMessage.getPlayerId();
+    private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
+        this.logger.info(`Username ${req.headers.username} connected`);
+
+        ws.on("message", async (clientRequestData: Buffer) => {
+            const clientRequest =
+                ClientRequest.deserializeBinary(clientRequestData);
+            const messageType = clientRequest.getMessageTypeCase();
 
             switch (messageType) {
-                case ClientMessage.MessageTypeCase.CONNECT: {
-                    const gameId = clientMessage.getGameId();
-                    this.assignPlayerToGame(ws, playerId, gameId);
+                case ClientRequest.MessageTypeCase.STEP: {
+                    const stepRequest = clientRequest.getStep();
+                    if (stepRequest !== undefined) {
+                        const environmentResponse =
+                            await this.pool.step(stepRequest);
+                        ws.send(environmentResponse.serializeBinary());
+                    } else {
+                        throw new Error("StepRequest not defined");
+                    }
                     break;
                 }
-
-                case ClientMessage.MessageTypeCase.STEP:
-                case ClientMessage.MessageTypeCase.RESET:
-                    this.handlePlayerMessage(ws, clientMessageData);
+                case ClientRequest.MessageTypeCase.RESET: {
+                    const resetRequest = clientRequest.getReset();
+                    if (resetRequest !== undefined) {
+                        const environmentResponse =
+                            await this.pool.reset(resetRequest);
+                        ws.send(environmentResponse.serializeBinary());
+                    } else {
+                        throw new Error("StepRequest not defined");
+                    }
                     break;
+                }
             }
         });
 
@@ -127,83 +244,8 @@ export class GameServer {
         });
 
         ws.on("close", () => {
-            this.logger.info("Player disconnected");
+            this.logger.info(`Username ${req.headers.username} disconnected`);
         });
-    }
-
-    private assignPlayerToGame(
-        ws: WebSocket,
-        playerId: number,
-        gameId: number,
-    ): void {
-        const gameWorker = this.findAvailableWorker(gameId);
-        if (gameWorker) {
-            gameWorker.players.set(playerId, ws);
-            this.socketWorkerMap.set(ws, gameWorker);
-            this.logger.info(
-                `Assigned player ${playerId} to game ${gameId} on worker ${gameWorker.workerIndex}`,
-            );
-        } else {
-            this.logger.error(
-                `Failed to assign player ${playerId} to game ${gameId}`,
-            );
-        }
-    }
-
-    private handlePlayerMessage(
-        ws: WebSocket,
-        clientMessageData: Uint8Array,
-    ): void {
-        const gameWorker = this.socketWorkerMap.get(ws);
-        if (gameWorker) {
-            this.logger.debug(
-                `Worker Index ${gameWorker.workerIndex} recieved message`,
-            );
-            gameWorker.worker.postMessage(clientMessageData);
-            this.actionCount += 1;
-        } else {
-            this.logger.warn(
-                "Received message from a socket not assigned to any worker",
-            );
-        }
-    }
-
-    private findAvailableWorker(gameId: number): GameWorker | null {
-        if (this.gameWorkerMap.has(gameId)) {
-            return this.gameWorkerMap.get(gameId)!;
-        }
-        if (this.workers.length < this.maxWorkers) {
-            const newWorker = this.createNewWorker();
-            this.workers.push(newWorker);
-            this.logger.info(`Created new worker ${newWorker.workerIndex}`);
-            this.gameWorkerMap.set(gameId, newWorker);
-            newWorker.playerCount += 1;
-            return newWorker;
-        } else {
-            this.workers.sort((a, b) => a.playerCount - b.playerCount);
-            const leastLoadedWorker = this.workers[0];
-
-            if (leastLoadedWorker.playerCount < this.maxGamesPerWorker) {
-                this.logger.info(
-                    `Assigning game to existing worker ${leastLoadedWorker.workerIndex}`,
-                );
-                this.gameWorkerMap.set(gameId, leastLoadedWorker);
-                leastLoadedWorker.playerCount += 1;
-                return leastLoadedWorker;
-            }
-
-            this.logger.warn(
-                "All workers are at full capacity and maximum number of workers reached",
-            );
-            return null;
-        }
-    }
-
-    private createNewWorker(): GameWorker {
-        const newWorkerIndex = this.workers.length;
-        this.logger.info(`Creating new worker ${newWorkerIndex}`);
-        const worker = new GameWorker(newWorkerIndex, this.logger);
-        return worker;
     }
 
     private logThroughput(): void {
@@ -227,7 +269,7 @@ export class GameServer {
 // Initialize the server
 new GameServer(8080, {
     maxGamesPerWorker: 50,
-    maxWorkers: 16,
+    // maxWorkers: 16,
     loggingLevel: "info", // Set to 'debug' for more verbose logging
     logThroughput: false,
     throughputIntervalMs: 1000,

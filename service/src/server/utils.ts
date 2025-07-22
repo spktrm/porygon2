@@ -167,109 +167,29 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
     }
 }
 
-export class NDimBoolean<T extends TypedArray = Uint8Array> {
-    private readonly dimensions: number[];
-    private readonly data: OneDBoolean<T>;
-    private readonly strides: number[];
-    private readonly totalElements: number;
+export function generateRandomString(length: number): string {
+    const readableAsciiStart = 97; // 'a'
+    const readableAsciiEnd = 122; // 'z'
+    const range = readableAsciiEnd - readableAsciiStart + 1;
 
-    constructor(
-        dimensions: number[],
-        bufferConstructor?: new (length: number) => T,
-    ) {
-        this.dimensions = dimensions;
-        this.totalElements = this.calculateTotalElements(dimensions);
-        this.data = new OneDBoolean(this.totalElements, bufferConstructor);
-        this.strides = this.calculateStrides(dimensions);
-    }
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
 
-    private calculateTotalElements(dimensions: number[]): number {
-        let total = 1;
-        for (let i = 0; i < dimensions.length; i++) {
-            total *= dimensions[i];
-        }
-        return total;
-    }
+    // Map each byte to a readable ASCII character
+    const chars = Array.from(array, (byte) =>
+        String.fromCharCode(readableAsciiStart + (byte % range)),
+    );
 
-    private calculateStrides(dimensions: number[]): number[] {
-        const strides = new Array(dimensions.length);
-        strides[dimensions.length - 1] = 1;
-        for (let i = dimensions.length - 2; i >= 0; i--) {
-            strides[i] = strides[i + 1] * dimensions[i + 1];
-        }
-        return strides;
-    }
-
-    private validateIndices(indices: number[]): void {
-        if (indices.length !== this.dimensions.length) {
-            throw new Error(
-                `Expected ${this.dimensions.length} indices, got ${indices.length}`,
-            );
-        }
-        for (let i = 0; i < indices.length; i++) {
-            if (indices[i] < 0 || indices[i] >= this.dimensions[i]) {
-                throw new RangeError(`Index out of bounds at dimension ${i}`);
-            }
-        }
-    }
-
-    private flattenIndex(indices: number[]): number {
-        this.validateIndices(indices);
-        let flatIndex = 0;
-        for (let i = 0; i < indices.length; i++) {
-            flatIndex += indices[i] * this.strides[i];
-        }
-        return flatIndex;
-    }
-
-    toggle(...indices: number[]): void {
-        const flatIndex = this.flattenIndex(indices);
-        this.data.toggle(flatIndex);
-    }
-
-    get(...indices: number[]): boolean {
-        const flatIndex = this.flattenIndex(indices);
-        return this.data.get(flatIndex);
-    }
-
-    set(...args: [...number[], boolean]): void {
-        const value = args[args.length - 1] as boolean;
-        const indices = args.slice(0, -1) as number[];
-        const flatIndex = this.flattenIndex(indices);
-        this.data.set(flatIndex, value);
-    }
-
-    get buffer(): T {
-        return this.data.buffer;
-    }
-
-    toBinaryVector(): number[] {
-        return this.data.toBinaryVector();
-    }
-
-    toBinaryArray(): number[] | number[][] | number[][][] | any {
-        const vector = this.toBinaryVector();
-        return this.reshapeVector(vector, this.dimensions);
-    }
-
-    private reshapeVector(
-        vector: number[],
-        dims: number[],
-    ): number[] | number[][] | number[][][] | any {
-        if (dims.length === 1) {
-            return vector;
-        }
-        const result: any[] = [];
-        const subArrayLength = vector.length / dims[0];
-        for (let i = 0; i < dims[0]; i++) {
-            const start = i * subArrayLength;
-            const subArray = vector.slice(start, start + subArrayLength);
-            result.push(this.reshapeVector(subArray, dims.slice(1)));
-        }
-        return result;
-    }
+    return chars.join("");
 }
 
+export function isEvalUser(userName: string) {
+    return userName.startsWith("eval");
+}
+
+export function isBaselineUser(userName: string) {
+    return userName.startsWith("baseline");
+}
 export class AsyncQueue<T> {
     private queue: T[] = [];
     private maxSize: number;

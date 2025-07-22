@@ -1,18 +1,25 @@
 import functools
 import pickle
+import threading
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import PredictionResponse
-from ml.arch.model import get_model
-from ml.utils import get_most_recent_file
-from rlenv.env import get_ex_step
-from rlenv.interfaces import EnvStep, HistoryStep, ModelOutput
+from rl.actor.agent import Agent
+from rl.model.model import get_model
+from rl.model.utils import get_most_recent_file
+from rl.environment.utils import get_ex_step
+from rl.environment.interfaces import EnvStep, HistoryStep, ModelOutput, TimeStep
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
+
+
+def threshold(arr: np.ndarray, thresh: float = 0.1):
+    pi = np.where(arr < thresh, 0, arr)
+    return pi / pi.sum(axis=-1, keepdims=True)
 
 
 class InferenceModel:
@@ -20,6 +27,10 @@ class InferenceModel:
         self.np_rng = np.random.RandomState(seed)
 
         self.network = get_model()
+        self.agent = Agent(
+            jax.vmap(self.network.apply, in_axes=(None, 1)), threading.Lock()
+        )
+        self.rng_key = jax.random.PRNGKey(seed)
 
         if not fpath:
             fpath = get_most_recent_file("./ckpts")
@@ -29,25 +40,22 @@ class InferenceModel:
 
         self.params = step["params"]
         print("initializing...")
-        ex, hx = get_ex_step()
-        self.predict(ex, hx)
+        self.predict(get_ex_step(expand=False))  # warm up the model
         print("model initialized!")
 
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _network_jit_apply(self, env_step: EnvStep, history_step: HistoryStep):
-        return self.network.apply(self.params, env_step, history_step)
+    def split_rng(self) -> jax.Array:
+        self.rng_key, subkey = jax.random.split(self.rng_key)
+        return subkey
 
-    def predict(self, env_step: EnvStep, history_step: HistoryStep):
-        output: ModelOutput = self._network_jit_apply(env_step, history_step)
-        action = np.apply_along_axis(
-            lambda x: self.np_rng.choice(range(output.pi.shape[-1]), p=x),
-            axis=-1,
-            arr=output.pi,
-        )
+    def predict(self, timestep: TimeStep):
+        rng_key = self.split_rng()
+        actor_step = self.agent.step(rng_key, self.params, timestep)
+        model_output = actor_step.model_output
+        action = actor_step.action
         return PredictionResponse(
-            pi=output.pi.flatten().tolist(),
-            log_pi=output.log_pi.flatten().tolist(),
-            logit=output.logit.flatten().tolist(),
-            v=output.v.item(),
+            pi=model_output.pi.flatten().tolist(),
+            log_pi=model_output.log_pi.flatten().tolist(),
+            logit=model_output.logit.flatten().tolist(),
+            v=model_output.v.item(),
             action=action.item(),
         )

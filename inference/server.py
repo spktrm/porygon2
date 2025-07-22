@@ -1,17 +1,20 @@
 from pprint import pprint
 
 import numpy as np
+import tabulate
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from model import InferenceModel
 
 from inference.interfaces import PredictionResponse
-from rlenv.env import process_state
-from rlenv.protos.features_pb2 import MovesetFeature
-from rlenv.protos.state_pb2 import State
+from rl.environment.env import process_state
+from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.utils import init_jax_jit_cache
+
 
 app = FastAPI()
+init_jax_jit_cache()
 
 
 # Initialize the model
@@ -25,23 +28,20 @@ def pprint_nparray(arr: np.ndarray):
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: Request):
     data = await request.body()
-    state = State.FromString(data)
+    state = EnvironmentState.FromString(data)
 
-    ex, hx = process_state(state)
-    response = await run_in_threadpool(model.predict, ex, hx)
-    pprint(state.info)
+    ts = process_state(state)
+    response = await run_in_threadpool(model.predict, ts)
 
-    pprint_nparray(np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__ACTION_ID]))
-    pprint_nparray(np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__MOVE_ID]))
-    pprint_nparray(
-        np.array(ex.moveset[..., MovesetFeature.MOVESET_FEATURE__SPECIES_ID])
+    pprint(ts.env.info)
+
+    table = tabulate.tabulate(
+        np.stack([response.logit, response.log_pi, response.pi]).clip(
+            max=9.99, min=-9.99
+        ),
+        floatfmt=".2f",
     )
-    print()
-    pprint_nparray(np.array(response.logit))
-    pprint_nparray(np.array(response.log_pi))
-    print()
-    pprint_nparray(np.array(response.pi))
-    print()
+    print(table)
     pprint_nparray(np.array(response.v))
     pprint_nparray(np.array(response.action))
 
