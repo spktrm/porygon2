@@ -103,8 +103,6 @@ for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
     AllValidActions.set(actionIndex, true);
 }
 
-export const EVAL_GAME_ID_OFFSET = 10_000;
-
 // Define the path to the JSON file
 const filePath = "../data/data/data.json";
 

@@ -4,6 +4,7 @@ import threading
 from typing import Callable
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 
@@ -52,19 +53,19 @@ class ReplayBuffer:
             lambda *xs: np.stack(xs, axis=1), *batch
         )
 
-        # resolution = 64
-        # valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
-        # num_valid = valid.sum(0).max().item() + 1
-        # num_valid = int(np.ceil(num_valid / resolution) * resolution)
+        resolution = 64
+        valid = jnp.bitwise_not(stacked_batch.timestep.env.done)
+        num_valid = valid.sum(0).max().item() + 1
+        num_valid = int(np.ceil(num_valid / resolution) * resolution)
 
         stacked_batch = Transition(
             timestep=TimeStep(
-                env=stacked_batch.timestep.env,
-                # env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
+                # env=stacked_batch.timestep.env,
+                env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
                 history=clip_history(stacked_batch.timestep.history, resolution=128),
             ),
-            actorstep=stacked_batch.actorstep,
-            # actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
+            # actorstep=stacked_batch.actorstep,
+            actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
         )
 
         return jax.device_put(stacked_batch)

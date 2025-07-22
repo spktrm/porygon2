@@ -2,7 +2,6 @@ import jax
 import numpy as np
 from websockets.sync.client import connect
 
-from rl.environment.interfaces import TimeStep
 from rl.environment.protos.service_pb2 import (
     ClientRequest,
     EnvironmentResponse,
@@ -27,8 +26,7 @@ class SinglePlayerSyncEnvironment:
         server_message_data = self.websocket.recv()
         server_message = EnvironmentResponse.FromString(server_message_data)
         self.rqid = server_message.state.rqid
-        ex, hx = process_state(server_message.state)
-        self.last_state = TimeStep(env=ex, history=hx)
+        self.last_state = process_state(server_message.state)
         return self.last_state
 
     def reset(self):
