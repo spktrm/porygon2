@@ -398,8 +398,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             // When stream is empty, wait for action from async source
             if (
                 this.stream.buf.length === 0 &&
-                // this.isActionRequired(chunk) &&
-                this.isActionRequired2(chunk) &&
+                this.isActionRequired(chunk) &&
+                // this.isActionRequired2(chunk) &&
                 true
             ) {
                 shiftBackup();
