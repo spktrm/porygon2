@@ -228,7 +228,7 @@ class Encoder(nn.Module):
         self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
 
         # layer norm for entity action
-        self.private_entity_ln = RMSNorm()
+        self.private_entity_ln = RMSNorm(dtype=self.cfg.dtype)
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
