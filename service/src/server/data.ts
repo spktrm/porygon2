@@ -30,7 +30,12 @@ import {
     WeatherEnumMap,
 } from "../../protos/enums_pb";
 import { OneDBoolean } from "./utils";
-import { EntityFeature, MovesetFeature } from "../../protos/features_pb";
+import {
+    EntityFeature,
+    MovesetFeature,
+    ContextFeature,
+    InfoFeature,
+} from "../../protos/features_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -86,17 +91,17 @@ export const sideIdMapping: {
 };
 
 export const numPokemonFields = Object.keys(EntityFeature).length;
+export const numInfoFields = Object.keys(InfoFeature).length;
+export const numContextFields = Object.keys(ContextFeature).length;
 export const numMoveFields = Object.keys(MovesetFeature).length;
 export const numMovesetFields = 10 * numMoveFields;
 
-export const NUM_HISTORY = 768;
+export const NUM_HISTORY = 384;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
     AllValidActions.set(actionIndex, true);
 }
-
-export const EVAL_GAME_ID_OFFSET = 10_000;
 
 // Define the path to the JSON file
 const filePath = "../data/data/data.json";

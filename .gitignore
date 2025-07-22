@@ -6,6 +6,7 @@ env/
 __pycache__/
 
 .vscode/
+.jax_jit_cache/
 
 data/data/
 

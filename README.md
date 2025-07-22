@@ -102,7 +102,7 @@ source venv/bin/activate
 2.  **Run the Training Client**
 
 ```bash
-python ml/rl.py
+python ml/learners/mmd.py
 ```
 
 ## Evaluation
@@ -154,7 +154,3 @@ The `scripts/` directory contains helper scripts for various tasks:
 
 -   **Directory Structure**: The project contains several subdirectories with their own `npm` installs. The `setup.sh` script handles these installations automatically.
 -   **Python Virtual Environment**: A virtual environment named `env` is created in the root directory. Always activate it before running Python scripts.
-
-## Additional Information
-
--   **License**: This project is licensed under the MIT License.

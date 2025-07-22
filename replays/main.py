@@ -160,7 +160,7 @@ class Counter:
 
     def __init__(self, session: ClientSession, total: int):
         self._count = 0
-        self.bar = tqdm(total=total)
+        self.bar = tqdm(desc="Downloading replays", total=total)
         self.session = session
 
     async def count(self, base_url: str, suffix: str) -> Optional[Dict[str, Any]]:
@@ -171,7 +171,7 @@ class Counter:
 
 
 async def main():
-    format_id = "gen3randombattle"
+    format_id = "gen3ou"
 
     async with aiohttp.ClientSession() as session:
         leaderboard = await get_leaderboard(session, format_id)
