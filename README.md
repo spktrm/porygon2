@@ -8,8 +8,8 @@ Successor from [meloetta](https://github.com/spktrm/meloetta/), hence porygon **
 
 Porygon2 provides:
 
--   A UNIX server written in Node.js wrapped around the `sim` and `client` packages from [pkmn](https://github.com/pkmn).
--   A reinforcement learning framework for interacting with this server. Currently supports [R-NaD from DeepMind](https://github.com/google-deepmind/open_spiel/blob/master/open_spiel/python/algorithms/rnad/rnad.py).
+-   A [websocket server](https://github.com/spktrm/porygon2/tree/main/service) written in Node.js wrapped around the `sim` and `client` packages from [pkmn](https://github.com/pkmn).
+-   A reinforcement learning framework for interacting with this server. Currently supports [Magnetic Mirror Descent](https://github.com/nathanlct/IIG-RL-Benchmark/blob/main/algorithms/mmd/mmd.py) in an asynchronous [IMPALA](https://github.com/google-deepmind/dm-haiku/tree/main/examples/impala) style.
 
 ## Overview
 
@@ -102,7 +102,7 @@ source venv/bin/activate
 2.  **Run the Training Client**
 
 ```bash
-python ml/learners/mmd.py
+python rl/main.py
 ```
 
 ## Evaluation
