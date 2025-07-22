@@ -49,13 +49,19 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
 
     tx = optax.chain(
         optax.clip_by_global_norm(config.clip_gradient),
-        optax.adam(
-            learning_rate=config.learning_rate,
-            eps_root=0.0,
+        optax.scale_by_adam(
             b1=config.adam.b1,
             b2=config.adam.b2,
             eps=config.adam.eps,
         ),
+        optax.scale_by_schedule(
+            optax.linear_schedule(
+                init_value=config.learning_rate,
+                end_value=0.0,
+                transition_steps=config.num_steps,
+            )
+        ),
+        optax.scale(-1.0),
     )
 
     return TrainState.create(
@@ -323,8 +329,10 @@ class Learner:
             else:
                 # If no OOM for 60 minutes, double the batch size
                 if time.time() - last_oom > 60 * 60:
-                    batch_size *= 2
-                    print(
-                        f"No OOM for 60 minutes, doubling batch size to {batch_size}."
-                    )
+                    new_batch_size = min(self.learner_config.batch_size, 2 * batch_size)
+                    if new_batch_size != batch_size:
+                        batch_size = new_batch_size
+                        print(
+                            f"No OOM for 60 minutes, doubling batch size to {batch_size}."
+                        )
                     last_oom = time.time()

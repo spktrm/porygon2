@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.model.func import legal_log_policy, legal_policy
-from rl.model.modules import RMSNorm, TransformerDecoder
+from rl.model.modules import RMSNorm, TransformerDecoder, activation_fn
 
 
 class PolicyHead(nn.Module):
@@ -13,7 +13,7 @@ class PolicyHead(nn.Module):
 
     def setup(self):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.final_norm = RMSNorm()
+        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
         self.final_layer = nn.Dense(
             features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
         )
@@ -29,11 +29,11 @@ class PolicyHead(nn.Module):
             action_embeddings, latent_embeddings, action_mask, None
         )
 
-        logits = jax.vmap(lambda x: self.final_layer(self.final_norm(x)))(
-            action_embeddings
-        )
+        logits = activation_fn(self.final_norm(action_embeddings))
+        logits = self.final_layer(logits)
         logits = logits.reshape(-1)
         logits = logits - logits.mean(where=action_mask)
+
         masked_logits = jnp.where(action_mask, logits, -1e30)
 
         policy = legal_policy(logits, action_mask, temp)
@@ -47,7 +47,7 @@ class ValueHead(nn.Module):
 
     def setup(self):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.final_norm = RMSNorm()
+        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
         self.final_layer = nn.Dense(
             features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
         )
@@ -56,7 +56,7 @@ class ValueHead(nn.Module):
         query = latent_embeddings.mean(axis=0, keepdims=True)
 
         pooled = self.decoder(query, latent_embeddings)
-        pooled = self.final_norm(pooled)
+        pooled = activation_fn(self.final_norm(pooled))
         value = self.final_layer(pooled)
 
         return value.reshape(-1)
