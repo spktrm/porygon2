@@ -1,13 +1,13 @@
 import functools
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 
 import chex
 import jax
 import jax.numpy as jnp
+from flax.training import train_state
 
 from rl.environment.interfaces import ModelOutput, Transition
 from rl.learner.config import MMDConfig
-from rl.model.utils import Params
 
 
 class VTraceOutput(NamedTuple):
@@ -182,12 +182,11 @@ def _compute_returns(
 
 @functools.partial(jax.jit, static_argnums=(2,))
 def compute_returns(
-    apply_fn: Callable[[Params, jnp.ndarray], ModelOutput],
-    params: Params,
+    state: train_state.TrainState,
     batch: Transition,
     config: MMDConfig,
 ):
-    target_pred = apply_fn(params, batch.timestep)
+    target_pred: ModelOutput = state.apply_fn(state.params, batch.timestep)
 
     valid = jnp.bitwise_not(batch.timestep.env.done)
 

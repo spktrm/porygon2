@@ -252,6 +252,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return false;
     }
 
+    isActionRequired2(chunk: string) {
+        const request = this.getRequest()! as AnyObject;
+        return chunk.includes("|request") && !request?.wait;
+    }
+
     choiceFromAction(action: number) {
         if (action < 0) {
             return "default";
@@ -391,7 +396,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             }
 
             // When stream is empty, wait for action from async source
-            if (this.stream.buf.length === 0 && this.isActionRequired(chunk)) {
+            if (
+                this.stream.buf.length === 0 &&
+                // this.isActionRequired(chunk) &&
+                this.isActionRequired2(chunk) &&
+                true
+            ) {
                 shiftBackup();
                 this.privateBattle.requestStatus = "received";
                 this.updateRequest();

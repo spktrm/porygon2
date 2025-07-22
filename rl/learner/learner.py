@@ -12,6 +12,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import optax
+import wandb.wandb_run
 from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
@@ -30,6 +31,7 @@ from rl.model.utils import Params
 class TrainState(train_state.TrainState):
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
+    num_steps: int = 0
     num_samples: int = 0
     actor_steps: int = 0
 
@@ -64,25 +66,24 @@ def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     )
 
 
-def save_train_state(state: TrainState, replay_buffer: ReplayBuffer):
-    with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.step:08}"), "wb") as f:
+def save_train_state(state: TrainState):
+    with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.num_steps:08}"), "wb") as f:
         pickle.dump(
             dict(
                 params=state.params,
                 target_params=state.target_params,
                 opt_state=state.opt_state,
-                step=state.step,
+                num_steps=state.num_steps,
                 num_samples=state.num_samples,
                 actor_steps=state.actor_steps,
                 target_adv_mean=state.target_adv_mean,
                 target_adv_std=state.target_adv_std,
-                total_added=replay_buffer.total_added,
             ),
             f,
         )
 
 
-def load_train_state(state: TrainState, replay_buffer: ReplayBuffer, path: str):
+def load_train_state(state: TrainState, path: str):
     print(f"loading checkpoint from {path}")
     with open(path, "rb") as f:
         ckpt_data = pickle.load(f)
@@ -100,16 +101,14 @@ def load_train_state(state: TrainState, replay_buffer: ReplayBuffer, path: str):
         params=ckpt_data["params"],
         target_params=ckpt_data["target_params"],
         opt_state=ckpt_data["opt_state"],
-        step=ckpt_data["step"],
+        num_steps=ckpt_data.get("num_steps", 0),
         num_samples=ckpt_data["num_samples"],
         actor_steps=ckpt_data["actor_steps"],
         target_adv_mean=ckpt_data.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_data.get("target_adv_std", 1.0),
     )
 
-    replay_buffer._total_added = ckpt_data["total_added"]
-
-    return state, replay_buffer
+    return state
 
 
 @functools.partial(jax.jit, static_argnums=(3,))
@@ -227,7 +226,7 @@ def train_step(
             gradient_norm=optax.global_norm(grads),
             value_target_mean=targets.vtrace.returns.mean(where=valid),
             value_target_std=targets.vtrace.returns.std(where=valid),
-            Step=state.step,
+            Step=state.num_steps,
         )
     )
 
@@ -241,8 +240,8 @@ def train_step(
         + logs["adv_mean"] * config.tau,
         target_adv_std=state.target_adv_std * (1 - config.tau)
         + logs["adv_std"] * config.tau,
-        # Update num trajectories sampled.
-        num_samples=state.num_samples + valid.shape[1],
+        # Update num steps sampled.
+        num_steps=state.num_steps + 1,
         # Add 1 for the final step in each trajectory
         actor_steps=state.actor_steps + (valid.sum(0) + 1).sum(),
     )
@@ -258,7 +257,9 @@ def train(
     learner_config: MMDConfig,
     replay_buffer: ReplayBuffer,
     controller: ReplayRatioController,
+    wandb_run: wandb.wandb_run.Run,
     gpu_lock: threading.Lock,
+    num_samples: list[int],
 ):
 
     consumer_progress = tqdm(desc="consumer", smoothing=0)
@@ -272,22 +273,21 @@ def train(
 
             batch = replay_buffer.sample(batch_size)
             with gpu_lock:
-                targets = compute_returns(
-                    state.apply_fn, state.params, batch, learner_config
-                )
+                targets = compute_returns(state, batch, learner_config)
             with gpu_lock:
                 state, logs = train_step(state, batch, targets, learner_config)
 
-            wandb.log(logs)
+            wandb_run.log(logs)
 
             # Update the tqdm progress bars.
             consumer_progress.update(batch_size)
             train_progress.update(1)
+            num_samples[0] += batch_size
 
             controller.signal_actors()
 
-            if state.step % 5000 == 0:
-                save_train_state(state, replay_buffer)
+            if state.num_steps % 5000 == 0:
+                save_train_state(state)
 
         except Exception as e:
             traceback.print_exc()

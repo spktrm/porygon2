@@ -1,4 +1,3 @@
-import os
 import pickle
 
 import jax
@@ -6,9 +5,6 @@ import jax
 from rl.environment.utils import get_ex_step
 from rl.model.model import get_model
 from rl.model.utils import get_most_recent_file
-
-os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 
 def block_all(xs):

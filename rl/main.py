@@ -1,15 +1,19 @@
-import json
 import os
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["JAX_TRACEBACK_FILTERING"] = "off"
+os.environ["XLA_FLAGS"] = (
+    "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
+)
+import json
 import queue
 import threading
 import traceback
 from pprint import pprint
 
 import jax
-import jax.experimental
-import jax.experimental.compilation_cache
-import jax.experimental.compilation_cache.compilation_cache
 import numpy as np
+import wandb.wandb_run
 
 import wandb
 from rl.actor.actor import Actor
@@ -23,22 +27,7 @@ from rl.learner.learner import create_train_state, load_train_state, train
 from rl.model.config import get_model_config
 from rl.model.model import get_model, get_num_params
 from rl.model.utils import get_most_recent_file
-
-JAX_JIT_CACHE_PATH = os.path.join(os.path.dirname(__file__), "../../.jax_jit_cache")
-
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["JAX_TRACEBACK_FILTERING"] = "off"
-os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
-)
-
-
-def init_jax_jit_cache(jax_jit_cache_path: str = JAX_JIT_CACHE_PATH):
-    if not os.path.exists(jax_jit_cache_path):
-        os.mkdir(jax_jit_cache_path)
-    jax.experimental.compilation_cache.compilation_cache.set_cache_dir(
-        jax_jit_cache_path
-    )
+from rl.utils import init_jax_jit_cache
 
 
 def run_training_actor(
@@ -56,7 +45,9 @@ def run_training_actor(
             raise e
 
 
-def run_eval_actor(actor: Actor, stop_signal: list[bool]):
+def run_eval_actor(
+    actor: Actor, wandb_run: wandb.wandb_run.Run, stop_signal: list[bool]
+):
     """Runs an actor to produce num_trajectories trajectories."""
 
     old_step_count, _ = actor.pull_params()
@@ -75,7 +66,7 @@ def run_eval_actor(actor: Actor, stop_signal: list[bool]):
 
             if step_count > old_step_count:
                 reward_count, reward_sum = win_reward_sum.pop(old_step_count)
-                wandb.log(
+                wandb_run.log(
                     {
                         "Step": old_step_count,
                         f"wr-{session_id}": reward_sum / max(1, reward_count),
@@ -129,6 +120,7 @@ def main():
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
+    num_samples = [0]
 
     num_eval_actors = 4
     trajectory_queue: queue.Queue[Transition] = queue.Queue(
@@ -148,14 +140,23 @@ def main():
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
-        state, replay_buffer = load_train_state(state, replay_buffer, latest_ckpt)
+        state = load_train_state(state, latest_ckpt)
 
     controller = ReplayRatioController(
-        replay_buffer, lambda: int(state.num_samples), learner_config
+        replay_buffer, lambda: num_samples[0], learner_config
     )
 
     def params_for_actor():
         return int(state.step), jax.device_get(state.params)
+
+    wandb_run = wandb.init(
+        project="pokemon-rl",
+        config={
+            "num_params": get_num_params(state.params),
+            "learner_config": learner_config,
+            "model_config": json.loads(model_config.to_json_best_effort()),
+        },
+    )
 
     for game_id in range(learner_config.num_actors // 2):
         for player_id in range(2):
@@ -184,21 +185,12 @@ def main():
             params_for_actor=params_for_actor,
             rng_seed=len(actor_threads),
         )
-        args = (actor, stop_signal)
+        args = (actor, wandb_run, stop_signal)
         actor_threads.append(
             threading.Thread(
                 target=run_eval_actor, args=args, name=f"EvalActor-{eval_id}"
             )
         )
-
-    wandb.init(
-        project="pokemon-rl",
-        config={
-            "num_params": get_num_params(state.params),
-            "learner_config": learner_config,
-            "model_config": json.loads(model_config.to_json_best_effort()),
-        },
-    )
 
     # Start the actors and learner.
     for t in actor_threads:
@@ -210,7 +202,15 @@ def main():
     )
     transfer_thread.start()
 
-    train(state, learner_config, replay_buffer, controller, gpu_lock)
+    train(
+        state,
+        learner_config,
+        replay_buffer,
+        controller,
+        wandb_run,
+        gpu_lock,
+        num_samples,
+    )
 
     stop_signal[0] = True
     for t in actor_threads:

@@ -1,4 +1,3 @@
-import { EVAL_GAME_ID_OFFSET } from "./data";
 import { GetRandomAction } from "./baselines/random";
 import { GetMaxDamageAction } from "./baselines/max_dmg";
 import { GetHeuristicAction } from "./baselines/heuristic";

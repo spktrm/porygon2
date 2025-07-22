@@ -2,6 +2,7 @@ from typing import Sequence, TypeVar
 
 import jax
 import numpy as np
+
 from rl.environment.data import (
     EX_STATE,
     MAX_RATIO_TOKEN,
@@ -12,7 +13,6 @@ from rl.environment.data import (
     NUM_MOVE_FIELDS,
     NUM_RELATIVE_EDGE_FIELDS,
 )
-
 from rl.environment.interfaces import EnvStep, HistoryStep, TimeStep
 from rl.environment.protos.features_pb2 import AbsoluteEdgeFeature, InfoFeature
 from rl.environment.protos.service_pb2 import EnvironmentState
@@ -60,7 +60,7 @@ def get_legal_mask(state: EnvironmentState):
     return mask[:10].astype(bool)
 
 
-def process_state(state: EnvironmentState) -> tuple[EnvStep, HistoryStep]:
+def process_state(state: EnvironmentState) -> TimeStep:
     history_length = state.history_length
 
     info = np.frombuffer(state.info, dtype=np.int16)
@@ -128,11 +128,14 @@ def process_state(state: EnvironmentState) -> tuple[EnvStep, HistoryStep]:
         absolute_edges=history_absolute_edge,
     )
 
-    return env_step, history_step
+    return TimeStep(env=env_step, history=history_step)
 
 
-def get_ex_step():
-    ex, hx = process_state(EX_STATE)
-    ex = jax.tree.map(lambda x: x[None, None, ...], ex)
-    hx = jax.tree.map(lambda x: x[:, None, ...], hx)
-    return TimeStep(env=ex, history=hx)
+def get_ex_step(expand: bool = True) -> TimeStep:
+    ts = process_state(EX_STATE)
+    if expand:
+        ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
+        hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
+        return TimeStep(env=ex, history=hx)
+    else:
+        return ts

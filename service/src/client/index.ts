@@ -1,25 +1,11 @@
-// import WebSocket from "ws";
-// import axios from "axios";
-// import * as dotenv from "dotenv";
-// import * as path from "path";
+import WebSocket from "ws";
+import axios from "axios";
+import * as dotenv from "dotenv";
+import * as path from "path";
 
-// import { Player } from "../server/player"; // Assuming these paths are correct
-// import { ObjectReadWriteStream } from "@pkmn/streams";
-// import { recvFnType, sendFnType } from "../server/types"; // Assuming these paths are correct
-// import { Action, GameState } from "../../protos/service_pb"; // Assuming these paths are correct
-// import { TaskQueueSystem } from "../server/utils"; // Assuming these paths are correct
-// import { AnyObject } from "@pkmn/sim";
-// import { Protocol } from "@pkmn/protocol";
-
-// async function ActionFromResponse(
-//     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-//     modelOutput: Record<string, any>,
-// ): Promise<Action> {
-//     const { action: actionIndex } = modelOutput;
-//     const action = new Action();
-//     action.setValue(actionIndex);
-//     return action;
-// }
+import { ObjectReadWriteStream } from "@pkmn/streams";
+import { TrainablePlayerAI } from "../server/runner";
+import { StepRequest } from "../../protos/service_pb";
 
 // class ClientStream extends ObjectReadWriteStream<string> {
 //     debug: boolean;
@@ -355,528 +341,549 @@
 //     }
 // }
 
-// const welcomeMessage =
-//     "You are fighting an AI in development - trained with reinforcement learning. If you have any questions, please message spktrm#6133 on discord. glfh :)";
+const welcomeMessage =
+    "You are fighting an AI in development - trained with reinforcement learning. If you have any questions, please message spktrm#6133 on discord. glfh :)";
 
-// class Battle {
-//     private battleId: string;
-//     private ws: WebSocket;
-//     private config: BotConfig;
-//     stream: ClientStream;
-//     prevMessage: string | undefined;
-//     active: boolean;
+class ClientStream extends ObjectReadWriteStream<string> {
+    constructor(options = {}) {
+        super(options);
+    }
 
-//     constructor(roomId: string, ws: WebSocket, config: BotConfig) {
-//         this.battleId = roomId;
-//         this.ws = ws;
-//         this.active = true;
-//         this.config = config;
-//         this.prevMessage = undefined;
+    _write(message: string) {
+        this.push(message);
+    }
+}
 
-//         // this.ws.send(`${this.battleId}|/timer on`);
-//         this.ws.send(`${this.battleId}|${welcomeMessage}`);
-//         this.stream = new ClientStream({
-//             roomId,
-//             config: this.config,
-//             choose: (message: string) => {
-//                 this.send(`${message}`);
-//             },
-//         });
-//     }
+class Battle {
+    private battleId: string;
+    private ws: WebSocket;
+    private config: BotConfig;
+    stream: ObjectReadWriteStream<string>;
+    player: TrainablePlayerAI;
+    prevMessage: string | undefined;
+    active: boolean;
 
-//     public async receive(message: string): Promise<void> {
-//         if (
-//             this.prevMessage !== undefined &&
-//             message.includes(`class="message-throttle-notice"`)
-//         ) {
-//             this.send(this.prevMessage);
-//         }
-//         this.stream.write(message);
-//     }
+    constructor(roomId: string, ws: WebSocket, config: BotConfig) {
+        this.battleId = roomId;
+        this.ws = ws;
+        this.active = true;
+        this.config = config;
+        this.prevMessage = undefined;
 
-//     send(message: string): void {
-//         if (Math.random() < 0.5)
-//             this.ws.send(
-//                 `${this.battleId}|${this.stream.getThinkingMesssage().trim()}`,
-//             );
-//         this.ws.send(`${this.battleId}|/choose ${message}`);
-//         this.prevMessage = message;
-//     }
+        // this.ws.send(`${this.battleId}|/timer on`);
+        this.ws.send(`${this.battleId}|${welcomeMessage}`);
+        this.stream = new ClientStream();
+        this.player = new TrainablePlayerAI(
+            this.config.username,
+            this.stream,
+            {},
+            true,
+        );
+        this.player.choose = (choice: string) => {
+            const rqid = this.player.getRequest().rqid;
+            this.ws.send(`${this.battleId}|/choose ${choice}|${rqid}`);
+        };
+        this.player.start();
+    }
 
-//     public isActive(): boolean {
-//         return !this.stream.player.done;
-//     }
+    public async start(rateLimit: number = 1000) {
+        while (!this.player.done) {
+            const state = await this.player.recieveEnvironmentState();
+            const response = await fetch("http://127.0.0.1:8001/predict", {
+                // Ensure this URL is correct for your setup
+                method: "POST",
+                body: state.serializeBinary(),
+            });
+            await new Promise((resolve) => setTimeout(resolve, rateLimit));
+            const modelOutput = await response.json();
+            const stepRequest = new StepRequest();
+            stepRequest.setAction(modelOutput.action);
+            stepRequest.setRqid(state.getRqid());
+            this.player.submitStepRequest(stepRequest);
+        }
+    }
 
-//     public getBattleId(): string {
-//         return this.battleId;
-//     }
-// }
+    public async receive(message: string): Promise<void> {
+        this.stream.write(message);
+    }
 
-// interface BotConfig {
-//     username: string;
-//     password: string;
-//     format: string;
-//     team?: string;
-//     maxConcurrentBattles: number;
-//     serverUrl: string;
-//     secure: boolean;
-// }
+    public getBattleId(): string {
+        return this.battleId;
+    }
 
-// interface BotState {
-//     activeBattles: number;
-//     isSearchingLadder: boolean; // Added to track ladder search status
-//     rooms: Set<string>;
-//     challenges: Map<string, string>;
-//     battles: Map<string, Battle>;
-// }
+    public leave() {
+        this.ws.send(`${this.battleId}|/leave`);
+    }
+}
 
-// export class ShowdownBot {
-//     private config: BotConfig;
-//     private state: BotState;
-//     private ws: WebSocket | null = null;
-//     private challstr: string = "";
-//     private connected: boolean = false;
-//     private loggedIn: boolean = false;
+interface BotConfig {
+    username: string;
+    password: string;
+    format: string;
+    team?: string;
+    maxConcurrentBattles: number;
+    serverUrl: string;
+    secure: boolean;
+}
 
-//     constructor(config: BotConfig) {
-//         this.config = config;
-//         this.state = {
-//             activeBattles: 0,
-//             isSearchingLadder: false, // Initialize here
-//             rooms: new Set(),
-//             challenges: new Map(),
-//             battles: new Map(),
-//         };
-//     }
+interface BotState {
+    activeBattles: number;
+    isSearchingLadder: boolean; // Added to track ladder search status
+    rooms: Set<string>;
+    challenges: Map<string, string>;
+    battles: Map<string, Battle>;
+}
 
-//     public start(): void {
-//         this.connect();
-//     }
+export class ShowdownBot {
+    private config: BotConfig;
+    private state: BotState;
+    private ws: WebSocket | null = null;
+    private challstr: string = "";
+    private connected: boolean = false;
+    private loggedIn: boolean = false;
 
-//     private connect(): void {
-//         const protocol = this.config.secure ? "wss" : "ws";
-//         const serverUrl = `${protocol}://${this.config.serverUrl}/showdown/websocket`;
+    constructor(config: BotConfig) {
+        this.config = config;
+        this.state = {
+            activeBattles: 0,
+            isSearchingLadder: false, // Initialize here
+            rooms: new Set(),
+            challenges: new Map(),
+            battles: new Map(),
+        };
+    }
 
-//         console.log(`Connecting to ${serverUrl}...`);
+    public start(): void {
+        this.connect();
+    }
 
-//         this.ws = new WebSocket(serverUrl);
+    private connect(): void {
+        const protocol = this.config.secure ? "wss" : "ws";
+        const serverUrl = `${protocol}://${this.config.serverUrl}/showdown/websocket`;
 
-//         this.ws.on("open", () => {
-//             console.log("Connection established.");
-//             this.connected = true;
-//         });
+        console.log(`Connecting to ${serverUrl}...`);
 
-//         this.ws.on("message", (data) => {
-//             this.handleMessage(data);
-//         });
+        this.ws = new WebSocket(serverUrl);
 
-//         this.ws.on("close", () => {
-//             console.log(
-//                 "Connection closed. Attempting to reconnect in 10 seconds...",
-//             );
-//             this.connected = false;
-//             this.loggedIn = false;
-//             this.state.isSearchingLadder = false; // Reset search state on disconnect
+        this.ws.on("open", () => {
+            console.log("Connection established.");
+            this.connected = true;
+        });
 
-//             setTimeout(() => {
-//                 this.connect();
-//             }, 10000);
-//         });
+        this.ws.on("message", (data) => {
+            this.handleMessage(data);
+        });
 
-//         this.ws.on("error", (error) => {
-//             console.error("WebSocket error:", error.message);
-//             this.state.isSearchingLadder = false; // Reset search state on error
-//         });
-//     }
+        this.ws.on("close", () => {
+            console.log(
+                "Connection closed. Attempting to reconnect in 10 seconds...",
+            );
+            this.connected = false;
+            this.loggedIn = false;
+            this.state.isSearchingLadder = false; // Reset search state on disconnect
 
-//     private handleMessage(data: WebSocket.RawData): void {
-//         const message = data.toString();
-//         const lines = message.split("\n");
+            setTimeout(() => {
+                this.connect();
+            }, 10000);
+        });
 
-//         if (message.startsWith(">")) {
-//             // Battle room messages
-//             const roomId = lines[0].slice(1);
-//             if (!this.state.battles.has(roomId)) {
-//                 // This is a new battle starting
-//                 this.state.battles.set(
-//                     roomId,
-//                     new Battle(roomId, this.ws!, this.config),
-//                 );
-//                 this.state.activeBattles++;
-//                 this.state.isSearchingLadder = false; // A battle started, so we are no longer just "searching"
-//                 console.log(
-//                     `Battle ${roomId} started. Active battles: ${this.state.activeBattles}. No longer searching ladder.`,
-//                 );
-//             }
+        this.ws.on("error", (error) => {
+            console.error("WebSocket error:", error.message);
+            this.state.isSearchingLadder = false; // Reset search state on error
+        });
+    }
 
-//             const battle = this.state.battles.get(roomId);
-//             if (!battle) {
-//                 // Should not happen if the above logic is correct
-//                 console.error(
-//                     `Error: Battle instance for ${roomId} not found after creation.`,
-//                 );
-//                 return;
-//             }
+    private handleMessage(data: WebSocket.RawData): void {
+        const message = data.toString();
+        const lines = message.split("\n");
 
-//             battle.receive(message);
+        if (message.startsWith(">")) {
+            // Battle room messages
+            const roomId = lines[0].slice(1);
+            if (!this.state.battles.has(roomId)) {
+                // This is a new battle starting
+                const battle = new Battle(roomId, this.ws!, this.config);
+                this.state.battles.set(roomId, battle);
+                battle.start();
+                this.state.activeBattles++;
+                this.state.isSearchingLadder = false; // A battle started, so we are no longer just "searching"
+                console.log(
+                    `Battle ${roomId} started. Active battles: ${this.state.activeBattles}. No longer searching ladder.`,
+                );
+            }
 
-//             const battleIsWon = message.includes("|win|");
-//             const battleIsTie = message.includes("|tie|");
-//             if (battleIsWon || battleIsTie) {
-//                 if (this.state.battles.has(roomId)) {
-//                     this.state.activeBattles--;
-//                     // No need to delete from this.state.battles here, |deinit| handles it.
-//                     // Or, if |deinit| is not reliable for this, clean up here:
-//                     // this.state.battles.delete(roomId);
-//                     console.log(
-//                         `Battle ${roomId} ended. Active battles: ${this.state.activeBattles}.`,
-//                     );
-//                 }
+            const battle = this.state.battles.get(roomId);
+            if (!battle) {
+                // Should not happen if the above logic is correct
+                console.error(
+                    `Error: Battle instance for ${roomId} not found after creation.`,
+                );
+                return;
+            }
 
-//                 if (this.state.rooms.has(roomId)) {
-//                     // This seems redundant if |deinit| handles room state
-//                     this.state.rooms.delete(roomId);
-//                 }
+            battle.receive(message);
 
-//                 this.state.isSearchingLadder = false; // Reset search state as a battle slot might be free
-//                 this.checkAndSearchForBattles();
-//             }
-//         } else {
-//             // General server messages
-//             for (const line of lines) {
-//                 if (!line || line === "") continue;
-//                 if (line.startsWith("|")) {
-//                     this.parseLine(line);
-//                 }
-//             }
-//         }
-//     }
+            const battleIsWon = message.includes("|win|");
+            const battleIsTie = message.includes("|tie|");
+            if (battleIsWon || battleIsTie) {
+                if (this.state.battles.has(roomId)) {
+                    this.state.activeBattles--;
+                    // No need to delete from this.state.battles here, |deinit| handles it.
+                    // Or, if |deinit| is not reliable for this, clean up here:
+                    // this.state.battles.delete(roomId);
+                    console.log(
+                        `Battle ${roomId} ended. Active battles: ${this.state.activeBattles}.`,
+                    );
+                }
 
-//     private parseLine(line: string): void {
-//         const parts = line.slice(1).split("|");
-//         const messageType = parts[0];
-//         // console.log(line); // Optional: keep for debugging
+                const battle = this.state.battles.get(roomId);
+                if (battle) {
+                    battle.leave();
+                }
+                if (this.state.rooms.has(roomId)) {
+                    this.state.rooms.delete(roomId);
+                }
 
-//         switch (messageType) {
-//             case "challstr":
-//                 this.challstr = parts.slice(1).join("|");
-//                 this.login();
-//                 break;
+                this.state.isSearchingLadder = false; // Reset search state as a battle slot might be free
+                this.checkAndSearchForBattles();
+            }
+        } else {
+            // General server messages
+            for (const line of lines) {
+                if (!line || line === "") continue;
+                if (line.startsWith("|")) {
+                    this.parseLine(line);
+                }
+            }
+        }
+    }
 
-//             case "updateuser": {
-//                 const username = parts[1].trim();
-//                 const namedStatus = parts[2];
+    private parseLine(line: string): void {
+        const parts = line.slice(1).split("|");
+        const messageType = parts[0];
+        // console.log(line); // Optional: keep for debugging
 
-//                 if (
-//                     username.toLowerCase() ===
-//                         this.config.username.toLowerCase() &&
-//                     namedStatus === "1"
-//                 ) {
-//                     console.log(`Successfully logged in as ${username}`);
-//                     this.loggedIn = true;
-//                     this.state.isSearchingLadder = false; // Reset search state on login
-//                     this.checkAndSearchForBattles();
-//                 }
-//                 break;
-//             }
+        switch (messageType) {
+            case "challstr":
+                this.challstr = parts.slice(1).join("|");
+                this.login();
+                break;
 
-//             case "pm": {
-//                 const sender = parts[1].trim();
-//                 const receiver = parts[2].trim();
-//                 const messageContent = parts.slice(3).join("|");
+            case "updateuser": {
+                const username = parts[1].trim();
+                const namedStatus = parts[2];
 
-//                 if (
-//                     messageContent.startsWith("/challenge") &&
-//                     receiver.toLowerCase() ===
-//                         this.config.username.toLowerCase()
-//                 ) {
-//                     const challengeParts = messageContent.split("|");
-//                     const format = challengeParts[1]; // Ensure this parsing is robust
+                if (
+                    username.toLowerCase() ===
+                        this.config.username.toLowerCase() &&
+                    namedStatus === "1"
+                ) {
+                    console.log(`Successfully logged in as ${username}`);
+                    this.loggedIn = true;
+                    this.state.isSearchingLadder = false; // Reset search state on login
+                    this.checkAndSearchForBattles();
+                }
+                break;
+            }
 
-//                     this.state.challenges.set(sender, format);
-//                     this.checkAndAcceptChallenge(sender);
-//                 }
-//                 break;
-//             }
+            case "pm": {
+                const sender = parts[1].trim();
+                const receiver = parts[2].trim();
+                const messageContent = parts.slice(3).join("|");
 
-//             case "updatechallenges":
-//                 try {
-//                     const challengesData = JSON.parse(parts.slice(1).join("|")); // Ensure full JSON is parsed
+                if (
+                    messageContent.startsWith("/challenge") &&
+                    receiver.toLowerCase() ===
+                        this.config.username.toLowerCase()
+                ) {
+                    const challengeParts = messageContent.split("|");
+                    const format = challengeParts[1]; // Ensure this parsing is robust
 
-//                     if (challengesData.challengesFrom) {
-//                         for (const challenger in challengesData.challengesFrom) {
-//                             const format =
-//                                 challengesData.challengesFrom[challenger];
-//                             this.state.challenges.set(challenger, format);
-//                             this.checkAndAcceptChallenge(challenger);
-//                         }
-//                     }
-//                 } catch (error) {
-//                     console.error(
-//                         "Error parsing challenges JSON:",
-//                         error,
-//                         "Raw data:",
-//                         parts.slice(1).join("|"),
-//                     );
-//                 }
-//                 break;
+                    this.state.challenges.set(sender, format);
+                    this.checkAndAcceptChallenge(sender);
+                }
+                break;
+            }
 
-//             case "updatesearch": {
-//                 try {
-//                     const searchData = JSON.parse(parts.slice(1).join("|")); // Ensure full JSON is parsed
-//                     if (
-//                         this.state.isSearchingLadder &&
-//                         searchData.searching === false
-//                     ) {
-//                         console.log(
-//                             "Server indicated searching has stopped (no match found or cancelled). Resetting isSearchingLadder flag.",
-//                         );
-//                         this.state.isSearchingLadder = false;
-//                     }
-//                 } catch (e) {
-//                     console.error(
-//                         "Error parsing updatesearch JSON:",
-//                         e,
-//                         "Raw data:",
-//                         parts.slice(1).join("|"),
-//                     );
-//                 }
-//                 // Always call checkAndSearchForBattles; it will decide based on the new state.
-//                 this.checkAndSearchForBattles();
-//                 break;
-//             }
+            case "updatechallenges":
+                try {
+                    const challengesData = JSON.parse(parts.slice(1).join("|")); // Ensure full JSON is parsed
 
-//             case "init": {
-//                 if (parts[1] === "battle") {
-//                     const roomId = parts[2] || ""; // parts[2] should be the room ID e.g. "battle-gen3randombattle-123"
-//                     console.log(`Room initialized: ${roomId}`);
-//                     this.state.rooms.add(roomId);
-//                     // Note: Battle instance creation and activeBattles increment is now in handleMessage for ">roomid"
-//                 }
-//                 break;
-//             }
+                    if (challengesData.challengesFrom) {
+                        for (const challenger in challengesData.challengesFrom) {
+                            const format =
+                                challengesData.challengesFrom[challenger];
+                            this.state.challenges.set(challenger, format);
+                            this.checkAndAcceptChallenge(challenger);
+                        }
+                    }
+                } catch (error) {
+                    console.error(
+                        "Error parsing challenges JSON:",
+                        error,
+                        "Raw data:",
+                        parts.slice(1).join("|"),
+                    );
+                }
+                break;
 
-//             case "deinit": {
-//                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-//                 const roomTypeOrId = parts[1]; // Sometimes this is just 'battle', other times it's the full room ID.
-//                 // If it's just 'battle', then parts[2] is the room ID.
-//                 // Let's assume for now it's the room ID or not relevant if just 'battle'.
-//                 let roomId = "";
-//                 if (parts.length > 2 && parts[1] === "battle") {
-//                     // If message is like |deinit|battle|battle-id
-//                     roomId = parts[2];
-//                 } else if (parts.length > 1 && parts[1].startsWith("battle-")) {
-//                     // If message is like |deinit|battle-id
-//                     roomId = parts[1];
-//                 }
+            case "updatesearch": {
+                try {
+                    const searchData = JSON.parse(parts.slice(1).join("|")); // Ensure full JSON is parsed
+                    if (
+                        this.state.isSearchingLadder &&
+                        searchData.searching === false
+                    ) {
+                        console.log(
+                            "Server indicated searching has stopped (no match found or cancelled). Resetting isSearchingLadder flag.",
+                        );
+                        this.state.isSearchingLadder = false;
+                    }
+                } catch (e) {
+                    console.error(
+                        "Error parsing updatesearch JSON:",
+                        e,
+                        "Raw data:",
+                        parts.slice(1).join("|"),
+                    );
+                }
+                // Always call checkAndSearchForBattles; it will decide based on the new state.
+                this.checkAndSearchForBattles();
+                break;
+            }
 
-//                 if (roomId && this.state.battles.has(roomId)) {
-//                     console.log(
-//                         `Room deinitialized: ${roomId}. Removing from active battles map.`,
-//                     );
-//                     this.state.battles.delete(roomId);
-//                     // activeBattles should have been decremented by win/loss logic,
-//                     // but if a battle ends for other reasons (disconnect, forfeit without win/loss message),
-//                     // ensure activeBattles is correct.
-//                     // However, the primary decrement is tied to win/loss. If deinit occurs without win/loss,
-//                     // activeBattles might be off. Consider if activeBattles should be this.state.battles.size.
-//                     // For now, relying on win/loss to decrement activeBattles.
-//                 }
-//                 if (roomId && this.state.rooms.has(roomId)) {
-//                     this.state.rooms.delete(roomId);
-//                 }
-//                 break;
-//             }
-//         }
-//     }
+            case "init": {
+                if (parts[1] === "battle") {
+                    const roomId = parts[2] || ""; // parts[2] should be the room ID e.g. "battle-gen3randombattle-123"
+                    console.log(`Room initialized: ${roomId}`);
+                    this.state.rooms.add(roomId);
+                    // Note: Battle instance creation and activeBattles increment is now in handleMessage for ">roomid"
+                }
+                break;
+            }
 
-//     private async login(): Promise<void> {
-//         if (!this.challstr) {
-//             console.error("No challstr received. Cannot login.");
-//             return;
-//         }
-//         try {
-//             const response = await axios.post(
-//                 "https://play.pokemonshowdown.com/action.php",
-//                 new URLSearchParams({
-//                     // Use URLSearchParams for form data
-//                     act: "login",
-//                     name: this.config.username,
-//                     pass: this.config.password,
-//                     challstr: this.challstr,
-//                 }).toString(),
-//                 {
-//                     headers: {
-//                         "Content-Type": "application/x-www-form-urlencoded",
-//                     },
-//                 },
-//             );
+            case "deinit": {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const roomTypeOrId = parts[1]; // Sometimes this is just 'battle', other times it's the full room ID.
+                // If it's just 'battle', then parts[2] is the room ID.
+                // Let's assume for now it's the room ID or not relevant if just 'battle'.
+                let roomId = "";
+                if (parts.length > 2 && parts[1] === "battle") {
+                    // If message is like |deinit|battle|battle-id
+                    roomId = parts[2];
+                } else if (parts.length > 1 && parts[1].startsWith("battle-")) {
+                    // If message is like |deinit|battle-id
+                    roomId = parts[1];
+                }
 
-//             const responseData = response.data;
-//             if (
-//                 typeof responseData === "string" &&
-//                 responseData.startsWith("]")
-//             ) {
-//                 const json = JSON.parse(responseData.slice(1));
-//                 if (json.assertion) {
-//                     this.send(
-//                         `|/trn ${this.config.username},0,${json.assertion}`,
-//                     );
-//                 } else {
-//                     console.error(
-//                         "No assertion received in login response. Login might have failed.",
-//                         json,
-//                     );
-//                     this.loggedIn = false;
-//                 }
-//             } else {
-//                 console.error("Invalid login response format:", responseData);
-//                 this.loggedIn = false;
-//             }
-//         } catch (error) {
-//             console.error(
-//                 "Login HTTP request error:",
-//                 error instanceof Error ? error.message : error,
-//             );
-//             this.loggedIn = false;
-//         }
-//     }
+                if (roomId && this.state.battles.has(roomId)) {
+                    console.log(
+                        `Room deinitialized: ${roomId}. Removing from active battles map.`,
+                    );
+                    this.state.battles.delete(roomId);
+                    // activeBattles should have been decremented by win/loss logic,
+                    // but if a battle ends for other reasons (disconnect, forfeit without win/loss message),
+                    // ensure activeBattles is correct.
+                    // However, the primary decrement is tied to win/loss. If deinit occurs without win/loss,
+                    // activeBattles might be off. Consider if activeBattles should be this.state.battles.size.
+                    // For no
+                    // w, relying on win/loss to decrement activeBattles.
+                }
+                if (roomId && this.state.rooms.has(roomId)) {
+                    this.state.rooms.delete(roomId);
+                }
+                break;
+            }
+        }
+    }
 
-//     private checkAndSearchForBattles(): void {
-//         if (!this.loggedIn) {
-//             console.log("Not logged in. Cannot search for battles.");
-//             return;
-//         }
+    private async login(): Promise<void> {
+        if (!this.challstr) {
+            console.error("No challstr received. Cannot login.");
+            return;
+        }
+        try {
+            const response = await axios.post(
+                "https://play.pokemonshowdown.com/action.php",
+                new URLSearchParams({
+                    // Use URLSearchParams for form data
+                    act: "login",
+                    name: this.config.username,
+                    pass: this.config.password,
+                    challstr: this.challstr,
+                }).toString(),
+                {
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                },
+            );
 
-//         if (this.state.activeBattles >= this.config.maxConcurrentBattles) {
-//             console.log(
-//                 `Maximum number of active battles reached (${this.state.activeBattles}/${this.config.maxConcurrentBattles}). Not searching.`,
-//             );
-//             return;
-//         }
+            const responseData = response.data;
+            if (
+                typeof responseData === "string" &&
+                responseData.startsWith("]")
+            ) {
+                const json = JSON.parse(responseData.slice(1));
+                if (json.assertion) {
+                    this.send(
+                        `|/trn ${this.config.username},0,${json.assertion}`,
+                    );
+                } else {
+                    console.error(
+                        "No assertion received in login response. Login might have failed.",
+                        json,
+                    );
+                    this.loggedIn = false;
+                }
+            } else {
+                console.error("Invalid login response format:", responseData);
+                this.loggedIn = false;
+            }
+        } catch (error) {
+            console.error(
+                "Login HTTP request error:",
+                error instanceof Error ? error.message : error,
+            );
+            this.loggedIn = false;
+        }
+    }
 
-//         if (this.state.isSearchingLadder) {
-//             console.log(
-//                 "Already searching for a ladder battle. Not sending another search request.",
-//             );
-//             return;
-//         }
+    private checkAndSearchForBattles(): void {
+        if (!this.loggedIn) {
+            console.log("Not logged in. Cannot search for battles.");
+            return;
+        }
 
-//         // At this point, activeBattles < maxConcurrentBattles AND not currently searching.
-//         console.log(
-//             `Attempting to search for new battle. Active: ${this.state.activeBattles}, Max: ${this.config.maxConcurrentBattles}, Searching: ${this.state.isSearchingLadder}`,
-//         );
+        if (this.state.activeBattles >= this.config.maxConcurrentBattles) {
+            console.log(
+                `Maximum number of active battles reached (${this.state.activeBattles}/${this.config.maxConcurrentBattles}). Not searching.`,
+            );
+            return;
+        }
 
-//         if (this.config.team) {
-//             this.send(`|/utm ${this.config.team}`);
-//         }
+        if (this.state.isSearchingLadder) {
+            console.log(
+                "Already searching for a ladder battle. Not sending another search request.",
+            );
+            return;
+        }
 
-//         this.send(`|/search ${this.config.format}`);
-//         this.state.isSearchingLadder = true; // Set flag after sending search
-//         console.log(
-//             `Sent search request for ${this.config.format}. Flag isSearchingLadder set to true.`,
-//         );
-//     }
+        // At this point, activeBattles < maxConcurrentBattles AND not currently searching.
+        console.log(
+            `Attempting to search for new battle. Active: ${this.state.activeBattles}, Max: ${this.config.maxConcurrentBattles}, Searching: ${this.state.isSearchingLadder}`,
+        );
 
-//     private checkAndAcceptChallenge(challenger: string): void {
-//         if (!this.loggedIn) {
-//             console.log("Not logged in. Cannot accept challenges.");
-//             return;
-//         }
+        if (this.config.team) {
+            this.send(`|/utm ${this.config.team}`);
+        }
 
-//         const format = this.state.challenges.get(challenger);
-//         if (!format) {
-//             console.error(
-//                 `No challenge found from ${challenger} in state.challenges. This shouldn't happen.`,
-//             );
-//             return;
-//         }
+        this.send(`|/search ${this.config.format}`);
+        this.state.isSearchingLadder = true; // Set flag after sending search
+        console.log(
+            `Sent search request for ${this.config.format}. Flag isSearchingLadder set to true.`,
+        );
+    }
 
-//         if (format !== this.config.format) {
-//             console.log(
-//                 `Rejecting challenge from ${challenger} due to mismatched format: ${format} (expected ${this.config.format})`,
-//             );
-//             this.send(`|/reject ${challenger}`);
-//             this.state.challenges.delete(challenger);
-//             return;
-//         }
+    private checkAndAcceptChallenge(challenger: string): void {
+        if (!this.loggedIn) {
+            console.log("Not logged in. Cannot accept challenges.");
+            return;
+        }
 
-//         // Calculate potential battles if this challenge is accepted
-//         // A ladder search counts as a potential battle if active.
-//         const potentialBattleSlotsOccupied =
-//             this.state.activeBattles + (this.state.isSearchingLadder ? 1 : 0);
+        const format = this.state.challenges.get(challenger);
+        if (!format) {
+            console.error(
+                `No challenge found from ${challenger} in state.challenges. This shouldn't happen.`,
+            );
+            return;
+        }
 
-//         if (potentialBattleSlotsOccupied >= this.config.maxConcurrentBattles) {
-//             console.log(
-//                 `Cannot accept challenge from ${challenger}. Would exceed max concurrent battles. Active: ${this.state.activeBattles}, SearchingLadder: ${this.state.isSearchingLadder}, Max: ${this.config.maxConcurrentBattles}. Rejecting.`,
-//             );
-//             this.send(`|/reject ${challenger}`);
-//             // Do not delete the challenge yet, it might become acceptable if a slot frees up soon.
-//             // Or, decide to delete if you don't want to re-evaluate it:
-//             this.state.challenges.delete(challenger);
-//             return;
-//         }
+        if (format !== this.config.format) {
+            console.log(
+                `Rejecting challenge from ${challenger} due to mismatched format: ${format} (expected ${this.config.format})`,
+            );
+            this.send(`|/reject ${challenger}`);
+            this.state.challenges.delete(challenger);
+            return;
+        }
 
-//         console.log(
-//             `Accepting challenge from ${challenger} for format ${format}. Active: ${this.state.activeBattles}, SearchingLadder: ${this.state.isSearchingLadder}, Max: ${this.config.maxConcurrentBattles}.`,
-//         );
+        // Calculate potential battles if this challenge is accepted
+        // A ladder search counts as a potential battle if active.
+        const potentialBattleSlotsOccupied =
+            this.state.activeBattles + (this.state.isSearchingLadder ? 1 : 0);
 
-//         if (this.config.team) {
-//             this.send(`|/utm ${this.config.team}`);
-//         }
+        if (potentialBattleSlotsOccupied >= this.config.maxConcurrentBattles) {
+            console.log(
+                `Cannot accept challenge from ${challenger}. Would exceed max concurrent battles. Active: ${this.state.activeBattles}, SearchingLadder: ${this.state.isSearchingLadder}, Max: ${this.config.maxConcurrentBattles}. Rejecting.`,
+            );
+            this.send(`|/reject ${challenger}`);
+            // Do not delete the challenge yet, it might become acceptable if a slot frees up soon.
+            // Or, decide to delete if you don't want to re-evaluate it:
+            this.state.challenges.delete(challenger);
+            return;
+        }
 
-//         this.send(`|/accept ${challenger}`);
-//         // Note: isSearchingLadder is NOT changed here. Accepting a challenge doesn't stop a ladder search.
-//         // activeBattles will increment when the battle room for this challenge starts.
-//         this.state.challenges.delete(challenger); // Accepted, so remove from pending challenges
-//     }
+        console.log(
+            `Accepting challenge from ${challenger} for format ${format}. Active: ${this.state.activeBattles}, SearchingLadder: ${this.state.isSearchingLadder}, Max: ${this.config.maxConcurrentBattles}.`,
+        );
 
-//     private send(message: string): void {
-//         if (!this.connected || !this.ws) {
-//             console.error("Not connected. Cannot send message:", message);
-//             return;
-//         }
-//         this.ws.send(message);
-//     }
-// }
+        if (this.config.team) {
+            this.send(`|/utm ${this.config.team}`);
+        }
 
-// // Example usage (ensure your .env file is correctly set up at the specified path)
-// if (require.main === module) {
-//     const result = dotenv.config({
-//         path: path.resolve(__dirname, "../../../.env"), // Adjust path if your .env is elsewhere
-//     });
-//     if (result.error) {
-//         console.error(
-//             "Error loading .env file. Please ensure it exists and is configured correctly.",
-//             result.error,
-//         );
-//         // throw result.error; // Or handle more gracefully
-//         process.exit(1);
-//     }
+        this.send(`|/accept ${challenger}`);
+        // Note: isSearchingLadder is NOT changed here. Accepting a challenge doesn't stop a ladder search.
+        // activeBattles will increment when the battle room for this challenge starts.
+        this.state.challenges.delete(challenger); // Accepted, so remove from pending challenges
+    }
 
-//     const config: BotConfig = {
-//         username: process.env.SHOWDOWN_USERNAME!,
-//         password: process.env.SHOWDOWN_PASSWORD!,
-//         format: "gen3randombattle",
-//         maxConcurrentBattles: 1, // Changed from maxSearches to maxConcurrentBattles
-//         serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
-//         secure: false, // Set to true for main server
-//         // serverUrl: "sim3.psim.us", // Use 'localhost' for local server
-//         // secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
-//     };
+    private send(message: string): void {
+        if (!this.connected || !this.ws) {
+            console.error("Not connected. Cannot send message:", message);
+            return;
+        }
+        this.ws.send(message);
+    }
+}
 
-//     if (!config.username || !config.password) {
-//         console.error(
-//             "Username or password not found in environment variables. Please check your .env file.",
-//         );
-//         process.exit(1);
-//     }
+// Example usage (ensure your .env file is correctly set up at the specified path)
+if (require.main === module) {
+    const result = dotenv.config({
+        path: path.resolve(__dirname, "../../../.env"), // Adjust path if your .env is elsewhere
+    });
+    if (result.error) {
+        console.error(
+            "Error loading .env file. Please ensure it exists and is configured correctly.",
+            result.error,
+        );
+        // throw result.error; // Or handle more gracefully
+        process.exit(1);
+    }
 
-//     console.log("Starting bot with configuration:", {
-//         ...config,
-//         password: "[REDACTED]", // Don't log password
-//     });
+    const config: BotConfig = {
+        username: process.env.SHOWDOWN_USERNAME!,
+        password: process.env.SHOWDOWN_PASSWORD!,
+        format: "gen3randombattle",
+        maxConcurrentBattles: 1, // Changed from maxSearches to maxConcurrentBattles
+        serverUrl: "localhost:8000", // Change to 'sim.smogon.com' for main server
+        secure: false, // Set to true for main server
+        // serverUrl: "sim3.psim.us", // Use 'localhost' for local server
+        // secure: true, // Use true for wss:// (usually with play.pokemonshowdown.com)
+    };
 
-//     const bot = new ShowdownBot(config);
-//     bot.start();
-// }
+    if (!config.username || !config.password) {
+        console.error(
+            "Username or password not found in environment variables. Please check your .env file.",
+        );
+        process.exit(1);
+    }
+
+    console.log("Starting bot with configuration:", {
+        ...config,
+        password: "[REDACTED]", // Don't log password
+    });
+
+    const bot = new ShowdownBot(config);
+    bot.start();
+}
