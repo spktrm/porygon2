@@ -6,7 +6,7 @@ import numpy as np
 
 from rl.environment.data import ACTION_STRINGS
 from rl.environment.interfaces import TimeStep, Transition
-from rl.environment.protos.features_pb2 import AbsoluteEdgeFeature, MovesetFeature
+from rl.environment.protos.features_pb2 import FieldFeature, MovesetFeature
 
 
 def renormalize(loss: chex.Array, mask: chex.Array) -> chex.Array:
@@ -53,8 +53,8 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
     valid = jnp.bitwise_not(batch.timestep.env.done)
     lengths = valid.sum(0)
 
-    history_lengths = batch.timestep.history.absolute_edges[
-        ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+    history_lengths = batch.timestep.history.field[
+        ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
     can_move = batch.timestep.env.legal[..., :4].any(axis=-1)

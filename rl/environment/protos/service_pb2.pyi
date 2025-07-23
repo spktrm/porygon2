@@ -29,12 +29,12 @@ class ResetRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
-    __slots__ = ("info", "legal_actions", "history_entities", "history_absolute_edge", "history_relative_edges", "history_length", "moveset", "public_team", "private_team", "current_context", "rqid")
+    __slots__ = ("info", "legal_actions", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "private_team", "current_context", "rqid")
     INFO_FIELD_NUMBER: _ClassVar[int]
     LEGAL_ACTIONS_FIELD_NUMBER: _ClassVar[int]
-    HISTORY_ENTITIES_FIELD_NUMBER: _ClassVar[int]
-    HISTORY_ABSOLUTE_EDGE_FIELD_NUMBER: _ClassVar[int]
-    HISTORY_RELATIVE_EDGES_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_ENTITY_NODES_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_ENTITY_EDGES_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_FIELD_FIELD_NUMBER: _ClassVar[int]
     HISTORY_LENGTH_FIELD_NUMBER: _ClassVar[int]
     MOVESET_FIELD_NUMBER: _ClassVar[int]
     PUBLIC_TEAM_FIELD_NUMBER: _ClassVar[int]
@@ -43,16 +43,16 @@ class EnvironmentState(_message.Message):
     RQID_FIELD_NUMBER: _ClassVar[int]
     info: bytes
     legal_actions: bytes
-    history_entities: bytes
-    history_absolute_edge: bytes
-    history_relative_edges: bytes
+    history_entity_nodes: bytes
+    history_entity_edges: bytes
+    history_field: bytes
     history_length: int
     moveset: bytes
     public_team: bytes
     private_team: bytes
     current_context: bytes
     rqid: int
-    def __init__(self, info: _Optional[bytes] = ..., legal_actions: _Optional[bytes] = ..., history_entities: _Optional[bytes] = ..., history_absolute_edge: _Optional[bytes] = ..., history_relative_edges: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., current_context: _Optional[bytes] = ..., rqid: _Optional[int] = ...) -> None: ...
+    def __init__(self, info: _Optional[bytes] = ..., legal_actions: _Optional[bytes] = ..., history_entity_nodes: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., current_context: _Optional[bytes] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class EnvironmentResponse(_message.Message):
     __slots__ = ("username", "state")

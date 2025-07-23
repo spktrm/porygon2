@@ -11,13 +11,13 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
-    ABSOLUTE_EDGE_MAX_VALUES,
     ACTION_MAX_VALUES,
-    ENTITY_MAX_VALUES,
+    ENTITY_EDGE_MAX_VALUES,
+    ENTITY_NODE_MAX_VALUES,
+    FIELD_MAX_VALUES,
     MAX_RATIO_TOKEN,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
-    RELATIVE_EDGE_MAX_VALUES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep
 from rl.environment.protos.enums_pb2 import (
@@ -29,15 +29,13 @@ from rl.environment.protos.enums_pb2 import (
     SpeciesEnum,
 )
 from rl.environment.protos.features_pb2 import (
-    AbsoluteEdgeFeature,
-    ContextFeature,
-    EntityFeature,
+    EntityEdgeFeature,
+    EntityNodeFeature,
+    FieldFeature,
     InfoFeature,
     MovesetFeature,
-    RelativeEdgeFeature,
 )
 from rl.model.modules import (
-    MLP,
     FeedForwardResidual,
     MergeEmbeddings,
     PretrainedEmbedding,
@@ -45,6 +43,7 @@ from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
+    cosine_similarity,
     one_hot_concat_jax,
 )
 
@@ -155,29 +154,23 @@ def _features_embedding(
     return jnp.concatenate(selected_features, axis=0).astype(jnp.float32)
 
 
-_encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_MAX_VALUES)
+_encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_NODE_MAX_VALUES)
 _encode_one_hot_action = partial(_encode_one_hot, max_values=ACTION_MAX_VALUES)
-_encode_one_hot_relative_edge = partial(
-    _encode_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
-)
-_encode_one_hot_absolute_edge = partial(
-    _encode_one_hot, max_values=ABSOLUTE_EDGE_MAX_VALUES
-)
+_encode_one_hot_edge = partial(_encode_one_hot, max_values=ENTITY_EDGE_MAX_VALUES)
+_encode_one_hot_field = partial(_encode_one_hot, max_values=FIELD_MAX_VALUES)
 _encode_one_hot_entity_boost = partial(_encode_one_hot_entity, value_offset=6)
-_encode_one_hot_relative_edge_boost = partial(
-    _encode_one_hot_relative_edge, value_offset=6
-)
+_encode_one_hot_edge_boost = partial(_encode_one_hot_edge, value_offset=6)
 _encode_sqrt_one_hot_entity = partial(
-    _encode_sqrt_one_hot, max_values=ENTITY_MAX_VALUES
+    _encode_sqrt_one_hot, max_values=ENTITY_NODE_MAX_VALUES
 )
 _encode_sqrt_one_hot_action = partial(
     _encode_sqrt_one_hot, max_values=ACTION_MAX_VALUES
 )
 _encode_divided_one_hot_entity = partial(
-    _encode_divided_one_hot, max_values=ENTITY_MAX_VALUES
+    _encode_divided_one_hot, max_values=ENTITY_NODE_MAX_VALUES
 )
-_encode_divided_one_hot_relative_edge = partial(
-    _encode_divided_one_hot, max_values=RELATIVE_EDGE_MAX_VALUES
+_encode_divided_one_hot_edge = partial(
+    _encode_divided_one_hot, max_values=ENTITY_EDGE_MAX_VALUES
 )
 
 
@@ -185,7 +178,9 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
     """
     Generate a mask to identify valid entities based on species tokens.
     """
-    species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES].astype(jnp.int32)
+    species_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES].astype(
+        jnp.int32
+    )
     return ~(
         (species_token == SpeciesEnum.SPECIES_ENUM___NULL)
         | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
@@ -197,7 +192,7 @@ def get_edge_mask(edge: chex.Array) -> chex.Array:
     """
     Generate a mask for edges based on their validity tokens.
     """
-    return edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID].astype(jnp.int32)
+    return edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.int32)
 
 
 class Encoder(nn.Module):
@@ -240,9 +235,6 @@ class Encoder(nn.Module):
         self.absolute_edge_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="absolute_edge_sum"
         )
-        self.timestep_linear = MLP(
-            layer_sizes=(entity_size,), use_layer_norm=True, dtype=self.cfg.dtype
-        )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
@@ -263,6 +255,12 @@ class Encoder(nn.Module):
 
         # Transformer encoders for processing sequences of entities and edges.
         self.entity_encoder = TransformerEncoder(**self.cfg.entity_encoder.to_dict())
+        self.per_timestep_encoder = TransformerEncoder(
+            **self.cfg.per_timestep_encoder.to_dict()
+        )
+        self.per_timestep_decoder = TransformerDecoder(
+            **self.cfg.per_timestep_decoder.to_dict()
+        )
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
@@ -273,9 +271,9 @@ class Encoder(nn.Module):
         self.latent_timestep_decoder = TransformerDecoder(
             **self.cfg.latent_timestep_decoder.to_dict()
         )
-        self.latent_entity_decoder = TransformerDecoder(
-            **self.cfg.latent_entity_decoder.to_dict()
-        )
+        # self.latent_entity_decoder = TransformerDecoder(
+        #     **self.cfg.latent_entity_decoder.to_dict()
+        # )
         self.latent_action_decoder = TransformerDecoder(
             **self.cfg.latent_action_decoder.to_dict()
         )
@@ -324,19 +322,21 @@ class Encoder(nn.Module):
             functools.partial(_binary_scale_encoding, world_dim=65535)
         )
         volatiles_indices = entity[
-            EntityFeature.ENTITY_FEATURE__VOLATILES0 : EntityFeature.ENTITY_FEATURE__VOLATILES8
+            EntityNodeFeature.ENTITY_NODE_FEATURE__VOLATILES0 : EntityNodeFeature.ENTITY_NODE_FEATURE__VOLATILES8
             + 1
         ]
         volatiles_encoding = _encode_hex(volatiles_indices).reshape(-1)
 
         typechange_indices = entity[
-            EntityFeature.ENTITY_FEATURE__TYPECHANGE0 : EntityFeature.ENTITY_FEATURE__TYPECHANGE1
+            EntityNodeFeature.ENTITY_NODE_FEATURE__TYPECHANGE0 : EntityNodeFeature.ENTITY_NODE_FEATURE__TYPECHANGE1
             + 1
         ]
         typechange_encoding = _encode_hex(typechange_indices).reshape(-1)
 
-        hp_ratio_token = entity[EntityFeature.ENTITY_FEATURE__HP_RATIO]
-        hp_ratio = entity[EntityFeature.ENTITY_FEATURE__HP_RATIO] / MAX_RATIO_TOKEN
+        hp_ratio_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO]
+        hp_ratio = (
+            entity[EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO] / MAX_RATIO_TOKEN
+        )
         hp_features = jnp.stack(
             [
                 hp_ratio,
@@ -353,73 +353,87 @@ class Encoder(nn.Module):
         boolean_code = one_hot_concat_jax(
             [
                 _encode_sqrt_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__LEVEL
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL
                 ),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__ACTIVE),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__SIDE),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__IS_PUBLIC),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE
+                ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE
+                ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__IS_PUBLIC
+                ),
                 _encode_divided_one_hot_entity(
                     entity,
-                    EntityFeature.ENTITY_FEATURE__HP_RATIO,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__GENDER),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__STATUS),
                 _encode_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__ITEM_EFFECT
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__GENDER
                 ),
                 _encode_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__BEING_CALLED_BACK
-                ),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__TRAPPED),
-                _encode_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__NEWLY_SWITCHED
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS
                 ),
                 _encode_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__TOXIC_TURNS
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM_EFFECT
                 ),
                 _encode_one_hot_entity(
-                    entity, EntityFeature.ENTITY_FEATURE__SLEEP_TURNS
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BEING_CALLED_BACK
                 ),
-                _encode_one_hot_entity(entity, EntityFeature.ENTITY_FEATURE__FAINTED),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_ATK_VALUE
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TRAPPED
                 ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_DEF_VALUE
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__NEWLY_SWITCHED
                 ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_SPA_VALUE
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TOXIC_TURNS
                 ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_SPD_VALUE
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__SLEEP_TURNS
                 ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_SPE_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_EVASION_VALUE
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED
                 ),
                 _encode_one_hot_entity_boost(
-                    entity, EntityFeature.ENTITY_FEATURE__BOOST_ACCURACY_VALUE
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ATK_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_DEF_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPA_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPD_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPE_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE
+                ),
+                _encode_one_hot_entity_boost(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE
                 ),
             ]
         )
 
         move_indices = np.array(
             [
-                EntityFeature.ENTITY_FEATURE__MOVEID0,
-                EntityFeature.ENTITY_FEATURE__MOVEID1,
-                EntityFeature.ENTITY_FEATURE__MOVEID2,
-                EntityFeature.ENTITY_FEATURE__MOVEID3,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID0,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID1,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID2,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID3,
             ]
         )
         move_pp_indices = np.array(
             [
-                EntityFeature.ENTITY_FEATURE__MOVEPP0,
-                EntityFeature.ENTITY_FEATURE__MOVEPP1,
-                EntityFeature.ENTITY_FEATURE__MOVEPP2,
-                EntityFeature.ENTITY_FEATURE__MOVEPP3,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP0,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP1,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP2,
+                EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP3,
             ]
         )
         move_tokens = entity[move_indices]
@@ -437,10 +451,10 @@ class Encoder(nn.Module):
 
         move_encodings = jax.vmap(self._encode_move)(move_tokens)
 
-        species_token = entity[EntityFeature.ENTITY_FEATURE__SPECIES]
-        ability_token = entity[EntityFeature.ENTITY_FEATURE__ABILITY]
-        item_token = entity[EntityFeature.ENTITY_FEATURE__ITEM]
-        # last_move_token = entity[EntityFeature.ENTITY_FEATURE__LAST_MOVE]
+        species_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES]
+        ability_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY]
+        item_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM]
+        # last_move_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__LAST_MOVE]
 
         embedding = self.entity_sum(
             boolean_code,
@@ -460,89 +474,76 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _encode_relative_edge(self, edge: chex.Array) -> chex.Array:
+    def _encode_edge(self, edge: chex.Array) -> chex.Array:
         _encode_hex = jax.vmap(
             functools.partial(_binary_scale_encoding, world_dim=65535)
         )
 
         minor_args_indices = edge[
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MINOR_ARG3
+            EntityEdgeFeature.ENTITY_EDGE_FEATURE__MINOR_ARG0 : EntityEdgeFeature.ENTITY_EDGE_FEATURE__MINOR_ARG3
             + 1
         ]
         minor_args_encoding = _encode_hex(minor_args_indices).reshape(-1)
 
-        side_condition_indices = edge[
-            RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS0 : RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SIDECONDITIONS1
-            + 1
-        ]
-        side_condition_encoding = _encode_hex(side_condition_indices).reshape(-1)
-
         # Aggregate embeddings for the relative edge.
         boolean_code = one_hot_concat_jax(
             [
-                _encode_one_hot_relative_edge(
+                _encode_one_hot_edge(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MAJOR_ARG,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG,
                 ),
-                _encode_divided_one_hot_relative_edge(
+                _encode_divided_one_hot_edge(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__DAMAGE_RATIO,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_divided_one_hot_relative_edge(
+                _encode_divided_one_hot_edge(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__HEAL_RATIO,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__HEAL_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_one_hot_relative_edge(
+                _encode_one_hot_edge(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__STATUS_TOKEN,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ATK_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ATK_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_DEF_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_DEF_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPA_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPA_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPD_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPD_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_SPE_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPE_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_EVASION_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_EVASION_VALUE,
                 ),
-                _encode_one_hot_relative_edge_boost(
+                _encode_one_hot_edge_boost(
                     edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__BOOST_ACCURACY_VALUE,
-                ),
-                _encode_one_hot_relative_edge(
-                    edge, RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__SPIKES
-                ),
-                _encode_one_hot_relative_edge(
-                    edge,
-                    RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__TOXIC_SPIKES,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ACCURACY_VALUE,
                 ),
             ]
         )
 
         effect_from_source_indices = np.array(
             [
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN0,
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN1,
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN2,
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN3,
-                RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__FROM_SOURCE_TOKEN4,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN0,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN1,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN2,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN3,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN4,
             ]
         )
         effect_from_source_tokens = edge[effect_from_source_indices]
@@ -556,14 +557,12 @@ class Encoder(nn.Module):
             effect_from_source_mask[..., None], effect_from_source_embeddings, 0
         ).sum(axis=0)
 
-        ability_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ABILITY_TOKEN]
-        item_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ITEM_TOKEN]
-        move_token = edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__MOVE_TOKEN]
-        # edge[RelativeEdgeFeature.RELATIVE_EDGE_FEATURE__ACTION_TOKEN]
+        ability_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ABILITY_TOKEN]
+        item_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN]
+        move_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
 
         embedding = self.relative_edge_sum(
             minor_args_encoding,
-            side_condition_encoding,
             boolean_code,
             self._encode_ability(ability_token),
             self._encode_item(item_token),
@@ -573,60 +572,95 @@ class Encoder(nn.Module):
 
         return embedding
 
-    def _encode_absolute_edge(self, edge: chex.Array) -> chex.Array:
+    def _encode_field(self, edge: chex.Array):
         """
         Encode features of an absolute edge, including turn and request offsets.
         """
         # Compute turn and request count differences for encoding.
-        edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_VALUE]
-        request_count = edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__REQUEST_COUNT]
+
+        request_count = edge[FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
+
+        _encode_hex = jax.vmap(
+            functools.partial(_binary_scale_encoding, world_dim=65535)
+        )
+
+        my_side_condition_indices = edge[
+            FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS0 : FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS1
+            + 1
+        ]
+        opp_side_condition_indices = edge[
+            FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS1
+            + 1
+        ]
+        my_side_condition_encoding = _encode_hex(my_side_condition_indices).reshape(-1)
+        opp_side_condition_encoding = _encode_hex(opp_side_condition_indices).reshape(
+            -1
+        )
 
         # Aggregate embeddings for the absolute edge.
         boolean_code = one_hot_concat_jax(
             [
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID,
+                    FieldFeature.FIELD_FEATURE__WEATHER_ID,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION,
+                    FieldFeature.FIELD_FEATURE__WEATHER_MAX_DURATION,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION,
+                    FieldFeature.FIELD_FEATURE__WEATHER_MIN_DURATION,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_ID,
+                    FieldFeature.FIELD_FEATURE__TERRAIN_ID,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION,
+                    FieldFeature.FIELD_FEATURE__TERRAIN_MAX_DURATION,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION,
+                    FieldFeature.FIELD_FEATURE__TERRAIN_MIN_DURATION,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID,
+                    FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_ID,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION,
+                    FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_MAX_DURATION,
                 ),
-                _encode_one_hot_absolute_edge(
+                _encode_one_hot_field(
                     edge,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION,
+                    FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_MIN_DURATION,
+                ),
+                _encode_one_hot_field(
+                    edge,
+                    FieldFeature.FIELD_FEATURE__MY_SPIKES,
+                ),
+                _encode_one_hot_field(
+                    edge,
+                    FieldFeature.FIELD_FEATURE__OPP_SPIKES,
+                ),
+                _encode_one_hot_field(
+                    edge,
+                    FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES,
+                ),
+                _encode_one_hot_field(
+                    edge,
+                    FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES,
                 ),
             ]
         )
 
         embedding = self.absolute_edge_sum(
             boolean_code,
+            my_side_condition_encoding,
+            opp_side_condition_encoding,
             _binary_scale_encoding(
-                edge[AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TURN_ORDER_VALUE],
+                edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE],
                 32,
             ),
         )
@@ -643,23 +677,32 @@ class Encoder(nn.Module):
         Encode features of a single timestep, including entities and edges.
         """
 
-        # Encode entities.
-        entity_embedding, _ = jax.vmap(self._encode_entity)(history.entities)
+        # Encode nodes.
+        history_node_embedding, node_mask = jax.vmap(self._encode_entity)(history.nodes)
 
-        # Encode relative edges.
-        relative_edge_embedding = jax.vmap(self._encode_relative_edge)(
-            history.relative_edges
+        # Encode edges.
+        history_edge_embedding = jax.vmap(self._encode_edge)(history.edges)
+
+        # Encode field
+        field_embedding, valid_timestep_mask, history_request_count = (
+            self._encode_field(history.field)
         )
 
-        # Encode absolute edges.
-        absolute_edge_embedding, valid_timestep_mask, history_request_count = (
-            self._encode_absolute_edge(history.absolute_edges)
+        state_action_embedding = history_node_embedding + history_edge_embedding
+        contextual_state_action_embeddings = self.per_timestep_encoder(
+            state_action_embedding, node_mask
         )
+        pooled_embedding = self.per_timestep_decoder(
+            contextual_state_action_embeddings.mean(axis=0, keepdims=True),
+            contextual_state_action_embeddings,
+            None,
+            node_mask,
+        )
+
+        timestep_embedding = pooled_embedding.squeeze(0) + field_embedding
 
         return (
-            entity_embedding,
-            relative_edge_embedding,
-            absolute_edge_embedding,
+            timestep_embedding,
             valid_timestep_mask,
             history_request_count,
         )
@@ -673,29 +716,18 @@ class Encoder(nn.Module):
         def _batched_fn(encodings: jax.Array):
             embeddings, mask = encode_entities(encodings)
             embeddings = self.entity_ff(embeddings)
-            return self.entity_encoder(embeddings, mask), mask
+            return self.entity_encoder(embeddings, mask)
 
-        entity_embeddings, entity_mask = jax.vmap(_batched_fn)(entity_encodings)
+        entity_embeddings = jax.vmap(_batched_fn)(entity_encodings)
 
         private_entity_embeddings = self.private_entity_ln(entity_embeddings[:, :6])
-        return private_entity_embeddings, entity_mask, entity_embeddings
+        return private_entity_embeddings
 
     def _encode_timesteps(self, history: HistoryStep):
-        (
-            entity_embedding,
-            relative_edge_embedding,
-            absolute_edge_embedding,
-            valid_timestep_mask,
-            history_request_count,
-        ) = jax.vmap(self._encode_timestep)(history)
+        timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
+            self._encode_timestep
+        )(history)
 
-        timestep_embedding = (
-            entity_embedding
-            + relative_edge_embedding
-            + jnp.expand_dims(absolute_edge_embedding, axis=1)
-        ).reshape(-1, 2 * entity_embedding.shape[-1])
-
-        timestep_embedding = self.timestep_linear(timestep_embedding)
         timestep_embedding = self.timestep_ff(timestep_embedding)
 
         # Apply mask to the timestep embeddings.
@@ -705,13 +737,13 @@ class Encoder(nn.Module):
 
         seq_len = timestep_embedding.shape[0]
 
-        timestep_embedding = self.timestep_encoder(
+        contextual_timestep_embedding = self.timestep_encoder(
             timestep_embedding,
             valid_timestep_mask,
             jnp.tril(jnp.ones((seq_len, seq_len))),
         )
 
-        return timestep_embedding, history_request_count
+        return contextual_timestep_embedding, history_request_count
 
     # Encode actions for the current environment step.
     def _encode_action(
@@ -746,74 +778,12 @@ class Encoder(nn.Module):
 
         return embedding
 
-    def _encode_context(self, context_vector: chex.Array) -> chex.Array:
-        _encode_hex = jax.vmap(
-            functools.partial(_binary_scale_encoding, world_dim=65535)
-        )
-
-        my_side_condition_indices = context_vector[
-            ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__MY_SIDECONDITIONS1
-            + 1
-        ]
-        opp_side_condition_indices = context_vector[
-            ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS0 : ContextFeature.CONTEXT_FEATURE__OPP_SIDECONDITIONS1
-            + 1
-        ]
-        my_side_condition_encoding = _encode_hex(my_side_condition_indices).reshape(-1)
-        opp_side_condition_encoding = _encode_hex(opp_side_condition_indices).reshape(
-            -1
-        )
-        boolean_code = one_hot_concat_jax(
-            [
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_ID,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MAX_DURATION,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__WEATHER_MIN_DURATION,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_ID,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MAX_DURATION,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__TERRAIN_MIN_DURATION,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_ID,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MAX_DURATION,
-                ),
-                _encode_one_hot_absolute_edge(
-                    context_vector,
-                    AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__PSEUDOWEATHER_MIN_DURATION,
-                ),
-            ]
-        )
-        return jnp.concatenate(
-            (my_side_condition_encoding, opp_side_condition_encoding, boolean_code),
-            axis=-1,
-        )
-
     def _encode_actions(
         self, env_step: EnvStep, entity_embeddings: chex.Array
     ) -> chex.Array:
 
         def _batched_forward(env_step: EnvStep, entity_embeddings: chex.Array):
-            context_encoding = self._encode_context(env_step.current_context)
+            context_encoding, _, _ = self._encode_field(env_step.current_context)
             action_entites = jnp.take(
                 entity_embeddings,
                 env_step.moveset[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
@@ -837,31 +807,20 @@ class Encoder(nn.Module):
         Forward pass of the Encoder model. Processes an environment step and outputs
         contextual embeddings for actions.
         """
-        private_entity_embeddings, entity_mask, entity_embeddings = (
-            self._encode_entities(env_step)
-        )
+        private_entity_embeddings = self._encode_entities(env_step)
 
         timestep_embeddings, history_request_count = self._encode_timesteps(
             history_step
         )
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        timestep_mask = request_count[..., None] >= history_request_count
-
-        action_embeddings = self._encode_actions(env_step, private_entity_embeddings)
 
         def _batched_forward(
             timestep_mask: jax.Array,
-            entity_embeddings: jax.Array,
-            entity_mask: jax.Array,
             action_embeddings: jax.Array,
             legal_mask: jax.Array,
         ):
-            latent_timesteps = (self.latent_timestep_decoder)(
+            latent_timesteps = self.latent_timestep_decoder(
                 self.latent_embeddings, timestep_embeddings, None, timestep_mask
-            )
-
-            latent_entities = self.latent_entity_decoder(
-                self.latent_embeddings, entity_embeddings, None, entity_mask
             )
 
             latent_actions = self.latent_action_decoder(
@@ -869,16 +828,14 @@ class Encoder(nn.Module):
             )
 
             latent_embeddings = jax.vmap(self.latent_merge)(
-                latent_timesteps, latent_entities, latent_actions
+                latent_timesteps, latent_actions
             )
             contextual_latent_embeddings = self.latent_encoder(latent_embeddings)
 
             return contextual_latent_embeddings, action_embeddings
 
         return jax.vmap(_batched_forward)(
-            timestep_mask,
-            entity_embeddings,
-            entity_mask,
-            action_embeddings,
+            request_count[..., None] >= history_request_count,
+            self._encode_actions(env_step, private_entity_embeddings),
             env_step.legal,
         )

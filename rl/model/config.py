@@ -71,9 +71,10 @@ def get_model_config():
 
     cfg.encoder.entity_encoder = ConfigDict()
     cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.per_timestep_encoder = ConfigDict()
+    cfg.encoder.per_timestep_decoder = ConfigDict()
     cfg.encoder.action_encoder = ConfigDict()
     cfg.encoder.latent_timestep_decoder = ConfigDict()
-    cfg.encoder.latent_entity_decoder = ConfigDict()
     cfg.encoder.latent_action_decoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
 
@@ -123,13 +124,17 @@ def get_model_config():
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
+    set_attributes(cfg.encoder.per_timestep_encoder, **transformer_encoder_kwargs)
+    cfg.encoder.per_timestep_encoder.need_pos = False
+
+    set_attributes(cfg.encoder.per_timestep_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.per_timestep_decoder.need_pos = False
+
     set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
     cfg.encoder.action_encoder.need_pos = False
 
     set_attributes(cfg.encoder.latent_timestep_decoder, **transformer_decoder_kwargs)
     cfg.encoder.latent_timestep_decoder.need_pos = True
-
-    set_attributes(cfg.encoder.latent_entity_decoder, **transformer_decoder_kwargs)
 
     set_attributes(cfg.encoder.latent_action_decoder, **transformer_decoder_kwargs)
 
@@ -147,7 +152,6 @@ def get_model_config():
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
-    cfg.value_head.entity_size = entity_size
     cfg.value_head.dtype = dtype
 
     set_attributes(cfg.value_head.transformer, **transformer_encoder_kwargs)

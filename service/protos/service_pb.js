@@ -775,9 +775,9 @@ proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
     info: msg.getInfo_asB64(),
     legalActions: msg.getLegalActions_asB64(),
-    historyEntities: msg.getHistoryEntities_asB64(),
-    historyAbsoluteEdge: msg.getHistoryAbsoluteEdge_asB64(),
-    historyRelativeEdges: msg.getHistoryRelativeEdges_asB64(),
+    historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
+    historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
+    historyField: msg.getHistoryField_asB64(),
     historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
     moveset: msg.getMoveset_asB64(),
     publicTeam: msg.getPublicTeam_asB64(),
@@ -830,15 +830,15 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntities(value);
+      msg.setHistoryEntityNodes(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryAbsoluteEdge(value);
+      msg.setHistoryEntityEdges(value);
       break;
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryRelativeEdges(value);
+      msg.setHistoryField(value);
       break;
     case 6:
       var value = /** @type {number} */ (reader.readInt32());
@@ -907,21 +907,21 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
       f
     );
   }
-  f = message.getHistoryEntities_asU8();
+  f = message.getHistoryEntityNodes_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       3,
       f
     );
   }
-  f = message.getHistoryAbsoluteEdge_asU8();
+  f = message.getHistoryEntityEdges_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       4,
       f
     );
   }
-  f = message.getHistoryRelativeEdges_asU8();
+  f = message.getHistoryField_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       5,
@@ -1058,35 +1058,35 @@ proto.servicev2.EnvironmentState.prototype.setLegalActions = function(value) {
 
 
 /**
- * optional bytes history_entities = 3;
+ * optional bytes history_entity_nodes = 3;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntities = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityNodes = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
 };
 
 
 /**
- * optional bytes history_entities = 3;
- * This is a type-conversion wrapper around `getHistoryEntities()`
+ * optional bytes history_entity_nodes = 3;
+ * This is a type-conversion wrapper around `getHistoryEntityNodes()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntities_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityNodes_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryEntities()));
+      this.getHistoryEntityNodes()));
 };
 
 
 /**
- * optional bytes history_entities = 3;
+ * optional bytes history_entity_nodes = 3;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryEntities()`
+ * This is a type-conversion wrapper around `getHistoryEntityNodes()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntities_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityNodes_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryEntities()));
+      this.getHistoryEntityNodes()));
 };
 
 
@@ -1094,41 +1094,41 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntities_asU8 = function() 
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryEntities = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityNodes = function(value) {
   return jspb.Message.setProto3BytesField(this, 3, value);
 };
 
 
 /**
- * optional bytes history_absolute_edge = 4;
+ * optional bytes history_entity_edges = 4;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryAbsoluteEdge = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
 };
 
 
 /**
- * optional bytes history_absolute_edge = 4;
- * This is a type-conversion wrapper around `getHistoryAbsoluteEdge()`
+ * optional bytes history_entity_edges = 4;
+ * This is a type-conversion wrapper around `getHistoryEntityEdges()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryAbsoluteEdge_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryAbsoluteEdge()));
+      this.getHistoryEntityEdges()));
 };
 
 
 /**
- * optional bytes history_absolute_edge = 4;
+ * optional bytes history_entity_edges = 4;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryAbsoluteEdge()`
+ * This is a type-conversion wrapper around `getHistoryEntityEdges()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryAbsoluteEdge_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryAbsoluteEdge()));
+      this.getHistoryEntityEdges()));
 };
 
 
@@ -1136,41 +1136,41 @@ proto.servicev2.EnvironmentState.prototype.getHistoryAbsoluteEdge_asU8 = functio
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryAbsoluteEdge = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdges = function(value) {
   return jspb.Message.setProto3BytesField(this, 4, value);
 };
 
 
 /**
- * optional bytes history_relative_edges = 5;
+ * optional bytes history_field = 5;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryRelativeEdges = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryField = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes history_relative_edges = 5;
- * This is a type-conversion wrapper around `getHistoryRelativeEdges()`
+ * optional bytes history_field = 5;
+ * This is a type-conversion wrapper around `getHistoryField()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryRelativeEdges_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryField_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryRelativeEdges()));
+      this.getHistoryField()));
 };
 
 
 /**
- * optional bytes history_relative_edges = 5;
+ * optional bytes history_field = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryRelativeEdges()`
+ * This is a type-conversion wrapper around `getHistoryField()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryRelativeEdges_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryField_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryRelativeEdges()));
+      this.getHistoryField()));
 };
 
 
@@ -1178,7 +1178,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryRelativeEdges_asU8 = functi
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryRelativeEdges = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryField = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
 };
 
