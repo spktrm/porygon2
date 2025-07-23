@@ -18,9 +18,9 @@ class EnvStep(NamedTuple):
 
 
 class HistoryStep(NamedTuple):
-    entities: ArrayLike = ()
-    relative_edges: ArrayLike = ()
-    absolute_edges: ArrayLike = ()
+    nodes: ArrayLike = ()
+    edges: ArrayLike = ()
+    field: ArrayLike = ()
 
 
 class ModelOutput(NamedTuple):

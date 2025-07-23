@@ -139,7 +139,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 def main():
     network = get_model()
-    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
+    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:

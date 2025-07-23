@@ -265,6 +265,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     addLine(line: string) {
+        this.ingestEvent(line);
         try {
             this.privateBattle.add(line);
         } catch (err) {
@@ -273,10 +274,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
         this.publicBattle.add(line);
         this.getPlayerIndex();
-        if (line.startsWith("|start")) {
-            this.eventHandler.reset();
-        }
-        this.ingestEvent(line);
     }
 
     async generateStepRequest(

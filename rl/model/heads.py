@@ -1,6 +1,5 @@
 import chex
 import flax.linen as nn
-import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 

@@ -34,6 +34,15 @@ class RMSNorm(nn.Module):
         return normed_inputs
 
 
+def cosine_similarity(
+    x: chex.Array, y: chex.Array, mask: chex.Array, eps: float = 1e-6
+) -> chex.Array:
+    x_normed = x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + eps)
+    y_normed = y / (jnp.linalg.norm(y, axis=-1, keepdims=True) + eps)
+    similarity = jnp.sum(x_normed * y_normed, axis=-1)
+    return similarity.mean(where=mask, keepdims=True)
+
+
 def activation_fn(array: chex.Array) -> chex.Array:
     """
     Apply activation function.

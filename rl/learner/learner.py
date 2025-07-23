@@ -41,7 +41,6 @@ class TrainState(train_state.TrainState):
 
 def create_train_state(module: nn.Module, rng: PRNGKey, config: MMDConfig):
     """Creates an initial `TrainState`."""
-    ts = get_ex_step()
     ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
     params = module.init(rng, ts)
@@ -281,8 +280,9 @@ class Learner:
 
     def update_params_for_actor(self):
         """Updates the parameters for the actor."""
-        self.params_for_actor = int(self.state.num_steps), jax.device_get(
-            self.state.params
+        self.params_for_actor = (
+            int(self.state.num_steps),
+            jax.device_get(self.state.params),
         )
 
     def train(self):
