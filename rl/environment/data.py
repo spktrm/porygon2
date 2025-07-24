@@ -32,7 +32,7 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
 
-with open(os.path.join(os.path.dirname(__file__), "ex"), "rb") as f:
+with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
     EX_BUFFER = f.read()
 
 EX_STATE = EnvironmentState.FromString(EX_BUFFER)
