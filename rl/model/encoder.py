@@ -16,13 +16,16 @@ from rl.environment.data import (
     ENTITY_NODE_MAX_VALUES,
     FIELD_MAX_VALUES,
     MAX_RATIO_TOKEN,
+    NUM_ABILITIES,
     NUM_FROM_SOURCE_EFFECTS,
+    NUM_ITEMS,
     NUM_MOVES,
+    NUM_SPECIES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
-    ActionsEnum,
+    BattlemajorargsEnum,
     EffectEnum,
     ItemsEnum,
     MovesEnum,
@@ -39,11 +42,9 @@ from rl.model.modules import (
     FeedForwardResidual,
     MergeEmbeddings,
     PretrainedEmbedding,
-    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
-    cosine_similarity,
     one_hot_concat_jax,
 )
 
@@ -56,19 +57,6 @@ ABILITY_ONEHOT = PretrainedEmbedding(
 )
 ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy", dtype=jnp.bfloat16)
 MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bfloat16)
-
-
-def get_move_mask(move: chex.Array) -> chex.Array:
-    """
-    Generate a mask to filter valid moves based on move identifiers.
-    """
-    action_id_token = move[MovesetFeature.MOVESET_FEATURE__ACTION_ID].astype(jnp.int32)
-    return ~(
-        (action_id_token == ActionsEnum.ACTIONS_ENUM__MOVE__NULL)
-        | (action_id_token == ActionsEnum.ACTIONS_ENUM__SWITCH__NULL)
-        | (action_id_token == ActionsEnum.ACTIONS_ENUM__MOVE__PAD)
-        | (action_id_token == ActionsEnum.ACTIONS_ENUM__SWITCH__PAD)
-    )
 
 
 def _binary_scale_encoding(to_encode: chex.Array, world_dim: int) -> chex.Array:
@@ -178,21 +166,12 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
     """
     Generate a mask to identify valid entities based on species tokens.
     """
-    species_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES].astype(
-        jnp.int32
-    )
+    species_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES]
     return ~(
         (species_token == SpeciesEnum.SPECIES_ENUM___NULL)
         | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
         | (species_token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
     )
-
-
-def get_edge_mask(edge: chex.Array) -> chex.Array:
-    """
-    Generate a mask for edges based on their validity tokens.
-    """
-    return edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.int32)
 
 
 class Encoder(nn.Module):
@@ -210,6 +189,18 @@ class Encoder(nn.Module):
         embed_kwargs = dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         # Initialize embeddings for various entities and features.
+        self.species_embedding = nn.Embed(
+            num_embeddings=NUM_SPECIES, name="species_embedding", **embed_kwargs
+        )
+        self.items_embedding = nn.Embed(
+            num_embeddings=NUM_ITEMS, name="items_embedding", **embed_kwargs
+        )
+        self.abilities_embedding = nn.Embed(
+            num_embeddings=NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
+        )
+        self.moves_embedding = nn.Embed(
+            num_embeddings=NUM_MOVES, name="moves_embedding", **embed_kwargs
+        )
         self.effect_from_source_embedding = nn.Embed(
             num_embeddings=NUM_FROM_SOURCE_EFFECTS,
             name="effect_from_source_embedding",
@@ -222,18 +213,15 @@ class Encoder(nn.Module):
         self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
         self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
 
-        # layer norm for entity action
-        self.private_entity_ln = RMSNorm(dtype=self.cfg.dtype)
-
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="entity_sum"
+            output_size=entity_size, dtype=self.cfg.dtype, name="entity_node_sum"
         )
-        self.relative_edge_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="relative_edge_sum"
+        self.entity_edge_sum = SumEmbeddings(
+            output_size=entity_size, dtype=self.cfg.dtype, name="entity_edge_sum"
         )
-        self.absolute_edge_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="absolute_edge_sum"
+        self.field_sum = SumEmbeddings(
+            output_size=entity_size, dtype=self.cfg.dtype, name="field_sum"
         )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
@@ -255,11 +243,11 @@ class Encoder(nn.Module):
 
         # Transformer encoders for processing sequences of entities and edges.
         self.entity_encoder = TransformerEncoder(**self.cfg.entity_encoder.to_dict())
-        self.per_timestep_encoder = TransformerEncoder(
-            **self.cfg.per_timestep_encoder.to_dict()
+        self.per_timestep_node_encoder = TransformerEncoder(
+            **self.cfg.per_timestep_node_encoder.to_dict()
         )
-        self.per_timestep_decoder = TransformerDecoder(
-            **self.cfg.per_timestep_decoder.to_dict()
+        self.per_timestep_node_edge_encoder = TransformerEncoder(
+            **self.cfg.per_timestep_node_edge_encoder.to_dict()
         )
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
@@ -271,9 +259,9 @@ class Encoder(nn.Module):
         self.latent_timestep_decoder = TransformerDecoder(
             **self.cfg.latent_timestep_decoder.to_dict()
         )
-        # self.latent_entity_decoder = TransformerDecoder(
-        #     **self.cfg.latent_entity_decoder.to_dict()
-        # )
+        self.latent_entity_decoder = TransformerDecoder(
+            **self.cfg.latent_entity_decoder.to_dict()
+        )
         self.latent_action_decoder = TransformerDecoder(
             **self.cfg.latent_action_decoder.to_dict()
         )
@@ -287,34 +275,49 @@ class Encoder(nn.Module):
 
     def _encode_species(self, token: chex.Array):
         return jnp.where(
-            token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED,
+            (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
+            | (token == SpeciesEnum.SPECIES_ENUM___PAD)
+            | (token == SpeciesEnum.SPECIES_ENUM___NULL),
             0,
-            self.species_linear(SPECIES_ONEHOT(token)),
+            self.species_linear(SPECIES_ONEHOT(token)) + self.species_embedding(token),
         )
 
     def _encode_item(self, token: chex.Array):
         return jnp.where(
-            token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED,
+            (token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
+            | (token == ItemsEnum.ITEMS_ENUM___PAD)
+            | (token == ItemsEnum.ITEMS_ENUM___NULL),
             0,
-            self.items_linear(ITEM_ONEHOT(token)),
+            self.items_linear(ITEM_ONEHOT(token)) + self.items_embedding(token),
         )
 
     def _encode_ability(self, token: chex.Array):
         return jnp.where(
-            token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED,
+            (token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
+            | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
+            | (token == AbilitiesEnum.ABILITIES_ENUM___NULL),
             0,
-            self.abilities_linear(ABILITY_ONEHOT(token)),
+            self.abilities_linear(ABILITY_ONEHOT(token))
+            + self.abilities_embedding(token),
         )
 
     def _encode_move(self, token: chex.Array):
         return jnp.where(
-            token == MovesEnum.MOVES_ENUM___UNSPECIFIED,
+            (token == MovesEnum.MOVES_ENUM___UNSPECIFIED)
+            | (token == MovesEnum.MOVES_ENUM___PAD)
+            | (token == MovesEnum.MOVES_ENUM___NULL),
             0,
-            self.moves_linear(MOVE_ONEHOT(token)),
+            self.moves_linear(MOVE_ONEHOT(token)) + self.moves_embedding(token),
         )
 
     def _encode_effect_from_source(self, token: chex.Array):
-        return self.effect_from_source_embedding(token)
+        return jnp.where(
+            (token == EffectEnum.EFFECT_ENUM___UNSPECIFIED)
+            | (token == EffectEnum.EFFECT_ENUM___PAD)
+            | (token == EffectEnum.EFFECT_ENUM___NULL),
+            0,
+            self.effect_from_source_embedding(token),
+        )
 
     def _encode_entity(self, entity: chex.Array):
         # Encode volatile and type-change indices using the binary encoder.
@@ -474,7 +477,7 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _encode_edge(self, edge: chex.Array) -> chex.Array:
+    def _encode_edge(self, edge: chex.Array):
         _encode_hex = jax.vmap(
             functools.partial(_binary_scale_encoding, world_dim=65535)
         )
@@ -550,18 +553,13 @@ class Encoder(nn.Module):
         effect_from_source_embeddings = jax.vmap(self._encode_effect_from_source)(
             effect_from_source_tokens
         )
-        effect_from_source_mask = (
-            effect_from_source_tokens != EffectEnum.EFFECT_ENUM___UNSPECIFIED
-        ) & (effect_from_source_tokens != EffectEnum.EFFECT_ENUM___NULL)
-        effect_from_source_embedding = jnp.where(
-            effect_from_source_mask[..., None], effect_from_source_embeddings, 0
-        ).sum(axis=0)
+        effect_from_source_embedding = effect_from_source_embeddings.sum(axis=0)
 
         ability_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN]
         move_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
 
-        embedding = self.relative_edge_sum(
+        embedding = self.entity_edge_sum(
             minor_args_encoding,
             boolean_code,
             self._encode_ability(ability_token),
@@ -570,7 +568,12 @@ class Encoder(nn.Module):
             effect_from_source_embedding,
         )
 
-        return embedding
+        mask = (
+            edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
+            != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
+        ) | (minor_args_indices.sum(axis=-1) > 0)
+
+        return embedding, mask
 
     def _encode_field(self, edge: chex.Array):
         """
@@ -655,7 +658,7 @@ class Encoder(nn.Module):
             ]
         )
 
-        embedding = self.absolute_edge_sum(
+        embedding = self.field_sum(
             boolean_code,
             my_side_condition_encoding,
             opp_side_condition_encoding,
@@ -666,7 +669,7 @@ class Encoder(nn.Module):
         )
 
         # Apply mask to filter out invalid edges.
-        mask = get_edge_mask(edge)
+        mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
         request_count = jnp.where(mask, request_count, 1e9)
 
         return embedding, mask, request_count
@@ -681,29 +684,30 @@ class Encoder(nn.Module):
         history_node_embedding, node_mask = jax.vmap(self._encode_entity)(history.nodes)
 
         # Encode edges.
-        history_edge_embedding = jax.vmap(self._encode_edge)(history.edges)
+        history_edge_embedding, edge_mask = jax.vmap(self._encode_edge)(history.edges)
 
         # Encode field
         field_embedding, valid_timestep_mask, history_request_count = (
             self._encode_field(history.field)
         )
 
-        state_action_embedding = history_node_embedding + history_edge_embedding
-        contextual_state_action_embeddings = self.per_timestep_encoder(
-            state_action_embedding, node_mask
-        )
-        pooled_embedding = self.per_timestep_decoder(
-            contextual_state_action_embeddings.mean(axis=0, keepdims=True),
-            contextual_state_action_embeddings,
-            None,
-            node_mask,
+        contextual_history_nodes = self.per_timestep_node_encoder(
+            history_node_embedding, node_mask
         )
 
-        timestep_embedding = pooled_embedding.squeeze(0) + field_embedding
+        node_edge_mask = node_mask & edge_mask
+        contextual_history_nodes = self.per_timestep_node_edge_encoder(
+            contextual_history_nodes + history_edge_embedding, node_edge_mask
+        )
+
+        timestep_embedding = (
+            node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
+            + field_embedding
+        )
 
         return (
             timestep_embedding,
-            valid_timestep_mask,
+            valid_timestep_mask & edge_mask.any(),
             history_request_count,
         )
 
@@ -715,13 +719,18 @@ class Encoder(nn.Module):
 
         def _batched_fn(encodings: jax.Array):
             embeddings, mask = encode_entities(encodings)
-            embeddings = self.entity_ff(embeddings)
-            return self.entity_encoder(embeddings, mask)
+            return (
+                embeddings,
+                self.entity_encoder(self.entity_ff(embeddings), mask),
+                mask,
+            )
 
-        entity_embeddings = jax.vmap(_batched_fn)(entity_encodings)
+        entity_embeddings, contextual_entity_embeddings, entity_mask = jax.vmap(
+            _batched_fn
+        )(entity_encodings)
+        private_entity_embeddings = entity_embeddings[:, :6]
 
-        private_entity_embeddings = self.private_entity_ln(entity_embeddings[:, :6])
-        return private_entity_embeddings
+        return private_entity_embeddings, contextual_entity_embeddings, entity_mask
 
     def _encode_timesteps(self, history: HistoryStep):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
@@ -807,35 +816,51 @@ class Encoder(nn.Module):
         Forward pass of the Encoder model. Processes an environment step and outputs
         contextual embeddings for actions.
         """
-        private_entity_embeddings = self._encode_entities(env_step)
+        private_entity_embeddings, contextual_entity_embeddings, entity_mask = (
+            self._encode_entities(env_step)
+        )
 
         timestep_embeddings, history_request_count = self._encode_timesteps(
             history_step
         )
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        timestep_mask = request_count[..., None] >= history_request_count
+
+        contextual_action_embeddings = self._encode_actions(
+            env_step, private_entity_embeddings
+        )
+        action_mask = env_step.legal
 
         def _batched_forward(
             timestep_mask: jax.Array,
+            entity_embeddings: jax.Array,
+            entity_mask: jax.Array,
             action_embeddings: jax.Array,
-            legal_mask: jax.Array,
+            action_mask: jax.Array,
         ):
             latent_timesteps = self.latent_timestep_decoder(
                 self.latent_embeddings, timestep_embeddings, None, timestep_mask
             )
-
+            latent_entities = self.latent_entity_decoder(
+                self.latent_embeddings, entity_embeddings, None, entity_mask
+            )
             latent_actions = self.latent_action_decoder(
-                self.latent_embeddings, action_embeddings, None, legal_mask
+                self.latent_embeddings, action_embeddings, None, action_mask
             )
 
             latent_embeddings = jax.vmap(self.latent_merge)(
-                latent_timesteps, latent_actions
+                latent_timesteps, latent_entities, latent_actions
             )
             contextual_latent_embeddings = self.latent_encoder(latent_embeddings)
 
-            return contextual_latent_embeddings, action_embeddings
+            return contextual_latent_embeddings
 
-        return jax.vmap(_batched_forward)(
-            request_count[..., None] >= history_request_count,
-            self._encode_actions(env_step, private_entity_embeddings),
-            env_step.legal,
+        contextual_latent_embeddings = jax.vmap(_batched_forward)(
+            timestep_mask,
+            contextual_entity_embeddings,
+            entity_mask,
+            contextual_action_embeddings,
+            action_mask,
         )
+
+        return contextual_latent_embeddings, contextual_action_embeddings

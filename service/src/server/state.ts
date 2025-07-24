@@ -266,7 +266,7 @@ const WEATHERS = {
     sun: "sunnyday",
     rain: "raindance",
     hail: "hail",
-    snow: "snow",
+    snowscape: "snowscape",
     harshsunshine: "desolateland",
     heavyrain: "primordialsea",
     strongwinds: "deltastream",
@@ -793,6 +793,13 @@ class Edge {
         return this.entityEdgeData.at(index);
     }
 
+    getFieldFeature(args: {
+        featureIndex: FieldFeatureMap[keyof FieldFeatureMap];
+    }) {
+        const { featureIndex } = args;
+        return this.fieldData[featureIndex];
+    }
+
     addMajorArg(args: { argName: MajorArgNames; edgeIndex: number }) {
         const { argName, edgeIndex } = args;
         const index = IndexValueFromEnum(BattlemajorargsEnum, argName);
@@ -1001,6 +1008,14 @@ export class EdgeBuffer {
         }
         const index = this.prevFieldCursor + featureIndex;
         this.fieldData[index] = value;
+    }
+
+    getLatestFieldFeature(args: {
+        featureIndex: FieldFeatureMap[keyof FieldFeatureMap];
+    }) {
+        const { featureIndex } = args;
+        const index = this.prevFieldCursor + featureIndex;
+        return this.fieldData[index];
     }
 
     updateLatestEdgeFromOf(args: {
@@ -1227,6 +1242,10 @@ export class EventHandler implements Protocol.Handler {
                     }
                 }
             }
+            return {
+                pokemon: null,
+                index: this.identToIndex.get(parsedPokemonid) ?? -1,
+            };
         } else {
             const { siden, pokemonid: parsedPokemonid } =
                 this.player.privateBattle.parsePokemonId(pokemonid);
@@ -1236,9 +1255,8 @@ export class EventHandler implements Protocol.Handler {
                     return { pokemon, index };
                 }
             }
+            return { pokemon: null, index: -1 };
         }
-
-        return { pokemon: null, index: -1 };
     }
 
     getMove(ident?: string) {
@@ -1368,19 +1386,17 @@ export class EventHandler implements Protocol.Handler {
         const { index: edgeIndex } = this.getPokemon(poke1Ident)!;
         const edge = new Edge(this.player);
 
-        if (edgeIndex >= 0) {
-            edge.addMajorArg({ argName, edgeIndex });
-            edge.setEntityEdgeFeature({
-                edgeIndex,
-                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
-                value: MovesEnum.MOVES_ENUM___SWITCH,
-            });
-            if (argName === "switch") {
-                const from = (kwArgs as KWArgs["|switch|"]).from;
-                if (from) {
-                    const fromEffect = this.getCondition(from);
-                    edge.updateEdgeFromOf({ effect: fromEffect, edgeIndex });
-                }
+        edge.addMajorArg({ argName, edgeIndex });
+        edge.setEntityEdgeFeature({
+            edgeIndex,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
+            value: MovesEnum.MOVES_ENUM___SWITCH,
+        });
+        if (argName === "switch") {
+            const from = (kwArgs as KWArgs["|switch|"]).from;
+            if (from) {
+                const effect = this.getCondition(from);
+                edge.updateEdgeFromOf({ effect, edgeIndex });
             }
         }
         this.addEdge(edge);
@@ -1492,15 +1508,19 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { index: edgeIndex } = this.getPokemon(poke1Ident ?? poke2Ident)!;
-
-        const effect = this.getCondition(kwArgs.from);
-
-        this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
-        this.edgeBuffer.updateLatestEdgeFromOf({
-            effect,
-            edgeIndex,
-        });
+        const idents = [poke1Ident];
+        if (poke2Ident !== undefined) {
+            idents.push(poke2Ident);
+        }
+        for (const ident of idents) {
+            const { index: edgeIndex } = this.getPokemon(ident)!;
+            const effect = this.getCondition(kwArgs.from);
+            this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
+            this.edgeBuffer.updateLatestEdgeFromOf({
+                effect,
+                edgeIndex,
+            });
+        }
     }
 
     "|-damage|"(
@@ -1861,7 +1881,8 @@ export class EventHandler implements Protocol.Handler {
         const effect = this.getCondition(conditionId);
 
         for (const pokemon of side.team) {
-            const { index: edgeIndex } = this.getPokemon(pokemon.originalIdent);
+            const ident = pokemon.originalIdent;
+            const { index: edgeIndex } = this.getPokemon(ident);
             this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
             this.edgeBuffer.updateLatestEdgeFromOf({ effect, edgeIndex });
         }
@@ -1879,7 +1900,8 @@ export class EventHandler implements Protocol.Handler {
         const effect = this.getCondition(conditionId);
 
         for (const pokemon of side.team) {
-            const { index: edgeIndex } = this.getPokemon(pokemon.originalIdent);
+            const ident = pokemon.originalIdent;
+            const { index: edgeIndex } = this.getPokemon(ident);
             this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
             this.edgeBuffer.updateLatestEdgeFromOf({ effect, edgeIndex });
         }

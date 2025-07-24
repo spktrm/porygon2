@@ -12,7 +12,6 @@ from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
 from rl.utils import init_jax_jit_cache
 
-
 app = FastAPI()
 init_jax_jit_cache()
 
