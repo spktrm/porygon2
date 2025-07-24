@@ -2,6 +2,7 @@ import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
 import { EdgeBuffer } from "../server/state";
+import { OneDBoolean } from "../server/utils";
 
 async function playerController(player: TrainablePlayerAI) {
     while (true) {
@@ -25,7 +26,16 @@ async function playerController(player: TrainablePlayerAI) {
             // A request is pending, so we need to choose an action.
 
             const stepRequest = new StepRequest();
-            stepRequest.setAction(-1);
+
+            const legalActions = new OneDBoolean(10);
+            legalActions.setBuffer(state.getLegalActions_asU8());
+            const legalIndices = legalActions
+                .toBinaryVector()
+                .flatMap((value, index) => (value > 0 ? [index] : []));
+            const randomIndex =
+                legalIndices[Math.floor(Math.random() * legalIndices.length)];
+
+            stepRequest.setAction(randomIndex);
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         } catch (error) {

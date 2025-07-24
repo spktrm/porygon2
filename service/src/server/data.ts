@@ -2,7 +2,6 @@ import * as fs from "fs";
 
 import {
     AbilitiesEnumMap,
-    ActionsEnumMap,
     BattlemajorargsEnum,
     BattlemajorargsEnumMap,
     BattleminorargsEnum,
@@ -42,7 +41,6 @@ export type EnumMappings =
     | SpeciesEnumMap
     | ItemsEnumMap
     | StatusEnumMap
-    | ActionsEnumMap
     | TypechartEnumMap
     | ItemeffecttypesEnumMap
     | LastitemeffecttypesEnumMap

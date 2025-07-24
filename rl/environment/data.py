@@ -4,7 +4,6 @@ import jax.numpy as jnp
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
-    ActionsEnum,
     BattlemajorargsEnum,
     BattleminorargsEnum,
     BoostsEnum,
@@ -51,7 +50,6 @@ NUM_TERRAIN = len(TerrainEnum.keys())
 NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
 NUM_FROM_SOURCE_EFFECTS = len(EffectEnum.keys())
-NUM_ACTIONS = len(ActionsEnum.keys())
 NUM_ACTION_TYPES = len(MovesetActionTypeEnum.keys())
 NUM_HAS_PP = len(MovesetHasPPEnum.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
@@ -157,6 +155,3 @@ ACTION_MAX_VALUES = {
     MovesetFeature.MOVESET_FEATURE__PP: 64,
     MovesetFeature.MOVESET_FEATURE__MAXPP: 64,
 }
-
-
-ACTION_STRINGS = {v: k[8:] for k, v in ActionsEnum.items()}

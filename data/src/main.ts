@@ -579,22 +579,25 @@ async function scrapeRepo() {
 
     data["Effect"] = standardize(
         [
+            // ...genData.species.map((x) => x.id),
             ...genData.abilities.map((x) => x.id),
             ...genData.items.map((x) => x.id),
             ...genData.moves.map((x) => x.id),
             ...keywords.status,
             ...keywords.weather,
             ...conditions,
+            // ...EXTRA_TOKENS.flatMap((x) => [
+            //     x + "_species",
+            //     x + "_ability",
+            //     x + "_item",
+            //     x + "_move",
+            //     x + "_status",
+            //     x + "_weather",
+            //     x + "_condition",
+            // ]),
         ],
         EXTRA_TOKENS,
     );
-
-    data["Actions"] = standardize([
-        ...[...genFormatData.species, ...EXTRA_TOKENS].map(
-            (x) => `switch_${x}`,
-        ),
-        ...[...genFormatData.moves, ...EXTRA_TOKENS].map((x) => `move_${x}`),
-    ]);
 
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,

@@ -12,7 +12,7 @@ class AdamConfig:
 
 @chex.dataclass(frozen=True)
 class MMDConfig:
-    num_steps = 10_000_000
+    num_steps = 1_000_000
     num_actors: int = 32
     unroll_length: int = 108
     replay_buffer_capacity: int = 16
@@ -23,7 +23,7 @@ class MMDConfig:
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-8)
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 3e-5
     clip_gradient: float = 2.0
     tau: float = 1e-3
 

@@ -1,7 +1,7 @@
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
 
-function getRandomOneIndex(arr: number[]): number {
+export function getRandomOneIndex(arr: number[]): number {
     // Collect indices where the element is 1
     const oneIndices: number[] = [];
 

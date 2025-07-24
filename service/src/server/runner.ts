@@ -20,7 +20,7 @@ import { isBaselineUser, TaskQueueSystem } from "./utils";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
-const formatid = "gen3randombattle";
+const formatid = "gen3ou";
 
 interface Queue<T> {
     enqueue(item: T): void;
@@ -440,11 +440,11 @@ export function createBattle(
 
     const p1spec = {
         name: p1Name,
-        team: Teams.pack(Teams.generate(formatid)),
+        team: Teams.pack(Teams.generate("gen3randombattle")),
     };
     const p2spec = {
         name: p2Name,
-        team: Teams.pack(Teams.generate(formatid)),
+        team: Teams.pack(Teams.generate("gen3randombattle")),
     };
 
     const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);

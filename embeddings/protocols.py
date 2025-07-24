@@ -57,7 +57,7 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "nfe",
             # "tier",
             "maxHP",
@@ -100,7 +100,7 @@ MOVES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "category",
             "priority",
             "type",
@@ -229,7 +229,7 @@ ITEMS_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "affectsFainted",
             "itemUser",
         ]
@@ -287,7 +287,7 @@ ABILITIES_PROTOCOLS: List[Protocol] = [
             "feature_type": FeatureType.CATEGORICAL,
         }
         for stat_feature in [
-            "id",
+            # "id",
             "suppressWeather",
             "affectsFainted",
             "rating",
