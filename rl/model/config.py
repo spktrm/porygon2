@@ -54,7 +54,7 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 def get_model_config():
     cfg = ConfigDict()
 
-    num_heads = 6
+    num_heads = 3
     entity_size = 64 * num_heads
     num_latents = 8 * num_heads
     dtype = jnp.bfloat16
@@ -145,7 +145,8 @@ def get_model_config():
 
     cfg.encoder.latent_encoder = ConfigDict()
     set_attributes(cfg.encoder.latent_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.latent_encoder.num_layers = 3
+    cfg.encoder.latent_encoder.resblocks_hidden_size = 4 * entity_size
+    cfg.encoder.latent_encoder.num_layers = 2
     cfg.encoder.latent_encoder.need_pos = False
 
     # Policy Head Configuration

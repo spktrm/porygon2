@@ -14,7 +14,6 @@ from rl.environment.interfaces import EnvStep, ModelOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
-from rl.model.func import legal_log_policy, legal_policy
 from rl.model.heads import PolicyHead, ValueHead
 from rl.model.utils import Params, get_most_recent_file
 
@@ -35,7 +34,7 @@ class Porygon2Model(nn.Module):
         latent_embeddings: jax.Array,
         action_embeddings: jax.Array,
         legal: jax.Array,
-        temp: float = 2.0,
+        temp: float = 1.0,
     ):
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(
@@ -48,7 +47,7 @@ class Porygon2Model(nn.Module):
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
-    def __call__(self, timestep: TimeStep, temp: float = 2.0):
+    def __call__(self, timestep: TimeStep, temp: float = 1.0):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -72,8 +71,8 @@ class DummyModel(nn.Module):
             v = jnp.tanh(nn.Dense(1)(mask))
             logit = nn.Dense(mask.shape[-1])(mask)
             masked_logits = jnp.where(mask, logit, -1e30)
-            pi = legal_policy(logit, env_step.legal)
-            log_pi = legal_log_policy(logit, env_step.legal)
+            pi = nn.softmax(logit, where=env_step.legal)
+            log_pi = nn.log_softmax(logit, where=env_step.legal)
             return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
 
         return jax.vmap(_forward)(timestep.env)

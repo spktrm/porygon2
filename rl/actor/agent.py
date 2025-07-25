@@ -10,6 +10,12 @@ from rl.environment.interfaces import ActorStep, ModelOutput, TimeStep
 from rl.model.utils import Params
 
 
+def threshold_policy(pi: jax.Array, threshold: float = 0.03) -> jax.Array:
+    """Thresholds the policy for evaluation."""
+    thresholded_pi = jnp.where(pi < threshold, 0.0, pi)
+    return thresholded_pi / jnp.sum(thresholded_pi, axis=-1, keepdims=True)
+
+
 class Agent:
     """A stateless agent interface."""
 
@@ -45,8 +51,3 @@ class Agent:
             rng_key, np.arange(10), shape=(1,), p=model_output.pi
         ).squeeze()
         return ActorStep(action=action, model_output=model_output)
-
-    def unroll(self, params: Params, trajectory: TimeStep) -> ActorStep:
-        """Unroll the agent along trajectory."""
-        model_output = self._apply_fn(params, trajectory)
-        return ActorStep(model_output=model_output)

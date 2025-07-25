@@ -20,7 +20,7 @@ class PolicyHead(nn.Module):
         latent_embeddings: chex.Array,
         action_embeddings: chex.Array,
         action_mask: chex.Array,
-        temp: float = 2,
+        temp: float = 1.0,
     ):
         action_embeddings = self.decoder(
             action_embeddings, latent_embeddings, action_mask, None
