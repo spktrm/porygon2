@@ -1,7 +1,7 @@
 import functools
 import math
 from functools import partial
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Tuple
 
 import chex
 import flax.linen as nn
@@ -16,11 +16,8 @@ from rl.environment.data import (
     ENTITY_NODE_MAX_VALUES,
     FIELD_MAX_VALUES,
     MAX_RATIO_TOKEN,
-    NUM_ABILITIES,
     NUM_FROM_SOURCE_EFFECTS,
-    NUM_ITEMS,
     NUM_MOVES,
-    NUM_SPECIES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep
 from rl.environment.protos.enums_pb2 import (
@@ -59,7 +56,9 @@ ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy", dtype=jnp.bf
 MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bfloat16)
 
 
-def _binary_scale_encoding(to_encode: chex.Array, world_dim: int) -> chex.Array:
+def _binary_scale_encoding(
+    to_encode: chex.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
+) -> chex.Array:
     """Encode the feature using its binary representation."""
     chex.assert_rank(to_encode, 0)
     chex.assert_type(to_encode, jnp.int32)
@@ -67,7 +66,7 @@ def _binary_scale_encoding(to_encode: chex.Array, world_dim: int) -> chex.Array:
     bit_mask = 1 << np.arange(num_bits)
     pos = jnp.broadcast_to(to_encode[jnp.newaxis], num_bits)
     result = jnp.not_equal(jnp.bitwise_and(pos, bit_mask), 0)
-    return result.astype(jnp.float32)
+    return result.astype(dtype)
 
 
 def _encode_one_hot(
@@ -91,13 +90,16 @@ def _encode_capped_one_hot(
 
 
 def _encode_sqrt_one_hot(
-    entity: chex.Array, feature_idx: int, max_values: Dict[int, int]
+    entity: chex.Array,
+    feature_idx: int,
+    max_values: Dict[int, int],
+    dtype: jnp.dtype = jnp.int32,
 ) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
     max_sqrt_value = int(math.floor(math.sqrt(max_value)))
-    x = jnp.floor(jnp.sqrt(entity[feature_idx].astype(jnp.float32)))
+    x = jnp.floor(jnp.sqrt(entity[feature_idx].astype(dtype)))
     x = jnp.minimum(x.astype(jnp.int32), max_sqrt_value)
     return x, max_sqrt_value + 1
 
@@ -112,34 +114,6 @@ def _encode_divided_one_hot(
     x = jnp.floor_divide(entity[feature_idx], divisor)
     x = jnp.minimum(x, max_divided_value)
     return x, max_divided_value + 1
-
-
-def _features_embedding(
-    raw_unit: chex.Array, rescales: Mapping[int, float]
-) -> chex.Array:
-    """Select features in `rescales`, rescale and concatenate them."""
-    chex.assert_rank(raw_unit, 1)
-    chex.assert_type(raw_unit, jnp.int32)
-    assert rescales
-    selected_features = []
-    feature_indices = sorted(rescales.keys())
-    i_min = 0
-    while i_min < len(feature_indices):
-        i_max = i_min
-        while (i_max < len(feature_indices) - 1) and (
-            feature_indices[i_max + 1] == feature_indices[i_max] + 1
-        ):
-            i_max += 1
-        consecutive_features = raw_unit[
-            feature_indices[i_min] : feature_indices[i_max] + 1
-        ]
-        consecutive_rescales = jnp.asarray(
-            [rescales[feature_indices[i]] for i in range(i_min, i_max + 1)], jnp.float32
-        )
-        i_min = i_max + 1
-        rescaled_features = jnp.multiply(consecutive_features, consecutive_rescales)
-        selected_features.append(rescaled_features)
-    return jnp.concatenate(selected_features, axis=0).astype(jnp.float32)
 
 
 _encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_NODE_MAX_VALUES)
@@ -189,18 +163,7 @@ class Encoder(nn.Module):
         embed_kwargs = dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         # Initialize embeddings for various entities and features.
-        self.species_embedding = nn.Embed(
-            num_embeddings=NUM_SPECIES, name="species_embedding", **embed_kwargs
-        )
-        self.items_embedding = nn.Embed(
-            num_embeddings=NUM_ITEMS, name="items_embedding", **embed_kwargs
-        )
-        self.abilities_embedding = nn.Embed(
-            num_embeddings=NUM_ABILITIES, name="abilities_embedding", **embed_kwargs
-        )
-        self.moves_embedding = nn.Embed(
-            num_embeddings=NUM_MOVES, name="moves_embedding", **embed_kwargs
-        )
+
         self.effect_from_source_embedding = nn.Embed(
             num_embeddings=NUM_FROM_SOURCE_EFFECTS,
             name="effect_from_source_embedding",
@@ -274,50 +237,36 @@ class Encoder(nn.Module):
         )
 
     def _encode_species(self, token: chex.Array):
-        return jnp.where(
+        mask = ~(
             (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
             | (token == SpeciesEnum.SPECIES_ENUM___PAD)
-            | (token == SpeciesEnum.SPECIES_ENUM___NULL),
-            0,
-            self.species_linear(SPECIES_ONEHOT(token)) + self.species_embedding(token),
+            | (token == SpeciesEnum.SPECIES_ENUM___NULL)
         )
+        return mask * self.species_linear(SPECIES_ONEHOT(token))
 
     def _encode_item(self, token: chex.Array):
-        return jnp.where(
+        mask = ~(
             (token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
             | (token == ItemsEnum.ITEMS_ENUM___PAD)
-            | (token == ItemsEnum.ITEMS_ENUM___NULL),
-            0,
-            self.items_linear(ITEM_ONEHOT(token)) + self.items_embedding(token),
+            | (token == ItemsEnum.ITEMS_ENUM___NULL)
         )
+        return mask * self.items_linear(ITEM_ONEHOT(token))
 
     def _encode_ability(self, token: chex.Array):
-        return jnp.where(
+        mask = ~(
             (token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
             | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
-            | (token == AbilitiesEnum.ABILITIES_ENUM___NULL),
-            0,
-            self.abilities_linear(ABILITY_ONEHOT(token))
-            + self.abilities_embedding(token),
+            | (token == AbilitiesEnum.ABILITIES_ENUM___NULL)
         )
+        return mask * self.abilities_linear(ABILITY_ONEHOT(token))
 
     def _encode_move(self, token: chex.Array):
-        return jnp.where(
+        mask = ~(
             (token == MovesEnum.MOVES_ENUM___UNSPECIFIED)
             | (token == MovesEnum.MOVES_ENUM___PAD)
-            | (token == MovesEnum.MOVES_ENUM___NULL),
-            0,
-            self.moves_linear(MOVE_ONEHOT(token)) + self.moves_embedding(token),
+            | (token == MovesEnum.MOVES_ENUM___NULL)
         )
-
-    def _encode_effect_from_source(self, token: chex.Array):
-        return jnp.where(
-            (token == EffectEnum.EFFECT_ENUM___UNSPECIFIED)
-            | (token == EffectEnum.EFFECT_ENUM___PAD)
-            | (token == EffectEnum.EFFECT_ENUM___NULL),
-            0,
-            self.effect_from_source_embedding(token),
-        )
+        return mask * self.moves_linear(MOVE_ONEHOT(token))
 
     def _encode_entity(self, entity: chex.Array):
         # Encode volatile and type-change indices using the binary encoder.
@@ -356,7 +305,9 @@ class Encoder(nn.Module):
         boolean_code = one_hot_concat_jax(
             [
                 _encode_sqrt_one_hot_entity(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL
+                    entity,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL,
+                    dtype=self.cfg.dtype,
                 ),
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE
@@ -473,13 +424,15 @@ class Encoder(nn.Module):
 
         # Apply mask to filter out invalid entities.
         mask = get_entity_mask(entity)
-        embedding = jnp.where(mask, embedding, 0)
+        embedding = mask * embedding
 
         return embedding, mask
 
     def _encode_edge(self, edge: chex.Array):
         _encode_hex = jax.vmap(
-            functools.partial(_binary_scale_encoding, world_dim=65535)
+            functools.partial(
+                _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
+            )
         )
 
         minor_args_indices = edge[
@@ -550,10 +503,17 @@ class Encoder(nn.Module):
             ]
         )
         effect_from_source_tokens = edge[effect_from_source_indices]
-        effect_from_source_embeddings = jax.vmap(self._encode_effect_from_source)(
+        effect_from_source_mask = ~(
+            (effect_from_source_tokens == EffectEnum.EFFECT_ENUM___UNSPECIFIED)
+            | (effect_from_source_tokens == EffectEnum.EFFECT_ENUM___PAD)
+            | (effect_from_source_tokens == EffectEnum.EFFECT_ENUM___NULL)
+        )
+        effect_from_source_embeddings = self.effect_from_source_embedding(
             effect_from_source_tokens
         )
-        effect_from_source_embedding = effect_from_source_embeddings.sum(axis=0)
+        effect_from_source_embedding = effect_from_source_embeddings.sum(
+            axis=0, where=effect_from_source_mask[..., None]
+        )
 
         ability_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN]
@@ -584,7 +544,9 @@ class Encoder(nn.Module):
         request_count = edge[FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
 
         _encode_hex = jax.vmap(
-            functools.partial(_binary_scale_encoding, world_dim=65535)
+            functools.partial(
+                _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
+            )
         )
 
         my_side_condition_indices = edge[
@@ -663,8 +625,8 @@ class Encoder(nn.Module):
             my_side_condition_encoding,
             opp_side_condition_encoding,
             _binary_scale_encoding(
-                edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE],
-                32,
+                to_encode=edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE],
+                world_dim=32,
             ),
         )
 
@@ -673,6 +635,27 @@ class Encoder(nn.Module):
         request_count = jnp.where(mask, request_count, 1e9)
 
         return embedding, mask, request_count
+
+    def _encode_entities(self, env_step: EnvStep):
+        entity_encodings = entity_embeddings = jnp.concatenate(
+            (env_step.private_team, env_step.public_team), axis=-2
+        )
+        encode_entities = jax.vmap(self._encode_entity)
+
+        def _batched_fn(encodings: jax.Array):
+            embeddings, mask = encode_entities(encodings)
+            return (
+                embeddings,
+                self.entity_encoder(self.entity_ff(embeddings), mask),
+                mask,
+            )
+
+        entity_embeddings, contextual_entity_embeddings, entity_mask = jax.vmap(
+            _batched_fn
+        )(entity_encodings)
+        private_entity_embeddings = entity_embeddings[:, :6]
+
+        return private_entity_embeddings, contextual_entity_embeddings, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
     def _encode_timestep(self, history: HistoryStep):
@@ -710,27 +693,6 @@ class Encoder(nn.Module):
             valid_timestep_mask & edge_mask.any(),
             history_request_count,
         )
-
-    def _encode_entities(self, env_step: EnvStep):
-        entity_encodings = entity_embeddings = jnp.concatenate(
-            (env_step.private_team, env_step.public_team), axis=-2
-        )
-        encode_entities = jax.vmap(self._encode_entity)
-
-        def _batched_fn(encodings: jax.Array):
-            embeddings, mask = encode_entities(encodings)
-            return (
-                embeddings,
-                self.entity_encoder(self.entity_ff(embeddings), mask),
-                mask,
-            )
-
-        entity_embeddings, contextual_entity_embeddings, entity_mask = jax.vmap(
-            _batched_fn
-        )(entity_encodings)
-        private_entity_embeddings = entity_embeddings[:, :6]
-
-        return private_entity_embeddings, contextual_entity_embeddings, entity_mask
 
     def _encode_timesteps(self, history: HistoryStep):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
@@ -770,9 +732,11 @@ class Encoder(nn.Module):
                 _encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__ACTION_TYPE
                 ),
-                _encode_sqrt_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__PP),
                 _encode_sqrt_one_hot_action(
-                    action, MovesetFeature.MOVESET_FEATURE__MAXPP
+                    action, MovesetFeature.MOVESET_FEATURE__PP, dtype=self.cfg.dtype
+                ),
+                _encode_sqrt_one_hot_action(
+                    action, MovesetFeature.MOVESET_FEATURE__MAXPP, dtype=self.cfg.dtype
                 ),
                 _encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
             ]

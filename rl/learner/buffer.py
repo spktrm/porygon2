@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from rl.environment.interfaces import TimeStep, Transition
 from rl.environment.utils import clip_history
-from rl.learner.config import MMDConfig
+from rl.learner.config import Porygon2LearnerConfig
 
 
 class ReplayBuffer:
@@ -77,7 +77,7 @@ class ReplayRatioController:
         self,
         replay_buffer: ReplayBuffer,
         get_num_samples: Callable[[], int],
-        learner_config: MMDConfig,
+        learner_config: Porygon2LearnerConfig,
     ):
         self.replay_buffer = replay_buffer
         self.get_num_samples = get_num_samples
