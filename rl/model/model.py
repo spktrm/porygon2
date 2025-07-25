@@ -19,7 +19,7 @@ from rl.model.heads import PolicyHead, ValueHead
 from rl.model.utils import Params, get_most_recent_file
 
 
-class Model(nn.Module):
+class Porygon2Model(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
@@ -35,7 +35,7 @@ class Model(nn.Module):
         latent_embeddings: jax.Array,
         action_embeddings: jax.Array,
         legal: jax.Array,
-        temp: float = 1.0,
+        temp: float = 2.0,
     ):
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(
@@ -48,7 +48,7 @@ class Model(nn.Module):
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
-    def __call__(self, timestep: TimeStep, temp: float = 1):
+    def __call__(self, timestep: TimeStep, temp: float = 2.0):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -120,7 +120,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
 def get_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
         config = get_model_config()
-    return Model(config)
+    return Porygon2Model(config)
 
 
 def get_dummy_model() -> nn.Module:

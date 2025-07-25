@@ -4,6 +4,7 @@ from typing import Callable, overload
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from rl.environment.interfaces import ActorStep, ModelOutput, TimeStep
 from rl.model.utils import Params
@@ -40,7 +41,9 @@ class Agent:
         # Remove the padding from above.
         model_output = jax.tree.map(lambda t: jnp.squeeze(t, axis=(0, 1)), model_output)
         # Sample an action and return.
-        action = jax.random.categorical(rng_key, model_output.logit)
+        action = jax.random.choice(
+            rng_key, np.arange(10), shape=(1,), p=model_output.pi
+        ).squeeze()
         return ActorStep(action=action, model_output=model_output)
 
     def unroll(self, params: Params, trajectory: TimeStep) -> ActorStep:

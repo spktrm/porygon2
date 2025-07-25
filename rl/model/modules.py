@@ -6,8 +6,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-np.set_printoptions(precision=3, suppress=True)
-jnp.set_printoptions(precision=3, suppress=True)
+from rl.model.utils import BIAS_VALUE
+
+np.set_printoptions(precision=2, suppress=True)
+jnp.set_printoptions(precision=2, suppress=True)
 
 
 class RMSNorm(nn.Module):
@@ -32,15 +34,6 @@ class RMSNorm(nn.Module):
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         normed_inputs = normed_inputs * (1 + scale)
         return normed_inputs
-
-
-def cosine_similarity(
-    x: chex.Array, y: chex.Array, mask: chex.Array, eps: float = 1e-6
-) -> chex.Array:
-    x_normed = x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + eps)
-    y_normed = y / (jnp.linalg.norm(y, axis=-1, keepdims=True) + eps)
-    similarity = jnp.sum(x_normed * y_normed, axis=-1)
-    return similarity.mean(where=mask, keepdims=True)
 
 
 def activation_fn(array: chex.Array) -> chex.Array:
@@ -165,6 +158,14 @@ def apply_rope(x: chex.Array, max_wavelength: int = 10_000) -> chex.Array:
     return out.astype(x.dtype)
 
 
+def escort_transform(x: jax.Array, m: jax.Array = None, p: int = 2, axis: int = -1):
+    if m is None:
+        m = jnp.ones_like(x, dtype=bool)
+    abs_x_p = jnp.where(m, jnp.abs(x) ** p, 0)
+    denom = abs_x_p.sum(axis=axis, keepdims=True)
+    return abs_x_p / (denom + (denom == 0))
+
+
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
 
@@ -256,9 +257,10 @@ class MultiHeadAttention(nn.Module):
                     f"Mask dimensionality {mask.ndim} must match logits dimensionality "
                     f"{attn_logits.ndim}."
                 )
-            attn_logits = jnp.where(mask, attn_logits, -2.3819763e38)
+            attn_logits = jnp.where(mask, attn_logits, BIAS_VALUE)
 
-        attn_weights = jax.nn.softmax(attn_logits)  # [H, T', T]
+        attn_weights = nn.softmax(attn_logits)  # [H, T', T]
+        # attn_weights = escort_transform(attn_logits, mask)
 
         if mask is not None:
             attn_weights = jnp.where(mask, attn_weights, 0)

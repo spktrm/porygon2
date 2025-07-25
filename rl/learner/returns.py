@@ -4,10 +4,9 @@ from typing import NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
-from flax.training import train_state
 
-from rl.environment.interfaces import ModelOutput, Transition
-from rl.learner.config import MMDConfig
+from rl.environment.interfaces import Transition
+from rl.learner.config import Porygon2LearnerConfig
 
 
 class VTraceOutput(NamedTuple):
@@ -153,8 +152,11 @@ def vtrace_td_error_and_advantage(
     )
 
 
-def _compute_returns(
-    v_tm1: chex.Array, rho_tm1: chex.Array, batch: Transition, config: MMDConfig
+def compute_returns(
+    v_tm1: chex.Array,
+    rho_tm1: chex.Array,
+    batch: Transition,
+    config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
 
@@ -178,31 +180,3 @@ def _compute_returns(
             in_axes=1,
             out_axes=1,
         )(v_tm1, v_t, rewards, discount_t, rho_tm1)
-
-
-@functools.partial(jax.jit, static_argnums=(2,))
-def compute_returns(
-    state: train_state.TrainState,
-    batch: Transition,
-    config: MMDConfig,
-):
-    target_pred: ModelOutput = state.apply_fn(state.params, batch.timestep)
-
-    valid = jnp.bitwise_not(batch.timestep.env.done)
-
-    action = jax.lax.stop_gradient(batch.actorstep.action[..., None])
-    target_log_pi = jnp.take_along_axis(target_pred.log_pi, action, axis=-1).squeeze(-1)
-    log_mu = jnp.take_along_axis(
-        batch.actorstep.model_output.log_pi, action, axis=-1
-    ).squeeze(-1)
-
-    # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-    log_ratio = log_mu - target_log_pi
-    ratio = jnp.exp(log_ratio)
-
-    return Targets(
-        vtrace=_compute_returns(
-            target_pred.v.reshape(*valid.shape), ratio, batch, config
-        ),
-        target_log_pi=jax.lax.stop_gradient(target_log_pi),
-    )
