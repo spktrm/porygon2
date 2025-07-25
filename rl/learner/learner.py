@@ -73,12 +73,12 @@ def train_step(
         # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
         learner_actor_ratio_is = is_ratio * learner_actor_ratio
 
-        pg_loss1 = -advantages * learner_actor_ratio_is
-        pg_loss2 = -advantages * jnp.clip(
-            learner_actor_ratio_is, 1 - config.clip_ppo, 1 + config.clip_ppo
+        pg_loss1 = advantages * learner_actor_ratio_is
+        pg_loss2 = advantages * jnp.clip(
+            learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
         )
-        pg_loss = jnp.maximum(pg_loss1, pg_loss2)
-        loss_pg = pg_loss.mean(where=valid)
+        pg_loss = jnp.minimum(pg_loss1, pg_loss2)
+        loss_pg = -pg_loss.mean(where=valid)
 
         # Calculate the value loss.
         loss_v = 0.5 * jnp.square(pred.v - vtrace.returns).mean(where=valid)
