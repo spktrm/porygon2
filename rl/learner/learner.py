@@ -10,7 +10,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl.environment.interfaces import ModelOutput, Transition
+from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
     Porygon2LearnerConfig,
