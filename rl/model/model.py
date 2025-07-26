@@ -14,12 +14,11 @@ from rl.environment.interfaces import EnvStep, ModelOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
-from rl.model.func import legal_log_policy, legal_policy
 from rl.model.heads import PolicyHead, ValueHead
 from rl.model.utils import Params, get_most_recent_file
 
 
-class Model(nn.Module):
+class Porygon2Model(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
@@ -48,7 +47,7 @@ class Model(nn.Module):
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
 
-    def __call__(self, timestep: TimeStep, temp: float = 1):
+    def __call__(self, timestep: TimeStep, temp: float = 1.0):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -72,8 +71,8 @@ class DummyModel(nn.Module):
             v = jnp.tanh(nn.Dense(1)(mask))
             logit = nn.Dense(mask.shape[-1])(mask)
             masked_logits = jnp.where(mask, logit, -1e30)
-            pi = legal_policy(logit, env_step.legal)
-            log_pi = legal_log_policy(logit, env_step.legal)
+            pi = nn.softmax(logit, where=env_step.legal)
+            log_pi = nn.log_softmax(logit, where=env_step.legal)
             return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
 
         return jax.vmap(_forward)(timestep.env)
@@ -120,7 +119,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
 def get_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
         config = get_model_config()
-    return Model(config)
+    return Porygon2Model(config)
 
 
 def get_dummy_model() -> nn.Module:
@@ -139,7 +138,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 def main():
     network = get_model()
-    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
+    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:

@@ -1,5 +1,7 @@
 import os
 
+from rl.learner.learner import Learner
+
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 os.environ["XLA_FLAGS"] = (
@@ -22,8 +24,7 @@ from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
-from rl.learner.config import get_learner_config
-from rl.learner.learner import Learner, create_train_state, load_train_state
+from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.model.config import get_model_config
 from rl.model.model import get_model, get_num_params
 from rl.model.utils import get_most_recent_file

@@ -6,6 +6,8 @@ import chex
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
 
+BIAS_VALUE = -1e30
+
 
 def get_most_recent_file(dir_path: str, pattern: str = None):
     # List all files in the directory

@@ -1,4 +1,3 @@
-import functools
 import pickle
 import threading
 
@@ -8,10 +7,10 @@ import numpy as np
 
 from inference.interfaces import PredictionResponse
 from rl.actor.agent import Agent
+from rl.environment.interfaces import TimeStep
+from rl.environment.utils import get_ex_step
 from rl.model.model import get_model
 from rl.model.utils import get_most_recent_file
-from rl.environment.utils import get_ex_step
-from rl.environment.interfaces import EnvStep, HistoryStep, ModelOutput, TimeStep
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)

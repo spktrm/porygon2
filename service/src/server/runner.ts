@@ -8,7 +8,7 @@ import {
 } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { Battle } from "@pkmn/client";
-import { Generations } from "@pkmn/data";
+import { Generations, PokemonSet } from "@pkmn/data";
 import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
@@ -20,7 +20,7 @@ import { isBaselineUser, TaskQueueSystem } from "./utils";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
-const formatid = "gen3randombattle";
+const formatid = "gen3ou";
 
 interface Queue<T> {
     enqueue(item: T): void;
@@ -141,14 +141,15 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             seed?: PRNG | PRNGSeed | null;
         } = {},
         debug: boolean = false,
+        sets?: PokemonSet[],
     ) {
         super(playerStream, options, debug);
 
         this.userName = userName;
 
         this.eventHandler = new EventHandler(this);
-        this.privateBattle = new Battle(new Generations(Dex));
-        this.publicBattle = new Battle(new Generations(Dex));
+        this.privateBattle = new Battle(new Generations(Dex), null, sets);
+        this.publicBattle = new Battle(new Generations(Dex), null, sets);
         this.done = false;
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
@@ -265,6 +266,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     addLine(line: string) {
+        this.ingestEvent(line);
         try {
             this.privateBattle.add(line);
         } catch (err) {
@@ -273,10 +275,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
         this.publicBattle.add(line);
         this.getPlayerIndex();
-        if (line.startsWith("|start")) {
-            this.eventHandler.reset();
-        }
-        this.ingestEvent(line);
     }
 
     async generateStepRequest(
@@ -407,10 +405,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 this.updateRequest();
 
                 const choice = await this.getChoice();
+                this.privateBattle.request = undefined;
 
                 // Process the received action
                 this.choose(choice);
-                this.privateBattle.request = undefined;
 
                 // Increment internal counters
                 this.requestCount += 1;
@@ -441,17 +439,31 @@ export function createBattle(
     );
     const spec = { formatid };
 
+    const p1Sets = Teams.generate("gen3randombattle");
     const p1spec = {
         name: p1Name,
-        team: Teams.pack(Teams.generate(formatid)),
+        team: Teams.pack(p1Sets),
     };
+    const p2Sets = Teams.generate("gen3randombattle");
     const p2spec = {
         name: p2Name,
-        team: Teams.pack(Teams.generate(formatid)),
+        team: Teams.pack(p2Sets),
     };
 
-    const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);
-    const p2 = new TrainablePlayerAI(p2spec.name, streams.p2, {}, debug);
+    const p1 = new TrainablePlayerAI(
+        p1spec.name,
+        streams.p1,
+        {},
+        debug,
+        p1Sets,
+    );
+    const p2 = new TrainablePlayerAI(
+        p2spec.name,
+        streams.p2,
+        {},
+        debug,
+        p2Sets,
+    );
 
     p1.start();
     p2.start();

@@ -2,7 +2,6 @@ import * as fs from "fs";
 
 import {
     AbilitiesEnumMap,
-    ActionsEnumMap,
     BattlemajorargsEnum,
     BattlemajorargsEnumMap,
     BattleminorargsEnum,
@@ -17,6 +16,7 @@ import {
     ItemsEnumMap,
     LastitemeffecttypesEnumMap,
     MovesEnumMap,
+    NaturesEnumMap,
     PseudoweatherEnum,
     PseudoweatherEnumMap,
     SideconditionEnum,
@@ -31,17 +31,17 @@ import {
 } from "../../protos/enums_pb";
 import { OneDBoolean } from "./utils";
 import {
-    EntityFeature,
     MovesetFeature,
-    ContextFeature,
     InfoFeature,
+    EntityNodeFeature,
+    EntityEdgeFeature,
+    FieldFeature,
 } from "../../protos/features_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
     | ItemsEnumMap
     | StatusEnumMap
-    | ActionsEnumMap
     | TypechartEnumMap
     | ItemeffecttypesEnumMap
     | LastitemeffecttypesEnumMap
@@ -57,7 +57,8 @@ export type EnumMappings =
     | BattlemajorargsEnumMap
     | BattleminorargsEnumMap
     | EffectEnumMap
-    | EffecttypesEnumMap;
+    | EffecttypesEnumMap
+    | NaturesEnumMap;
 
 export type MoveIndex = 0 | 1 | 2 | 3;
 export type BenchIndex = MoveIndex | 4 | 5;
@@ -90,11 +91,13 @@ export const sideIdMapping: {
     p2: 1,
 };
 
-export const numPokemonFields = Object.keys(EntityFeature).length;
-export const numInfoFields = Object.keys(InfoFeature).length;
-export const numContextFields = Object.keys(ContextFeature).length;
-export const numMoveFields = Object.keys(MovesetFeature).length;
-export const numMovesetFields = 10 * numMoveFields;
+export const numEntityNodeFeatures = Object.keys(EntityNodeFeature).length;
+export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
+export const numFieldFeatures = Object.keys(FieldFeature).length;
+export const numInfoFeatures = Object.keys(InfoFeature).length;
+
+export const numMoveFeatures = Object.keys(MovesetFeature).length;
+export const numMovesetFeatures = 10 * numMoveFeatures;
 
 export const NUM_HISTORY = 384;
 

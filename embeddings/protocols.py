@@ -81,15 +81,15 @@ SPECIES_PROTOCOLS: List[Protocol] = [
             # "otherFormes",
         ]
     ],
-    {
-        "feature_fn": lambda x: x.startswith("effectiveness."),
-        "feature_type": FeatureType.SCALAR,
-    },
-    {
-        "feature_fn": lambda x: x.startswith("effectiveness."),
-        "func": onehot_encode,
-        "feature_type": FeatureType.CATEGORICAL,
-    },
+    # {
+    #     "feature_fn": lambda x: x.startswith("effectiveness."),
+    #     "feature_type": FeatureType.SCALAR,
+    # },
+    # {
+    #     "feature_fn": lambda x: x.startswith("effectiveness."),
+    #     "func": onehot_encode,
+    #     "feature_type": FeatureType.CATEGORICAL,
+    # },
 ]
 
 MOVES_PROTOCOLS: List[Protocol] = [
@@ -179,10 +179,10 @@ MOVES_PROTOCOLS: List[Protocol] = [
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,
     },
-    {
-        "feature_fn": lambda x: x.startswith("effectiveness."),
-        "feature_type": FeatureType.SCALAR,
-    },
+    # {
+    #     "feature_fn": lambda x: x.startswith("effectiveness."),
+    #     "feature_type": FeatureType.SCALAR,
+    # },
     {
         "feature_fn": lambda x: x.startswith("ignore"),
         "func": onehot_encode,
