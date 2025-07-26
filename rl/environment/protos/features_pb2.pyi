@@ -55,6 +55,19 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__NUM_MOVES: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__IS_PUBLIC: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__LAST_MOVE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_HP: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_ATK: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_DEF: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_SPA: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_SPD: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__EV_SPE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_HP: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_ATK: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_DEF: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_SPA: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_SPD: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
 
 class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -71,10 +84,8 @@ class MovesetHasPPEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     MOVESET_FEATURE___UNSPECIFIED: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__ACTION_ID: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__PP_RATIO: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__MOVE_ID: _ClassVar[MovesetFeature]
-    MOVESET_FEATURE__SPECIES_ID: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__PP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__MAXPP: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__HAS_PP: _ClassVar[MovesetFeature]
@@ -201,6 +212,19 @@ ENTITY_NODE_FEATURE__TYPECHANGE1: EntityNodeFeature
 ENTITY_NODE_FEATURE__NUM_MOVES: EntityNodeFeature
 ENTITY_NODE_FEATURE__IS_PUBLIC: EntityNodeFeature
 ENTITY_NODE_FEATURE__LAST_MOVE: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_HP: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_ATK: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_DEF: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_SPA: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_SPD: EntityNodeFeature
+ENTITY_NODE_FEATURE__EV_SPE: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_HP: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_ATK: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_DEF: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_SPA: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
+ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
+ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
 MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
 MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum
@@ -208,10 +232,8 @@ MOVESET_HAS_PP_ENUM___UNSPECIFIED: MovesetHasPPEnum
 MOVESET_HAS_PP_ENUM__YES: MovesetHasPPEnum
 MOVESET_HAS_PP_ENUM__NO: MovesetHasPPEnum
 MOVESET_FEATURE___UNSPECIFIED: MovesetFeature
-MOVESET_FEATURE__ACTION_ID: MovesetFeature
 MOVESET_FEATURE__PP_RATIO: MovesetFeature
 MOVESET_FEATURE__MOVE_ID: MovesetFeature
-MOVESET_FEATURE__SPECIES_ID: MovesetFeature
 MOVESET_FEATURE__PP: MovesetFeature
 MOVESET_FEATURE__MAXPP: MovesetFeature
 MOVESET_FEATURE__HAS_PP: MovesetFeature

@@ -3889,6 +3889,38 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__YAWN: _ClassVar[ConditionEnum]
     CONDITION_ENUM__ZENMODE: _ClassVar[ConditionEnum]
 
+class NaturesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    NATURES_ENUM___UNSPECIFIED: _ClassVar[NaturesEnum]
+    NATURES_ENUM___NULL: _ClassVar[NaturesEnum]
+    NATURES_ENUM___PAD: _ClassVar[NaturesEnum]
+    NATURES_ENUM___UNK: _ClassVar[NaturesEnum]
+    NATURES_ENUM__ADAMANT: _ClassVar[NaturesEnum]
+    NATURES_ENUM__BASHFUL: _ClassVar[NaturesEnum]
+    NATURES_ENUM__BOLD: _ClassVar[NaturesEnum]
+    NATURES_ENUM__BRAVE: _ClassVar[NaturesEnum]
+    NATURES_ENUM__CALM: _ClassVar[NaturesEnum]
+    NATURES_ENUM__CAREFUL: _ClassVar[NaturesEnum]
+    NATURES_ENUM__DOCILE: _ClassVar[NaturesEnum]
+    NATURES_ENUM__GENTLE: _ClassVar[NaturesEnum]
+    NATURES_ENUM__HARDY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__HASTY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__IMPISH: _ClassVar[NaturesEnum]
+    NATURES_ENUM__JOLLY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__LAX: _ClassVar[NaturesEnum]
+    NATURES_ENUM__LONELY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__MILD: _ClassVar[NaturesEnum]
+    NATURES_ENUM__MODEST: _ClassVar[NaturesEnum]
+    NATURES_ENUM__NAIVE: _ClassVar[NaturesEnum]
+    NATURES_ENUM__NAUGHTY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__QUIET: _ClassVar[NaturesEnum]
+    NATURES_ENUM__QUIRKY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__RASH: _ClassVar[NaturesEnum]
+    NATURES_ENUM__RELAXED: _ClassVar[NaturesEnum]
+    NATURES_ENUM__SASSY: _ClassVar[NaturesEnum]
+    NATURES_ENUM__SERIOUS: _ClassVar[NaturesEnum]
+    NATURES_ENUM__TIMID: _ClassVar[NaturesEnum]
+
 class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     EFFECT_ENUM___UNSPECIFIED: _ClassVar[EffectEnum]
@@ -9543,6 +9575,35 @@ CONDITION_ENUM__WIDEGUARD: ConditionEnum
 CONDITION_ENUM__WRAP: ConditionEnum
 CONDITION_ENUM__YAWN: ConditionEnum
 CONDITION_ENUM__ZENMODE: ConditionEnum
+NATURES_ENUM___UNSPECIFIED: NaturesEnum
+NATURES_ENUM___NULL: NaturesEnum
+NATURES_ENUM___PAD: NaturesEnum
+NATURES_ENUM___UNK: NaturesEnum
+NATURES_ENUM__ADAMANT: NaturesEnum
+NATURES_ENUM__BASHFUL: NaturesEnum
+NATURES_ENUM__BOLD: NaturesEnum
+NATURES_ENUM__BRAVE: NaturesEnum
+NATURES_ENUM__CALM: NaturesEnum
+NATURES_ENUM__CAREFUL: NaturesEnum
+NATURES_ENUM__DOCILE: NaturesEnum
+NATURES_ENUM__GENTLE: NaturesEnum
+NATURES_ENUM__HARDY: NaturesEnum
+NATURES_ENUM__HASTY: NaturesEnum
+NATURES_ENUM__IMPISH: NaturesEnum
+NATURES_ENUM__JOLLY: NaturesEnum
+NATURES_ENUM__LAX: NaturesEnum
+NATURES_ENUM__LONELY: NaturesEnum
+NATURES_ENUM__MILD: NaturesEnum
+NATURES_ENUM__MODEST: NaturesEnum
+NATURES_ENUM__NAIVE: NaturesEnum
+NATURES_ENUM__NAUGHTY: NaturesEnum
+NATURES_ENUM__QUIET: NaturesEnum
+NATURES_ENUM__QUIRKY: NaturesEnum
+NATURES_ENUM__RASH: NaturesEnum
+NATURES_ENUM__RELAXED: NaturesEnum
+NATURES_ENUM__SASSY: NaturesEnum
+NATURES_ENUM__SERIOUS: NaturesEnum
+NATURES_ENUM__TIMID: NaturesEnum
 EFFECT_ENUM___UNSPECIFIED: EffectEnum
 EFFECT_ENUM___NULL: EffectEnum
 EFFECT_ENUM___PAD: EffectEnum

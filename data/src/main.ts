@@ -1,17 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { Dex, Format, RuleTable } from "@pkmn/sim";
-import {
-    Ability,
-    Item,
-    Move,
-    Species,
-    Type,
-    toID,
-    Dex as dexDex,
-    TypeName,
-} from "@pkmn/dex";
+import { Dex, ModdedDex } from "@pkmn/sim";
+import { Ability, Item, Move, Species, Type, toID, TypeName } from "@pkmn/dex";
 import { Generations } from "@pkmn/data";
 
 const PS_DIRECTORY = "ps/";
@@ -434,9 +425,7 @@ type GenData = {
     //     }[];
 };
 
-async function getGenData(genNo: number): Promise<GenData> {
-    const dex = new Dex.ModdedDex(`gen${genNo}`);
-    const gens = new Generations(dexDex).get(genNo);
+async function getGenData(dex: ModdedDex): Promise<GenData> {
     const species = dex.species.all();
     const promises = species.map((species: { id: string }) =>
         dex.learnsets.get(species.id),
@@ -450,21 +439,7 @@ async function getGenData(genNo: number): Promise<GenData> {
         .filter((type) => type.isNonstandard === null);
 
     const data = {
-        species: species.map((x) => {
-            const effectiveness = Object.fromEntries(
-                typechart.map((type) => [
-                    type.name,
-                    gens.types.totalEffectiveness(
-                        type.name as TypeName,
-                        x.types as TypeName[],
-                    ),
-                ]),
-            );
-            return {
-                ...x,
-                effectiveness,
-            };
-        }),
+        species,
         moves,
         abilities,
         items,
@@ -554,7 +529,9 @@ async function scrapeRepo() {
         }
     });
 
-    const genData = await getGenData(9);
+    const genNo = 9;
+    const dex = new Dex.ModdedDex(`gen${genNo}`);
+    const genData = await getGenData(dex);
     const allFormats = Dex.formats.all().map((format) => ({
         format,
         formatId: format.id,
@@ -576,15 +553,19 @@ async function scrapeRepo() {
         "drain",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
+    data["Natures"] = standardize(
+        dex.natures.all().map((x) => toID(x.id)),
+        EXTRA_TOKENS,
+    );
 
     data["Effect"] = standardize(
         [
             // ...genData.species.map((x) => x.id),
-            ...genData.abilities.map((x) => x.id),
-            ...genData.items.map((x) => x.id),
-            ...genData.moves.map((x) => x.id),
-            ...keywords.status,
-            ...keywords.weather,
+            ...genData.abilities.map((x) => toID(x.id)),
+            ...genData.items.map((x) => toID(x.id)),
+            ...genData.moves.map((x) => toID(x.id)),
+            ...Array.from(keywords.status).map((x) => toID(x)),
+            ...Array.from(keywords.weather).map((x) => toID(x)),
             ...conditions,
             // ...EXTRA_TOKENS.flatMap((x) => [
             //     x + "_species",
@@ -614,7 +595,8 @@ async function scrapeRepo() {
             fs.mkdirSync(parentDir, { recursive: true });
         }
 
-        const genDataPromise = getGenData(genNo);
+        const dex = new Dex.ModdedDex(`gen${genNo}`);
+        const genDataPromise = getGenData(dex);
 
         datas.push(genDataPromise);
         parentDirs.push(parentDir);

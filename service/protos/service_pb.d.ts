@@ -115,10 +115,15 @@ export class EnvironmentState extends jspb.Message {
   getHistoryLength(): number;
   setHistoryLength(value: number): void;
 
-  getMoveset(): Uint8Array | string;
-  getMoveset_asU8(): Uint8Array;
-  getMoveset_asB64(): string;
-  setMoveset(value: Uint8Array | string): void;
+  getMyActions(): Uint8Array | string;
+  getMyActions_asU8(): Uint8Array;
+  getMyActions_asB64(): string;
+  setMyActions(value: Uint8Array | string): void;
+
+  getOppActions(): Uint8Array | string;
+  getOppActions_asU8(): Uint8Array;
+  getOppActions_asB64(): string;
+  setOppActions(value: Uint8Array | string): void;
 
   getPublicTeam(): Uint8Array | string;
   getPublicTeam_asU8(): Uint8Array;
@@ -130,10 +135,10 @@ export class EnvironmentState extends jspb.Message {
   getPrivateTeam_asB64(): string;
   setPrivateTeam(value: Uint8Array | string): void;
 
-  getCurrentContext(): Uint8Array | string;
-  getCurrentContext_asU8(): Uint8Array;
-  getCurrentContext_asB64(): string;
-  setCurrentContext(value: Uint8Array | string): void;
+  getField(): Uint8Array | string;
+  getField_asU8(): Uint8Array;
+  getField_asB64(): string;
+  setField(value: Uint8Array | string): void;
 
   getRqid(): number;
   setRqid(value: number): void;
@@ -156,10 +161,11 @@ export namespace EnvironmentState {
     historyEntityEdges: Uint8Array | string,
     historyField: Uint8Array | string,
     historyLength: number,
-    moveset: Uint8Array | string,
+    myActions: Uint8Array | string,
+    oppActions: Uint8Array | string,
     publicTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
-    currentContext: Uint8Array | string,
+    field: Uint8Array | string,
     rqid: number,
   }
 }

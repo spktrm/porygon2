@@ -18,6 +18,7 @@ import {
     ItemeffecttypesEnum,
     ItemsEnum,
     MovesEnum,
+    NaturesEnum,
     SideconditionEnum,
     SpeciesEnum,
     StatusEnum,
@@ -35,7 +36,6 @@ import {
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
-    numMovesetFeatures,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -397,6 +397,27 @@ function getUnkPokemon(n: number) {
         MovesEnum.MOVES_ENUM___UNK;
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__NUM_MOVES] = 4;
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__HAS_STATUS] = 0;
+
+    // Evs
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_HP] = -255;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_ATK] = -255;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_DEF] = -255;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPA] = -255;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPD] = -255;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPE] = -255;
+
+    // Set Ivs
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_HP] = -31;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_ATK] = -31;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_DEF] = -31;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPA] = -31;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] = -31;
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] = -31;
+
+    // Set Nature
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
+        NaturesEnum.NATURES_ENUM___UNK;
+    // Side
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE] = n;
     return data;
 }
@@ -418,6 +439,8 @@ function getArrayFromPokemon(
     playerIndex: number,
     isPublic: boolean = true,
 ) {
+    const dataArr = getBlankPokemonArr();
+
     if (candidate === null) {
         return nullPokemon;
     }
@@ -433,6 +456,40 @@ function getArrayFromPokemon(
     } else {
         pokemon = candidate;
     }
+
+    // Set Evs
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_HP] =
+        pokemon.evs?.hp ?? -255;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_ATK] =
+        pokemon.evs?.atk ?? -255;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_DEF] =
+        pokemon.evs?.def ?? -255;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPA] =
+        pokemon.evs?.spa ?? -255;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPD] =
+        pokemon.evs?.spd ?? -255;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPE] =
+        pokemon.evs?.spe ?? -255;
+
+    // Set Ivs
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_HP] =
+        pokemon.ivs?.hp ?? -31;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_ATK] =
+        pokemon.ivs?.atk ?? -31;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_DEF] =
+        pokemon.ivs?.def ?? -31;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPA] =
+        pokemon.ivs?.spa ?? -31;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] =
+        pokemon.ivs?.spd ?? -31;
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] =
+        pokemon.ivs?.spe ?? -31;
+
+    // Set Nature
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
+        pokemon.nature === undefined
+            ? NaturesEnum.NATURES_ENUM___UNK
+            : IndexValueFromEnum(NaturesEnum, pokemon.nature);
 
     const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;
@@ -464,8 +521,6 @@ function getArrayFromPokemon(
         }
     }
     let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
-
-    const dataArr = getBlankPokemonArr();
 
     if (isPublic) {
         for (remainingIndex; remainingIndex < 4; remainingIndex++) {
@@ -2266,6 +2321,312 @@ export class EventHandler implements Protocol.Handler {
     }
 }
 
+class PrivateActionHandler {
+    player: TrainablePlayerAI;
+    request: AnyObject;
+    actionBuffer: Int16Array;
+
+    constructor(player: TrainablePlayerAI) {
+        this.player = player;
+        this.request = player.getRequest();
+
+        // const numActive = (this.request?.active ?? []).length;
+        this.actionBuffer = new Int16Array((1 * 4 + 6) * numMoveFeatures);
+    }
+
+    assignActionBuffer(args: { offset: number; index: number; value: number }) {
+        const { offset, index, value } = args;
+        this.actionBuffer[offset + index] = value;
+    }
+
+    pushMoveAction(
+        actionOffset: number,
+        move:
+            | { name: "Recharge"; id: "recharge" }
+            | { name: Protocol.MoveName; id: ID }
+            | {
+                  name: Protocol.MoveName;
+                  id: ID;
+                  pp: number;
+                  maxpp: number;
+                  target: MoveTarget;
+                  disabled?: boolean;
+              },
+    ) {
+        if ("pp" in move) {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__YES,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP,
+                value: move.pp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__MAXPP,
+                value: move.maxpp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP_RATIO,
+                value: MAX_RATIO_TOKEN * (move.pp / move.maxpp),
+            });
+        } else {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+            });
+        }
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+            value: IndexValueFromEnum(MovesEnum, move.id),
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
+        });
+    }
+
+    pushSwitchAction(
+        actionOffset: number,
+        switchIndex: number,
+        potentialSwitch: Protocol.Request.Pokemon,
+    ) {
+        const { index: entityIndex } = this.player.eventHandler.getPokemon(
+            potentialSwitch.ident,
+            false,
+        );
+        // This was to check a test
+        // if (switchIndex !== entityIndex) {
+        //     throw new Error(
+        //         `Switch action index ${switchIndex} does not match entity index ${entityIndex} for ${potentialSwitch.ident}`,
+        //     );
+        // }
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+            value: MovesEnum.MOVES_ENUM___SWITCH,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+            value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+            value: entityIndex,
+        });
+    }
+
+    build() {
+        const actives = (this.request?.active ?? [
+            null,
+        ]) as Protocol.MoveRequest["active"];
+        const switches = (this.request?.side?.pokemon ??
+            []) as Protocol.Request.SideInfo["pokemon"];
+
+        let actionOffset = 0;
+
+        for (const [activeIndex, activePokemon] of actives.entries()) {
+            let moves = [];
+            if (activePokemon !== null) {
+                const { pokemon, index: entityIndex } =
+                    this.player.eventHandler.getPokemon(
+                        switches[activeIndex].ident,
+                        false,
+                    );
+                if (pokemon === null) {
+                    throw new Error(
+                        `Pokemon ${switches[activeIndex].ident} not found`,
+                    );
+                }
+                moves = activePokemon.moves;
+                for (const action of moves) {
+                    this.pushMoveAction(actionOffset, action);
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+                        value: entityIndex,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+            }
+            actionOffset += (4 - moves.length) * numMoveFeatures;
+
+            for (const [switchIndex, potentialSwitch] of switches.entries()) {
+                this.pushSwitchAction(
+                    actionOffset,
+                    switchIndex,
+                    potentialSwitch,
+                );
+                actionOffset += numMoveFeatures;
+            }
+            actionOffset += (6 - switches.length) * numMoveFeatures;
+        }
+
+        return new Uint8Array(this.actionBuffer.buffer);
+    }
+}
+
+class PublicActionHandler {
+    player: TrainablePlayerAI;
+    actionBuffer: Int16Array;
+
+    constructor(player: TrainablePlayerAI) {
+        this.player = player;
+
+        const request = player.getRequest();
+        const numActive = (request?.active ?? []).length;
+        this.actionBuffer = new Int16Array(
+            (numActive * 4 + 6) * numMoveFeatures,
+        );
+    }
+
+    assignActionBuffer(args: { offset: number; index: number; value: number }) {
+        const { offset, index, value } = args;
+        this.actionBuffer[offset + index] = value;
+    }
+
+    pushMoveAction(actionOffset: number, move: Pokemon["moveSlots"][number]) {
+        if ("ppUsed" in move) {
+            const moveData = this.player.eventHandler.getMove(move.id);
+            if (moveData === undefined || moveData.pp === undefined) {
+                throw new Error(`Move ${move.id} not found`);
+            }
+            const maxpp = (8 / 5) * moveData.pp;
+            const pp = maxpp - move.ppUsed;
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__YES,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP,
+                value: pp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__MAXPP,
+                value: maxpp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP_RATIO,
+                value: MAX_RATIO_TOKEN * (pp / maxpp),
+            });
+        } else {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+            });
+        }
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+            value: IndexValueFromEnum(MovesEnum, move.id),
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
+        });
+    }
+
+    pushSwitchAction(actionOffset: number, switchIndex: number) {
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+            value: MovesEnum.MOVES_ENUM___SWITCH,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+            value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+            value: switchIndex,
+        });
+    }
+
+    build() {
+        const side =
+            this.player.publicBattle.sides[1 - this.player.getPlayerIndex()!];
+        const actives = side.active;
+        const switches = side.team;
+
+        let actionOffset = 0;
+
+        for (const [activeIndex, activePokemon] of actives.entries()) {
+            let moves = [];
+            if (activePokemon !== null) {
+                const { pokemon, index: entityIndex } =
+                    this.player.eventHandler.getPokemon(
+                        switches[activeIndex].ident,
+                        false,
+                    );
+                if (pokemon === null) {
+                    throw new Error(
+                        `Pokemon ${switches[activeIndex].ident} not found`,
+                    );
+                }
+                moves = activePokemon.moveSlots.slice(0, 4);
+                for (const move of moves) {
+                    this.pushMoveAction(actionOffset, move);
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+                        value: entityIndex,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+                for (let i = 0; i < 4 - moves.length; i++) {
+                    this.pushMoveAction(actionOffset, {
+                        ppUsed: 0,
+                        name: "" as Protocol.MoveName,
+                        id: "" as ID,
+                    });
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+                        value: entityIndex,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+                for (const [switchIndex] of switches.entries()) {
+                    this.pushSwitchAction(actionOffset, switchIndex);
+                    actionOffset += numMoveFeatures;
+                }
+                actionOffset += (6 - switches.length) * numMoveFeatures;
+            } else {
+                actionOffset += moves.length * numMoveFeatures;
+                actionOffset += switches.length * numMoveFeatures;
+            }
+        }
+
+        return new Uint8Array(this.actionBuffer.buffer);
+    }
+}
 export class StateHandler {
     player: TrainablePlayerAI;
 
@@ -2363,156 +2724,14 @@ export class StateHandler {
         return { legalActions, isStruggling };
     }
 
-    getMoveset(): Uint8Array {
-        const request = this.player.getRequest() as AnyObject;
+    getMyActions(): Uint8Array {
+        const actionHandler = new PrivateActionHandler(this.player);
+        return actionHandler.build();
+    }
 
-        const active = (request?.active ??
-            [])[0] as Protocol.MoveRequest["active"][0];
-        const activeMoves = (active ?? {})?.moves ?? [];
-        const switches = (request?.side?.pokemon ??
-            []) as Protocol.Request.SideInfo["pokemon"];
-
-        const actionBuffer = new Int16Array(numMovesetFeatures);
-        let bufferOffset = 0;
-
-        const assignActionBuffer = (index: number, value: number) => {
-            actionBuffer[bufferOffset + index] = value;
-        };
-
-        const switchIndices = switches.map((poke) => {
-            const { index } = this.player.eventHandler.getPokemon(
-                poke.ident,
-                false,
-            );
-            return index;
-        });
-        let activeIndex = 0;
-        for (const [index, poke] of switches.entries()) {
-            if (poke.active) {
-                activeIndex = switchIndices[index];
-                break;
-            }
-        }
-
-        const pushMoveAction = (
-            action:
-                | { name: "Recharge"; id: "recharge" }
-                | { name: Protocol.MoveName; id: ID }
-                | {
-                      name: Protocol.MoveName;
-                      id: ID;
-                      pp: number;
-                      maxpp: number;
-                      target: MoveTarget;
-                      disabled?: boolean;
-                  },
-        ) => {
-            // assignActionBuffer(
-            //     MovesetFeature.MOVESET_FEATURE__ACTION_ID,
-            //     IndexValueFromEnum(ActionsEnum, `move_${action.id}`),
-            // );
-            if ("pp" in action) {
-                assignActionBuffer(
-                    MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                    MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__YES,
-                );
-                assignActionBuffer(
-                    MovesetFeature.MOVESET_FEATURE__PP,
-                    action.pp,
-                );
-                assignActionBuffer(
-                    MovesetFeature.MOVESET_FEATURE__MAXPP,
-                    action.maxpp,
-                );
-                assignActionBuffer(
-                    MovesetFeature.MOVESET_FEATURE__PP_RATIO,
-                    MAX_RATIO_TOKEN * (action.pp / action.maxpp),
-                );
-            } else {
-                assignActionBuffer(
-                    MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                    MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
-                );
-            }
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-                IndexValueFromEnum(MovesEnum, action.id),
-            );
-            // assignActionBuffer(
-            //     MovesetFeature.MOVESET_FEATURE__SPECIES_ID,
-            //     SpeciesEnum.SPECIES_ENUM___UNSPECIFIED,
-            // );
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-                MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
-            );
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-                activeIndex,
-            );
-        };
-
-        const pushSwitchAction = (action: Protocol.Request.Pokemon) => {
-            let member = this.player.privateBattle.getPokemon(action.ident);
-            if (member === null) {
-                const activeIdent = (action.ident.slice(0, 2) +
-                    "a" +
-                    action.ident.slice(2)) as PokemonIdent;
-                member = this.player.privateBattle.getPokemon(activeIdent);
-            }
-            if (member === null) {
-                throw new Error();
-            }
-            // const species = member.species.baseSpecies.toLowerCase();
-            // assignActionBuffer(
-            //     MovesetFeature.MOVESET_FEATURE__ACTION_ID,
-            //     IndexValueFromEnum(ActionsEnum, `switch_${species}`),
-            // );
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-                MovesEnum.MOVES_ENUM___SWITCH,
-            );
-            // assignActionBuffer(
-            //     MovesetFeature.MOVESET_FEATURE__SPECIES_ID,
-            //     IndexValueFromEnum(SpeciesEnum, species),
-            // );
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-                MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
-            );
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
-            );
-        };
-
-        for (const action of activeMoves) {
-            pushMoveAction(action);
-            bufferOffset += numMoveFeatures;
-        }
-        bufferOffset += (4 - activeMoves.length) * numMoveFeatures;
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        for (const [_, action] of switches.entries()) {
-            const { index: entityIndex } = this.player.eventHandler.getPokemon(
-                action.ident,
-                false,
-            );
-            // This was to check a test
-            // if (actionIndex !== entityIndex) {
-            //     throw new Error(
-            //         `Switch action index ${actionIndex} does not match entity index ${entityIndex} for ${action.ident}`,
-            //     );
-            // }
-            pushSwitchAction(action);
-            assignActionBuffer(
-                MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-                entityIndex,
-            );
-            bufferOffset += numMoveFeatures;
-        }
-        bufferOffset += (6 - switches.length) * numMoveFeatures;
-
-        return new Uint8Array(actionBuffer.buffer);
+    getOppActions(): Uint8Array {
+        const actionHandler = new PublicActionHandler(this.player);
+        return actionHandler.build();
     }
 
     getTeamFromSide(
@@ -2546,162 +2765,12 @@ export class StateHandler {
         return buffer;
     }
 
-    // getAllMyMoves(): Int16Array {
-    //     const request = this.player.getRequest() as AnyObject;
-
-    //     const active = (request?.active ??
-    //         [])[0] as Protocol.MoveRequest["active"][0];
-    //     const activeMoves = (active ?? {})?.moves ?? [];
-    //     const switches = (request?.side?.pokemon ??
-    //         []) as Protocol.Request.SideInfo["pokemon"];
-
-    //     const buffer = new Int16Array(6 * 4 * numActionFields);
-    //     let bufferOffset = 0;
-
-    //     for (const [actionIndex, action] of activeMoves.entries()) {
-    //         buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //             IndexValueFromEnum(MovesEnum, action.id);
-    //         buffer[
-    //             bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //         ] = actionIndex;
-    //         bufferOffset += numActionFields;
-    //     }
-    //     for (let i = 0; i < 4 - Math.min(4, activeMoves.length); i++) {
-    //         buffer[bufferOffset] = MovesEnum.MOVES_ENUM___NULL;
-    //         buffer[
-    //             bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //         ] = i + activeMoves.length;
-    //         bufferOffset += numActionFields;
-    //     }
-    //     for (const [potentialSwitchIndex, potentialSwitch] of switches
-    //         .slice(0, 6)
-    //         .entries()) {
-    //         const numMoves = potentialSwitch.moves.length;
-    //         if (!potentialSwitch.active) {
-    //             for (const move of potentialSwitch.moves) {
-    //                 buffer[
-    //                     bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID
-    //                 ] = IndexValueFromEnum(MovesEnum, move);
-    //                 buffer[
-    //                     bufferOffset +
-    //                         ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //                 ] = potentialSwitchIndex + 4;
-    //                 bufferOffset += numActionFields;
-    //             }
-    //             for (let i = 0; i < 4 - numMoves; i++) {
-    //                 buffer[
-    //                     bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID
-    //                 ] = MovesEnum.MOVES_ENUM___NULL;
-    //                 bufferOffset += numActionFields;
-    //             }
-    //         }
-    //     }
-    //     for (let i = 0; i < 6 - switches.length; i++) {
-    //         for (let i = 0; i < 4; i++) {
-    //             buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //                 MovesEnum.MOVES_ENUM___NULL;
-    //             buffer[
-    //                 bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //             ] = i + 4 + Math.min(6, switches.length);
-    //             bufferOffset += numActionFields;
-    //         }
-    //     }
-
-    //     return buffer;
-    // }
-
-    // getAllOppMoves(): Int16Array {
-    //     const playerIndex = this.player.getPlayerIndex()!;
-    //     const oppSide = this.player.publicBattle.sides[1 - playerIndex];
-
-    //     const buffer = new Int16Array(6 * 4 * numActionFields);
-    //     let bufferOffset = 0;
-
-    //     let activeIndex = 0;
-    //     let switchIndex = 4;
-
-    //     for (const member of oppSide.team.slice(0, 6)) {
-    //         for (const move of member.moves.slice(0, 4)) {
-    //             buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //                 member.fainted || member.hp === 0
-    //                     ? MovesEnum.MOVES_ENUM___NULL
-    //                     : IndexValueFromEnum(MovesEnum, move);
-    //             if (member.isActive()) {
-    //                 buffer[
-    //                     bufferOffset +
-    //                         ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //                 ] = activeIndex;
-    //                 activeIndex += 1;
-    //             } else {
-    //                 buffer[
-    //                     bufferOffset +
-    //                         ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //                 ] = switchIndex;
-    //             }
-    //             bufferOffset += numActionFields;
-    //         }
-    //         const numMoves = member.moves.length;
-    //         for (let i = 0; i < 4 - numMoves; i++) {
-    //             buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //                 member.fainted
-    //                     ? MovesEnum.MOVES_ENUM___NULL
-    //                     : MovesEnum.MOVES_ENUM___UNK;
-    //             if (member.isActive()) {
-    //                 buffer[
-    //                     bufferOffset +
-    //                         ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //                 ] = activeIndex;
-    //                 activeIndex += 1;
-    //             } else {
-    //                 buffer[
-    //                     bufferOffset +
-    //                         ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //                 ] = switchIndex;
-    //             }
-    //             bufferOffset += numActionFields;
-    //         }
-    //         switchIndex += 1;
-    //     }
-    //     const teamLength = Math.min(oppSide.team.length, 6);
-    //     for (
-    //         let i = 0;
-    //         i < Math.min(6, oppSide.totalPokemon - teamLength);
-    //         i++
-    //     ) {
-    //         for (let i = 0; i < 4; i++) {
-    //             buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //                 MovesEnum.MOVES_ENUM___UNK;
-    //             buffer[
-    //                 bufferOffset + ActionsFeature.ACTIONS_FEATURE__ACTION_INDEX
-    //             ] = switchIndex;
-    //             bufferOffset += numActionFields;
-    //         }
-    //         switchIndex += 1;
-    //     }
-    //     for (let i = 0; i < 6 - Math.min(6, oppSide.totalPokemon); i++) {
-    //         for (let i = 0; i < 4; i++) {
-    //             buffer[bufferOffset + ActionsFeature.ACTIONS_FEATURE__MOVE_ID] =
-    //                 MovesEnum.MOVES_ENUM___NULL;
-    //             bufferOffset += numActionFields;
-    //         }
-    //     }
-
-    //     return buffer;
-    // }
-
     getPrivateTeam(playerIndex: number): Int16Array {
-        const team = [
-            this.getTeamFromSide(
-                this.player.privateBattle.sides[playerIndex],
-                playerIndex,
-                false,
-            ),
-            // this.getTeamFromSide(
-            //     this.player.privateBattle.sides[1 - playerIndex],
-            //     playerIndex,
-            // ),
-        ];
-        return concatenateArrays(team);
+        return this.getTeamFromSide(
+            this.player.privateBattle.sides[playerIndex],
+            playerIndex,
+            false,
+        );
     }
 
     getPublicTeam(playerIndex: number): Int16Array {
@@ -2793,8 +2862,8 @@ export class StateHandler {
         return entityDatums;
     }
 
-    getCurrentContext() {
-        const currentContextBuffer = new Int16Array(numFieldFeatures);
+    getField() {
+        const fieldBuffer = new Int16Array(numFieldFeatures);
         const playerIndex = this.player.getPlayerIndex()!;
         for (const side of this.player.privateBattle.sides) {
             const mySide = isMySide(side.n, playerIndex) === 1;
@@ -2813,16 +2882,15 @@ export class StateHandler {
                 const featureIndex = IndexValueFromEnum(SideconditionEnum, id);
                 sideConditionBuffer |= BigInt(1) << BigInt(featureIndex);
             }
-            currentContextBuffer.set(
+            fieldBuffer.set(
                 bigIntToInt16Array(sideConditionBuffer),
                 sideOffset,
             );
             if (side.sideConditions.spikes) {
-                currentContextBuffer[spikesOffset] =
-                    side.sideConditions.spikes.level;
+                fieldBuffer[spikesOffset] = side.sideConditions.spikes.level;
             }
             if (side.sideConditions.toxicspikes) {
-                currentContextBuffer[toxisSpikesOffset] =
+                fieldBuffer[toxisSpikesOffset] =
                     side.sideConditions.toxicspikes.level;
             }
         }
@@ -2834,13 +2902,12 @@ export class StateHandler {
               )
             : WeatherEnum.WEATHER_ENUM___NULL;
 
-        currentContextBuffer[FieldFeature.FIELD_FEATURE__WEATHER_ID] =
-            weatherIndex;
-        currentContextBuffer[FieldFeature.FIELD_FEATURE__WEATHER_MAX_DURATION] =
+        fieldBuffer[FieldFeature.FIELD_FEATURE__WEATHER_ID] = weatherIndex;
+        fieldBuffer[FieldFeature.FIELD_FEATURE__WEATHER_MAX_DURATION] =
             field.weatherState.maxDuration;
-        currentContextBuffer[FieldFeature.FIELD_FEATURE__WEATHER_MIN_DURATION] =
+        fieldBuffer[FieldFeature.FIELD_FEATURE__WEATHER_MIN_DURATION] =
             field.weatherState.minDuration;
-        return new Uint8Array(currentContextBuffer.buffer);
+        return new Uint8Array(fieldBuffer.buffer);
     }
 
     build(): EnvironmentState {
@@ -2878,9 +2945,10 @@ export class StateHandler {
         const publicTeam = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
-        state.setMoveset(this.getMoveset());
+        state.setMyActions(this.getMyActions());
+        // state.setOppActions(this.getOppActions());
 
-        state.setCurrentContext(this.getCurrentContext());
+        state.setField(this.getField());
 
         return state;
     }
