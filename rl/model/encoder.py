@@ -39,6 +39,7 @@ from rl.model.modules import (
     FeedForwardResidual,
     MergeEmbeddings,
     PretrainedEmbedding,
+    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
@@ -120,8 +121,6 @@ _encode_one_hot_entity = partial(_encode_one_hot, max_values=ENTITY_NODE_MAX_VAL
 _encode_one_hot_action = partial(_encode_one_hot, max_values=ACTION_MAX_VALUES)
 _encode_one_hot_edge = partial(_encode_one_hot, max_values=ENTITY_EDGE_MAX_VALUES)
 _encode_one_hot_field = partial(_encode_one_hot, max_values=FIELD_MAX_VALUES)
-_encode_one_hot_entity_boost = partial(_encode_one_hot_entity, value_offset=6)
-_encode_one_hot_edge_boost = partial(_encode_one_hot_edge, value_offset=6)
 _encode_sqrt_one_hot_entity = partial(
     _encode_sqrt_one_hot, max_values=ENTITY_NODE_MAX_VALUES
 )
@@ -146,6 +145,24 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
         | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
         | (species_token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
     )
+
+
+def encode_boosts(boosts: chex.Array, offset: int):
+    return jnp.where(
+        boosts > 0,
+        (offset + boosts) / offset,
+        offset / (offset - boosts),
+    )
+
+
+def encode_reg_boosts(boosts: chex.Array):
+    """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
+    return (1 / math.log(2)) * jnp.log(encode_boosts(boosts, 2))
+
+
+def encode_spe_boosts(boosts: chex.Array):
+    """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
+    return (2 / math.log(3)) * jnp.log(encode_boosts(boosts, 3))
 
 
 class Encoder(nn.Module):
@@ -193,6 +210,10 @@ class Encoder(nn.Module):
             output_size=entity_size, dtype=self.cfg.dtype, name="latent_merge"
         )
 
+        # Layer normalization for some embeddings.
+        self.private_entity_ln = RMSNorm()
+        self.field_ln = RMSNorm()
+
         # Feed-forward layers for processing entity and timestep features.
         self.entity_ff = FeedForwardResidual(
             hidden_dim=entity_size, dtype=self.cfg.dtype
@@ -236,7 +257,7 @@ class Encoder(nn.Module):
             (self.cfg.num_latents, entity_size),
         )
 
-    def _encode_species(self, token: chex.Array):
+    def _embed_species(self, token: chex.Array):
         mask = ~(
             (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
             | (token == SpeciesEnum.SPECIES_ENUM___PAD)
@@ -244,7 +265,7 @@ class Encoder(nn.Module):
         )
         return mask * self.species_linear(SPECIES_ONEHOT(token))
 
-    def _encode_item(self, token: chex.Array):
+    def _embed_item(self, token: chex.Array):
         mask = ~(
             (token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
             | (token == ItemsEnum.ITEMS_ENUM___PAD)
@@ -252,7 +273,7 @@ class Encoder(nn.Module):
         )
         return mask * self.items_linear(ITEM_ONEHOT(token))
 
-    def _encode_ability(self, token: chex.Array):
+    def _embed_ability(self, token: chex.Array):
         mask = ~(
             (token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
             | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
@@ -260,7 +281,7 @@ class Encoder(nn.Module):
         )
         return mask * self.abilities_linear(ABILITY_ONEHOT(token))
 
-    def _encode_move(self, token: chex.Array):
+    def _embed_move(self, token: chex.Array):
         mask = ~(
             (token == MovesEnum.MOVES_ENUM___UNSPECIFIED)
             | (token == MovesEnum.MOVES_ENUM___PAD)
@@ -268,7 +289,7 @@ class Encoder(nn.Module):
         )
         return mask * self.moves_linear(MOVE_ONEHOT(token))
 
-    def _encode_entity(self, entity: chex.Array):
+    def _embed_entity(self, entity: chex.Array):
         # Encode volatile and type-change indices using the binary encoder.
         _encode_hex = jax.vmap(
             functools.partial(_binary_scale_encoding, world_dim=65535)
@@ -302,6 +323,60 @@ class Encoder(nn.Module):
             axis=-1,
         ).reshape(-1)
 
+        ev_features = entity[
+            np.array(
+                [
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_HP,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_ATK,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_DEF,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPA,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPD,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPE,
+                ]
+            )
+        ]
+        iv_features = entity[
+            np.array(
+                [
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_HP,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_ATK,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_DEF,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPA,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE,
+                ]
+            )
+        ]
+        reg_boost_features = entity[
+            np.array(
+                [
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ATK_VALUE,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_DEF_VALUE,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPA_VALUE,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPD_VALUE,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPE_VALUE,
+                ]
+            )
+        ]
+        spe_boost_features = entity[
+            np.array(
+                [
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE,
+                    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE,
+                ]
+            )
+        ]
+        stat_features = jnp.concatenate(
+            (
+                hp_features,
+                ev_features / 255,
+                iv_features / 31,
+                encode_reg_boosts(reg_boost_features),
+                encode_spe_boosts(spe_boost_features),
+            ),
+            axis=-1,
+        )
+
         boolean_code = one_hot_concat_jax(
             [
                 _encode_sqrt_one_hot_entity(
@@ -311,6 +386,9 @@ class Encoder(nn.Module):
                 ),
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE
+                ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE
                 ),
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE
@@ -350,27 +428,6 @@ class Encoder(nn.Module):
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED
                 ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ATK_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_DEF_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPA_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPD_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPE_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE
-                ),
-                _encode_one_hot_entity_boost(
-                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE
-                ),
             ]
         )
 
@@ -403,7 +460,7 @@ class Encoder(nn.Module):
             .clip(min=0, max=1)
         )
 
-        move_encodings = jax.vmap(self._encode_move)(move_tokens)
+        move_encodings = jax.vmap(self._embed_move)(move_tokens)
 
         species_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES]
         ability_token = entity[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY]
@@ -415,10 +472,10 @@ class Encoder(nn.Module):
             volatiles_encoding,
             typechange_encoding,
             move_pp_onehot,
-            hp_features,
-            self._encode_species(species_token),
-            self._encode_ability(ability_token),
-            self._encode_item(item_token),
+            stat_features,
+            self._embed_species(species_token),
+            self._embed_ability(ability_token),
+            self._embed_item(item_token),
             move_encodings.sum(axis=0),
         )
 
@@ -428,7 +485,7 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _encode_edge(self, edge: chex.Array):
+    def _embed_edge(self, edge: chex.Array):
         _encode_hex = jax.vmap(
             functools.partial(
                 _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
@@ -462,34 +519,6 @@ class Encoder(nn.Module):
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN,
                 ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ATK_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_DEF_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPA_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPD_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPE_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_EVASION_VALUE,
-                ),
-                _encode_one_hot_edge_boost(
-                    edge,
-                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ACCURACY_VALUE,
-                ),
             ]
         )
 
@@ -519,12 +548,44 @@ class Encoder(nn.Module):
         item_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN]
         move_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
 
+        reg_boost_features = edge[
+            np.array(
+                [
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ATK_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_DEF_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPA_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPD_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPE_VALUE,
+                ]
+            )
+        ]
+        spe_boost_features = edge[
+            np.array(
+                [
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ACCURACY_VALUE,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_EVASION_VALUE,
+                ]
+            )
+        ]
+        stat_features = jnp.concatenate(
+            (
+                edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO, None]
+                / MAX_RATIO_TOKEN,
+                edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__HEAL_RATIO, None]
+                / MAX_RATIO_TOKEN,
+                encode_reg_boosts(reg_boost_features),
+                encode_spe_boosts(spe_boost_features),
+            ),
+            axis=-1,
+        )
+
         embedding = self.entity_edge_sum(
             minor_args_encoding,
             boolean_code,
-            self._encode_ability(ability_token),
-            self._encode_item(item_token),
-            self._encode_move(move_token),
+            stat_features,
+            self._embed_ability(ability_token),
+            self._embed_item(item_token),
+            self._embed_move(move_token),
             effect_from_source_embedding,
         )
 
@@ -535,9 +596,9 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _encode_field(self, edge: chex.Array):
+    def _embed_field(self, edge: chex.Array):
         """
-        Encode features of an absolute edge, including turn and request offsets.
+        Embed features of the field
         """
         # Compute turn and request count differences for encoding.
 
@@ -636,42 +697,40 @@ class Encoder(nn.Module):
 
         return embedding, mask, request_count
 
-    def _encode_entities(self, env_step: EnvStep):
+    def _embed_entities(self, env_step: EnvStep):
         entity_encodings = entity_embeddings = jnp.concatenate(
             (env_step.private_team, env_step.public_team), axis=-2
         )
-        encode_entities = jax.vmap(self._encode_entity)
+        encode_entities = jax.vmap(self._embed_entity)
 
         def _batched_fn(encodings: jax.Array):
             embeddings, mask = encode_entities(encodings)
-            return (
-                embeddings,
-                self.entity_encoder(self.entity_ff(embeddings), mask),
-                mask,
-            )
+            contextual_entities = self.entity_encoder(self.entity_ff(embeddings), mask)
+            return contextual_entities, mask
 
-        entity_embeddings, contextual_entity_embeddings, entity_mask = jax.vmap(
-            _batched_fn
-        )(entity_encodings)
+        contextual_entity_embeddings, entity_mask = jax.vmap(_batched_fn)(
+            entity_encodings
+        )
         private_entity_embeddings = entity_embeddings[:, :6]
+        private_entity_embeddings = self.private_entity_ln(private_entity_embeddings)
 
         return private_entity_embeddings, contextual_entity_embeddings, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
-    def _encode_timestep(self, history: HistoryStep):
+    def _embed_timestep(self, history: HistoryStep):
         """
         Encode features of a single timestep, including entities and edges.
         """
 
         # Encode nodes.
-        history_node_embedding, node_mask = jax.vmap(self._encode_entity)(history.nodes)
+        history_node_embedding, node_mask = jax.vmap(self._embed_entity)(history.nodes)
 
         # Encode edges.
-        history_edge_embedding, edge_mask = jax.vmap(self._encode_edge)(history.edges)
+        history_edge_embedding, edge_mask = jax.vmap(self._embed_edge)(history.edges)
 
         # Encode field
-        field_embedding, valid_timestep_mask, history_request_count = (
-            self._encode_field(history.field)
+        field_embedding, valid_timestep_mask, history_request_count = self._embed_field(
+            history.field
         )
 
         contextual_history_nodes = self.per_timestep_node_encoder(
@@ -694,9 +753,9 @@ class Encoder(nn.Module):
             history_request_count,
         )
 
-    def _encode_timesteps(self, history: HistoryStep):
+    def _embed_timesteps(self, history: HistoryStep):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
-            self._encode_timestep
+            self._embed_timestep
         )(history)
 
         timestep_embedding = self.timestep_ff(timestep_embedding)
@@ -717,7 +776,7 @@ class Encoder(nn.Module):
         return contextual_timestep_embedding, history_request_count
 
     # Encode actions for the current environment step.
-    def _encode_action(
+    def _embed_action(
         self,
         action: chex.Array,
         legal: chex.Array,
@@ -746,27 +805,28 @@ class Encoder(nn.Module):
             boolean_code,
             context_encoding,
             entity_embedding,
-            self._encode_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
+            self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
         return embedding
 
-    def _encode_actions(
+    def _embed_actions(
         self, env_step: EnvStep, entity_embeddings: chex.Array
     ) -> chex.Array:
 
         def _batched_forward(env_step: EnvStep, entity_embeddings: chex.Array):
-            context_encoding, _, _ = self._encode_field(env_step.current_context)
-            action_entites = jnp.take(
+            field_embedding, _, _ = self._embed_field(env_step.field)
+            field_embedding = self.field_ln(field_embedding)
+            action_entity_embeddings = jnp.take(
                 entity_embeddings,
-                env_step.moveset[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
+                env_step.my_actions[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
                 axis=0,
             )
-            action_embeddings = jax.vmap(self._encode_action, in_axes=(0, 0, 0, None))(
-                env_step.moveset,
+            action_embeddings = jax.vmap(self._embed_action, in_axes=(0, 0, 0, None))(
+                env_step.my_actions,
                 env_step.legal.astype(int),
-                action_entites,
-                context_encoding,
+                action_entity_embeddings,
+                field_embedding,
             )
             action_embeddings = self.action_ff(action_embeddings)
             return self.action_encoder(action_embeddings, env_step.legal)
@@ -781,16 +841,14 @@ class Encoder(nn.Module):
         contextual embeddings for actions.
         """
         private_entity_embeddings, contextual_entity_embeddings, entity_mask = (
-            self._encode_entities(env_step)
+            self._embed_entities(env_step)
         )
 
-        timestep_embeddings, history_request_count = self._encode_timesteps(
-            history_step
-        )
+        timestep_embeddings, history_request_count = self._embed_timesteps(history_step)
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         timestep_mask = request_count[..., None] >= history_request_count
 
-        contextual_action_embeddings = self._encode_actions(
+        contextual_action_embeddings = self._embed_actions(
             env_step, private_entity_embeddings
         )
         action_mask = env_step.legal

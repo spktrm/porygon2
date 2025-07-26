@@ -16,6 +16,7 @@ import {
     ItemsEnumMap,
     LastitemeffecttypesEnumMap,
     MovesEnumMap,
+    NaturesEnumMap,
     PseudoweatherEnum,
     PseudoweatherEnumMap,
     SideconditionEnum,
@@ -56,7 +57,8 @@ export type EnumMappings =
     | BattlemajorargsEnumMap
     | BattleminorargsEnumMap
     | EffectEnumMap
-    | EffecttypesEnumMap;
+    | EffecttypesEnumMap
+    | NaturesEnumMap;
 
 export type MoveIndex = 0 | 1 | 2 | 3;
 export type BenchIndex = MoveIndex | 4 | 5;

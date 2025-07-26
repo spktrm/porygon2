@@ -13,6 +13,7 @@ from rl.environment.protos.enums_pb2 import (
     ItemsEnum,
     LastitemeffecttypesEnum,
     MovesEnum,
+    NaturesEnum,
     PseudoweatherEnum,
     SideconditionEnum,
     SpeciesEnum,
@@ -57,6 +58,7 @@ NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
 NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
+NUM_NATURES = len(NaturesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
 NUM_MOVE_FEATURES = len(MovesetFeature.keys())
@@ -109,13 +111,7 @@ ENTITY_NODE_MAX_VALUES = {
     EntityNodeFeature.ENTITY_NODE_FEATURE__TOXIC_TURNS: 8,
     EntityNodeFeature.ENTITY_NODE_FEATURE__SLEEP_TURNS: 4,
     EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ATK_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_DEF_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPA_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPD_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPE_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
+    EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE: NUM_NATURES,
 }
 
 ENTITY_EDGE_MAX_VALUES = {
@@ -123,13 +119,6 @@ ENTITY_EDGE_MAX_VALUES = {
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO: MAX_RATIO_TOKEN,
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__HEAL_RATIO: MAX_RATIO_TOKEN,
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN: NUM_STATUS,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ATK_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_DEF_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPA_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPD_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_SPE_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_EVASION_VALUE: MAX_BOOST_VALUE,
-    EntityEdgeFeature.ENTITY_EDGE_FEATURE__BOOST_ACCURACY_VALUE: MAX_BOOST_VALUE,
 }
 
 

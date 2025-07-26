@@ -83,8 +83,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         NUM_HISTORY,
     ).astype(np.int32)
 
-    moveset = (
-        np.frombuffer(state.moveset, dtype=np.int16)
+    my_actions = (
+        np.frombuffer(state.my_actions, dtype=np.int16)
         .reshape(10, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
@@ -99,8 +99,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         .astype(np.int32)
     )
 
-    current_context = (
-        np.frombuffer(state.current_context, dtype=np.int16)
+    field = (
+        np.frombuffer(state.field, dtype=np.int16)
         .reshape(NUM_FIELD_FEATURES)
         .astype(np.int32)
     )
@@ -115,8 +115,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         win_reward=win_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
-        current_context=current_context,
-        moveset=moveset.astype(np.int32),
+        field=field,
+        my_actions=my_actions.astype(np.int32),
         legal=get_legal_mask(state),
     )
     history_step = HistoryStep(

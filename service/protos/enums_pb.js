@@ -27,6 +27,7 @@ goog.exportSymbol('proto.enums.ItemeffecttypesEnum', null, global);
 goog.exportSymbol('proto.enums.ItemsEnum', null, global);
 goog.exportSymbol('proto.enums.LastitemeffecttypesEnum', null, global);
 goog.exportSymbol('proto.enums.MovesEnum', null, global);
+goog.exportSymbol('proto.enums.NaturesEnum', null, global);
 goog.exportSymbol('proto.enums.PseudoweatherEnum', null, global);
 goog.exportSymbol('proto.enums.SideconditionEnum', null, global);
 goog.exportSymbol('proto.enums.SpeciesEnum', null, global);
@@ -3975,6 +3976,41 @@ proto.enums.ConditionEnum = {
   CONDITION_ENUM__WRAP: 163,
   CONDITION_ENUM__YAWN: 164,
   CONDITION_ENUM__ZENMODE: 165
+};
+
+/**
+ * @enum {number}
+ */
+proto.enums.NaturesEnum = {
+  NATURES_ENUM___UNSPECIFIED: 0,
+  NATURES_ENUM___NULL: 1,
+  NATURES_ENUM___PAD: 2,
+  NATURES_ENUM___UNK: 3,
+  NATURES_ENUM__ADAMANT: 4,
+  NATURES_ENUM__BASHFUL: 5,
+  NATURES_ENUM__BOLD: 6,
+  NATURES_ENUM__BRAVE: 7,
+  NATURES_ENUM__CALM: 8,
+  NATURES_ENUM__CAREFUL: 9,
+  NATURES_ENUM__DOCILE: 10,
+  NATURES_ENUM__GENTLE: 11,
+  NATURES_ENUM__HARDY: 12,
+  NATURES_ENUM__HASTY: 13,
+  NATURES_ENUM__IMPISH: 14,
+  NATURES_ENUM__JOLLY: 15,
+  NATURES_ENUM__LAX: 16,
+  NATURES_ENUM__LONELY: 17,
+  NATURES_ENUM__MILD: 18,
+  NATURES_ENUM__MODEST: 19,
+  NATURES_ENUM__NAIVE: 20,
+  NATURES_ENUM__NAUGHTY: 21,
+  NATURES_ENUM__QUIET: 22,
+  NATURES_ENUM__QUIRKY: 23,
+  NATURES_ENUM__RASH: 24,
+  NATURES_ENUM__RELAXED: 25,
+  NATURES_ENUM__SASSY: 26,
+  NATURES_ENUM__SERIOUS: 27,
+  NATURES_ENUM__TIMID: 28
 };
 
 /**

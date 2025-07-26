@@ -9,10 +9,10 @@ class EnvStep(NamedTuple):
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
     public_team: ArrayLike = ()
-    current_context: ArrayLike = ()
+    field: ArrayLike = ()
 
     # Private Info
-    moveset: ArrayLike = ()
+    my_actions: ArrayLike = ()
     legal: ArrayLike = ()
     private_team: ArrayLike = ()
 
