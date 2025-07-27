@@ -107,7 +107,7 @@ def train_step(
         learner_actor_approx_kl = (-learner_actor_log_ratio).mean(where=valid)
         learner_target_approx_kl = (-learner_target_log_ratio).mean(where=valid)
 
-        logs = dict(
+        return loss, dict(
             # Loss values
             loss_pg=loss_pg,
             loss_v=loss_v,
@@ -125,8 +125,6 @@ def train_step(
                 value_prediction=pred.v, value_target=vtrace.returns, mask=valid
             ),
         )
-
-        return loss, logs
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss_val, logs), grads = grad_fn(state.params)

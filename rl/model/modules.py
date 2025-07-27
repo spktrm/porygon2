@@ -1,6 +1,5 @@
 from typing import List, Optional, Sequence, Tuple
 
-import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -18,7 +17,7 @@ class RMSNorm(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         scale = self.param(
             "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.dtype
         )
@@ -36,42 +35,42 @@ class RMSNorm(nn.Module):
         return normed_inputs
 
 
-def activation_fn(array: chex.Array) -> chex.Array:
+def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.
 
     Args:
-        array (chex.Array): Input array.
+        array (jax.Array): Input array.
 
     Returns:
-        chex.Array: Activated array.
+        jax.Array: Activated array.
     """
     return nn.gelu(array)
 
 
-def layer_norm(array: chex.Array, dtype: jnp.dtype) -> chex.Array:
+def layer_norm(array: jax.Array, dtype: jnp.dtype) -> jax.Array:
     """
     Apply layer normalization.
 
     Args:
-        array (chex.Array): Input array.
+        array (jax.Array): Input array.
 
     Returns:
-        chex.Array: Normalized array.
+        jax.Array: Normalized array.
     """
     return RMSNorm(dtype=dtype)(array)
 
 
-def softcap(array: chex.Array, max_value: int = 50) -> chex.Array:
+def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
     """
     Apply softcap function.
 
     Args:
-        array (chex.Array): Input array.
+        array (jax.Array): Input array.
         max_value (int, optional): Maximum value. Defaults to 50.
 
     Returns:
-        chex.Array: Softcapped array.
+        jax.Array: Softcapped array.
     """
     return max_value * nn.tanh(array / max_value)
 
@@ -85,7 +84,7 @@ class Logits(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         """Logits for scalar heads."""
 
         for i in range(self.num_linear_layers):
@@ -104,9 +103,7 @@ class Logits(nn.Module):
         return x
 
 
-def get_freqs(
-    seq_len: int, dim: int, base: int = 10000
-) -> Tuple[chex.Array, chex.Array]:
+def get_freqs(seq_len: int, dim: int, base: int = 10000) -> Tuple[jax.Array, jax.Array]:
     """
     Get frequency embeddings.
 
@@ -116,7 +113,7 @@ def get_freqs(
         base (int, optional): Base value. Defaults to 10000.
 
     Returns:
-        Tuple[chex.Array, chex.Array]: Frequency embeddings.
+        Tuple[jax.Array, jax.Array]: Frequency embeddings.
     """
     theta = 1 / (base ** (jnp.arange(0, dim, 2) / dim))
     t = jnp.arange(seq_len)
@@ -130,15 +127,15 @@ def get_freqs(
     return freqs_cos, freqs_sin
 
 
-def apply_rope(x: chex.Array, max_wavelength: int = 10_000) -> chex.Array:
+def apply_rope(x: jax.Array, max_wavelength: int = 10_000) -> jax.Array:
     """
     Get rotary position embeddings.
 
     Args:
-        x (chex.Array): Input array.
+        x (jax.Array): Input array.
 
     Returns:
-        chex.Array: Rotary position embeddings.
+        jax.Array: Rotary position embeddings.
     """
     *_, seq_len, num_heads, head_dim = x.shape
     fraction = 2 * jnp.arange(0, head_dim // 2) / head_dim
@@ -186,106 +183,83 @@ class MultiHeadAttention(nn.Module):
     """
 
     num_heads: int
-    key_size: int
-    value_size: Optional[int] = None
+    qk_size: int
+    v_size: Optional[int] = None
     model_size: Optional[int] = None
     qk_layer_norm: bool = False
     need_pos: bool = False
+    use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
 
-    @nn.compact
-    def __call__(
+    def _linear_projection(
         self,
-        query: chex.Array,
-        key: chex.Array,
-        value: chex.Array,
-        mask: Optional[chex.Array] = None,
-    ) -> chex.Array:
-        """
-        Computes (optionally masked) MHA with queries, keys & values.
+        x: jax.Array,
+        head_size: int,
+        use_layer_norm: bool = False,
+        need_pos: bool = False,
+    ) -> jax.Array:
+        y = nn.Dense(
+            self.num_heads * head_size,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+        )(x)
+        *leading_dims, _ = x.shape
+        y = y.reshape((*leading_dims, self.num_heads, head_size))
+        if use_layer_norm:
+            y = layer_norm(y, self.dtype)
+        if need_pos:
+            y = apply_rope(y)
+        return y
 
-        Args:
-            query (chex.Array): Embeddings sequence used to compute queries.
-            key (chex.Array): Embeddings sequence used to compute keys.
-            value (chex.Array): Embeddings sequence used to compute values.
-            mask (Optional[chex.Array], optional): Optional mask applied to attention weights.
-
-        Returns:
-            chex.Array: A new sequence of embeddings.
-        """
+    @nn.compact
+    def __call__(self, q: jax.Array, kv: jax.Array, mask: jax.Array) -> jax.Array:
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
-        *leading_dims, s1_length, _ = query.shape
+        *leading_dims, s1_length, _ = q.shape
 
-        key_size = self.key_size
-        value_size = self.value_size or self.key_size
-        model_size = self.model_size or self.key_size * self.num_heads
+        qk_size = self.qk_size
+        v_size = self.v_size or self.qk_size
+        model_size = self.model_size or self.qk_size * self.num_heads
 
-        def _linear_projection(
-            x: chex.Array,
-            head_size: int,
-            use_layer_norm: bool = False,
-            need_pos: bool = False,
-        ) -> chex.Array:
-            y = nn.Dense(self.num_heads * head_size, use_bias=False, dtype=self.dtype)(
-                x
-            )
-            *leading_dims, _ = x.shape
-            y = y.reshape((*leading_dims, self.num_heads, head_size))
-            if use_layer_norm:
-                y = layer_norm(y, self.dtype)
-            if need_pos:
-                y = apply_rope(y)
-            return y
-
-        # Compute key/query/values (overload K/Q/V to denote the respective sizes).
-        query_heads = _linear_projection(
-            query, key_size, self.qk_layer_norm, self.need_pos
-        )  # [T', H, Q=K]
-        key_heads = _linear_projection(
-            key, key_size, self.qk_layer_norm, self.need_pos
-        )  # [T, H, K]
-        value_heads = _linear_projection(value, value_size)  # [T, H, V]
+        query_heads = self._linear_projection(
+            q, qk_size, self.qk_layer_norm, self.need_pos
+        )
+        key_heads = self._linear_projection(
+            kv, qk_size, self.qk_layer_norm, self.need_pos
+        )
+        value_heads = self._linear_projection(kv, v_size)
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits / np.sqrt(key_size).astype(key.dtype)
+        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        if mask is not None:
-            if mask.ndim != attn_logits.ndim:
-                raise ValueError(
-                    f"Mask dimensionality {mask.ndim} must match logits dimensionality "
-                    f"{attn_logits.ndim}."
-                )
-            attn_logits = jnp.where(mask, attn_logits, BIAS_VALUE)
-
-        attn_weights = nn.softmax(attn_logits)  # [H, T', T]
-        # attn_weights = escort_transform(attn_logits, mask)
-
-        if mask is not None:
-            attn_weights = jnp.where(mask, attn_weights, 0)
+        attn_logits = jnp.where(mask, attn_logits, BIAS_VALUE)
+        attn_weights = nn.softmax(attn_logits)
+        attn_weights = jnp.where(mask, attn_weights, 0)
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
         attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(model_size, use_bias=False, dtype=self.dtype)
+        final_projection = nn.Dense(
+            model_size, use_bias=self.use_bias, dtype=self.dtype
+        )
         return final_projection(attn)  # [T', D']
 
 
 def create_attention_mask(
-    mask1: Optional[chex.Array] = None, mask2: Optional[chex.Array] = None
-) -> Optional[chex.Array]:
+    mask1: Optional[jax.Array] = None, mask2: Optional[jax.Array] = None
+) -> Optional[jax.Array]:
     """
     Create a combined attention mask for cross-attention.
 
     Args:
-        mask1 (Optional[chex.Array], optional): First mask array. Defaults to None.
-        mask2 (Optional[chex.Array], optional): Second mask array. Defaults to None.
+        mask1 (Optional[jax.Array], optional): First mask array. Defaults to None.
+        mask2 (Optional[jax.Array], optional): Second mask array. Defaults to None.
 
     Returns:
-        Optional[chex.Array]: Combined attention mask.
+        Optional[jax.Array]: Combined attention mask.
     """
     if mask1 is None:
         return None
@@ -293,7 +267,8 @@ def create_attention_mask(
     if mask2 is None:
         mask2 = mask1
 
-    return mask1[..., None, :, None] & mask2[..., None, None, :]
+    mask = jnp.einsum("...s,...t->...st", mask1, mask2)
+    return jnp.expand_dims(mask, axis=-3)
 
 
 class FeedForward(nn.Module):
@@ -303,7 +278,7 @@ class FeedForward(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         ff_gate = nn.Dense(self.hidden_dim, use_bias=False, dtype=self.dtype)(x)
         gate_value = nn.gelu(ff_gate)
 
@@ -321,7 +296,7 @@ class FeedForwardResidual(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         ffw = FeedForward(self.hidden_dim, dtype=self.dtype)(layer_norm(x, self.dtype))
         if self.post_ffw_norm:
             ffw = layer_norm(ffw, self.dtype)
@@ -331,12 +306,12 @@ class FeedForwardResidual(nn.Module):
 class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    key_size: int
-    value_size: int
+    qk_size: int
+    v_size: int
     model_size: int
     num_layers: int
     num_heads: int
-    use_layer_norm: bool = True
+    use_bias: bool = True
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
@@ -344,71 +319,71 @@ class TransformerEncoder(nn.Module):
     use_post_ffw_norm: bool = True
     dtype: jnp.dtype = jnp.float32
 
+    def layer(
+        self,
+        qkv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+    ):
+        qkv_ln = layer_norm(qkv, self.dtype)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            qk_layer_norm=self.qk_layer_norm,
+            use_bias=self.use_bias,
+            need_pos=self.need_pos,
+            dtype=self.dtype,
+        )(q=qkv_ln, kv=qkv_ln, mask=attn_mask)
+        if self.use_post_attn_norm:
+            mha = layer_norm(mha, self.dtype)
+        qkv = qkv + mha
+        qkv_ln = layer_norm(qkv, self.dtype)
+        ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(qkv_ln)
+        if self.use_post_ffw_norm:
+            ffn = layer_norm(ffn, self.dtype)
+        qkv = qkv + ffn
+        return jnp.where(positionwise_mask, qkv, 0)
+
     @nn.compact
     def __call__(
         self,
-        x: chex.Array,
-        mask: Optional[chex.Array] = None,
-        ca_mask: Optional[chex.Array] = None,
-    ) -> chex.Array:
+        qkv: jax.Array,
+        attn_mask: Optional[jax.Array] = None,
+    ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
 
         Args:
-            x (chex.Array): Input array.
-            mask (Optional[chex.Array], optional): Mask array. Defaults to None.
-            ca_mask (Optional[chex.Array], optional): Cross-attention mask array. Defaults to None.
+            x (jax.Array): Input array.
+            mask (Optional[jax.Array], optional): Mask array. Defaults to None.
+            ca_mask (Optional[jax.Array], optional): Cross-attention mask array. Defaults to None.
 
         Returns:
-            chex.Array: Output array.
+            jax.Array: Output array.
         """
-        if mask is None:
-            mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
+        if attn_mask is None:
+            qkv_mask = jnp.ones_like(qkv[..., 0], dtype=jnp.bool)
+            attn_mask = create_attention_mask(qkv_mask, qkv_mask)
 
-        self_attn_mask = create_attention_mask(mask)
-        if ca_mask is not None:
-            self_attn_mask = jnp.logical_and(self_attn_mask, ca_mask)
-        positionwise_mask = self_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
+        positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         for _ in range(self.num_layers):
-            if self.use_layer_norm:
-                x_ln = layer_norm(x, self.dtype)
-            else:
-                x_ln = x
-            mha = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                qk_layer_norm=self.qk_layer_norm,
-                need_pos=self.need_pos,
-                dtype=self.dtype,
-            )(query=x_ln, key=x_ln, value=x_ln, mask=self_attn_mask)
-            if self.use_post_attn_norm:
-                mha = layer_norm(mha, self.dtype)
-            x = x + mha
-            if self.use_layer_norm:
-                x_ln = layer_norm(x, self.dtype)
-            else:
-                x_ln = x
-            ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(x_ln)
-            if self.use_post_ffw_norm:
-                ffn = layer_norm(ffn, self.dtype)
-            x = x + ffn
-            x = jnp.where(positionwise_mask, x, 0)
+            qkv = self.layer(qkv, attn_mask, positionwise_mask)
 
-        return x
+        return qkv
 
 
 class TransformerDecoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
-    key_size: int
-    value_size: int
+    qk_size: int
+    v_size: int
     model_size: int
     num_layers: int
     num_heads: int
-    use_layer_norm: bool = True
+    use_bias: bool = True
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: Optional[int] = None
@@ -416,72 +391,64 @@ class TransformerDecoder(nn.Module):
     use_post_ffw_norm: bool = True
     dtype: jnp.dtype = jnp.float32
 
+    def layer(
+        self,
+        q: jax.Array,
+        kv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+    ):
+        q_ln = layer_norm(q, self.dtype)
+        kv_ln = layer_norm(kv, self.dtype)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            use_bias=self.use_bias,
+            qk_layer_norm=self.qk_layer_norm,
+            need_pos=self.need_pos,
+            dtype=self.dtype,
+        )(q=q_ln, kv=kv_ln, mask=attn_mask)
+        if self.use_post_attn_norm:
+            mha = layer_norm(mha, self.dtype)
+        q = q + mha
+        q_ln = layer_norm(q, self.dtype)
+        ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(q_ln)
+        if self.use_post_ffw_norm:
+            ffn = layer_norm(ffn, self.dtype)
+        q = q + ffn
+        return jnp.where(positionwise_mask, q, 0)
+
     @nn.compact
     def __call__(
         self,
-        x: chex.Array,
-        y: chex.Array,
-        x_mask: Optional[chex.Array] = None,
-        y_mask: Optional[chex.Array] = None,
-        ca_mask: Optional[chex.Array] = None,
-    ) -> chex.Array:
+        q: jax.Array,
+        kv: jax.Array,
+        attn_mask: Optional[jax.Array] = None,
+    ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
 
         Args:
-            x (chex.Array): Input array.
-            y (chex.Array): Input array.
-            x_mask (Optional[chex.Array], optional): Mask array for x. Defaults to None.
-            y_mask (Optional[chex.Array], optional): Mask array for y. Defaults to None.
-            ca_mask (Optional[chex.Array], optional): Cross-attention mask array. Defaults to None.
+            x (jax.Array): Input array.
+            mask (Optional[jax.Array], optional): Mask array. Defaults to None.
+            ca_mask (Optional[jax.Array], optional): Cross-attention mask array. Defaults to None.
 
         Returns:
-            chex.Array: Output array.
+            jax.Array: Output array.
         """
-        if x_mask is None:
-            x_mask = jnp.ones_like(x[..., 0], dtype=jnp.bool)
+        if attn_mask is None:
+            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+            attn_mask = create_attention_mask(q_mask, kv_mask)
 
-        if y_mask is None:
-            y_mask = jnp.ones_like(y[..., 0], dtype=jnp.bool)
-
-        cross_attn_mask = create_attention_mask(x_mask, y_mask)
-        if ca_mask is not None:
-            cross_attn_mask = cross_attn_mask & ca_mask
-        positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
-
-        if self.use_layer_norm:
-            y_ln = layer_norm(y, self.dtype)
-        else:
-            y_ln = y
+        positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
         for _ in range(self.num_layers):
-            if self.use_layer_norm:
-                x_ln = layer_norm(x, self.dtype)
-            else:
-                x_ln = x
-            ca = MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.key_size,
-                value_size=self.value_size,
-                model_size=self.model_size,
-                qk_layer_norm=self.qk_layer_norm,
-                need_pos=self.need_pos,
-                dtype=self.dtype,
-            )(query=x_ln, key=y_ln, value=y_ln, mask=cross_attn_mask)
-            if self.use_post_attn_norm:
-                ca = layer_norm(ca, self.dtype)
-            x = x + ca
-            if self.use_layer_norm:
-                x_ln = layer_norm(x, self.dtype)
-            else:
-                x_ln = x
-            ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(x_ln)
-            if self.use_post_ffw_norm:
-                ffn = layer_norm(ffn, self.dtype)
-            x = x + ffn
-            x = jnp.where(positionwise_mask, x, 0)
+            q = self.layer(q, kv, attn_mask, positionwise_mask)
 
-        return x
+        return q
 
 
 class MLP(nn.Module):
@@ -493,15 +460,15 @@ class MLP(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         """
         Apply unit-wise linear layers to the units.
 
         Args:
-            x (chex.Array): Input array.
+            x (jax.Array): Input array.
 
         Returns:
-            chex.Array: Output array.
+            jax.Array: Output array.
         """
         for layer_index, size in enumerate(self.layer_sizes):
             if layer_index == 0 and not self.activate_first:
@@ -527,15 +494,15 @@ class PretrainedEmbedding:
             arr = np.load(f)
         self.embeddings = jnp.asarray(arr, dtype=dtype)
 
-    def __call__(self, indices: chex.Array) -> chex.Array:
+    def __call__(self, indices: jax.Array) -> jax.Array:
         """
         Get embeddings for the given indices.
 
         Args:
-            indices (chex.Array): Indices array.
+            indices (jax.Array): Indices array.
 
         Returns:
-            chex.Array: Embeddings array.
+            jax.Array: Embeddings array.
         """
         return jnp.take(self.embeddings, indices, axis=0)
 
@@ -545,7 +512,7 @@ class SumEmbeddings(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
+    def __call__(self, *embeddings: List[jax.Array]) -> jax.Array:
         """Sum embeddings."""
         return sum(
             [
@@ -562,16 +529,16 @@ class MergeEmbeddings(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, *embeddings: List[chex.Array]) -> chex.Array:
+    def __call__(self, *embeddings: List[jax.Array]) -> jax.Array:
         """
         Sum embeddings.
 
         Args:
-            encodings (List[chex.Array]): List of encoding arrays.
-            embeddings (Optional[List[chex.Array]], optional): List of embedding arrays. Defaults to None.
+            encodings (List[jax.Array]): List of encoding arrays.
+            embeddings (Optional[List[jax.Array]], optional): List of embedding arrays. Defaults to None.
 
         Returns:
-            chex.Array: Summed embeddings array.
+            jax.Array: Summed embeddings array.
         """
         num_module_embeddings = len(embeddings)
         if num_module_embeddings == 0:
@@ -606,7 +573,7 @@ class MergeEmbeddings(nn.Module):
 
 def one_hot_concat_jax(
     one_hot_encoded: List[Tuple[int, int]], dtype: jnp.dtype = jnp.float32
-) -> chex.Array:
+) -> jax.Array:
     """
     Concatenate one-hot encoded arrays.
 
@@ -614,7 +581,7 @@ def one_hot_concat_jax(
         one_hot_encoded (List[Tuple[int, int]]): List of tuples containing indices and offsets.
 
     Returns:
-        chex.Array: Concatenated one-hot encoded array.
+        jax.Array: Concatenated one-hot encoded array.
     """
     sum_offsets = np.cumsum([0] + [offset for _, offset in one_hot_encoded])
     indices = jnp.stack(
