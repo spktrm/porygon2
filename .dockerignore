@@ -1,0 +1,39 @@
+env/
+
+**/dist
+**/node_modules
+
+__pycache__/
+
+.vscode/
+.jax_jit_cache/
+
+data/data/
+
+**/*.ipynb
+
+# rlenv ignores
+rlenv/ex
+rlenv/ex_batch
+
+# server ignores
+
+# replays ignores
+replays/data/**
+
+# ml ignores
+ml/wandb/
+
+**/*.env
+wandb/
+
+ckpts/
+
+# heuristics ignores
+heuristics/**/*.json
+
+# replays ignores
+replays/**/*.ckpt
+
+# viz ignores
+viz/*.json
