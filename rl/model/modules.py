@@ -127,7 +127,9 @@ def get_freqs(seq_len: int, dim: int, base: int = 10000) -> Tuple[jax.Array, jax
     return freqs_cos, freqs_sin
 
 
-def apply_rope(x: jax.Array, max_wavelength: int = 10_000) -> jax.Array:
+def apply_rope(
+    inputs: jax.Array, positions: jax.Array, max_wavelength: int = 10_000
+) -> jax.Array:
     """
     Get rotary position embeddings.
 
@@ -137,22 +139,21 @@ def apply_rope(x: jax.Array, max_wavelength: int = 10_000) -> jax.Array:
     Returns:
         jax.Array: Rotary position embeddings.
     """
-    *_, seq_len, num_heads, head_dim = x.shape
+    *_, seq_len, num_heads, head_dim = inputs.shape
     fraction = 2 * jnp.arange(0, head_dim // 2) / head_dim
     timescale = max_wavelength**fraction
 
-    positions = jnp.arange(seq_len, dtype=x.dtype)
     sinusoid_inp = positions[..., jnp.newaxis] / timescale[jnp.newaxis, :]
     sinusoid_inp = sinusoid_inp[..., jnp.newaxis, :]
 
     sin = jnp.sin(sinusoid_inp)
     cos = jnp.cos(sinusoid_inp)
 
-    first_half, second_half = jnp.split(x, 2, axis=-1)
+    first_half, second_half = jnp.split(inputs, 2, axis=-1)
     first_part = first_half * cos - second_half * sin
     second_part = second_half * cos + first_half * sin
     out = jnp.concatenate([first_part, second_part], axis=-1)
-    return out.astype(x.dtype)
+    return out.astype(inputs.dtype)
 
 
 def escort_transform(x: jax.Array, m: jax.Array = None, p: int = 2, axis: int = -1):
@@ -192,11 +193,7 @@ class MultiHeadAttention(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def _linear_projection(
-        self,
-        x: jax.Array,
-        head_size: int,
-        use_layer_norm: bool = False,
-        need_pos: bool = False,
+        self, x: jax.Array, head_size: int, use_layer_norm: bool = False
     ) -> jax.Array:
         y = nn.Dense(
             self.num_heads * head_size,
@@ -207,12 +204,17 @@ class MultiHeadAttention(nn.Module):
         y = y.reshape((*leading_dims, self.num_heads, head_size))
         if use_layer_norm:
             y = layer_norm(y, self.dtype)
-        if need_pos:
-            y = apply_rope(y)
         return y
 
     @nn.compact
-    def __call__(self, q: jax.Array, kv: jax.Array, mask: jax.Array) -> jax.Array:
+    def __call__(
+        self,
+        q: jax.Array,
+        kv: jax.Array,
+        mask: jax.Array,
+        q_positions: Optional[jax.Array] = None,
+        kv_positions: Optional[jax.Array] = None,
+    ) -> jax.Array:
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *leading_dims, s1_length, _ = q.shape
@@ -221,13 +223,18 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = self._linear_projection(
-            q, qk_size, self.qk_layer_norm, self.need_pos
-        )
-        key_heads = self._linear_projection(
-            kv, qk_size, self.qk_layer_norm, self.need_pos
-        )
+        query_heads = self._linear_projection(q, qk_size, self.qk_layer_norm)
+        key_heads = self._linear_projection(kv, qk_size, self.qk_layer_norm)
         value_heads = self._linear_projection(kv, v_size)
+
+        if self.need_pos:
+            if q_positions is None or kv_positions is None:
+                raise ValueError(
+                    "Rotary position embeddings require positions argument."
+                )
+            # Get the positions for the sequence.
+            query_heads = apply_rope(query_heads, q_positions)
+            key_heads = apply_rope(key_heads, kv_positions)
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
@@ -324,6 +331,7 @@ class TransformerEncoder(nn.Module):
         qkv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
+        qkv_positions: Optional[jax.Array] = None,
     ):
         qkv_ln = layer_norm(qkv, self.dtype)
         mha = MultiHeadAttention(
@@ -335,7 +343,13 @@ class TransformerEncoder(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=self.dtype,
-        )(q=qkv_ln, kv=qkv_ln, mask=attn_mask)
+        )(
+            q=qkv_ln,
+            kv=qkv_ln,
+            mask=attn_mask,
+            q_positions=qkv_positions,
+            kv_positions=qkv_positions,
+        )
         if self.use_post_attn_norm:
             mha = layer_norm(mha, self.dtype)
         qkv = qkv + mha
@@ -351,6 +365,7 @@ class TransformerEncoder(nn.Module):
         self,
         qkv: jax.Array,
         attn_mask: Optional[jax.Array] = None,
+        qkv_positions: Optional[jax.Array] = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -369,8 +384,11 @@ class TransformerEncoder(nn.Module):
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
+        if self.need_pos and qkv_positions is None:
+            qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
+
         for _ in range(self.num_layers):
-            qkv = self.layer(qkv, attn_mask, positionwise_mask)
+            qkv = self.layer(qkv, attn_mask, positionwise_mask, qkv_positions)
 
         return qkv
 
@@ -397,6 +415,8 @@ class TransformerDecoder(nn.Module):
         kv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
+        q_positions: Optional[jax.Array] = None,
+        kv_positions: Optional[jax.Array] = None,
     ):
         q_ln = layer_norm(q, self.dtype)
         kv_ln = layer_norm(kv, self.dtype)
@@ -409,7 +429,13 @@ class TransformerDecoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=self.dtype,
-        )(q=q_ln, kv=kv_ln, mask=attn_mask)
+        )(
+            q=q_ln,
+            kv=kv_ln,
+            mask=attn_mask,
+            q_positions=q_positions,
+            kv_positions=kv_positions,
+        )
         if self.use_post_attn_norm:
             mha = layer_norm(mha, self.dtype)
         q = q + mha
@@ -426,6 +452,8 @@ class TransformerDecoder(nn.Module):
         q: jax.Array,
         kv: jax.Array,
         attn_mask: Optional[jax.Array] = None,
+        q_positions: Optional[jax.Array] = None,
+        kv_positions: Optional[jax.Array] = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -445,8 +473,16 @@ class TransformerDecoder(nn.Module):
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
+        if self.need_pos:
+            if q_positions is None:
+                q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
+            if kv_positions is None:
+                kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
+
         for _ in range(self.num_layers):
-            q = self.layer(q, kv, attn_mask, positionwise_mask)
+            q = self.layer(
+                q, kv, attn_mask, positionwise_mask, q_positions, kv_positions
+            )
 
         return q
 

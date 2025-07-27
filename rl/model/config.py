@@ -131,7 +131,7 @@ def get_model_config():
     cfg.encoder.entity_timestep_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
     cfg.encoder.entity_timestep_decoder.num_layers = 2
-    cfg.encoder.entity_timestep_decoder.need_pos = False
+    cfg.encoder.entity_timestep_decoder.need_pos = True
 
     cfg.encoder.entity_action_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_action_decoder, **transformer_decoder_kwargs)
