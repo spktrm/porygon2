@@ -195,7 +195,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.tasks.submitResult(rqid, stepRequest);
     }
 
-    public async recieveEnvironmentState() {
+    public async receiveEnvironmentState() {
         return await this.outgoingQueue.dequeueAsync();
     }
 

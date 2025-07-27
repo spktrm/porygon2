@@ -11,10 +11,10 @@ async function playerController(
 ) {
     console.log(`${playerName}: Controller started.`);
     // The loop will continue as long as the player's stream is open.
-    // The `recieveEnvironmentResponse` will resolve when a request is available.
+    // The `receiveEnvironmentResponse` will resolve when a request is available.
     while (true) {
         try {
-            const state = await player.recieveEnvironmentState();
+            const state = await player.receiveEnvironmentState();
             stateTracker.lastState = state; // Update the shared last state
 
             const info = new Int16Array(state.getInfo_asU8().buffer);

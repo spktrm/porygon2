@@ -388,7 +388,7 @@ class Battle {
 
     public async start(rateLimit: number = 1000) {
         while (!this.player.done) {
-            const state = await this.player.recieveEnvironmentState();
+            const state = await this.player.receiveEnvironmentState();
             const response = await fetch("http://127.0.0.1:8001/predict", {
                 // Ensure this URL is correct for your setup
                 method: "POST",
