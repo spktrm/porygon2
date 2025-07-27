@@ -60,7 +60,7 @@ def get_legal_mask(state: EnvironmentState):
 def process_state(state: EnvironmentState) -> TimeStep:
     history_length = state.history_length
 
-    info = np.frombuffer(state.info, dtype=np.int16)
+    info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
 
     history_entity_nodes = padnstack(
         np.frombuffer(state.history_entity_nodes, dtype=np.int16).reshape(
@@ -116,7 +116,7 @@ def process_state(state: EnvironmentState) -> TimeStep:
         private_team=private_team,
         public_team=public_team,
         field=field,
-        my_actions=my_actions.astype(np.int32),
+        my_actions=my_actions,
         legal=get_legal_mask(state),
     )
     history_step = HistoryStep(

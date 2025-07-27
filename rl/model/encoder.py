@@ -46,6 +46,7 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
+from rl.model.utils import BIAS_VALUE
 
 # Load pretrained embeddings for various features.
 SPECIES_ONEHOT = PretrainedEmbedding(
@@ -686,7 +687,6 @@ class Encoder(nn.Module):
 
         # Apply mask to filter out invalid edges.
         mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
-        request_count = jnp.where(mask, request_count, 1e9)
 
         return embedding, mask, request_count
 
@@ -762,7 +762,7 @@ class Encoder(nn.Module):
             & jnp.expand_dims(causal_mask, axis=0),
         )
 
-        return contextual_timestep_embedding, history_request_count
+        return contextual_timestep_embedding, valid_timestep_mask, history_request_count
 
     # Encode actions for the current environment step.
     def _embed_action(
@@ -822,11 +822,20 @@ class Encoder(nn.Module):
         contextual embeddings for actions.
         """
 
-        timestep_embeddings, history_request_count = self._embed_timesteps(history_step)
+        timestep_embeddings, history_valid_mask, history_request_count = (
+            self._embed_timesteps(history_step)
+        )
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        timestep_mask = request_count[..., None] >= history_request_count
+        # For padded timesteps, request count is 0, so we use a large bias value.
+        timestep_mask = request_count[..., None] >= jnp.where(
+            history_valid_mask, history_request_count, -BIAS_VALUE
+        )
 
-        def _batched_forward(env_step: EnvStep, timestep_mask: jax.Array):
+        def _batched_forward(
+            env_step: EnvStep,
+            timestep_mask: jax.Array,
+            current_position: jax.Array,
+        ):
             entity_embeddings, entity_mask = self._embed_entities(env_step)
             field_embedding, *_ = self._embed_field(env_step.field)
 
@@ -834,6 +843,8 @@ class Encoder(nn.Module):
                 entity_embeddings + field_embedding,
                 timestep_embeddings,
                 create_attention_mask(entity_mask, timestep_mask),
+                q_positions=current_position,
+                kv_positions=history_request_count,
             )
             action_embeddings = self._embed_actions(env_step, entity_embeddings[:6])
 
@@ -852,6 +863,10 @@ class Encoder(nn.Module):
 
         contextual_entities, contextual_actions, entity_mask = jax.vmap(
             _batched_forward
-        )(env_step, timestep_mask)
+        )(
+            env_step,
+            timestep_mask,
+            jnp.expand_dims(request_count, -1),
+        )
 
         return contextual_entities, contextual_actions, entity_mask
