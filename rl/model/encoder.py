@@ -43,6 +43,7 @@ from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
+    create_attention_mask,
     one_hot_concat_jax,
 )
 
@@ -58,8 +59,8 @@ MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bf
 
 
 def _binary_scale_encoding(
-    to_encode: chex.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
-) -> chex.Array:
+    to_encode: jax.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
+) -> jax.Array:
     """Encode the feature using its binary representation."""
     chex.assert_rank(to_encode, 0)
     chex.assert_type(to_encode, jnp.int32)
@@ -71,7 +72,7 @@ def _binary_scale_encoding(
 
 
 def _encode_one_hot(
-    entity: chex.Array,
+    entity: jax.Array,
     feature_idx: int,
     max_values: Dict[int, int],
     value_offset: int = 0,
@@ -82,7 +83,7 @@ def _encode_one_hot(
 
 
 def _encode_capped_one_hot(
-    entity: chex.Array, feature_idx: int, max_values: Dict[int, int]
+    entity: jax.Array, feature_idx: int, max_values: Dict[int, int]
 ) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
@@ -91,7 +92,7 @@ def _encode_capped_one_hot(
 
 
 def _encode_sqrt_one_hot(
-    entity: chex.Array,
+    entity: jax.Array,
     feature_idx: int,
     max_values: Dict[int, int],
     dtype: jnp.dtype = jnp.int32,
@@ -106,7 +107,7 @@ def _encode_sqrt_one_hot(
 
 
 def _encode_divided_one_hot(
-    entity: chex.Array, feature_idx: int, divisor: int, max_values: Dict[int, int]
+    entity: jax.Array, feature_idx: int, divisor: int, max_values: Dict[int, int]
 ) -> Tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
@@ -135,7 +136,7 @@ _encode_divided_one_hot_edge = partial(
 )
 
 
-def get_entity_mask(entity: chex.Array) -> chex.Array:
+def get_entity_mask(entity: jax.Array) -> jax.Array:
     """
     Generate a mask to identify valid entities based on species tokens.
     """
@@ -147,7 +148,7 @@ def get_entity_mask(entity: chex.Array) -> chex.Array:
     )
 
 
-def encode_boosts(boosts: chex.Array, offset: int):
+def encode_boosts(boosts: jax.Array, offset: int):
     return jnp.where(
         boosts > 0,
         (offset + boosts) / offset,
@@ -155,12 +156,12 @@ def encode_boosts(boosts: chex.Array, offset: int):
     )
 
 
-def encode_reg_boosts(boosts: chex.Array):
+def encode_reg_boosts(boosts: jax.Array):
     """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
     return (1 / math.log(2)) * jnp.log(encode_boosts(boosts, 2))
 
 
-def encode_spe_boosts(boosts: chex.Array):
+def encode_spe_boosts(boosts: jax.Array):
     """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
     return (2 / math.log(3)) * jnp.log(encode_boosts(boosts, 3))
 
@@ -237,27 +238,19 @@ class Encoder(nn.Module):
             **self.cfg.timestep_encoder.to_dict()
         )
         self.action_encoder = TransformerEncoder(**self.cfg.action_encoder.to_dict())
-        self.latent_encoder = TransformerEncoder(**self.cfg.latent_encoder.to_dict())
 
         # Transformer Decoders
-        self.latent_timestep_decoder = TransformerDecoder(
-            **self.cfg.latent_timestep_decoder.to_dict()
+        self.entity_timestep_decoder = TransformerDecoder(
+            **self.cfg.entity_timestep_decoder.to_dict()
         )
-        self.latent_entity_decoder = TransformerDecoder(
-            **self.cfg.latent_entity_decoder.to_dict()
+        self.entity_action_decoder = TransformerDecoder(
+            **self.cfg.entity_action_decoder.to_dict()
         )
-        self.latent_action_decoder = TransformerDecoder(
-            **self.cfg.latent_action_decoder.to_dict()
-        )
-
-        # Latents
-        self.latent_embeddings = self.param(
-            "latent_embeddings",
-            nn.initializers.normal(dtype=self.cfg.dtype),
-            (self.cfg.num_latents, entity_size),
+        self.action_entity_decoder = TransformerDecoder(
+            **self.cfg.action_entity_decoder.to_dict()
         )
 
-    def _embed_species(self, token: chex.Array):
+    def _embed_species(self, token: jax.Array):
         mask = ~(
             (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
             | (token == SpeciesEnum.SPECIES_ENUM___PAD)
@@ -265,7 +258,7 @@ class Encoder(nn.Module):
         )
         return mask * self.species_linear(SPECIES_ONEHOT(token))
 
-    def _embed_item(self, token: chex.Array):
+    def _embed_item(self, token: jax.Array):
         mask = ~(
             (token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
             | (token == ItemsEnum.ITEMS_ENUM___PAD)
@@ -273,7 +266,7 @@ class Encoder(nn.Module):
         )
         return mask * self.items_linear(ITEM_ONEHOT(token))
 
-    def _embed_ability(self, token: chex.Array):
+    def _embed_ability(self, token: jax.Array):
         mask = ~(
             (token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
             | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
@@ -281,7 +274,7 @@ class Encoder(nn.Module):
         )
         return mask * self.abilities_linear(ABILITY_ONEHOT(token))
 
-    def _embed_move(self, token: chex.Array):
+    def _embed_move(self, token: jax.Array):
         mask = ~(
             (token == MovesEnum.MOVES_ENUM___UNSPECIFIED)
             | (token == MovesEnum.MOVES_ENUM___PAD)
@@ -289,7 +282,7 @@ class Encoder(nn.Module):
         )
         return mask * self.moves_linear(MOVE_ONEHOT(token))
 
-    def _embed_entity(self, entity: chex.Array):
+    def _embed_entity(self, entity: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.
         _encode_hex = jax.vmap(
             functools.partial(_binary_scale_encoding, world_dim=65535)
@@ -485,7 +478,7 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _embed_edge(self, edge: chex.Array):
+    def _embed_edge(self, edge: jax.Array):
         _encode_hex = jax.vmap(
             functools.partial(
                 _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
@@ -596,7 +589,7 @@ class Encoder(nn.Module):
 
         return embedding, mask
 
-    def _embed_field(self, edge: chex.Array):
+    def _embed_field(self, edge: jax.Array):
         """
         Embed features of the field
         """
@@ -699,22 +692,16 @@ class Encoder(nn.Module):
 
     def _embed_entities(self, env_step: EnvStep):
         entity_encodings = entity_embeddings = jnp.concatenate(
-            (env_step.private_team, env_step.public_team), axis=-2
+            (env_step.private_team, env_step.public_team)
         )
-        encode_entities = jax.vmap(self._embed_entity)
 
-        def _batched_fn(encodings: jax.Array):
-            embeddings, mask = encode_entities(encodings)
-            contextual_entities = self.entity_encoder(self.entity_ff(embeddings), mask)
-            return contextual_entities, mask
-
-        contextual_entity_embeddings, entity_mask = jax.vmap(_batched_fn)(
-            entity_encodings
+        entity_embeddings, entity_mask = jax.vmap(self._embed_entity)(entity_encodings)
+        entity_embeddings = self.entity_ff(entity_embeddings)
+        contextual_entities = self.entity_encoder(
+            entity_embeddings, create_attention_mask(entity_mask)
         )
-        private_entity_embeddings = entity_embeddings[:, :6]
-        private_entity_embeddings = self.private_entity_ln(private_entity_embeddings)
 
-        return private_entity_embeddings, contextual_entity_embeddings, entity_mask
+        return contextual_entities, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
     def _embed_timestep(self, history: HistoryStep):
@@ -734,12 +721,13 @@ class Encoder(nn.Module):
         )
 
         contextual_history_nodes = self.per_timestep_node_encoder(
-            history_node_embedding, node_mask
+            history_node_embedding, create_attention_mask(node_mask)
         )
 
         node_edge_mask = node_mask & edge_mask
         contextual_history_nodes = self.per_timestep_node_edge_encoder(
-            contextual_history_nodes + history_edge_embedding, node_edge_mask
+            contextual_history_nodes + history_edge_embedding,
+            create_attention_mask(node_edge_mask),
         )
 
         timestep_embedding = (
@@ -767,10 +755,11 @@ class Encoder(nn.Module):
 
         seq_len = timestep_embedding.shape[0]
 
+        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
         contextual_timestep_embedding = self.timestep_encoder(
             timestep_embedding,
-            valid_timestep_mask,
-            jnp.tril(jnp.ones((seq_len, seq_len))),
+            create_attention_mask(valid_timestep_mask)
+            & jnp.expand_dims(causal_mask, axis=0),
         )
 
         return contextual_timestep_embedding, history_request_count
@@ -778,11 +767,10 @@ class Encoder(nn.Module):
     # Encode actions for the current environment step.
     def _embed_action(
         self,
-        action: chex.Array,
-        legal: chex.Array,
-        entity_embedding: chex.Array,
-        context_encoding: chex.Array,
-    ) -> chex.Array:
+        action: jax.Array,
+        legal: jax.Array,
+        entity_embedding: jax.Array,
+    ) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
         """
@@ -803,7 +791,6 @@ class Encoder(nn.Module):
 
         embedding = self.action_sum(
             boolean_code,
-            context_encoding,
             entity_embedding,
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
@@ -811,78 +798,60 @@ class Encoder(nn.Module):
         return embedding
 
     def _embed_actions(
-        self, env_step: EnvStep, entity_embeddings: chex.Array
-    ) -> chex.Array:
+        self, env_step: EnvStep, entity_embeddings: jax.Array
+    ) -> jax.Array:
 
-        def _batched_forward(env_step: EnvStep, entity_embeddings: chex.Array):
-            field_embedding, _, _ = self._embed_field(env_step.field)
-            field_embedding = self.field_ln(field_embedding)
-            action_entity_embeddings = jnp.take(
-                entity_embeddings,
-                env_step.my_actions[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
-                axis=0,
-            )
-            action_embeddings = jax.vmap(self._embed_action, in_axes=(0, 0, 0, None))(
-                env_step.my_actions,
-                env_step.legal.astype(int),
-                action_entity_embeddings,
-                field_embedding,
-            )
-            action_embeddings = self.action_ff(action_embeddings)
-            return self.action_encoder(action_embeddings, env_step.legal)
+        action_entity_embeddings = jnp.take(
+            entity_embeddings,
+            env_step.my_actions[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
+            axis=0,
+        )
+        action_embeddings = jax.vmap(self._embed_action)(
+            env_step.my_actions,
+            env_step.legal.astype(int),
+            action_entity_embeddings,
+        )
+        action_embeddings = self.action_ff(action_embeddings)
+        return self.action_encoder(
+            action_embeddings, create_attention_mask(env_step.legal)
+        )
 
-        return jax.vmap(_batched_forward)(env_step, entity_embeddings)
-
-    def __call__(
-        self, env_step: EnvStep, history_step: HistoryStep
-    ) -> Tuple[chex.Array, chex.Array]:
+    def __call__(self, env_step: EnvStep, history_step: HistoryStep):
         """
         Forward pass of the Encoder model. Processes an environment step and outputs
         contextual embeddings for actions.
         """
-        private_entity_embeddings, contextual_entity_embeddings, entity_mask = (
-            self._embed_entities(env_step)
-        )
 
         timestep_embeddings, history_request_count = self._embed_timesteps(history_step)
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         timestep_mask = request_count[..., None] >= history_request_count
 
-        contextual_action_embeddings = self._embed_actions(
-            env_step, private_entity_embeddings
-        )
-        action_mask = env_step.legal
+        def _batched_forward(env_step: EnvStep, timestep_mask: jax.Array):
+            entity_embeddings, entity_mask = self._embed_entities(env_step)
+            field_embedding, *_ = self._embed_field(env_step.field)
 
-        def _batched_forward(
-            timestep_mask: jax.Array,
-            entity_embeddings: jax.Array,
-            entity_mask: jax.Array,
-            action_embeddings: jax.Array,
-            action_mask: jax.Array,
-        ):
-            latent_timesteps = self.latent_timestep_decoder(
-                self.latent_embeddings, timestep_embeddings, None, timestep_mask
+            entity_embeddings = self.entity_timestep_decoder(
+                entity_embeddings + field_embedding,
+                timestep_embeddings,
+                create_attention_mask(entity_mask, timestep_mask),
             )
-            latent_entities = self.latent_entity_decoder(
-                self.latent_embeddings, entity_embeddings, None, entity_mask
+            action_embeddings = self._embed_actions(env_step, entity_embeddings[:6])
+
+            contextual_entities = self.entity_action_decoder(
+                entity_embeddings,
+                action_embeddings,
+                create_attention_mask(entity_mask, env_step.legal),
             )
-            latent_actions = self.latent_action_decoder(
-                self.latent_embeddings, action_embeddings, None, action_mask
+            contextual_actions = self.action_entity_decoder(
+                action_embeddings,
+                entity_embeddings,
+                create_attention_mask(env_step.legal, entity_mask),
             )
 
-            latent_embeddings = jax.vmap(self.latent_merge)(
-                latent_timesteps, latent_entities, latent_actions
-            )
-            contextual_latent_embeddings = self.latent_encoder(latent_embeddings)
+            return contextual_entities, contextual_actions, entity_mask
 
-            return contextual_latent_embeddings
+        contextual_entities, contextual_actions, entity_mask = jax.vmap(
+            _batched_forward
+        )(env_step, timestep_mask)
 
-        contextual_latent_embeddings = jax.vmap(_batched_forward)(
-            timestep_mask,
-            contextual_entity_embeddings,
-            entity_mask,
-            contextual_action_embeddings,
-            action_mask,
-        )
-
-        return contextual_latent_embeddings, contextual_action_embeddings
+        return contextual_entities, contextual_actions, entity_mask

@@ -4,7 +4,6 @@ import pickle
 from pprint import pprint
 from typing import Dict
 
-import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -16,6 +15,7 @@ from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ValueHead
 from rl.model.utils import Params, get_most_recent_file
+from rl.utils import init_jax_jit_cache
 
 
 class Porygon2Model(nn.Module):
@@ -31,18 +31,19 @@ class Porygon2Model(nn.Module):
 
     def get_head_outputs(
         self,
-        latent_embeddings: jax.Array,
+        entity_embeddings: jax.Array,
         action_embeddings: jax.Array,
-        legal: jax.Array,
+        entity_mask: jax.Array,
+        action_mask: jax.Array,
         temp: float = 1.0,
     ):
         # Apply action argument heads
         logit, pi, log_pi = self.policy_head(
-            latent_embeddings, action_embeddings, legal, temp
+            entity_embeddings, action_embeddings, entity_mask, action_mask, temp
         )
 
         # Apply the value head
-        value = jnp.tanh(self.value_head(latent_embeddings))
+        value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
         return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
@@ -52,12 +53,12 @@ class Porygon2Model(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        latent_embeddings, action_embeddings = self.encoder(
+        entity_embeddings, action_embeddings, entity_mask = self.encoder(
             timestep.env, timestep.history
         )
 
         return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
-            latent_embeddings, action_embeddings, timestep.env.legal
+            entity_embeddings, action_embeddings, entity_mask, timestep.env.legal
         )
 
 
@@ -82,7 +83,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     def calculate_params(key: str, vars: Params) -> int:
         total = 0
         for key, value in vars.items():
-            if isinstance(value, chex.Array):
+            if isinstance(value, jax.Array):
                 total += math.prod(value.shape)
             else:
                 total += calculate_params(key, value)
@@ -93,7 +94,7 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     ) -> Dict[str, Dict[str, float]]:
         param_dict = {}
         for key, value in vars.items():
-            if isinstance(value, chex.Array):
+            if isinstance(value, jax.Array):
                 num_params = math.prod(value.shape)
                 param_dict[key] = {
                     "num_params": num_params,
@@ -137,6 +138,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 
 def main():
+    init_jax_jit_cache()
     network = get_model()
     ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
 

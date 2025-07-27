@@ -1,13 +1,14 @@
 from typing import Any, Dict
 
 import chex
+import jax
 import jax.numpy as jnp
 
 from rl.environment.interfaces import Transition
 from rl.environment.protos.features_pb2 import FieldFeature
 
 
-def renormalize(loss: chex.Array, mask: chex.Array) -> chex.Array:
+def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     """The `normalization` is the number of steps over which loss is computed."""
     chex.assert_equal_shape((loss, mask))
     loss = jnp.sum(loss * mask)
@@ -45,11 +46,11 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
 
 
 def calculate_r2(
-    value_prediction: chex.Array,
-    value_target: chex.Array,
-    mask: chex.Array = None,
+    value_prediction: jax.Array,
+    value_target: jax.Array,
+    mask: jax.Array = None,
     eps: float = 1e-8,
-) -> chex.Array:
+) -> jax.Array:
     """Calculate the R-squared (coefficient of determination) value."""
 
     chex.assert_rank(value_prediction, 2)

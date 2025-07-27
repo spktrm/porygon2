@@ -153,8 +153,8 @@ def vtrace_td_error_and_advantage(
 
 
 def compute_returns(
-    v_tm1: chex.Array,
-    rho_tm1: chex.Array,
+    v_tm1: jax.Array,
+    rho_tm1: jax.Array,
     batch: Transition,
     config: Porygon2LearnerConfig,
 ):
