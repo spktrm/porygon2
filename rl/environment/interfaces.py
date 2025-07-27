@@ -9,18 +9,18 @@ class EnvStep(NamedTuple):
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
     public_team: ArrayLike = ()
-    current_context: ArrayLike = ()
+    field: ArrayLike = ()
 
     # Private Info
-    moveset: ArrayLike = ()
+    my_actions: ArrayLike = ()
     legal: ArrayLike = ()
     private_team: ArrayLike = ()
 
 
 class HistoryStep(NamedTuple):
-    entities: ArrayLike = ()
-    relative_edges: ArrayLike = ()
-    absolute_edges: ArrayLike = ()
+    nodes: ArrayLike = ()
+    edges: ArrayLike = ()
+    field: ArrayLike = ()
 
 
 class ModelOutput(NamedTuple):
