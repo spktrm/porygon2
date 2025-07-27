@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from rl.environment.interfaces import TimeStep, Transition
 from rl.environment.utils import clip_history
-from rl.learner.config import MMDConfig
+from rl.learner.config import Porygon2LearnerConfig
 
 
 class ReplayBuffer:
@@ -77,11 +77,15 @@ class ReplayRatioController:
         self,
         replay_buffer: ReplayBuffer,
         get_num_samples: Callable[[], int],
-        learner_config: MMDConfig,
+        learner_config: Porygon2LearnerConfig,
+        hyst: float = 0.05,
+        alpha: float = 0.1,
     ):
         self.replay_buffer = replay_buffer
         self.get_num_samples = get_num_samples
         self.target_replay_ratio = learner_config.target_replay_ratio
+        self.upper_bound = self.target_replay_ratio * (1 + hyst)
+        self.lower_bound = self.target_replay_ratio * (1 - hyst)
         self.batch_size = learner_config.batch_size
 
         # A condition to make the LEARNER wait
@@ -89,21 +93,34 @@ class ReplayRatioController:
         # A separate condition to make the ACTORS wait
         self._actor_can_proceed = threading.Condition()
 
+        self._ratio_lock = threading.Lock()
+        self._alpha = alpha
+        self._ema = None
+
     def _get_current_ratio(self) -> float:
-        """Calculates the current consumer/producer ratio."""
         num_samples = self.get_num_samples()
         producer_steps = max(1, self.replay_buffer.total_added)
         return num_samples / producer_steps
 
+    def _get_smoothed_ratio(self) -> float:
+        """Calculates the current consumer/producer ratio."""
+        with self._ratio_lock:
+            current_ratio = self._get_current_ratio()
+            if self._ema is None:
+                self._ema = current_ratio
+            else:
+                self._ema = self._alpha * current_ratio + (1 - self._alpha) * self._ema
+            return self._ema
+
     def _is_safe_to_train(self) -> bool:
         """Checks if the learner is allowed to proceed"""
-        not_enough_learning = self._get_current_ratio() <= self.target_replay_ratio
+        not_enough_learning = self._get_smoothed_ratio() <= self.upper_bound
         buffer_ready = self.replay_buffer.is_ready(self.batch_size)
         return not_enough_learning and buffer_ready
 
     def _is_safe_to_produce(self) -> bool:
         """Checks if actors are allowed to produce"""
-        too_much_learning = self._get_current_ratio() > self.target_replay_ratio
+        too_much_learning = self._get_smoothed_ratio() > self.lower_bound
         no_samples = self.get_num_samples() == 0
         return too_much_learning or no_samples
 

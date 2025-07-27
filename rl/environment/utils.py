@@ -6,15 +6,14 @@ import numpy as np
 from rl.environment.data import (
     EX_STATE,
     MAX_RATIO_TOKEN,
-    NUM_ABSOLUTE_EDGE_FIELDS,
-    NUM_CONTEXT_FIELDS,
-    NUM_ENTITY_FIELDS,
+    NUM_ENTITY_EDGE_FEATURES,
+    NUM_ENTITY_NODE_FEATURES,
+    NUM_FIELD_FEATURES,
     NUM_HISTORY,
-    NUM_MOVE_FIELDS,
-    NUM_RELATIVE_EDGE_FIELDS,
+    NUM_MOVE_FEATURES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep, TimeStep
-from rl.environment.protos.features_pb2 import AbsoluteEdgeFeature, InfoFeature
+from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
 from rl.environment.protos.service_pb2 import EnvironmentState
 
 T = TypeVar("T")
@@ -42,9 +41,7 @@ def expand_dims(x, axis: int):
 
 def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
     history_length = np.max(
-        history.absolute_edges[
-            ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
-        ].sum(0),
+        history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0),
         axis=0,
     ).item()
 
@@ -63,48 +60,48 @@ def get_legal_mask(state: EnvironmentState):
 def process_state(state: EnvironmentState) -> TimeStep:
     history_length = state.history_length
 
-    info = np.frombuffer(state.info, dtype=np.int16)
+    info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
 
-    history_entities = padnstack(
-        np.frombuffer(state.history_entities, dtype=np.int16).reshape(
-            (history_length, 2, NUM_ENTITY_FIELDS)
+    history_entity_nodes = padnstack(
+        np.frombuffer(state.history_entity_nodes, dtype=np.int16).reshape(
+            (history_length, 12, NUM_ENTITY_NODE_FEATURES)
         ),
         NUM_HISTORY,
     ).astype(np.int32)
 
-    history_relative_edges = padnstack(
-        np.frombuffer(state.history_relative_edges, dtype=np.int16).reshape(
-            (history_length, 2, NUM_RELATIVE_EDGE_FIELDS)
+    history_entity_edges = padnstack(
+        np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
+            (history_length, 12, NUM_ENTITY_EDGE_FEATURES)
         ),
         NUM_HISTORY,
     ).astype(np.int32)
 
-    history_absolute_edge = padnstack(
-        np.frombuffer(state.history_absolute_edge, dtype=np.int16).reshape(
-            (history_length, NUM_ABSOLUTE_EDGE_FIELDS)
+    history_field = padnstack(
+        np.frombuffer(state.history_field, dtype=np.int16).reshape(
+            (history_length, NUM_FIELD_FEATURES)
         ),
         NUM_HISTORY,
     ).astype(np.int32)
 
-    moveset = (
-        np.frombuffer(state.moveset, dtype=np.int16)
-        .reshape(10, NUM_MOVE_FIELDS)
+    my_actions = (
+        np.frombuffer(state.my_actions, dtype=np.int16)
+        .reshape(10, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
     private_team = (
         np.frombuffer(state.private_team, dtype=np.int16)
-        .reshape(6, NUM_ENTITY_FIELDS)
+        .reshape(6, NUM_ENTITY_NODE_FEATURES)
         .astype(np.int32)
     )
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
-        .reshape(12, NUM_ENTITY_FIELDS)
+        .reshape(12, NUM_ENTITY_NODE_FEATURES)
         .astype(np.int32)
     )
 
-    current_context = (
-        np.frombuffer(state.current_context, dtype=np.int16)
-        .reshape(NUM_CONTEXT_FIELDS)
+    field = (
+        np.frombuffer(state.field, dtype=np.int16)
+        .reshape(NUM_FIELD_FEATURES)
         .astype(np.int32)
     )
 
@@ -118,14 +115,14 @@ def process_state(state: EnvironmentState) -> TimeStep:
         win_reward=win_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
-        current_context=current_context,
-        moveset=moveset.astype(np.int32),
+        field=field,
+        my_actions=my_actions,
         legal=get_legal_mask(state),
     )
     history_step = HistoryStep(
-        entities=history_entities,
-        relative_edges=history_relative_edges,
-        absolute_edges=history_absolute_edge,
+        nodes=history_entity_nodes,
+        edges=history_entity_edges,
+        field=history_field,
     )
 
     return TimeStep(env=env_step, history=history_step)

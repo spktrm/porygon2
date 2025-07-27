@@ -1,15 +1,14 @@
 from typing import Any, Dict
 
 import chex
+import jax
 import jax.numpy as jnp
-import numpy as np
 
-from rl.environment.data import ACTION_STRINGS
-from rl.environment.interfaces import TimeStep, Transition
-from rl.environment.protos.features_pb2 import AbsoluteEdgeFeature, MovesetFeature
+from rl.environment.interfaces import Transition
+from rl.environment.protos.features_pb2 import FieldFeature
 
 
-def renormalize(loss: chex.Array, mask: chex.Array) -> chex.Array:
+def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     """The `normalization` is the number of steps over which loss is computed."""
     chex.assert_equal_shape((loss, mask))
     loss = jnp.sum(loss * mask)
@@ -17,44 +16,12 @@ def renormalize(loss: chex.Array, mask: chex.Array) -> chex.Array:
     return loss / (normalization + (normalization == 0.0))
 
 
-def collect_action_prob_telemetry_data(batch: TimeStep) -> Dict[str, Any]:
-    valid_mask = batch.env.valid.reshape(-1)
-
-    actions_available = batch.env.moveset[
-        ..., 0, :, MovesetFeature.MOVESET_FEATURE__ACTION_ID
-    ]
-    actions_index = np.eye(actions_available.shape[-1])[batch.actor.action]
-
-    actions = (actions_available * actions_index).sum(axis=-1).reshape(-1)
-    probabilities = (batch.actor.policy * actions_index).sum(axis=-1).reshape(-1)
-
-    # Find unique actions and their indices
-    unique_actions, inverse_indices = np.unique(actions, return_inverse=True)
-
-    # One-hot encode the actions
-    one_hot = np.eye(len(unique_actions))[inverse_indices]
-
-    # Aggregate probabilities for each action
-    sum_probs = np.sum(
-        one_hot * probabilities[..., None], axis=0, where=valid_mask[..., None]
-    )
-    count_probs = np.sum(one_hot, axis=0, where=valid_mask[..., None])
-
-    # Compute the mean probabilities
-    mean_probs = sum_probs / np.where(count_probs == 0, 1, count_probs)
-
-    unique_actions = unique_actions.astype(int)
-    mean_probs = mean_probs.astype(float)
-
-    return {ACTION_STRINGS[k]: v for k, v in zip(unique_actions, mean_probs)}
-
-
 def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
     valid = jnp.bitwise_not(batch.timestep.env.done)
     lengths = valid.sum(0)
 
-    history_lengths = batch.timestep.history.absolute_edges[
-        ..., AbsoluteEdgeFeature.ABSOLUTE_EDGE_FEATURE__VALID
+    history_lengths = batch.timestep.history.field[
+        ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
     can_move = batch.timestep.env.legal[..., :4].any(axis=-1)
@@ -79,11 +46,11 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
 
 
 def calculate_r2(
-    value_prediction: chex.Array,
-    value_target: chex.Array,
-    mask: chex.Array = None,
+    value_prediction: jax.Array,
+    value_target: jax.Array,
+    mask: jax.Array = None,
     eps: float = 1e-8,
-) -> chex.Array:
+) -> jax.Array:
     """Calculate the R-squared (coefficient of determination) value."""
 
     chex.assert_rank(value_prediction, 2)

@@ -97,28 +97,33 @@ export class EnvironmentState extends jspb.Message {
   getLegalActions_asB64(): string;
   setLegalActions(value: Uint8Array | string): void;
 
-  getHistoryEntities(): Uint8Array | string;
-  getHistoryEntities_asU8(): Uint8Array;
-  getHistoryEntities_asB64(): string;
-  setHistoryEntities(value: Uint8Array | string): void;
+  getHistoryEntityNodes(): Uint8Array | string;
+  getHistoryEntityNodes_asU8(): Uint8Array;
+  getHistoryEntityNodes_asB64(): string;
+  setHistoryEntityNodes(value: Uint8Array | string): void;
 
-  getHistoryAbsoluteEdge(): Uint8Array | string;
-  getHistoryAbsoluteEdge_asU8(): Uint8Array;
-  getHistoryAbsoluteEdge_asB64(): string;
-  setHistoryAbsoluteEdge(value: Uint8Array | string): void;
+  getHistoryEntityEdges(): Uint8Array | string;
+  getHistoryEntityEdges_asU8(): Uint8Array;
+  getHistoryEntityEdges_asB64(): string;
+  setHistoryEntityEdges(value: Uint8Array | string): void;
 
-  getHistoryRelativeEdges(): Uint8Array | string;
-  getHistoryRelativeEdges_asU8(): Uint8Array;
-  getHistoryRelativeEdges_asB64(): string;
-  setHistoryRelativeEdges(value: Uint8Array | string): void;
+  getHistoryField(): Uint8Array | string;
+  getHistoryField_asU8(): Uint8Array;
+  getHistoryField_asB64(): string;
+  setHistoryField(value: Uint8Array | string): void;
 
   getHistoryLength(): number;
   setHistoryLength(value: number): void;
 
-  getMoveset(): Uint8Array | string;
-  getMoveset_asU8(): Uint8Array;
-  getMoveset_asB64(): string;
-  setMoveset(value: Uint8Array | string): void;
+  getMyActions(): Uint8Array | string;
+  getMyActions_asU8(): Uint8Array;
+  getMyActions_asB64(): string;
+  setMyActions(value: Uint8Array | string): void;
+
+  getOppActions(): Uint8Array | string;
+  getOppActions_asU8(): Uint8Array;
+  getOppActions_asB64(): string;
+  setOppActions(value: Uint8Array | string): void;
 
   getPublicTeam(): Uint8Array | string;
   getPublicTeam_asU8(): Uint8Array;
@@ -130,10 +135,10 @@ export class EnvironmentState extends jspb.Message {
   getPrivateTeam_asB64(): string;
   setPrivateTeam(value: Uint8Array | string): void;
 
-  getCurrentContext(): Uint8Array | string;
-  getCurrentContext_asU8(): Uint8Array;
-  getCurrentContext_asB64(): string;
-  setCurrentContext(value: Uint8Array | string): void;
+  getField(): Uint8Array | string;
+  getField_asU8(): Uint8Array;
+  getField_asB64(): string;
+  setField(value: Uint8Array | string): void;
 
   getRqid(): number;
   setRqid(value: number): void;
@@ -152,14 +157,15 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     legalActions: Uint8Array | string,
-    historyEntities: Uint8Array | string,
-    historyAbsoluteEdge: Uint8Array | string,
-    historyRelativeEdges: Uint8Array | string,
+    historyEntityNodes: Uint8Array | string,
+    historyEntityEdges: Uint8Array | string,
+    historyField: Uint8Array | string,
     historyLength: number,
-    moveset: Uint8Array | string,
+    myActions: Uint8Array | string,
+    oppActions: Uint8Array | string,
     publicTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
-    currentContext: Uint8Array | string,
+    field: Uint8Array | string,
     rqid: number,
   }
 }

@@ -1,10 +1,12 @@
 import os
 
+# Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["JAX_TRACEBACK_FILTERING"] = "off"
+# gemm_any=True is ~10% speed up in this setup
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
 )
+
 import json
 import queue
 import threading
@@ -22,8 +24,8 @@ from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
-from rl.learner.config import get_learner_config
-from rl.learner.learner import Learner, create_train_state, load_train_state
+from rl.learner.config import create_train_state, get_learner_config, load_train_state
+from rl.learner.learner import Learner
 from rl.model.config import get_model_config
 from rl.model.model import get_model, get_num_params
 from rl.model.utils import get_most_recent_file
