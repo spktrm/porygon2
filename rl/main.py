@@ -1,6 +1,8 @@
 import os
 
+# Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# gemm_any=True is ~10% speed up in this setup
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
 )
