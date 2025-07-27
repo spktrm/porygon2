@@ -9,7 +9,7 @@ import { Protocol } from "@pkmn/protocol";
 async function playerController(player: TrainablePlayerAI) {
     while (true) {
         try {
-            const state = await player.recieveEnvironmentState();
+            const state = await player.receiveEnvironmentState();
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];

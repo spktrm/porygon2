@@ -139,7 +139,7 @@ class WorkerHandler {
 
         player.submitStepRequest(stepRequest);
 
-        const state = await player.recieveEnvironmentState();
+        const state = await player.receiveEnvironmentState();
 
         const environmentResponse = this.createResponseFromRequest(stepRequest);
         environmentResponse.setState(state);
@@ -167,7 +167,7 @@ class WorkerHandler {
         const userName = resetRequest.getUsername();
 
         const player = await this.resetPlayerFromUserName(userName);
-        const state = await player.recieveEnvironmentState();
+        const state = await player.receiveEnvironmentState();
 
         const environmentResponse =
             this.createResponseFromRequest(resetRequest);
