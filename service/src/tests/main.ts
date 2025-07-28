@@ -51,7 +51,7 @@ async function playerController(player: TrainablePlayerAI) {
                     }
                 } else {
                     if (switches.length > 0) {
-                        const { pokemon, index: switchIndex } =
+                        const { index: switchIndex } =
                             player.eventHandler.getPokemon(
                                 switches[i - 4].ident,
                                 false,
@@ -90,7 +90,7 @@ async function playerController(player: TrainablePlayerAI) {
 async function runBattle() {
     console.log("Creating battle...");
     const names = { p1Name: "Bot1", p2Name: "Bot2" };
-    const { p1, p2 } = createBattle(names, false);
+    const { p1, p2 } = createBattle(names, true);
 
     console.log("Starting asynchronous player controllers...");
 

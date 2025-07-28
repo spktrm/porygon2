@@ -96,7 +96,7 @@ def train_step(
 
         # Update entropy schedule coefficient.
         # Disabled for now, as it is not used in the original MMD paper.
-        ent_kl_coef_mult = 1  # jnp.sqrt(config.num_steps / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(config.num_steps / (state.actor_steps + 1000))
 
         loss = (
             loss_pg

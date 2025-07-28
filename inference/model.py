@@ -1,3 +1,4 @@
+import functools
 import pickle
 import threading
 
@@ -33,9 +34,9 @@ class InferenceModel:
         self.np_rng = np.random.RandomState(seed)
 
         self.network = get_model()
-        self.agent = Agent(
-            jax.vmap(self.network.apply, in_axes=(None, 1)), threading.Lock()
-        )
+
+        apply = functools.partial(self.network.apply, temp=0.2)
+        self.agent = Agent(jax.vmap(apply, in_axes=(None, 1)), threading.Lock())
         self.rng_key = jax.random.PRNGKey(seed)
 
         if not fpath:

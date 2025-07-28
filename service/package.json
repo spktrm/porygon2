@@ -19,10 +19,10 @@
         "preprocess-replays": "ts-node src/replays/main.ts"
     },
     "dependencies": {
-        "@pkmn/client": "^0.6.31",
+        "@pkmn/client": "^0.7.0",
         "@pkmn/dex": "^0.9.31",
         "@pkmn/randoms": "^0.9.31",
-        "@pkmn/sim": "^0.9.31",
+        "@pkmn/sim": "^0.9.36",
         "@smogon/calc": "^0.10.0",
         "@types/node": "^20.11.20",
         "@types/pino": "^7.0.4",

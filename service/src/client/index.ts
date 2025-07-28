@@ -370,7 +370,7 @@ class Battle {
         this.config = config;
         this.prevMessage = undefined;
 
-        // this.ws.send(`${this.battleId}|/timer on`);
+        this.ws.send(`${this.battleId}|/timer on`);
         this.ws.send(`${this.battleId}|${welcomeMessage}`);
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
