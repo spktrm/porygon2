@@ -1,7 +1,5 @@
-from pprint import pprint
-
+import devtools
 import numpy as np
-import tabulate
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
@@ -32,17 +30,7 @@ async def predict(request: Request):
     ts = process_state(state)
     response = await run_in_threadpool(model.predict, ts)
 
-    pprint(ts.env.info)
-
-    table = tabulate.tabulate(
-        np.stack([response.logit, response.log_pi, response.pi]).clip(
-            max=9.99, min=-9.99
-        ),
-        floatfmt=".2f",
-    )
-    print(table)
-    pprint_nparray(np.array(response.v))
-    pprint_nparray(np.array(response.action))
+    devtools.pprint(response)
 
     return response
 
