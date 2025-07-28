@@ -26,15 +26,16 @@ RUN curl -L https://github.com/yoheimuta/protolint/releases/download/v0.55.6/pro
 # Set working directory
 WORKDIR /app
 
-# Copy everything except ignored content
-COPY . .
+# Copy package.json for all apps
+COPY app*/package*.json ./
 
-# Install Node.js deps only in subdirs that have package.json
-RUN for dir in */; do \
-    if [ -f "$dir/package.json" ]; then \
+# Install for each
+RUN for dir in app*/; do \
     cd "$dir" && npm install && cd ..; \
-    fi; \
     done
+
+# Copy the rest after install
+COPY . .
 
 # Pull the latest changes for the Pokemon Showdown submodule
 # TODO: Might be unnecessary...
@@ -42,24 +43,20 @@ RUN for dir in */; do \
 #     git submodule update --init --recursive && \
 #     cd ps && git checkout main && git pull origin main
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-RUN pip3 install -U "jax[cuda12]"
-
 ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+RUN cd /app && pip install virtualenv && virtualenv env && \
+    . env/bin/activate && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+RUN pip install -U "jax[cuda12]"
 
 # Generate indices from pokemon showdown
 RUN make data
 
-RUN python3 protos/scripts/make_enums.py
+RUN python protos/scripts/make_enums.py
 
 RUN make protos/
-
-# Create tmux runner for two apps (adjust as needed)
-RUN echo '#!/bin/bash\n\
-    tmux new-session -d -s multi "cd /service && npm run start"\n\
-    tmux split-window -v -t multi "python rl/main.py"\n\
-    tmux attach -t multi' > /start.sh && chmod +x /start.sh
 
 CMD ["/start.sh"]
