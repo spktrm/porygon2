@@ -1,6 +1,10 @@
 #!/bin/bash
 SESSION=train
 
+cd service
+npm run kill
+cd ../
+
 # Start clean
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
