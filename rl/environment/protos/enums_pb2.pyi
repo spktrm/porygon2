@@ -215,6 +215,7 @@ class SpeciesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPECIES_ENUM__CHIYU: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__CHROMERA: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__CHUGGALONG: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__CHUGGON: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__CINCCINO: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__CINDERACE: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__CINDERACEGMAX: _ClassVar[SpeciesEnum]
@@ -322,6 +323,7 @@ class SpeciesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPECIES_ENUM__DRACOZOLT: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__DRAGALGE: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__DRAGAPULT: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__DRAGGALONG: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__DRAGONAIR: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__DRAGONITE: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__DRAKLOAK: _ClassVar[SpeciesEnum]
@@ -994,6 +996,8 @@ class SpeciesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPECIES_ENUM__RAICHUALOLA: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__RAIKOU: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__RALTS: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__RAMNAROK: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__RAMNAROKRADIANT: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__RAMPARDOS: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__RAPIDASH: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__RAPIDASHGALAR: _ClassVar[SpeciesEnum]
@@ -1028,6 +1032,7 @@ class SpeciesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPECIES_ENUM__RIOLU: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__ROARINGMOON: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__ROCKRUFF: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__ROCKRUFFDUSK: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__ROGGENROLA: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__ROLYCOLY: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__ROOKIDEE: _ClassVar[SpeciesEnum]
@@ -1102,6 +1107,7 @@ class SpeciesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPECIES_ENUM__SHIFTRY: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__SHIINOTIC: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__SHINX: _ClassVar[SpeciesEnum]
+    SPECIES_ENUM__SHOX: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__SHROODLE: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__SHROOMISH: _ClassVar[SpeciesEnum]
     SPECIES_ENUM__SHUCKLE: _ClassVar[SpeciesEnum]
@@ -2085,6 +2091,7 @@ class MovesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVES_ENUM__POISONPOWDER: _ClassVar[MovesEnum]
     MOVES_ENUM__POISONSTING: _ClassVar[MovesEnum]
     MOVES_ENUM__POISONTAIL: _ClassVar[MovesEnum]
+    MOVES_ENUM__POLARFLARE: _ClassVar[MovesEnum]
     MOVES_ENUM__POLLENPUFF: _ClassVar[MovesEnum]
     MOVES_ENUM__POLTERGEIST: _ClassVar[MovesEnum]
     MOVES_ENUM__POPULATIONBOMB: _ClassVar[MovesEnum]
@@ -5023,6 +5030,7 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__POISONTAIL: _ClassVar[EffectEnum]
     EFFECT_ENUM__POISONTOUCH: _ClassVar[EffectEnum]
     EFFECT_ENUM__POKEBALL: _ClassVar[EffectEnum]
+    EFFECT_ENUM__POLARFLARE: _ClassVar[EffectEnum]
     EFFECT_ENUM__POLKADOTBOW: _ClassVar[EffectEnum]
     EFFECT_ENUM__POLLENPUFF: _ClassVar[EffectEnum]
     EFFECT_ENUM__POLTERGEIST: _ClassVar[EffectEnum]
@@ -5956,6 +5964,7 @@ SPECIES_ENUM__CHINGLING: SpeciesEnum
 SPECIES_ENUM__CHIYU: SpeciesEnum
 SPECIES_ENUM__CHROMERA: SpeciesEnum
 SPECIES_ENUM__CHUGGALONG: SpeciesEnum
+SPECIES_ENUM__CHUGGON: SpeciesEnum
 SPECIES_ENUM__CINCCINO: SpeciesEnum
 SPECIES_ENUM__CINDERACE: SpeciesEnum
 SPECIES_ENUM__CINDERACEGMAX: SpeciesEnum
@@ -6063,6 +6072,7 @@ SPECIES_ENUM__DRACOVISH: SpeciesEnum
 SPECIES_ENUM__DRACOZOLT: SpeciesEnum
 SPECIES_ENUM__DRAGALGE: SpeciesEnum
 SPECIES_ENUM__DRAGAPULT: SpeciesEnum
+SPECIES_ENUM__DRAGGALONG: SpeciesEnum
 SPECIES_ENUM__DRAGONAIR: SpeciesEnum
 SPECIES_ENUM__DRAGONITE: SpeciesEnum
 SPECIES_ENUM__DRAKLOAK: SpeciesEnum
@@ -6735,6 +6745,8 @@ SPECIES_ENUM__RAICHU: SpeciesEnum
 SPECIES_ENUM__RAICHUALOLA: SpeciesEnum
 SPECIES_ENUM__RAIKOU: SpeciesEnum
 SPECIES_ENUM__RALTS: SpeciesEnum
+SPECIES_ENUM__RAMNAROK: SpeciesEnum
+SPECIES_ENUM__RAMNAROKRADIANT: SpeciesEnum
 SPECIES_ENUM__RAMPARDOS: SpeciesEnum
 SPECIES_ENUM__RAPIDASH: SpeciesEnum
 SPECIES_ENUM__RAPIDASHGALAR: SpeciesEnum
@@ -6769,6 +6781,7 @@ SPECIES_ENUM__RILLABOOMGMAX: SpeciesEnum
 SPECIES_ENUM__RIOLU: SpeciesEnum
 SPECIES_ENUM__ROARINGMOON: SpeciesEnum
 SPECIES_ENUM__ROCKRUFF: SpeciesEnum
+SPECIES_ENUM__ROCKRUFFDUSK: SpeciesEnum
 SPECIES_ENUM__ROGGENROLA: SpeciesEnum
 SPECIES_ENUM__ROLYCOLY: SpeciesEnum
 SPECIES_ENUM__ROOKIDEE: SpeciesEnum
@@ -6843,6 +6856,7 @@ SPECIES_ENUM__SHIELDON: SpeciesEnum
 SPECIES_ENUM__SHIFTRY: SpeciesEnum
 SPECIES_ENUM__SHIINOTIC: SpeciesEnum
 SPECIES_ENUM__SHINX: SpeciesEnum
+SPECIES_ENUM__SHOX: SpeciesEnum
 SPECIES_ENUM__SHROODLE: SpeciesEnum
 SPECIES_ENUM__SHROOMISH: SpeciesEnum
 SPECIES_ENUM__SHUCKLE: SpeciesEnum
@@ -7823,6 +7837,7 @@ MOVES_ENUM__POISONJAB: MovesEnum
 MOVES_ENUM__POISONPOWDER: MovesEnum
 MOVES_ENUM__POISONSTING: MovesEnum
 MOVES_ENUM__POISONTAIL: MovesEnum
+MOVES_ENUM__POLARFLARE: MovesEnum
 MOVES_ENUM__POLLENPUFF: MovesEnum
 MOVES_ENUM__POLTERGEIST: MovesEnum
 MOVES_ENUM__POPULATIONBOMB: MovesEnum
@@ -10704,6 +10719,7 @@ EFFECT_ENUM__POISONSTING: EffectEnum
 EFFECT_ENUM__POISONTAIL: EffectEnum
 EFFECT_ENUM__POISONTOUCH: EffectEnum
 EFFECT_ENUM__POKEBALL: EffectEnum
+EFFECT_ENUM__POLARFLARE: EffectEnum
 EFFECT_ENUM__POLKADOTBOW: EffectEnum
 EFFECT_ENUM__POLLENPUFF: EffectEnum
 EFFECT_ENUM__POLTERGEIST: EffectEnum

@@ -2,8 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { Dex, ModdedDex } from "@pkmn/sim";
-import { Ability, Item, Move, Species, Type, toID, TypeName } from "@pkmn/dex";
-import { Generations } from "@pkmn/data";
+import { Ability, Item, Move, Species, Type, toID } from "@pkmn/dex";
 
 const PS_DIRECTORY = "ps/";
 const BATCH_SIZE = 128;
