@@ -1245,7 +1245,6 @@ export class EventHandler implements Protocol.Handler {
     turnNum: number;
     timestamp: number;
     edgeBuffer: EdgeBuffer;
-    log: string[];
     identToIndex: Map<PokemonIdent | SideID, number>;
 
     constructor(player: TrainablePlayerAI) {
@@ -1255,13 +1254,8 @@ export class EventHandler implements Protocol.Handler {
         this.turnOrder = 0;
         this.turnNum = 0;
         this.timestamp = 0;
-        this.log = [];
 
         this.identToIndex = new Map<PokemonIdent, number>();
-    }
-
-    addLine(line: string) {
-        this.log.push(line);
     }
 
     getPokemon(

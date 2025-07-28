@@ -7,6 +7,9 @@ protos:
 lint:
 	sh scripts/lint.sh
 
+ignore:
+	cp .gitignore .dockerignore
+
 clean:
 	find . -type d -name "__pycache__" -print -exec rm -r {} +
 

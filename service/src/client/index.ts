@@ -370,7 +370,7 @@ class Battle {
         this.config = config;
         this.prevMessage = undefined;
 
-        // this.ws.send(`${this.battleId}|/timer on`);
+        this.ws.send(`${this.battleId}|/timer on`);
         this.ws.send(`${this.battleId}|${welcomeMessage}`);
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
@@ -380,8 +380,9 @@ class Battle {
             true,
         );
         this.player.choose = (choice: string) => {
-            const rqid = this.player.getRequest().rqid;
-            this.ws.send(`${this.battleId}|/choose ${choice}|${rqid}`);
+            this.ws.send(
+                `${this.battleId}|/choose ${choice}|${this.player.rqid}`,
+            );
         };
         this.player.start();
     }

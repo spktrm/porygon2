@@ -121,13 +121,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     currentRequest: ChoiceRequest | null = null;
     done: boolean;
-    backup: string[];
 
     finishedEarly: boolean;
-    hasRequest: boolean;
-    started: boolean;
     playerIndex: number | undefined;
     requestCount: number;
+    rqid: number;
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -155,13 +153,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
 
-        this.backup = [];
-        this.hasRequest = false;
-        this.started = false;
-
         this.playerIndex = undefined;
         this.requestCount = 0;
         this.finishedEarly = false;
+        this.rqid = -1;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -199,12 +194,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return await this.outgoingQueue.dequeueAsync();
     }
 
-    updateRequest() {
-        while (this.privateBattle.requestStatus !== "applied") {
-            this.privateBattle.update();
-        }
-    }
-
     ingestEvent(line: string) {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
@@ -227,35 +216,15 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return this.privateBattle.request as AnyObject;
     }
 
-    isActionRequired(chunk: string): boolean {
+    isActionRequired(): boolean {
         const request = this.getRequest()! as AnyObject;
-        if (this.privateBattle.requestStatus !== "applied") {
-            return false;
-        }
         if (!request) {
             return false;
-        }
-        if (
-            request?.teamPreview ||
-            (chunk.includes("|inactive|") && chunk.includes("30 seconds left"))
-        ) {
-            return true;
         }
         if (request?.wait) {
             return false;
         }
-        if (chunk.includes("|turn")) {
-            return true;
-        }
-        if (!chunk.includes("|request")) {
-            return !!(request?.forceSwitch ?? [])[0];
-        }
-        return false;
-    }
-
-    isActionRequired2(chunk: string) {
-        const request = this.getRequest()! as AnyObject;
-        return chunk.includes("|request") && !request?.wait;
+        return true;
     }
 
     choiceFromAction(action: number) {
@@ -265,7 +234,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return CHOICES[action];
     }
 
-    addLine(line: string) {
+    addLine(cmd: string, line: string) {
         this.ingestEvent(line);
         try {
             this.privateBattle.add(line);
@@ -273,7 +242,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             console.log(err);
             this.privateBattle.add(line);
         }
-        this.publicBattle.add(line);
+        if (cmd !== "request") {
+            this.publicBattle.add(line);
+        }
         this.getPlayerIndex();
     }
 
@@ -343,19 +314,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     override async start() {
-        const backup: string[] = [];
-
-        const shiftBackup = () => {
-            while (backup.length > 0) {
-                const line = backup.shift();
-                if (line) this.addLine(line);
-            }
-        };
-        const lines = [];
-
         for await (const chunk of this.stream) {
-            lines.push(...chunk.split("\n"));
-
             if (this.done || this.finishedEarly) {
                 break;
             }
@@ -366,58 +325,29 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 console.log(err);
             }
 
-            if (!this.hasRequest) {
-                if (chunk.includes("|request")) {
-                    this.log.push("---request---");
-                    this.hasRequest = true;
-                }
-            }
-
             for (const line of chunk.split("\n")) {
-                backup.push(line);
-                if (line.startsWith("|start")) {
-                    this.started = true;
+                if (line) {
+                    const [cmd] = line.slice(1).split("|");
+                    this.addLine(cmd, line);
+
+                    if (cmd === "request" && this.isActionRequired()) {
+                        this.rqid = this.getRequest().rqid;
+
+                        const choice = await this.getChoice();
+                        this.privateBattle.request = undefined;
+
+                        // Process the received action
+                        this.choose(choice);
+
+                        // Increment internal counters
+                        this.requestCount += 1;
+                    }
                 }
-            }
-
-            if (this.hasRequest && this.started) {
-                shiftBackup();
-                // for (const line of chunk.split("\n")) {
-                //     this.addLine(line);
-                // }
-                this.updateRequest();
-                if (this.privateBattle.turn === 1) {
-                    this.privateBattle.requestStatus = "received";
-                    this.updateRequest();
-                }
-                this.hasRequest = false;
-            }
-
-            // When stream is empty, wait for action from async source
-            if (
-                this.stream.buf.length === 0 &&
-                this.isActionRequired(chunk) &&
-                // this.isActionRequired2(chunk) &&
-                true
-            ) {
-                shiftBackup();
-                this.privateBattle.requestStatus = "received";
-                this.updateRequest();
-
-                const choice = await this.getChoice();
-                this.privateBattle.request = undefined;
-
-                // Process the received action
-                this.choose(choice);
-
-                // Increment internal counters
-                this.requestCount += 1;
             }
         }
 
         this.done = true;
 
-        shiftBackup();
         this.sendFinalState();
     }
 
