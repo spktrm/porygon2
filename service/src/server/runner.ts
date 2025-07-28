@@ -128,6 +128,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     started: boolean;
     playerIndex: number | undefined;
     requestCount: number;
+    rqid: number;
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -162,6 +163,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.playerIndex = undefined;
         this.requestCount = 0;
         this.finishedEarly = false;
+        this.rqid = -1;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -396,13 +398,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             // When stream is empty, wait for action from async source
             if (
                 this.stream.buf.length === 0 &&
-                this.isActionRequired(chunk) &&
-                // this.isActionRequired2(chunk) &&
+                // this.isActionRequired(chunk) &&
+                this.isActionRequired2(chunk) &&
                 true
             ) {
                 shiftBackup();
                 this.privateBattle.requestStatus = "received";
                 this.updateRequest();
+                this.rqid = this.getRequest().rqid;
 
                 const choice = await this.getChoice();
                 this.privateBattle.request = undefined;
