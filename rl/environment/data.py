@@ -30,6 +30,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetActionTypeEnum,
     MovesetFeature,
     MovesetHasPPEnum,
+    TeamSetFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
 
@@ -58,6 +59,7 @@ NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
 NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
+NUM_TEAM_SET_FEATURES = len(TeamSetFeature.keys())
 NUM_NATURES = len(NaturesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
 NUM_EFFECTS = len(EffectEnum.keys())

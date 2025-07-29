@@ -643,7 +643,8 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
  */
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, "")
+    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+    team: msg.getTeam_asB64()
   };
 
   if (includeInstance) {
@@ -684,6 +685,10 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
       var value = /** @type {string} */ (reader.readString());
       msg.setUsername(value);
       break;
+    case 2:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setTeam(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -720,6 +725,13 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
+  f = message.getTeam_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      2,
+      f
+    );
+  }
 };
 
 
@@ -738,6 +750,48 @@ proto.servicev2.ResetRequest.prototype.getUsername = function() {
  */
 proto.servicev2.ResetRequest.prototype.setUsername = function(value) {
   return jspb.Message.setProto3StringField(this, 1, value);
+};
+
+
+/**
+ * optional bytes team = 2;
+ * @return {!(string|Uint8Array)}
+ */
+proto.servicev2.ResetRequest.prototype.getTeam = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
+};
+
+
+/**
+ * optional bytes team = 2;
+ * This is a type-conversion wrapper around `getTeam()`
+ * @return {string}
+ */
+proto.servicev2.ResetRequest.prototype.getTeam_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getTeam()));
+};
+
+
+/**
+ * optional bytes team = 2;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getTeam()`
+ * @return {!Uint8Array}
+ */
+proto.servicev2.ResetRequest.prototype.getTeam_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getTeam()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.setTeam = function(value) {
+  return jspb.Message.setProto3BytesField(this, 2, value);
 };
 
 
