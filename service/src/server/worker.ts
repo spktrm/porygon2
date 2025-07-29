@@ -1,4 +1,4 @@
-import { parentPort } from "worker_threads";
+import { MessagePort, parentPort } from "worker_threads";
 
 import {
     EnvironmentResponse,
@@ -9,26 +9,30 @@ import {
 } from "../../protos/service_pb";
 import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
+import { teamBytesToPackedString } from "./state";
 
 interface WaitingPlayer {
     userName: string;
+    team: string;
     resolve: (player: TrainablePlayerAI) => void;
 }
 
-class WorkerHandler {
+export class WorkerHandler {
+    private port: MessagePort | null | undefined = parentPort;
     private playerMapping = new Map<string, TrainablePlayerAI>();
     private waitingPlayers = new Array<WaitingPlayer>();
 
-    constructor() {
+    constructor(port: MessagePort | null | undefined) {
+        this.port = port;
         this.setupMessageHandler();
     }
 
     private setupMessageHandler(): void {
-        if (!parentPort) {
+        if (!this.port) {
             throw new Error("Worker must be run as a worker thread");
         }
 
-        parentPort.on("message", (data: Buffer) => {
+        this.port.on("message", (data: Buffer) => {
             this.handleMessage(data);
         });
     }
@@ -43,6 +47,7 @@ class WorkerHandler {
 
     private resetPlayerFromTrainingUserName(
         userName: string,
+        teamString: string,
     ): Promise<TrainablePlayerAI> {
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
@@ -55,6 +60,8 @@ class WorkerHandler {
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.userName,
                 p2Name: userName,
+                p1team: opponent.team,
+                p2team: teamString,
             });
 
             this.playerMapping.set(opponent.userName, player1);
@@ -65,12 +72,16 @@ class WorkerHandler {
         } else {
             // No pair, wait
             return new Promise<TrainablePlayerAI>((resolve) => {
-                this.waitingPlayers.push({ userName, resolve });
+                this.waitingPlayers.push({
+                    userName,
+                    team: teamString,
+                    resolve,
+                });
             });
         }
     }
 
-    private resetPlayerFromEvalUserName(userName: string) {
+    private resetPlayerFromEvalUserName(userName: string, teamString: string) {
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -78,6 +89,8 @@ class WorkerHandler {
         const { p1: player1 } = createBattle({
             p1Name: userName,
             p2Name: `baseline-${userName}`,
+            p1team: teamString,
+            p2team: teamString,
         });
         this.playerMapping.set(userName, player1);
         return player1;
@@ -152,11 +165,15 @@ class WorkerHandler {
 
     private resetPlayerFromUserName(
         userName: string,
+        teamView: Int16Array,
     ): Promise<TrainablePlayerAI> {
+        const teamString = teamBytesToPackedString(teamView);
         if (isEvalUser(userName)) {
-            return Promise.resolve(this.resetPlayerFromEvalUserName(userName));
+            return Promise.resolve(
+                this.resetPlayerFromEvalUserName(userName, teamString),
+            );
         } else {
-            return this.resetPlayerFromTrainingUserName(userName);
+            return this.resetPlayerFromTrainingUserName(userName, teamString);
         }
     }
 
@@ -165,8 +182,11 @@ class WorkerHandler {
         resetRequest: ResetRequest,
     ): Promise<void> {
         const userName = resetRequest.getUsername();
+        const teamBytes = resetRequest.getTeam_asU8();
 
-        const player = await this.resetPlayerFromUserName(userName);
+        const teamI16 = new Int16Array(teamBytes.slice().buffer);
+
+        const player = await this.resetPlayerFromUserName(userName, teamI16);
         const state = await player.receiveEnvironmentState();
 
         const environmentResponse =
@@ -180,16 +200,16 @@ class WorkerHandler {
     }
 
     private sendMessage(taskId: number, workerResponse: WorkerResponse): void {
-        if (!parentPort) {
+        if (!this.port) {
             throw new Error("Parent port not available");
         }
         workerResponse.setTaskId(taskId);
         const messageBuffer = workerResponse.serializeBinary();
-        parentPort.postMessage(messageBuffer, [
+        this.port.postMessage(messageBuffer, [
             messageBuffer.buffer as ArrayBuffer,
         ]);
     }
 }
 
 // Initialize the worker handler
-new WorkerHandler();
+new WorkerHandler(parentPort);

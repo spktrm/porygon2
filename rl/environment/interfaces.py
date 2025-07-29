@@ -35,6 +35,12 @@ class ActorStep(NamedTuple):
     model_output: ModelOutput = ModelOutput()
 
 
+class ActorReset(NamedTuple):
+    tokens: ArrayLike = ()
+    log_pi: ArrayLike = ()
+    key: ArrayLike = ()
+
+
 class TimeStep(NamedTuple):
     env: EnvStep = EnvStep()
     history: HistoryStep = HistoryStep()
@@ -42,4 +48,5 @@ class TimeStep(NamedTuple):
 
 class Transition(NamedTuple):
     timestep: TimeStep = TimeStep()
-    actorstep: ActorStep = ActorStep()
+    actor_step: ActorStep = ActorStep()
+    actor_reset: ActorReset = ActorReset()

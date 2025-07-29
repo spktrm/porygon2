@@ -13,8 +13,9 @@ import wandb
 from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
+    Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
-    Porygon2TrainState,
+    Porygon2PlayerTrainState,
     save_train_state,
 )
 from rl.learner.returns import compute_returns
@@ -29,14 +30,17 @@ def get_action_value(arr: jax.Array, action: jax.Array):
 
 @functools.partial(jax.jit, static_argnames=["config"])
 def train_step(
-    state: Porygon2TrainState, batch: Transition, config: Porygon2LearnerConfig
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+    batch: Transition,
+    config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
 
-    target_pred = state.apply_fn(state.target_params, batch.timestep)
-    target_log_pi = get_action_value(target_pred.log_pi, batch.actorstep.action)
+    target_pred = player_state.apply_fn(player_state.target_params, batch.timestep)
+    target_log_pi = get_action_value(target_pred.log_pi, batch.actor_step.action)
     actor_log_pi = get_action_value(
-        batch.actorstep.model_output.log_pi, batch.actorstep.action
+        batch.actor_step.model_output.log_pi, batch.actor_step.action
     )
 
     actor_target_log_ratio = actor_log_pi - target_log_pi
@@ -50,17 +54,17 @@ def train_step(
     adv_std = vtrace.pg_advantage.std(where=valid)
 
     # Normalize by the ema mean and std of the advantages.
-    advantages = (vtrace.pg_advantage - state.target_adv_mean) / (
-        state.target_adv_std + 1e-8
+    advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
+        player_state.target_adv_std + 1e-8
     )
 
     is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
-    def loss_fn(params: Params):
+    def player_loss_fn(params: Params):
 
-        pred = state.apply_fn(params, batch.timestep)
+        pred = player_state.apply_fn(params, batch.timestep)
 
-        learner_log_pi = get_action_value(pred.log_pi, batch.actorstep.action)
+        learner_log_pi = get_action_value(pred.log_pi, batch.actor_step.action)
 
         # Calculate the log ratios.
         learner_actor_log_ratio = learner_log_pi - actor_log_pi
@@ -96,7 +100,9 @@ def train_step(
 
         # Update entropy schedule coefficient.
         # Disabled for now, as it is not used in the original MMD paper.
-        ent_kl_coef_mult = jnp.sqrt(config.num_steps / (state.actor_steps + 1000))
+        ent_kl_coef_mult = jnp.sqrt(
+            config.num_steps / (player_state.actor_steps + 1000)
+        )
 
         loss = (
             loss_pg
@@ -126,14 +132,38 @@ def train_step(
             ),
         )
 
-    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss_val, logs), grads = grad_fn(state.params)
+    def builder_loss_fn(params: Params):
+        """Builder loss function."""
+        _, leaner_log_pi = builder_state.apply_fn(
+            params, batch.actor_reset.key.squeeze(0)
+        )
+
+        learner_actor_log_ratio = leaner_log_pi - batch.actor_reset.log_pi.squeeze()
+        learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
+
+        final_reward = batch.timestep.env.win_reward[-1]
+        pg_loss1 = final_reward * learner_actor_ratio
+        pg_loss2 = final_reward * learner_actor_ratio.clip(
+            min=1 - config.clip_ppo, max=1 + config.clip_ppo
+        )
+        pg_loss = -jnp.minimum(pg_loss1, pg_loss2).mean(where=valid[0])
+
+        return pg_loss, {}
+
+    player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
+    (player_loss_val, logs), player_grads = player_grad_fn(player_state.params)
+
+    builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
+    (builder_loss_val, _), builder_grads = builder_grad_fn(builder_state.params)
+
+    builder_state = builder_state.apply_gradients(grads=builder_grads)
 
     logs.update(
         dict(
-            loss=loss_val,
-            param_norm=optax.global_norm(state.params),
-            gradient_norm=optax.global_norm(grads),
+            loss=player_loss_val,
+            builder_los_val=builder_loss_val,
+            param_norm=optax.global_norm(player_state.params),
+            gradient_norm=optax.global_norm(player_grads),
             adv_mean=adv_mean,
             adv_std=adv_std,
             is_ratio=is_ratio.mean(where=valid),
@@ -141,35 +171,37 @@ def train_step(
             norm_adv_std=advantages.std(where=valid),
             value_target_mean=vtrace.returns.mean(where=valid),
             value_target_std=vtrace.returns.std(where=valid),
-            Step=state.num_steps,
+            Step=player_state.num_steps,
         )
     )
 
-    state = state.apply_gradients(grads=grads)
-    state = state.replace(
+    player_state = player_state.apply_gradients(grads=player_grads)
+    player_state = player_state.replace(
         # Update target params and adv mean/std.
         target_params=optax.incremental_update(
-            state.params, state.target_params, config.tau
+            player_state.params, player_state.target_params, config.tau
         ),
-        target_adv_mean=state.target_adv_mean * (1 - config.tau)
+        target_adv_mean=player_state.target_adv_mean * (1 - config.tau)
         + adv_mean * config.tau,
-        target_adv_std=state.target_adv_std * (1 - config.tau) + adv_std * config.tau,
+        target_adv_std=player_state.target_adv_std * (1 - config.tau)
+        + adv_std * config.tau,
         # Update num steps sampled.
-        num_steps=state.num_steps + 1,
+        num_steps=player_state.num_steps + 1,
         # Add 1 for the final step in each trajectory
-        actor_steps=state.actor_steps + valid.sum(),
+        actor_steps=player_state.actor_steps + valid.sum(),
     )
 
-    logs.update(dict(actor_steps=state.actor_steps))
+    logs.update(dict(actor_steps=player_state.actor_steps))
     logs.update(collect_batch_telemetry_data(batch))
 
-    return state, logs
+    return player_state, builder_state, logs
 
 
 class Learner:
     def __init__(
         self,
-        state: Porygon2TrainState,
+        player_state: Porygon2PlayerTrainState,
+        builder_state: Porygon2BuilderTrainState,
         learner_config: Porygon2LearnerConfig,
         replay_buffer: ReplayBuffer,
         controller: ReplayRatioController,
@@ -177,7 +209,8 @@ class Learner:
         gpu_lock: threading.Lock,
         num_samples: list[int],
     ):
-        self.state = state
+        self.player_state = player_state
+        self.builder_state = builder_state
         self.learner_config = learner_config
         self.replay_buffer = replay_buffer
         self.controller = controller
@@ -190,8 +223,9 @@ class Learner:
     def update_params_for_actor(self):
         """Updates the parameters for the actor."""
         self.params_for_actor = (
-            int(self.state.num_steps),
-            jax.device_get(self.state.params),
+            int(self.player_state.num_steps),
+            jax.device_get(self.player_state.params),
+            jax.device_get(self.builder_state.params),
         )
 
     def train(self):
@@ -206,8 +240,11 @@ class Learner:
 
                 batch = self.replay_buffer.sample(batch_size)
                 with self.gpu_lock:
-                    self.state, logs = train_step(
-                        self.state, batch, self.learner_config
+                    self.player_state, self.builder_state, logs = train_step(
+                        self.player_state,
+                        self.builder_state,
+                        batch,
+                        self.learner_config,
                     )
 
                 self.update_params_for_actor()
@@ -220,8 +257,8 @@ class Learner:
 
                 self.controller.signal_actors()
 
-                if self.state.num_steps % 5000 == 0:
-                    save_train_state(self.state)
+                if self.player_state.num_steps % 5000 == 0:
+                    save_train_state(self.player_state, self.builder_state)
 
             except Exception as e:
                 traceback.print_exc()

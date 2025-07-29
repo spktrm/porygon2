@@ -1,12 +1,11 @@
-import functools
 import math
-import pickle
 from pprint import pprint
 from typing import Dict
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
@@ -18,21 +17,30 @@ from rl.environment.data import (
     NUM_SPECIES,
     NUM_TEAM_SET_FEATURES,
     NUM_TYPECHART,
+    STOI,
 )
-from rl.environment.interfaces import EnvStep, ModelOutput, TimeStep
 from rl.environment.protos.features_pb2 import TeamSetFeature
-from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
-from rl.model.encoder import Encoder
-from rl.model.heads import PolicyHead, ValueHead
 from rl.model.modules import (
     MLP,
+    PretrainedEmbedding,
     SumEmbeddings,
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE, Params, get_most_recent_file
+from rl.model.utils import BIAS_VALUE, Params
 from rl.utils import init_jax_jit_cache
+
+SPECIES_MASK = PretrainedEmbedding(
+    fpath="data/data/gen3/OU_species_mask.npy", dtype=jnp.bool
+)
+LEARNSET_MASK = PretrainedEmbedding(
+    fpath="data/data/gen3/OU_learnset_mask.npy", dtype=jnp.bool
+)
+ABILITIES_MASK = PretrainedEmbedding(
+    fpath="data/data/gen3/OU_ability_mask.npy", dtype=jnp.bool
+)
+ITEM_MASK = PretrainedEmbedding(fpath="data/data/gen3/OU_item_mask.npy", dtype=jnp.bool)
 
 
 class Porygon2BuilderModel(nn.Module):
@@ -48,10 +56,6 @@ class Porygon2BuilderModel(nn.Module):
         self.transformer = TransformerEncoder(
             **self.cfg.policy_head.transformer.to_dict()
         )
-        self.set_transformer = TransformerEncoder(
-            **self.cfg.policy_head.transformer.to_dict()
-        )
-
         self.species_head = MLP((entity_size, NUM_SPECIES), dtype=dtype)
         self.item_head = MLP((entity_size, NUM_ITEMS), dtype=dtype)
         self.ability_head = MLP((entity_size, NUM_ABILITIES), dtype=dtype)
@@ -77,14 +81,14 @@ class Porygon2BuilderModel(nn.Module):
     ) -> tuple[int, jax.Array, jax.Array]:
         if mask is not None:
             logits = jnp.where(mask, logits, BIAS_VALUE)
-        probs = nn.softmax(logits, axis=-1)
+        log_probs = nn.log_softmax(logits, axis=-1)
         key, subkey = jax.random.split(key)
-        token = jax.random.choice(subkey, probs.shape[-1], p=probs)
-        log_prob = jnp.log(probs[token])
+        token = jax.random.categorical(subkey, logits)
+        log_prob = log_probs[token]
         return token, log_prob, key
 
     def _sample_moves(
-        self, embedding: jax.Array, key: jax.Array
+        self, logits: jax.Array, key: jax.Array, mask: jax.Array | None = None
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         """Samples four distinct moves and returns (tokens, onehot, log_prob_sum, new_key)."""
         selected = jnp.zeros((NUM_MOVES,), dtype=jnp.bool_)
@@ -92,10 +96,8 @@ class Porygon2BuilderModel(nn.Module):
         log_pi = 0.0
 
         for _ in range(4):
-            mask = ~selected  # only allow moves that haven't been chosen yet
-            token, log_p, key = self._sample_token(
-                self.moves_head(embedding), key, mask
-            )
+            selection_mask = ~selected  # only allow moves that haven't been chosen yet
+            token, log_p, key = self._sample_token(logits, key, selection_mask & mask)
             tokens.append(token)
             selected = selected | jax.nn.one_hot(token, NUM_MOVES).astype(jnp.bool_)
             log_pi += log_p
@@ -141,7 +143,7 @@ class Porygon2BuilderModel(nn.Module):
         species_token: int,
         item_token: int,
         ability_token: int,
-        moves_onehot: jax.Array,
+        move_toks: jax.Array,
         nature_token: int,
         evs_dist: jax.Array,
         hidden_power_token: jax.Array,
@@ -152,18 +154,10 @@ class Porygon2BuilderModel(nn.Module):
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__SPECIES].set(species_token)
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__ITEM].set(item_token)
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__ABILITY].set(ability_token)
-        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0].set(
-            moves_onehot[0]
-        )
-        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1].set(
-            moves_onehot[1]
-        )
-        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2].set(
-            moves_onehot[2]
-        )
-        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3].set(
-            moves_onehot[3]
-        )
+        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0].set(move_toks[0])
+        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1].set(move_toks[1])
+        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2].set(move_toks[2])
+        tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3].set(move_toks[3])
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__NATURE].set(nature_token)
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__EV_HP].set(evs_dist[0])
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__EV_ATK].set(evs_dist[1])
@@ -195,51 +189,61 @@ class Porygon2BuilderModel(nn.Module):
             embed_i = embeddings[i]
 
             # ---- Sample species (without reuse) ---------------------------------
-            species_t, log_p, key = self._sample_token(
-                self.species_head(embed_i), key, species_mask
+            species_t, log_p_species, key = self._sample_token(
+                self.species_head(embed_i), key, species_mask & SPECIES_MASK.embeddings
             )
-            log_pi_total += log_p
+            log_pi_total += log_p_species
             species_mask = species_mask.at[species_t].set(False)
 
             # ---- Sample item -----------------------------------------------------
-            item_t, log_p, key = self._sample_token(self.item_head(embed_i), key)
-            log_pi_total += log_p
+            item_t, log_p_item, key = self._sample_token(
+                self.item_head(embed_i), key, ITEM_MASK.embeddings
+            )
+            log_pi_total += log_p_item
 
             # ---- Sample ability --------------------------------------------------
-            ability_t, log_p, key = self._sample_token(self.ability_head(embed_i), key)
-            log_pi_total += log_p
+            ability_t, log_p_ability, key = self._sample_token(
+                self.ability_head(embed_i), key, ABILITIES_MASK(species_t)
+            )
+            log_pi_total += log_p_ability
 
             # ---- Sample four distinct moves -------------------------------------
-            move_toks, moves_onehot, log_p_moves, key = self._sample_moves(embed_i, key)
+            move_toks, moves_onehot, log_p_moves, key = self._sample_moves(
+                self.moves_head(embed_i), key, LEARNSET_MASK(species_t)
+            )
             log_pi_total += log_p_moves
 
             # ---- Sample nature --------------------------------------------------
-            nature_t, log_p, key = self._sample_token(self.nature_head(embed_i), key)
-            log_pi_total += log_p
+            nature_t, log_p_nature, key = self._sample_token(
+                self.nature_head(embed_i), key
+            )
+            log_pi_total += log_p_nature
 
             # ---- Sample evs --------------------------------------------------
-            evs_t, log_p, key = self._sample_stat_dist(self.evs_head(embed_i), key)
-            log_pi_total += log_p
+            evs_t, log_p_evs, key = self._sample_stat_dist(self.evs_head(embed_i), key)
+            log_pi_total += log_p_evs
 
             # ---- Sample ivs --------------------------------------------------
             # ivs_t, log_p, key = self._sample_stat_dist(self.ivs_head(embed_i), key)
             # log_pi_total += log_p
 
             # ---- Sample level --------------------------------------------------
-            level_t, log_p, key = self._sample_stat_dist(self.level_head(embed_i), key)
-            log_pi_total += log_p
+            level_t, log_p_level, key = self._sample_stat_dist(
+                self.level_head(embed_i), key
+            )
+            log_pi_total += log_p_level
 
             # ---- Sample happiness --------------------------------------------------
-            happiness_t, log_p, key = self._sample_stat_dist(
+            happiness_t, log_p_happiness, key = self._sample_stat_dist(
                 self.happiness_head(embed_i), key
             )
-            log_pi_total += log_p
+            log_pi_total += log_p_happiness
 
             # ---- Sample hidden_power_type --------------------------------------------------
-            hidden_power_type_t, log_p, key = self._sample_token(
+            hidden_power_type_t, log_p_hidden_power_type, key = self._sample_token(
                 self.hidden_power_type_head(embed_i), key
             )
-            log_pi_total += log_p
+            log_pi_total += log_p_hidden_power_type
 
             # ---- Build embedding & update team ----------------------------------
             evs_dist = nn.softmax(evs_t)
@@ -269,7 +273,7 @@ class Porygon2BuilderModel(nn.Module):
                 species_t,
                 item_t,
                 ability_t,
-                moves_onehot,
+                move_toks,
                 nature_t,
                 jnp.floor(512 * evs_dist).astype(jnp.int32),
                 hidden_power_type_t,
@@ -344,9 +348,44 @@ def main():
 
     jitted_apply = jax.jit(network.apply)
 
-    for _ in range(10):
+    while True:
         key, subkey = jax.random.split(key)
-        output = jitted_apply(params, subkey)
+        tokens, log_pi = jitted_apply(params, subkey)
+
+        for row in np.asarray(tokens):
+            print(
+                "|"
+                + STOI["species"][row[TeamSetFeature.TEAM_SET_FEATURE__SPECIES]]
+                + "|"
+                + STOI["items"][row[TeamSetFeature.TEAM_SET_FEATURE__ITEM]]
+                + "|"
+                + STOI["abilities"][row[TeamSetFeature.TEAM_SET_FEATURE__ABILITY]]
+                + "|"
+                + STOI["moves"][row[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0]]
+                + ","
+                + STOI["moves"][row[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1]]
+                + ","
+                + STOI["moves"][row[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2]]
+                + ","
+                + STOI["moves"][row[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3]]
+                + "|"
+                + STOI["natures"][row[TeamSetFeature.TEAM_SET_FEATURE__NATURE]]
+                + "|"
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_HP])
+                + ","
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_ATK])
+                + ","
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_DEF])
+                + ","
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_SPA])
+                + ","
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_SPD])
+                + ","
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_SPE])
+            )
+
+        print()
+
     pprint(get_num_params(params))
 
 

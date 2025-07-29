@@ -36,6 +36,7 @@ import {
     EntityNodeFeature,
     EntityEdgeFeature,
     FieldFeature,
+    TeamSetFeature,
 } from "../../protos/features_pb";
 
 export type EnumMappings =
@@ -95,6 +96,7 @@ export const numEntityNodeFeatures = Object.keys(EntityNodeFeature).length;
 export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
 export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
+export const numTeamSetFeatures = Object.keys(TeamSetFeature).length;
 
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;

@@ -64,7 +64,8 @@ class ReplayBuffer:
                 history=clip_history(stacked_batch.timestep.history, resolution=128),
             ),
             # actorstep=stacked_batch.actorstep,
-            actorstep=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actorstep),
+            actor_step=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actor_step),
+            actor_reset=stacked_batch.actor_reset,
         )
 
         return jax.device_put(clipped_batch)

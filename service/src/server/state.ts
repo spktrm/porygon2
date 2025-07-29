@@ -36,6 +36,7 @@ import {
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    numTeamSetFeatures,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -52,6 +53,7 @@ import {
     MovesetActionTypeEnum,
     MovesetFeature,
     MovesetHasPPEnum,
+    TeamSetFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState } from "../../protos/service_pb";
@@ -63,6 +65,81 @@ type MajorArgNames =
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const MAX_RATIO_TOKEN = 16384;
+
+function setBytesToPackedString(setArray: Int16Array): string {
+    const nickname = "";
+    const species =
+        jsonDatum["species"][
+            setArray[TeamSetFeature.TEAM_SET_FEATURE__SPECIES]
+        ];
+    const item =
+        jsonDatum["items"][setArray[TeamSetFeature.TEAM_SET_FEATURE__ITEM]];
+    const ability =
+        jsonDatum["abilities"][
+            setArray[TeamSetFeature.TEAM_SET_FEATURE__ABILITY]
+        ];
+    const moveId0 =
+        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0] ===
+        MovesEnum.MOVES_ENUM___NULL
+            ? ""
+            : jsonDatum["moves"][
+                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0]
+              ];
+    const moveId1 =
+        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1] ===
+        MovesEnum.MOVES_ENUM___NULL
+            ? ""
+            : jsonDatum["moves"][
+                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1]
+              ];
+    const moveId2 =
+        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2] ===
+        MovesEnum.MOVES_ENUM___NULL
+            ? ""
+            : jsonDatum["moves"][
+                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2]
+              ];
+    const moveId3 =
+        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3] ===
+        MovesEnum.MOVES_ENUM___NULL
+            ? ""
+            : jsonDatum["moves"][
+                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3]
+              ];
+    const nature =
+        jsonDatum["Natures"][setArray[TeamSetFeature.TEAM_SET_FEATURE__NATURE]];
+    const HpEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_HP];
+    const AtkEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_ATK];
+    const DefEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_DEF];
+    const SpaEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPA];
+    const SpdEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPD];
+    const SpeEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPE];
+    const gender = "";
+    const ivs = "";
+    const shiny = Math.random() < 1 / 8192 ? "S" : ""; // 1 in 8192 chance of being shiny
+    const level = setArray[TeamSetFeature.TEAM_SET_FEATURE__LEVEL];
+    const happiness = setArray[TeamSetFeature.TEAM_SET_FEATURE__HAPPINESS];
+    const pokeball = "";
+    const hiddenpowertype = "";
+    const gigantamax = "";
+    const dynamaxlevel = "";
+    const teratype = "";
+    return `${nickname}|${species}|${item}|${ability}|${moveId0},${moveId1},${moveId2},${moveId3}|${nature}|${HpEV},${AtkEV},${DefEV},${SpaEV},${SpdEV},${SpeEV}|${gender}|${ivs}|${shiny}|${level}|${happiness}|${pokeball}|${hiddenpowertype}|${gigantamax}|${dynamaxlevel}|${teratype}`;
+}
+
+export function teamBytesToPackedString(teamBytes: Int16Array): string {
+    const packedSets: string[] = [];
+
+    for (let i = 0; i < 6; i++) {
+        const setArray = teamBytes.slice(
+            i * numTeamSetFeatures,
+            (i + 1) * numTeamSetFeatures,
+        );
+        packedSets.push(setBytesToPackedString(setArray));
+    }
+
+    return packedSets.join("]");
+}
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
     const indices: number[] = [];
@@ -506,7 +583,20 @@ function getArrayFromPokemon(
 
     if (moveSlots) {
         for (const move of moveSlots) {
-            const { id, ppUsed } = move;
+            let { id } = move;
+            if (id.startsWith("return")) {
+                id = "return" as ID;
+            } else if (id.startsWith("frustration")) {
+                id = "frustration" as ID;
+            } else if (id.startsWith("hiddenpower")) {
+                const power = parseInt(id.slice(-2));
+                if (isNaN(power)) {
+                    id = "hiddenpower" as ID;
+                } else {
+                    id = id.slice(0, -2) as ID;
+                }
+            }
+            const ppUsed = move.ppUsed;
             const maxPP = isTransformed
                 ? 5
                 : pokemon.side.battle.gens.dex.moves.get(id).pp;
@@ -2375,10 +2465,23 @@ class PrivateActionHandler {
                 value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
             });
         }
+        let moveId = move.id;
+        if (moveId.startsWith("return")) {
+            moveId = "return" as ID;
+        } else if (moveId.startsWith("frustration")) {
+            moveId = "frustration" as ID;
+        } else if (moveId.startsWith("hiddenpower")) {
+            const power = parseInt(moveId.slice(-2));
+            if (isNaN(power)) {
+                moveId = "hiddenpower" as ID;
+            } else {
+                moveId = moveId.slice(0, -2) as ID;
+            }
+        }
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-            value: IndexValueFromEnum(MovesEnum, move.id),
+            value: IndexValueFromEnum(MovesEnum, moveId),
         });
         this.assignActionBuffer({
             offset: actionOffset,
