@@ -26,8 +26,9 @@ from rl.environment.interfaces import Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
+from rl.model.builder_model import get_builder_model
 from rl.model.config import get_model_config
-from rl.model.player_model import get_player_model, get_num_params
+from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
@@ -40,8 +41,8 @@ def run_training_actor(
     while not stop_signal[0]:
         try:
             controller.actor_wait()
-            step_count, params = actor.pull_params()
-            actor.unroll_and_push(step_count, params)
+            step_count, player_params, builder_params = actor.pull_params()
+            actor.unroll_and_push(step_count, player_params, builder_params)
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -58,7 +59,7 @@ def run_eval_actor(
 
     while not stop_signal[0]:
         try:
-            step_count, params = actor.pull_params()
+            step_count, player_params, builder_params = actor.pull_params()
             assert step_count >= old_step_count, (
                 f"Actor {session_id} tried to pull params with frame count "
                 f"{step_count} but expected at least {old_step_count}."
@@ -76,9 +77,12 @@ def run_eval_actor(
                 )
                 old_step_count = step_count
 
-            params = jax.device_put(params)
+            player_params = jax.device_put(player_params)
+            builder_params = jax.device_put(builder_params)
             subkey = actor.split_rng()
-            eval_trajectory = actor.unroll(subkey, step_count, params)
+            eval_trajectory = actor.unroll(
+                subkey, step_count, player_params, builder_params
+            )
 
             win_rewards = np.sign(eval_trajectory.timestep.env.win_reward[-1])
             # Update the win reward sum for this step count.
@@ -117,22 +121,25 @@ def main():
     model_config = get_model_config()
     pprint(learner_config)
 
-    network = get_player_model(model_config)
-    # network = get_dummy_model()
+    player_network = get_player_model(model_config)
+    builder_network = get_builder_model(model_config)
+    # player_network = get_dummy_model()
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
     num_samples = [0]
 
-    num_eval_actors = 4
+    num_eval_actors = 0
     trajectory_queue: queue.Queue[Transition] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )
 
-    state = create_train_state(network, jax.random.PRNGKey(42), learner_config)
+    player_state, builder_state = create_train_state(
+        player_network, builder_network, jax.random.PRNGKey(42), learner_config
+    )
 
     gpu_lock = FairLock()  # threading.Lock()
-    agent = Agent(state.apply_fn, gpu_lock)
+    agent = Agent(player_state.apply_fn, builder_state.apply_fn, gpu_lock)
 
     replay_buffer = ReplayBuffer(
         capacity=max(
@@ -142,7 +149,9 @@ def main():
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
-        state = load_train_state(state, latest_ckpt)
+        player_state, builder_state = load_train_state(
+            player_state, builder_state, latest_ckpt
+        )
 
     controller = ReplayRatioController(
         replay_buffer, lambda: num_samples[0], learner_config
@@ -151,14 +160,15 @@ def main():
     wandb_run = wandb.init(
         project="pokemon-rl",
         config={
-            "num_params": get_num_params(state.params),
+            "num_params": get_num_params(player_state.params),
             "learner_config": learner_config,
             "model_config": json.loads(model_config.to_json_best_effort()),
         },
     )
 
     learner = Learner(
-        state=state,
+        player_state=player_state,
+        builder_state=builder_state,
         learner_config=learner_config,
         replay_buffer=replay_buffer,
         controller=controller,

@@ -69,7 +69,7 @@ class DummyModel(nn.Module):
 
         def _forward(env_step: EnvStep) -> ModelOutput:
             mask = env_step.legal.astype(jnp.float32)
-            v = jnp.tanh(nn.Dense(1)(mask))
+            v = jnp.tanh(nn.Dense(1)(mask)).squeeze(-1)
             logit = nn.Dense(mask.shape[-1])(mask)
             masked_logits = jnp.where(mask, logit, -1e30)
             pi = nn.softmax(logit, where=env_step.legal)

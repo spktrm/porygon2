@@ -1,3 +1,4 @@
+import json
 import os
 
 import jax.numpy as jnp
@@ -146,3 +147,9 @@ ACTION_MAX_VALUES = {
     MovesetFeature.MOVESET_FEATURE__PP: 64,
     MovesetFeature.MOVESET_FEATURE__MAXPP: 64,
 }
+
+with open("data/data/data.json", "r") as f:
+    data = json.load(f)
+
+
+STOI = {key.lower(): {v: k for k, v in data[key].items()} for key in data}

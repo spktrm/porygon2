@@ -1,10 +1,28 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
-import { InfoFeature, MovesetFeature } from "../../protos/features_pb";
+import {
+    InfoFeature,
+    MovesetFeature,
+    TeamSetFeature,
+} from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
-import { EdgeBuffer } from "../server/state";
+import {
+    EdgeBuffer,
+    IndexValueFromEnum,
+    teamBytesToPackedString,
+} from "../server/state";
 import { OneDBoolean } from "../server/utils";
-import { numMoveFeatures } from "../server/data";
+import { numMoveFeatures, numTeamSetFeatures } from "../server/data";
 import { Protocol } from "@pkmn/protocol";
+import { Teams } from "@pkmn/sim";
+import { TeamGenerators } from "@pkmn/randoms";
+import {
+    AbilitiesEnum,
+    ItemsEnum,
+    MovesEnum,
+    NaturesEnum,
+    SpeciesEnum,
+} from "../../protos/enums_pb";
+Teams.setGeneratorFactory(TeamGenerators);
 
 async function playerController(player: TrainablePlayerAI) {
     while (true) {
@@ -87,10 +105,69 @@ async function playerController(player: TrainablePlayerAI) {
     }
 }
 
+function createFakeTeamBytes(): Uint8Array {
+    const team = Teams.generate("gen3randombattle");
+    const teamBytes = new Int16Array(numTeamSetFeatures * 6);
+    for (const [i, pokemonSet] of team.entries()) {
+        const offset = i * numTeamSetFeatures;
+
+        const [moveId0, moveId1, moveId2, moveId3] = pokemonSet.moves;
+
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__SPECIES] =
+            IndexValueFromEnum(SpeciesEnum, pokemonSet.name);
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__ITEM] =
+            IndexValueFromEnum(ItemsEnum, pokemonSet.item);
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__ABILITY] =
+            IndexValueFromEnum(AbilitiesEnum, pokemonSet.ability);
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__MOVEID0] = moveId0
+            ? IndexValueFromEnum(MovesEnum, moveId0)
+            : MovesEnum.MOVES_ENUM___NULL;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__MOVEID1] = moveId1
+            ? IndexValueFromEnum(MovesEnum, moveId1)
+            : MovesEnum.MOVES_ENUM___NULL;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__MOVEID2] = moveId2
+            ? IndexValueFromEnum(MovesEnum, moveId2)
+            : MovesEnum.MOVES_ENUM___NULL;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__MOVEID3] = moveId3
+            ? IndexValueFromEnum(MovesEnum, moveId3)
+            : MovesEnum.MOVES_ENUM___NULL;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__NATURE] =
+            pokemonSet.nature
+                ? IndexValueFromEnum(NaturesEnum, pokemonSet.nature)
+                : NaturesEnum.NATURES_ENUM__SERIOUS;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__HAPPINESS] =
+            pokemonSet.happiness ?? 255;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__LEVEL] =
+            pokemonSet.level ?? 100;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_HP] =
+            pokemonSet.evs.hp;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_ATK] =
+            pokemonSet.evs.atk;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_DEF] =
+            pokemonSet.evs.def;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_SPA] =
+            pokemonSet.evs.spa;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_SPD] =
+            pokemonSet.evs.spd;
+        teamBytes[offset + TeamSetFeature.TEAM_SET_FEATURE__EV_SPE] =
+            pokemonSet.evs.spe;
+    }
+    return new Uint8Array(teamBytes.buffer);
+}
+
 async function runBattle() {
     console.log("Creating battle...");
-    const names = { p1Name: "Bot1", p2Name: "Bot2" };
-    const { p1, p2 } = createBattle(names, true);
+
+    const team1Bytes = createFakeTeamBytes();
+    const team2Bytes = createFakeTeamBytes();
+
+    const names = {
+        p1Name: "Bot1",
+        p2Name: "Bot2",
+        p1team: teamBytesToPackedString(new Int16Array(team1Bytes.buffer)),
+        p2team: teamBytesToPackedString(new Int16Array(team2Bytes.buffer)),
+    };
+    const { p1, p2 } = createBattle(names, false);
 
     console.log("Starting asynchronous player controllers...");
 

@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rl.environment.interfaces import ActorStep, ModelOutput, TimeStep
+from rl.environment.interfaces import ActorReset, ActorStep, ModelOutput, TimeStep
 from rl.model.utils import Params
 
 
@@ -20,16 +20,33 @@ class Agent:
     """A stateless agent interface."""
 
     def __init__(
-        self, apply_fn: Callable[[TimeStep], ModelOutput], gpu_lock: threading.Lock
+        self,
+        player_apply_fn: Callable[[TimeStep], ModelOutput],
+        builder_apply_fn: Callable[[jax.Array], ActorReset],
+        gpu_lock: threading.Lock,
     ):
         """Constructs an Agent object."""
 
-        self._apply_fn = apply_fn
+        self._player_apply_fn = player_apply_fn
+        self._builder_apply_fn = builder_apply_fn
         self._lock = gpu_lock
+
+    def reset(self, rng_key, params: Params) -> ActorReset:
+        with self._lock:
+            return self._reset(rng_key, params)
 
     def step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep:
         with self._lock:
             return self._step(rng_key, params, timestep)
+
+    @overload
+    def _reset(self, rng_key, params: Params) -> ActorStep: ...
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset(self, rng_key, params: Params) -> jax.Array:
+        """For a given single-step, unbatched timestep, output the chosen action."""
+        # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
+        tokens, log_pi = self._builder_apply_fn(params, rng_key[None])
+        return ActorReset(tokens=tokens.reshape(-1), log_pi=log_pi, key=rng_key)
 
     @overload
     def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep: ...
@@ -43,7 +60,7 @@ class Agent:
             history=jax.tree.map(lambda t: t[:, None, ...], timestep.history),
         )
 
-        model_output = self._apply_fn(params, timestep)
+        model_output = self._player_apply_fn(params, timestep)
         # Remove the padding from above.
         model_output = jax.tree.map(lambda t: jnp.squeeze(t, axis=(0, 1)), model_output)
         # Sample an action and return.
