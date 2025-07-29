@@ -23,10 +23,12 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[int] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username",)
+    __slots__ = ("username", "team")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
+    TEAM_FIELD_NUMBER: _ClassVar[int]
     username: str
-    def __init__(self, username: _Optional[str] = ...) -> None: ...
+    team: bytes
+    def __init__(self, username: _Optional[str] = ..., team: _Optional[bytes] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "legal_actions", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "my_actions", "opp_actions", "public_team", "private_team", "field", "rqid")

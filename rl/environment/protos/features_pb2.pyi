@@ -163,6 +163,37 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__TURN: _ClassVar[InfoFeature]
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
+
+class TeamSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    TEAM_SET_FEATURE___UNSPECIFIED: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__SPECIES: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__ITEM: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__ABILITY: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__MOVEID0: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__MOVEID1: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__MOVEID2: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__MOVEID3: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__NATURE: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__GENDER: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_HP: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_ATK: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_DEF: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_SPA: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_SPD: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__EV_SPE: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_HP: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_ATK: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_DEF: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_SPA: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_SPD: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__IV_SPE: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__LEVEL: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__HAPPINESS: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__HIDDEN_POWER_TYPE: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__GIGANTAMAX: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__DYNAMAX_LEVEL: _ClassVar[TeamSetFeature]
+    TEAM_SET_FEATURE__TERA_TYPE: _ClassVar[TeamSetFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -302,3 +333,31 @@ INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
+TEAM_SET_FEATURE___UNSPECIFIED: TeamSetFeature
+TEAM_SET_FEATURE__SPECIES: TeamSetFeature
+TEAM_SET_FEATURE__ITEM: TeamSetFeature
+TEAM_SET_FEATURE__ABILITY: TeamSetFeature
+TEAM_SET_FEATURE__MOVEID0: TeamSetFeature
+TEAM_SET_FEATURE__MOVEID1: TeamSetFeature
+TEAM_SET_FEATURE__MOVEID2: TeamSetFeature
+TEAM_SET_FEATURE__MOVEID3: TeamSetFeature
+TEAM_SET_FEATURE__NATURE: TeamSetFeature
+TEAM_SET_FEATURE__GENDER: TeamSetFeature
+TEAM_SET_FEATURE__EV_HP: TeamSetFeature
+TEAM_SET_FEATURE__EV_ATK: TeamSetFeature
+TEAM_SET_FEATURE__EV_DEF: TeamSetFeature
+TEAM_SET_FEATURE__EV_SPA: TeamSetFeature
+TEAM_SET_FEATURE__EV_SPD: TeamSetFeature
+TEAM_SET_FEATURE__EV_SPE: TeamSetFeature
+TEAM_SET_FEATURE__IV_HP: TeamSetFeature
+TEAM_SET_FEATURE__IV_ATK: TeamSetFeature
+TEAM_SET_FEATURE__IV_DEF: TeamSetFeature
+TEAM_SET_FEATURE__IV_SPA: TeamSetFeature
+TEAM_SET_FEATURE__IV_SPD: TeamSetFeature
+TEAM_SET_FEATURE__IV_SPE: TeamSetFeature
+TEAM_SET_FEATURE__LEVEL: TeamSetFeature
+TEAM_SET_FEATURE__HAPPINESS: TeamSetFeature
+TEAM_SET_FEATURE__HIDDEN_POWER_TYPE: TeamSetFeature
+TEAM_SET_FEATURE__GIGANTAMAX: TeamSetFeature
+TEAM_SET_FEATURE__DYNAMAX_LEVEL: TeamSetFeature
+TEAM_SET_FEATURE__TERA_TYPE: TeamSetFeature

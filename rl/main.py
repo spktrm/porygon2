@@ -27,7 +27,7 @@ from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.config import get_model_config
-from rl.model.model import get_model, get_num_params
+from rl.model.player_model import get_player_model, get_num_params
 from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
@@ -117,7 +117,7 @@ def main():
     model_config = get_model_config()
     pprint(learner_config)
 
-    network = get_model(model_config)
+    network = get_player_model(model_config)
     # network = get_dummy_model()
 
     actor_threads: list[threading.Thread] = []

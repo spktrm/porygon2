@@ -10,7 +10,7 @@ from inference.interfaces import PredictionResponse
 from rl.actor.agent import Agent
 from rl.environment.interfaces import TimeStep
 from rl.environment.utils import get_ex_step
-from rl.model.model import get_model
+from rl.model.player_model import get_player_model
 from rl.model.utils import BIAS_VALUE, get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
@@ -33,7 +33,7 @@ class InferenceModel:
     def __init__(self, fpath: str = None, seed: int = 42):
         self.np_rng = np.random.RandomState(seed)
 
-        self.network = get_model()
+        self.network = get_player_model()
 
         apply = functools.partial(self.network.apply, temp=0.2)
         self.agent = Agent(jax.vmap(apply, in_axes=(None, 1)), threading.Lock())

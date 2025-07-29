@@ -18,7 +18,7 @@ from rl.model.utils import Params, get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
 
-class Porygon2Model(nn.Module):
+class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
@@ -117,10 +117,10 @@ def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
     return build_param_dict(vars, total_params, 0)
 
 
-def get_model(config: ConfigDict = None) -> nn.Module:
+def get_player_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
         config = get_model_config()
-    return Porygon2Model(config)
+    return Porygon2PlayerModel(config)
 
 
 def get_dummy_model() -> nn.Module:
@@ -139,7 +139,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 
 def main():
     init_jax_jit_cache()
-    network = get_model()
+    network = get_player_model()
     ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
 
     latest_ckpt = get_most_recent_file("./ckpts")

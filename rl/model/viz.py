@@ -5,12 +5,12 @@ import jax
 
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
-from rl.model.model import get_model
+from rl.model.player_model import get_player_model
 
 
 def main():
     config = get_model_config()
-    network = get_model(config)
+    network = get_player_model(config)
     ex, hx = get_ex_step()
 
     latest_ckpt = None  # get_most_recent_file("./ckpts")

@@ -3,7 +3,7 @@ import pickle
 import jax
 
 from rl.environment.utils import get_ex_step
-from rl.model.model import get_model
+from rl.model.player_model import get_player_model
 from rl.model.utils import get_most_recent_file
 
 
@@ -13,7 +13,7 @@ def block_all(xs):
 
 
 def main():
-    network = get_model()
+    network = get_player_model()
     ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
     latest_ckpt = get_most_recent_file("./ckpts")
