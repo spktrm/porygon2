@@ -1,5 +1,6 @@
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.model.modules import (
@@ -9,6 +10,7 @@ from rl.model.modules import (
     activation_fn,
     create_attention_mask,
 )
+from rl.model.utils import BIAS_VALUE, legal_log_policy, legal_policy
 
 
 class PolicyHead(nn.Module):
@@ -45,8 +47,9 @@ class PolicyHead(nn.Module):
         logits = logits.reshape(-1)
         logits = (logits - logits.mean(axis=-1, keepdims=True)) / temp
 
-        policy = nn.softmax(logits, where=action_mask)
-        log_policy = nn.log_softmax(logits, where=action_mask)
+        masked_logits = jnp.where(action_mask, logits, BIAS_VALUE)
+        policy = legal_policy(masked_logits, action_mask, temp)
+        log_policy = legal_log_policy(masked_logits, action_mask, temp)
 
         return logits, policy, log_policy
 
