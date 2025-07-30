@@ -550,7 +550,7 @@ class SumEmbeddings(nn.Module):
     @nn.compact
     def __call__(self, *embeddings: List[jax.Array]) -> jax.Array:
         """Sum embeddings."""
-        return sum(
+        embedding = sum(
             [
                 nn.Dense(self.output_size, use_bias=False, dtype=self.dtype)(embedding)
                 for embedding in embeddings
@@ -558,6 +558,7 @@ class SumEmbeddings(nn.Module):
         ) + self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.dtype
         )
+        return layer_norm(embedding, self.dtype)
 
 
 class MergeEmbeddings(nn.Module):

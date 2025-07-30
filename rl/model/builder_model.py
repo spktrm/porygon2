@@ -1,6 +1,7 @@
 import math
+import pickle
 from pprint import pprint
-from typing import Dict
+from typing import Callable, Dict
 
 import flax.linen as nn
 import jax
@@ -19,16 +20,18 @@ from rl.environment.data import (
     NUM_TYPECHART,
     STOI,
 )
+from rl.environment.interfaces import ActorReset
 from rl.environment.protos.features_pb2 import TeamSetFeature
 from rl.model.config import get_model_config
 from rl.model.modules import (
     MLP,
     PretrainedEmbedding,
     SumEmbeddings,
+    TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE, Params
+from rl.model.utils import BIAS_VALUE, Params, get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
 SPECIES_MASK = PretrainedEmbedding(
@@ -53,23 +56,24 @@ class Porygon2BuilderModel(nn.Module):
         entity_size = self.cfg.entity_size
         dtype = self.cfg.dtype
 
-        self.transformer = TransformerEncoder(
-            **self.cfg.policy_head.transformer.to_dict()
-        )
+        self.encoder = TransformerEncoder(**self.cfg.policy_head.transformer.to_dict())
+        self.decoder = TransformerDecoder(**self.cfg.policy_head.transformer.to_dict())
+        self.value_head = MLP((entity_size, 1), dtype=dtype)
+
         self.species_head = MLP((entity_size, NUM_SPECIES), dtype=dtype)
-        self.item_head = MLP((entity_size, NUM_ITEMS), dtype=dtype)
-        self.ability_head = MLP((entity_size, NUM_ABILITIES), dtype=dtype)
-        self.moves_head = MLP((entity_size, NUM_MOVES), dtype=dtype)
-        self.nature_head = MLP((entity_size, NUM_NATURES), dtype=dtype)
-        self.gender_head = MLP((entity_size, NUM_GENDERS), dtype=dtype)
-        self.evs_head = MLP((entity_size, 2 * 6), dtype=dtype)
-        self.ivs_head = MLP((entity_size, 2 * 6), dtype=dtype)
-        self.level_head = MLP((entity_size, 2), dtype=dtype)
-        self.happiness_head = MLP((entity_size, 2), dtype=dtype)
-        self.hidden_power_type_head = MLP((entity_size, NUM_TYPECHART), dtype=dtype)
-        self.gigantamax_head = MLP((entity_size, 2), dtype=dtype)
-        self.dynamax_level_head = MLP((entity_size, 2), dtype=dtype)
-        self.tera_type_head = MLP((entity_size, NUM_TYPECHART), dtype=dtype)
+        self.item_head = SumEmbeddings(NUM_ITEMS, dtype=dtype)
+        self.ability_head = SumEmbeddings(NUM_ABILITIES, dtype=dtype)
+        self.moves_head = SumEmbeddings(NUM_MOVES, dtype=dtype)
+        self.nature_head = SumEmbeddings(NUM_NATURES, dtype=dtype)
+        self.gender_head = SumEmbeddings(NUM_GENDERS, dtype=dtype)
+        self.evs_head = SumEmbeddings(2 * 6, dtype=dtype)
+        self.ivs_head = SumEmbeddings(2 * 6, dtype=dtype)
+        self.level_head = SumEmbeddings(2, dtype=dtype)
+        self.happiness_head = SumEmbeddings(2, dtype=dtype)
+        self.hidden_power_type_head = SumEmbeddings(NUM_TYPECHART, dtype=dtype)
+        self.gigantamax_head = SumEmbeddings(2, dtype=dtype)
+        self.dynamax_level_head = SumEmbeddings(2, dtype=dtype)
+        self.tera_type_head = SumEmbeddings(NUM_TYPECHART, dtype=dtype)
 
         self.set_sum = SumEmbeddings(entity_size, dtype=dtype)
 
@@ -78,64 +82,84 @@ class Porygon2BuilderModel(nn.Module):
         logits: jax.Array,
         key: jax.Array,
         mask: jax.Array | None = None,
+        forced_token: jax.Array | None = None,
     ) -> tuple[int, jax.Array, jax.Array]:
         if mask is not None:
             logits = jnp.where(mask, logits, BIAS_VALUE)
         log_probs = nn.log_softmax(logits, axis=-1)
         key, subkey = jax.random.split(key)
-        token = jax.random.categorical(subkey, logits)
+        if forced_token is None:
+            token = jax.random.categorical(subkey, logits)
+        else:
+            token = forced_token
         log_prob = log_probs[token]
-        return token, log_prob, key
+        probs = jnp.exp(log_probs)
+        ohe = jax.nn.one_hot(token, logits.shape[-1], dtype=log_probs.dtype)
+        pass_through = probs + jax.lax.stop_gradient(ohe - probs)
+        return token, pass_through, log_prob, key
 
     def _sample_moves(
-        self, logits: jax.Array, key: jax.Array, mask: jax.Array | None = None
+        self,
+        logits: jax.Array,
+        key: jax.Array,
+        mask: jax.Array | None = None,
+        forced_tokens: jax.Array | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         """Samples four distinct moves and returns (tokens, onehot, log_prob_sum, new_key)."""
-        selected = jnp.zeros((NUM_MOVES,), dtype=jnp.bool_)
+        selected = jnp.zeros((NUM_MOVES,), dtype=self.cfg.dtype)
         tokens = []
         log_pi = 0.0
 
-        for _ in range(4):
-            selection_mask = ~selected  # only allow moves that haven't been chosen yet
-            token, log_p, key = self._sample_token(logits, key, selection_mask & mask)
+        for i in range(4):
+            # only allow moves that haven't been chosen yet
+            selection_mask = ~(selected).astype(jnp.bool)
+            token, move_ohe, log_p, key = self._sample_token(
+                logits,
+                key,
+                selection_mask & mask,
+                forced_token=None if forced_tokens is None else forced_tokens[i],
+            )
             tokens.append(token)
-            selected = selected | jax.nn.one_hot(token, NUM_MOVES).astype(jnp.bool_)
+            selected = selected + move_ohe
             log_pi += log_p
 
         return jnp.array(tokens), selected, log_pi, key
 
     def _sample_stat_dist(self, logits: jax.Array, key: jax.Array) -> jax.Array:
         mu, log_var = jnp.split(logits, 2, axis=-1)
-        std = jnp.exp(0.5 * log_var)
+        log_std = 0.5 * log_var
+        std = jnp.exp(log_std)
+
         key, subkey = jax.random.split(key)
-        embedding = mu + std * jax.random.normal(subkey, mu.shape, dtype=self.cfg.dtype)
-        log_pi_z = -0.5 * jnp.sum(jnp.square((embedding - mu) / std), axis=-1)
-        return embedding, log_pi_z, key
+        eps = jax.random.normal(subkey, mu.shape, dtype=self.cfg.dtype)
+        z = mu + std * eps  # re‑parameterised sample
+
+        log_unnormalized = -0.5 * jnp.square(eps)
+        _half_log2pi = 0.5 * math.log(2 * math.pi)
+        log_normalization = _half_log2pi + jnp.log(std)
+        log_pi_z = (log_normalization + log_unnormalized).sum()
+
+        return z, log_pi_z, key
 
     def _generate_embedding(
         self,
-        species_token: int,
-        item_token: int,
-        ability_token: int,
+        species_ohe: int,
+        item_ohe: int,
+        ability_ohe: int,
         moves_onehot: jax.Array,
-        nature_token: int,
+        nature_ohe: int,
         stat_features: jax.Array,
-        hidden_power_token: jax.Array,
+        hidden_power_ohe: jax.Array,
     ) -> jax.Array:
         """Maps discrete choices into a dense entity embedding."""
-        species_oh = jax.nn.one_hot(species_token, NUM_SPECIES)
-        item_oh = jax.nn.one_hot(item_token, NUM_ITEMS)
-        ability_oh = jax.nn.one_hot(ability_token, NUM_ABILITIES)
-        nature_oh = jax.nn.one_hot(nature_token, NUM_NATURES)
-        hidden_power_oh = jax.nn.one_hot(hidden_power_token, NUM_TYPECHART)
         return self.set_sum(
-            species_oh,
-            item_oh,
-            ability_oh,
+            species_ohe,
+            item_ohe,
+            ability_ohe,
             moves_onehot.astype(self.cfg.dtype),
-            nature_oh,
+            nature_ohe,
             stat_features,
-            hidden_power_oh,
+            hidden_power_ohe,
         )
 
     def _build_tokens(
@@ -172,11 +196,13 @@ class Porygon2BuilderModel(nn.Module):
         tokens = tokens.at[TeamSetFeature.TEAM_SET_FEATURE__HAPPINESS].set(happiness_t)
         return tokens
 
-    def __call__(self, key: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def __call__(
+        self, init_key: jax.Array, forced_tokens: jax.Array = None
+    ) -> tuple[jax.Array, jax.Array]:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
-        key, init_key = jax.random.split(key)
+        key, subkey = jax.random.split(init_key)
         team = jax.random.normal(
-            init_key, (6, self.cfg.entity_size), dtype=self.cfg.dtype
+            subkey, (6, self.cfg.entity_size), dtype=self.cfg.dtype
         )
 
         log_pi_total = 0.0
@@ -185,42 +211,85 @@ class Porygon2BuilderModel(nn.Module):
         attn_masks = jnp.tril(jnp.ones((6, 6), dtype=jnp.bool_))
 
         for i in range(6):
-            embeddings = self.transformer(team, create_attention_mask(attn_masks[i]))
+            embeddings = self.encoder(team, create_attention_mask(attn_masks[i]))
             embed_i = embeddings[i]
 
             # ---- Sample species (without reuse) ---------------------------------
-            species_t, log_p_species, key = self._sample_token(
-                self.species_head(embed_i), key, species_mask & SPECIES_MASK.embeddings
+            species_t, species_ohe, log_p_species, key = self._sample_token(
+                self.species_head(embed_i),
+                key,
+                species_mask & SPECIES_MASK.embeddings,
+                forced_token=(
+                    forced_tokens[i, TeamSetFeature.TEAM_SET_FEATURE__SPECIES]
+                    if forced_tokens is not None
+                    else None
+                ),
             )
             log_pi_total += log_p_species
             species_mask = species_mask.at[species_t].set(False)
 
             # ---- Sample item -----------------------------------------------------
-            item_t, log_p_item, key = self._sample_token(
-                self.item_head(embed_i), key, ITEM_MASK.embeddings
+            item_t, item_ohe, log_p_item, key = self._sample_token(
+                self.item_head(embed_i, species_ohe),
+                key,
+                ITEM_MASK.embeddings,
+                forced_token=(
+                    forced_tokens[i, TeamSetFeature.TEAM_SET_FEATURE__ITEM]
+                    if forced_tokens is not None
+                    else None
+                ),
             )
             log_pi_total += log_p_item
 
             # ---- Sample ability --------------------------------------------------
-            ability_t, log_p_ability, key = self._sample_token(
-                self.ability_head(embed_i), key, ABILITIES_MASK(species_t)
+            ability_t, ability_ohe, log_p_ability, key = self._sample_token(
+                self.ability_head(embed_i, species_ohe),
+                key,
+                ABILITIES_MASK(species_t),
+                forced_token=(
+                    forced_tokens[i, TeamSetFeature.TEAM_SET_FEATURE__ABILITY]
+                    if forced_tokens is not None
+                    else None
+                ),
             )
             log_pi_total += log_p_ability
 
             # ---- Sample four distinct moves -------------------------------------
             move_toks, moves_onehot, log_p_moves, key = self._sample_moves(
-                self.moves_head(embed_i), key, LEARNSET_MASK(species_t)
+                self.moves_head(embed_i, species_ohe),
+                key,
+                LEARNSET_MASK(species_t),
+                forced_tokens=(
+                    forced_tokens[
+                        i,
+                        TeamSetFeature.TEAM_SET_FEATURE__MOVEID0 : TeamSetFeature.TEAM_SET_FEATURE__MOVEID3
+                        + 1,
+                    ]
+                    if forced_tokens is not None
+                    else None
+                ),
             )
             log_pi_total += log_p_moves
 
             # ---- Sample nature --------------------------------------------------
-            nature_t, log_p_nature, key = self._sample_token(
-                self.nature_head(embed_i), key
+            nature_mask = np.ones((NUM_NATURES,), dtype=np.bool_)
+            nature_mask[:4] = False  # First four placeholder natures are not allowed
+            nature_t, nature_ohe, log_p_nature, key = self._sample_token(
+                self.nature_head(embed_i, species_ohe),
+                key,
+                nature_mask,
+                forced_token=(
+                    forced_tokens[i, TeamSetFeature.TEAM_SET_FEATURE__NATURE]
+                    if forced_tokens is not None
+                    else None
+                ),
             )
             log_pi_total += log_p_nature
 
             # ---- Sample evs --------------------------------------------------
-            evs_t, log_p_evs, key = self._sample_stat_dist(self.evs_head(embed_i), key)
+            evs_t, log_p_evs, key = self._sample_stat_dist(
+                self.evs_head(embed_i, species_ohe), key
+            )
             log_pi_total += log_p_evs
 
             # ---- Sample ivs --------------------------------------------------
@@ -229,19 +298,29 @@ class Porygon2BuilderModel(nn.Module):
 
             # ---- Sample level --------------------------------------------------
             level_t, log_p_level, key = self._sample_stat_dist(
-                self.level_head(embed_i), key
+                self.level_head(embed_i, species_ohe), key
             )
             log_pi_total += log_p_level
 
             # ---- Sample happiness --------------------------------------------------
             happiness_t, log_p_happiness, key = self._sample_stat_dist(
-                self.happiness_head(embed_i), key
+                self.happiness_head(embed_i, species_ohe), key
             )
             log_pi_total += log_p_happiness
 
             # ---- Sample hidden_power_type --------------------------------------------------
-            hidden_power_type_t, log_p_hidden_power_type, key = self._sample_token(
-                self.hidden_power_type_head(embed_i), key
+            hidden_power_type_t, hidden_power_type_ohe, log_p_hidden_power_type, key = (
+                self._sample_token(
+                    self.hidden_power_type_head(embed_i, species_ohe),
+                    key,
+                    forced_token=(
+                        forced_tokens[
+                            i, TeamSetFeature.TEAM_SET_FEATURE__HIDDEN_POWER_TYPE
+                        ]
+                        if forced_tokens is not None
+                        else None
+                    ),
+                )
             )
             log_pi_total += log_p_hidden_power_type
 
@@ -251,11 +330,11 @@ class Porygon2BuilderModel(nn.Module):
             happiness_prob = nn.sigmoid(happiness_t)
             team = team.at[i].set(
                 self._generate_embedding(
-                    species_t,
-                    item_t,
-                    ability_t,
+                    species_ohe,
+                    item_ohe,
+                    ability_ohe,
                     moves_onehot,
-                    nature_t,
+                    nature_ohe,
                     jnp.concatenate(
                         (
                             evs_dist,
@@ -264,7 +343,7 @@ class Porygon2BuilderModel(nn.Module):
                         ),
                         axis=-1,
                     ),
-                    hidden_power_type_t,
+                    hidden_power_type_ohe,
                 )
             )
 
@@ -282,7 +361,16 @@ class Porygon2BuilderModel(nn.Module):
             )
             all_tokens.append(current)
 
-        return jnp.stack(all_tokens), log_pi_total
+        pooled = self.decoder(
+            team.mean(axis=0, keepdims=True),
+            team,
+            create_attention_mask(attn_masks[-1].any(keepdims=True), attn_masks[-1]),
+        )
+        v = nn.tanh(self.value_head(pooled)).squeeze(-1)
+
+        return ActorReset(
+            tokens=jnp.stack(all_tokens), log_pi=log_pi_total, v=v, key=init_key
+        )
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -343,16 +431,35 @@ def main():
     init_jax_jit_cache()
     network = get_builder_model()
 
-    key = jax.random.key(42)
-    params = network.init(key, key)
+    latest_ckpt = get_most_recent_file("./ckpts")
+    if latest_ckpt:
+        print(f"loading checkpoint from {latest_ckpt}")
+        with open(latest_ckpt, "rb") as f:
+            step = pickle.load(f)
+        params = step["builder_state"]["params"]
+    else:
+        key = jax.random.key(42)
+        params = network.init(key, key)
 
-    jitted_apply = jax.jit(network.apply)
+    pprint(get_num_params(params))
+
+    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset]
+    # apply_fn = jax.jit(network.apply)
+    apply_fn = network.apply
+
+    key = jax.random.key(42)
 
     while True:
         key, subkey = jax.random.split(key)
-        tokens, log_pi = jitted_apply(params, subkey)
+        output1 = apply_fn(params, subkey)
+        assert jnp.all(output1.key == subkey)
 
-        for row in np.asarray(tokens):
+        output = apply_fn(params, output1.subkey, output1.tokens)
+        assert jnp.all(output.key == subkey)
+
+        assert jnp.allclose(output.log_pi, output1.log_pi)
+
+        for row in np.asarray(output.tokens):
             print(
                 "|"
                 + STOI["species"][row[TeamSetFeature.TEAM_SET_FEATURE__SPECIES]]
@@ -382,11 +489,11 @@ def main():
                 + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_SPD])
                 + ","
                 + str(row[TeamSetFeature.TEAM_SET_FEATURE__EV_SPE])
+                + "|"
+                + str(row[TeamSetFeature.TEAM_SET_FEATURE__LEVEL])
             )
 
         print()
-
-    pprint(get_num_params(params))
 
 
 if __name__ == "__main__":

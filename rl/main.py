@@ -28,7 +28,7 @@ from rl.learner.config import create_train_state, get_learner_config, load_train
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_model_config
-from rl.model.player_model import get_num_params, get_player_model
+from rl.model.player_model import get_dummy_model, get_num_params
 from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
@@ -53,7 +53,7 @@ def run_eval_actor(
 ):
     """Runs an actor to produce num_trajectories trajectories."""
 
-    old_step_count, _ = actor.pull_params()
+    old_step_count, player_params, builder_params = actor.pull_params()
     session_id = actor._env.username
     win_reward_sum = {old_step_count: (0, 0)}
 
@@ -121,15 +121,15 @@ def main():
     model_config = get_model_config()
     pprint(learner_config)
 
-    player_network = get_player_model(model_config)
+    # player_network = get_player_model(model_config)
     builder_network = get_builder_model(model_config)
-    # player_network = get_dummy_model()
+    player_network = get_dummy_model()
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
     num_samples = [0]
 
-    num_eval_actors = 0
+    num_eval_actors = 4
     trajectory_queue: queue.Queue[Transition] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )

@@ -50,15 +50,15 @@ def train_step(
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace = compute_returns(target_pred.v, actor_target_ratio, batch, config)
-    adv_mean = vtrace.pg_advantage.mean(where=valid)
-    adv_std = vtrace.pg_advantage.std(where=valid)
+    player_adv_mean = vtrace.pg_advantage.mean(where=valid)
+    player_adv_std = vtrace.pg_advantage.std(where=valid)
 
     # Normalize by the ema mean and std of the advantages.
-    advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
+    player_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
         player_state.target_adv_std + 1e-8
     )
 
-    is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+    player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     def player_loss_fn(params: Params):
 
@@ -75,10 +75,10 @@ def train_step(
 
         # Calculate the policy gradient loss.
         # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-        learner_actor_ratio_is = is_ratio * learner_actor_ratio
+        learner_actor_ratio_is = player_is_ratio * learner_actor_ratio
 
-        pg_loss1 = advantages * learner_actor_ratio_is
-        pg_loss2 = advantages * jnp.clip(
+        pg_loss1 = player_advantages * learner_actor_ratio_is
+        pg_loss2 = player_advantages * jnp.clip(
             learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
         )
         pg_loss = jnp.minimum(pg_loss1, pg_loss2)
@@ -132,43 +132,90 @@ def train_step(
             ),
         )
 
+    actor_builder_keys = batch.actor_reset.key.squeeze(0)
+    actor_builder_log_pi = batch.actor_reset.log_pi.squeeze(0)
+    actor_builder_tokens = batch.actor_reset.tokens.squeeze(0)
+
+    target_builder_output = builder_state.apply_fn(
+        builder_state.target_params, actor_builder_keys, actor_builder_tokens
+    )
+    target_builder_v = target_builder_output.v.squeeze(-1)
+
+    actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_output.log_pi
+    actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
+
+    builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
+
+    final_reward = batch.timestep.env.win_reward[-1]
+    builder_advantage = final_reward - target_builder_v
+
+    first_valid = valid[0]
+
+    builder_adv_mean = builder_advantage.mean(where=first_valid)
+    builder_adv_std = builder_advantage.std(where=first_valid)
+    builder_norm_advantages = (builder_advantage - builder_state.target_adv_mean) / (
+        builder_state.target_adv_std + 1e-8
+    )
+
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        _, leaner_log_pi = builder_state.apply_fn(
-            params, batch.actor_reset.key.squeeze(0)
+        learner_builder_output = builder_state.apply_fn(
+            params, actor_builder_keys, actor_builder_tokens
         )
 
-        learner_actor_log_ratio = leaner_log_pi - batch.actor_reset.log_pi.squeeze()
+        learner_actor_log_ratio = learner_builder_output.log_pi - actor_builder_log_pi
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        final_reward = batch.timestep.env.win_reward[-1]
-        pg_loss1 = final_reward * learner_actor_ratio
-        pg_loss2 = final_reward * learner_actor_ratio.clip(
-            min=1 - config.clip_ppo, max=1 + config.clip_ppo
+        learner_target_log_ratio = (
+            learner_builder_output.log_pi - target_builder_output.log_pi
         )
-        pg_loss = -jnp.minimum(pg_loss1, pg_loss2).mean(where=valid[0])
+        learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        return pg_loss, {}
+        # Calculate the policy gradient loss.
+        # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
+        learner_actor_ratio_is = builder_is_ratio * learner_actor_ratio
+
+        pg_loss1 = builder_norm_advantages * learner_actor_ratio_is
+        pg_loss2 = builder_norm_advantages * jnp.clip(
+            learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
+        )
+        pg_loss = jnp.minimum(pg_loss1, pg_loss2)
+        loss_pg = -pg_loss.mean(where=first_valid)
+
+        pred_v = learner_builder_output.v.squeeze(-1)
+        loss_v = 0.5 * jnp.square(pred_v - final_reward).mean(where=first_valid)
+
+        backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
+            learner_target_ratio - 1
+        )
+        loss_kl = backward_kl_approx.mean(where=first_valid)
+
+        builder_loss = (
+            loss_pg + config.value_loss_coef * loss_v + config.kl_loss_coef * loss_kl
+        )
+
+        return builder_loss, dict(
+            builder_loss_pg=loss_pg,
+            builder_loss_v=loss_v,
+            builder_loss_kl=loss_kl,
+            builder_value_function_r2=calculate_r2(
+                value_prediction=pred_v, value_target=final_reward, mask=first_valid
+            ),
+        )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
-    (player_loss_val, logs), player_grads = player_grad_fn(player_state.params)
+    (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
-    builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
-    (builder_loss_val, _), builder_grads = builder_grad_fn(builder_state.params)
-
-    builder_state = builder_state.apply_gradients(grads=builder_grads)
-
-    logs.update(
+    player_logs.update(
         dict(
             loss=player_loss_val,
-            builder_los_val=builder_loss_val,
             param_norm=optax.global_norm(player_state.params),
             gradient_norm=optax.global_norm(player_grads),
-            adv_mean=adv_mean,
-            adv_std=adv_std,
-            is_ratio=is_ratio.mean(where=valid),
-            norm_adv_mean=advantages.mean(where=valid),
-            norm_adv_std=advantages.std(where=valid),
+            adv_mean=player_adv_mean,
+            adv_std=player_adv_std,
+            is_ratio=player_is_ratio.mean(where=valid),
+            norm_adv_mean=player_advantages.mean(where=valid),
+            norm_adv_std=player_advantages.std(where=valid),
             value_target_mean=vtrace.returns.mean(where=valid),
             value_target_std=vtrace.returns.std(where=valid),
             Step=player_state.num_steps,
@@ -182,19 +229,45 @@ def train_step(
             player_state.params, player_state.target_params, config.tau
         ),
         target_adv_mean=player_state.target_adv_mean * (1 - config.tau)
-        + adv_mean * config.tau,
+        + player_adv_mean * config.tau,
         target_adv_std=player_state.target_adv_std * (1 - config.tau)
-        + adv_std * config.tau,
+        + player_adv_std * config.tau,
         # Update num steps sampled.
         num_steps=player_state.num_steps + 1,
         # Add 1 for the final step in each trajectory
         actor_steps=player_state.actor_steps + valid.sum(),
     )
 
-    logs.update(dict(actor_steps=player_state.actor_steps))
-    logs.update(collect_batch_telemetry_data(batch))
+    player_logs.update(dict(actor_steps=player_state.actor_steps))
+    player_logs.update(collect_batch_telemetry_data(batch))
 
-    return player_state, builder_state, logs
+    builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
+    (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
+        builder_state.params
+    )
+
+    player_logs.update(builder_logs)
+    player_logs.update(
+        dict(
+            builder_loss_val=builder_loss_val,
+            param_norm=optax.global_norm(builder_state.params),
+            gradient_norm=optax.global_norm(builder_grads),
+        )
+    )
+
+    builder_state = builder_state.apply_gradients(grads=builder_grads)
+    builder_state = builder_state.replace(
+        # Update target params.
+        target_params=optax.incremental_update(
+            builder_state.params, builder_state.target_params, config.tau
+        ),
+        target_adv_mean=builder_state.target_adv_mean * (1 - config.tau)
+        + builder_adv_mean * config.tau,
+        target_adv_std=builder_state.target_adv_std * (1 - config.tau)
+        + builder_adv_std * config.tau,
+    )
+
+    return player_state, builder_state, player_logs
 
 
 class Learner:

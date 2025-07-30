@@ -16,6 +16,8 @@ function fixMoveId(moveId: string) {
         return moveId.slice(0, -2);
     } else if (moveId.startsWith("return")) {
         return "return";
+    } else if (moveId.startsWith("frustration")) {
+        return "frustration";
     }
     return moveId;
 }

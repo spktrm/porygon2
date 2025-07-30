@@ -147,7 +147,7 @@ def main():
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
-        params = step["params"]
+        params = step["player_state"]["params"]
     else:
         key = jax.random.key(42)
         params = network.init(key, ts)

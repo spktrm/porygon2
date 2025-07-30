@@ -48,7 +48,7 @@ class Actor:
         subkeys = jax.random.split(rng_key, self._unroll_length + 1)
 
         actor_reset = self._agent.reset(subkeys[0], builder_params)
-        tokens_buffer = np.asarray(actor_reset.tokens, dtype=np.int16).view(np.uint8)
+        tokens_buffer = np.asarray(actor_reset.tokens.reshape(-1), dtype=np.int16)
         unprocessed_timestep = self._env.reset(tokens_buffer.tobytes())
 
         traj = []
@@ -77,7 +77,7 @@ class Actor:
             ),
             actor_step=trajectory.actor_step,
             # Only the first step uses this
-            actor_reset=jax.tree.map(lambda x: x[None], actor_reset),
+            actor_reset=actor_reset,
         )
 
         request_count = trajectory.timestep.env.info[

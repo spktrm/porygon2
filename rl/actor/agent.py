@@ -21,8 +21,8 @@ class Agent:
 
     def __init__(
         self,
-        player_apply_fn: Callable[[TimeStep], ModelOutput],
-        builder_apply_fn: Callable[[jax.Array], ActorReset],
+        player_apply_fn: Callable[[Params, TimeStep], ModelOutput],
+        builder_apply_fn: Callable[[Params, jax.Array], ActorReset],
         gpu_lock: threading.Lock,
     ):
         """Constructs an Agent object."""
@@ -42,11 +42,9 @@ class Agent:
     @overload
     def _reset(self, rng_key, params: Params) -> ActorStep: ...
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self, rng_key, params: Params) -> jax.Array:
-        """For a given single-step, unbatched timestep, output the chosen action."""
-        # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
-        tokens, log_pi = self._builder_apply_fn(params, rng_key[None])
-        return ActorReset(tokens=tokens.reshape(-1), log_pi=log_pi, key=rng_key)
+    def _reset(self, rng_key, params: Params) -> ActorStep:
+        rng_key = rng_key[None, ...]  # Ensure shape is [1, 1, ...]
+        return self._builder_apply_fn(params, rng_key, None)
 
     @overload
     def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep: ...
