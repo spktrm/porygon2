@@ -14,7 +14,7 @@ from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ValueHead
-from rl.model.utils import Params, get_most_recent_file
+from rl.model.utils import Params, get_most_recent_file, legal_log_policy, legal_policy
 from rl.utils import init_jax_jit_cache
 
 
@@ -72,8 +72,8 @@ class DummyModel(nn.Module):
             v = jnp.tanh(nn.Dense(1)(mask)).squeeze(-1)
             logit = nn.Dense(mask.shape[-1])(mask)
             masked_logits = jnp.where(mask, logit, -1e30)
-            pi = nn.softmax(logit, where=env_step.legal)
-            log_pi = nn.log_softmax(logit, where=env_step.legal)
+            pi = legal_policy(logit, env_step.legal)
+            log_pi = legal_log_policy(logit, env_step.legal)
             return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
 
         return jax.vmap(_forward)(timestep.env)

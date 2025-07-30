@@ -1,3 +1,4 @@
+import functools
 import threading
 import time
 import traceback
@@ -27,7 +28,7 @@ def get_action_value(arr: jax.Array, action: jax.Array):
     return jnp.take_along_axis(arr, action[..., None], axis=-1).squeeze(-1)
 
 
-# @functools.partial(jax.jit, static_argnames=["config"])
+@functools.partial(jax.jit, static_argnames=["config"])
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -199,6 +200,7 @@ def train_step(
             builder_loss_pg=loss_pg,
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
+            builder_loss_entropy=loss_entropy,
             builder_value_function_r2=calculate_r2(
                 value_prediction=pred_v, value_target=final_reward, mask=first_valid
             ),

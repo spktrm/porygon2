@@ -17,7 +17,7 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE, Params, get_most_recent_file
+from rl.model.utils import BIAS_VALUE, Params, get_most_recent_file, legal_log_policy
 from rl.utils import init_jax_jit_cache
 
 SETS_DATA = PACKED_SETS["gen3ou"]
@@ -66,7 +66,7 @@ class Porygon2BuilderModel(nn.Module):
         """
         logits = self.policy_head(embeddings)
         masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
-        log_pi = jax.nn.log_softmax(masked_logits)
+        log_pi = legal_log_policy(masked_logits, sample_mask)
         if forced_token is not None:
             token = forced_token
         else:
