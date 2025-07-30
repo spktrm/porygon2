@@ -39,6 +39,7 @@ class ActorReset(NamedTuple):
     tokens: ArrayLike = ()
     log_pi: ArrayLike = ()
     key: ArrayLike = ()
+    v: ArrayLike = ()
 
 
 class TimeStep(NamedTuple):

@@ -1,6 +1,5 @@
 import os
 import pickle
-from copy import deepcopy
 from pprint import pprint
 from typing import Any, Callable
 
@@ -12,7 +11,7 @@ from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
 
-from rl.environment.interfaces import ModelOutput, TimeStep
+from rl.environment.interfaces import ActorReset, ModelOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.utils import Params
 
@@ -67,7 +66,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     )
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    builder_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     num_steps: int = 0
     num_samples: int = 0
@@ -78,7 +76,13 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
-    pass
+    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset] = (
+        struct.field(pytree_node=False)
+    )
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+
+    target_adv_mean: float = 0
+    target_adv_std: float = 1
 
 
 def create_train_state(
@@ -92,13 +96,11 @@ def create_train_state(
 
     player_params = player_network.init(rng, ts)
     builder_params = builder_network.init(rng, rng)
-    target_params = deepcopy(player_params)
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
         params=player_params,
-        target_params=target_params,
-        builder_params=builder_params,
+        target_params=player_params,
         tx=optax.chain(
             optax.clip_by_global_norm(config.clip_gradient),
             optax.scale_by_adam(
@@ -118,8 +120,9 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 0)),
+        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 0, 0), out_axes=0),
         params=builder_params,
+        target_params=builder_params,
         tx=optax.chain(
             optax.clip_by_global_norm(config.clip_gradient),
             optax.scale_by_adam(
@@ -161,6 +164,7 @@ def save_train_state(
                 ),
                 builder_state=dict(
                     params=builder_state.params,
+                    target_params=builder_state.target_params,
                     opt_state=builder_state.opt_state,
                 ),
             ),
@@ -199,6 +203,7 @@ def load_train_state(
 
     builder_state = builder_state.replace(
         params=ckpt_data["builder_state"]["params"],
+        target_params=ckpt_data["builder_state"]["target_params"],
         opt_state=ckpt_data["builder_state"]["opt_state"],
     )
 

@@ -53,10 +53,6 @@ def calculate_r2(
 ) -> jax.Array:
     """Calculate the R-squared (coefficient of determination) value."""
 
-    chex.assert_rank(value_prediction, 2)
-    chex.assert_rank(value_target, 2)
-    chex.assert_rank(mask, 2)
-
     if mask is None:
         mask = jnp.ones_like(value_prediction)
 

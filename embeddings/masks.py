@@ -84,6 +84,7 @@ class Pokedex:
             mask[index] = (not does_nothing) & (
                 (row["isNonstandard"] != "Future")
                 & (row["isNonstandard"] != "Unobtainable")
+                & ~row["isPokeball"]
             ).item()
         return mask
 
