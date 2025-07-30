@@ -31,7 +31,6 @@ from rl.environment.protos.features_pb2 import (
     MovesetActionTypeEnum,
     MovesetFeature,
     MovesetHasPPEnum,
-    TeamSetFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
 
@@ -60,7 +59,6 @@ NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())
 NUM_MAJOR_ARGS = len(BattlemajorargsEnum.keys())
 NUM_ITEM_EFFECTS = len(ItemeffecttypesEnum.keys())
-NUM_TEAM_SET_FEATURES = len(TeamSetFeature.keys())
 NUM_NATURES = len(NaturesEnum.keys())
 NUM_LAST_ITEM_EFFECTS = len(LastitemeffecttypesEnum.keys())
 NUM_EFFECTS = len(EffectEnum.keys())
@@ -153,3 +151,26 @@ with open("data/data/data.json", "r") as f:
 
 
 STOI = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
+
+
+PACKED_SETS = {}
+for fpath in os.listdir("data/data/"):
+    if "packed" in fpath:
+        with open(os.path.join("data/data/", fpath), "r") as f:
+            packed_data = json.load(f)
+
+        unique_species = {}
+        unique_mask = []
+
+        for packed_set in packed_data:
+            species = packed_set.split("|")[0]
+            if species not in unique_species:
+                unique_species[species] = len(unique_species)
+
+            unique_mask.append(unique_species[species])
+
+        unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
+        PACKED_SETS[fpath.split("_")[0]] = {
+            "sets": packed_data,
+            "mask": unique_mask[None] == unique_mask[..., None],
+        }

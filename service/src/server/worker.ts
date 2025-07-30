@@ -9,7 +9,7 @@ import {
 } from "../../protos/service_pb";
 import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
-import { teamBytesToPackedString } from "./state";
+import { generateTeamFromFormat, generateTeamFromIndices } from "./state";
 
 interface WaitingPlayer {
     userName: string;
@@ -90,7 +90,7 @@ export class WorkerHandler {
             p1Name: userName,
             p2Name: `baseline-${userName}`,
             p1team: teamString,
-            p2team: teamString,
+            p2team: generateTeamFromFormat("gen3ou"),
         });
         this.playerMapping.set(userName, player1);
         return player1;
@@ -165,9 +165,9 @@ export class WorkerHandler {
 
     private resetPlayerFromUserName(
         userName: string,
-        teamView: Int16Array,
+        teamIndices: number[],
     ): Promise<TrainablePlayerAI> {
-        const teamString = teamBytesToPackedString(teamView);
+        const teamString = generateTeamFromIndices(teamIndices);
         if (isEvalUser(userName)) {
             return Promise.resolve(
                 this.resetPlayerFromEvalUserName(userName, teamString),
@@ -182,11 +182,12 @@ export class WorkerHandler {
         resetRequest: ResetRequest,
     ): Promise<void> {
         const userName = resetRequest.getUsername();
-        const teamBytes = resetRequest.getTeam_asU8();
+        const teamIndices = resetRequest.getTeamIndicesList();
 
-        const teamI16 = new Int16Array(teamBytes.slice().buffer);
-
-        const player = await this.resetPlayerFromUserName(userName, teamI16);
+        const player = await this.resetPlayerFromUserName(
+            userName,
+            teamIndices,
+        );
         const state = await player.receiveEnvironmentState();
 
         const environmentResponse =

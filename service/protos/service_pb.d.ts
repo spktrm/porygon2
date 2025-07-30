@@ -70,10 +70,10 @@ export class ResetRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  getTeam(): Uint8Array | string;
-  getTeam_asU8(): Uint8Array;
-  getTeam_asB64(): string;
-  setTeam(value: Uint8Array | string): void;
+  clearTeamIndicesList(): void;
+  getTeamIndicesList(): Array<number>;
+  setTeamIndicesList(value: Array<number>): void;
+  addTeamIndices(value: number, index?: number): number;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
@@ -88,7 +88,7 @@ export class ResetRequest extends jspb.Message {
 export namespace ResetRequest {
   export type AsObject = {
     username: string,
-    team: Uint8Array | string,
+    teamIndicesList: Array<number>,
   }
 }
 

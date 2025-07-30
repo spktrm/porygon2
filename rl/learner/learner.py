@@ -1,4 +1,3 @@
-import functools
 import threading
 import time
 import traceback
@@ -28,7 +27,7 @@ def get_action_value(arr: jax.Array, action: jax.Array):
     return jnp.take_along_axis(arr, action[..., None], axis=-1).squeeze(-1)
 
 
-@functools.partial(jax.jit, static_argnames=["config"])
+# @functools.partial(jax.jit, static_argnames=["config"])
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -59,6 +58,9 @@ def train_step(
     )
 
     player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+
+    # Update entropy schedule coefficient.
+    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (player_state.actor_steps + 1000))
 
     def player_loss_fn(params: Params):
 
@@ -98,12 +100,6 @@ def train_step(
         )
         loss_kl = backward_kl_approx.mean(where=valid)
 
-        # Update entropy schedule coefficient.
-        # Disabled for now, as it is not used in the original MMD paper.
-        ent_kl_coef_mult = jnp.sqrt(
-            config.num_steps / (player_state.actor_steps + 1000)
-        )
-
         loss = (
             loss_pg
             + config.value_loss_coef * loss_v
@@ -132,14 +128,14 @@ def train_step(
             ),
         )
 
-    actor_builder_keys = batch.actor_reset.key.squeeze(0)
-    actor_builder_log_pi = batch.actor_reset.log_pi.squeeze(0)
-    actor_builder_tokens = batch.actor_reset.tokens.squeeze(0)
+    actor_builder_keys = batch.actor_reset.key
+    actor_builder_log_pi = batch.actor_reset.log_pi
+    actor_builder_tokens = batch.actor_reset.tokens
 
     target_builder_output = builder_state.apply_fn(
         builder_state.target_params, actor_builder_keys, actor_builder_tokens
     )
-    target_builder_v = target_builder_output.v.squeeze(-1)
+    target_builder_v = target_builder_output.v.squeeze((0, -1))
 
     actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_output.log_pi
     actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
@@ -168,7 +164,7 @@ def train_step(
 
         learner_target_log_ratio = (
             learner_builder_output.log_pi - target_builder_output.log_pi
-        )
+        ).squeeze(0)
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         # Calculate the policy gradient loss.
@@ -182,8 +178,10 @@ def train_step(
         pg_loss = jnp.minimum(pg_loss1, pg_loss2)
         loss_pg = -pg_loss.mean(where=first_valid)
 
-        pred_v = learner_builder_output.v.squeeze(-1)
+        pred_v = learner_builder_output.v.squeeze((0, -1))
         loss_v = 0.5 * jnp.square(pred_v - final_reward).mean(where=first_valid)
+
+        loss_entropy = learner_builder_output.entropy.squeeze(0).mean(where=first_valid)
 
         backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
             learner_target_ratio - 1
@@ -191,7 +189,10 @@ def train_step(
         loss_kl = backward_kl_approx.mean(where=first_valid)
 
         builder_loss = (
-            loss_pg + config.value_loss_coef * loss_v + config.kl_loss_coef * loss_kl
+            loss_pg
+            + config.value_loss_coef * loss_v
+            + ent_kl_coef_mult
+            * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
         )
 
         return builder_loss, dict(
@@ -250,8 +251,8 @@ def train_step(
     player_logs.update(
         dict(
             builder_loss_val=builder_loss_val,
-            param_norm=optax.global_norm(builder_state.params),
-            gradient_norm=optax.global_norm(builder_grads),
+            builder_param_norm=optax.global_norm(builder_state.params),
+            builder_gradient_norm=optax.global_norm(builder_grads),
         )
     )
 
