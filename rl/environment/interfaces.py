@@ -38,6 +38,7 @@ class ActorStep(NamedTuple):
 class ActorReset(NamedTuple):
     tokens: ArrayLike = ()
     log_pi: ArrayLike = ()
+    entropy: ArrayLike = ()
     key: ArrayLike = ()
     v: ArrayLike = ()
 

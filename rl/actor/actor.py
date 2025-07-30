@@ -48,8 +48,8 @@ class Actor:
         subkeys = jax.random.split(rng_key, self._unroll_length + 1)
 
         actor_reset = self._agent.reset(subkeys[0], builder_params)
-        tokens_buffer = np.asarray(actor_reset.tokens.reshape(-1), dtype=np.int16)
-        unprocessed_timestep = self._env.reset(tokens_buffer.tobytes())
+        tokens_buffer = np.asarray(actor_reset.tokens, dtype=np.int16)
+        unprocessed_timestep = self._env.reset(tokens_buffer.reshape(-1).tolist())
 
         traj = []
         # Unroll one longer if trajectory is empty.

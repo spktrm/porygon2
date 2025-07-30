@@ -490,7 +490,7 @@ class TransformerDecoder(nn.Module):
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 
-    layer_sizes: Sequence[int]
+    layer_sizes: int | Sequence[int]
     use_layer_norm: bool = True
     activate_first: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -506,7 +506,12 @@ class MLP(nn.Module):
         Returns:
             jax.Array: Output array.
         """
-        for layer_index, size in enumerate(self.layer_sizes):
+        if isinstance(self.layer_sizes, int):
+            layer_sizes = (self.layer_sizes,)
+        else:
+            layer_sizes = self.layer_sizes
+
+        for layer_index, size in enumerate(layer_sizes):
             if layer_index == 0 and not self.activate_first:
                 # Skip layer normalization and activation for the first layer
                 x = nn.Dense(size, dtype=self.dtype)(x)
@@ -545,6 +550,7 @@ class PretrainedEmbedding:
 
 class SumEmbeddings(nn.Module):
     output_size: int
+    hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -552,13 +558,20 @@ class SumEmbeddings(nn.Module):
         """Sum embeddings."""
         embedding = sum(
             [
-                nn.Dense(self.output_size, use_bias=False, dtype=self.dtype)(embedding)
+                nn.Dense(
+                    self.hidden_size or self.output_size,
+                    use_bias=False,
+                    dtype=self.dtype,
+                )(embedding)
                 for embedding in embeddings
             ]
         ) + self.param(
-            "bias", nn.initializers.zeros_init(), (self.output_size,), self.dtype
+            "bias",
+            nn.initializers.zeros_init(),
+            (self.hidden_size or self.output_size,),
+            self.dtype,
         )
-        return layer_norm(embedding, self.dtype)
+        return MLP((self.output_size,), dtype=self.dtype)(embedding)
 
 
 class MergeEmbeddings(nn.Module):

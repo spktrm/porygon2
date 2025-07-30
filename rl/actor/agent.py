@@ -43,8 +43,9 @@ class Agent:
     def _reset(self, rng_key, params: Params) -> ActorStep: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self, rng_key, params: Params) -> ActorStep:
-        rng_key = rng_key[None, ...]  # Ensure shape is [1, 1, ...]
-        return self._builder_apply_fn(params, rng_key, None)
+        rng_key = rng_key[None, None, ...]
+        model_output = self._builder_apply_fn(params, rng_key, None)
+        return jax.tree.map(lambda t: jnp.squeeze(t, axis=1), model_output)
 
     @overload
     def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep: ...

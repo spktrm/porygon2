@@ -1,4 +1,4 @@
-import { AnyObject } from "@pkmn/sim";
+import { AnyObject, Teams, TeamValidator } from "@pkmn/sim";
 import {
     Args,
     BattleMajorArgName,
@@ -31,12 +31,12 @@ import {
     MoveIndex,
     NUM_HISTORY,
     jsonDatum,
+    lookUpSets,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
-    numTeamSetFeatures,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -53,7 +53,6 @@ import {
     MovesetActionTypeEnum,
     MovesetFeature,
     MovesetHasPPEnum,
-    TeamSetFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState } from "../../protos/service_pb";
@@ -66,76 +65,39 @@ type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const MAX_RATIO_TOKEN = 16384;
 
-function setBytesToPackedString(setArray: Int16Array): string {
-    const nickname = "";
-    const species =
-        jsonDatum["species"][
-            setArray[TeamSetFeature.TEAM_SET_FEATURE__SPECIES]
-        ];
-    const item =
-        jsonDatum["items"][setArray[TeamSetFeature.TEAM_SET_FEATURE__ITEM]];
-    const ability =
-        jsonDatum["abilities"][
-            setArray[TeamSetFeature.TEAM_SET_FEATURE__ABILITY]
-        ];
-    const moveId0 =
-        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0] ===
-        MovesEnum.MOVES_ENUM___NULL
-            ? ""
-            : jsonDatum["moves"][
-                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID0]
-              ];
-    const moveId1 =
-        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1] ===
-        MovesEnum.MOVES_ENUM___NULL
-            ? ""
-            : jsonDatum["moves"][
-                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID1]
-              ];
-    const moveId2 =
-        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2] ===
-        MovesEnum.MOVES_ENUM___NULL
-            ? ""
-            : jsonDatum["moves"][
-                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID2]
-              ];
-    const moveId3 =
-        setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3] ===
-        MovesEnum.MOVES_ENUM___NULL
-            ? ""
-            : jsonDatum["moves"][
-                  setArray[TeamSetFeature.TEAM_SET_FEATURE__MOVEID3]
-              ];
-    const nature =
-        jsonDatum["Natures"][setArray[TeamSetFeature.TEAM_SET_FEATURE__NATURE]];
-    const HpEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_HP];
-    const AtkEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_ATK];
-    const DefEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_DEF];
-    const SpaEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPA];
-    const SpdEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPD];
-    const SpeEV = setArray[TeamSetFeature.TEAM_SET_FEATURE__EV_SPE];
-    const gender = "";
-    const ivs = "";
-    const shiny = Math.random() < 1 / 8192 ? "S" : ""; // 1 in 8192 chance of being shiny
-    const level = setArray[TeamSetFeature.TEAM_SET_FEATURE__LEVEL];
-    const happiness = setArray[TeamSetFeature.TEAM_SET_FEATURE__HAPPINESS];
-    const pokeball = "";
-    const hiddenpowertype = "";
-    const gigantamax = "";
-    const dynamaxlevel = "";
-    const teratype = "";
-    return `${nickname}|${species}|${item}|${ability}|${moveId0},${moveId1},${moveId2},${moveId3}|${nature}|${HpEV},${AtkEV},${DefEV},${SpaEV},${SpdEV},${SpeEV}|${gender}|${ivs}|${shiny}|${level}|${happiness}|${pokeball}|${hiddenpowertype}|${gigantamax}|${dynamaxlevel}|${teratype}`;
+export function generateTeamFromFormat(format: string): string {
+    const setsToChoose = lookUpSets(format);
+    const validator = new TeamValidator(format);
+    const numSets = setsToChoose.length;
+
+    while (true) {
+        const packedSets: Set<string> = new Set();
+
+        while (packedSets.size < 6) {
+            packedSets.add(setsToChoose[Math.floor(Math.random() * numSets)]);
+        }
+
+        const packedTeam = Array.from(packedSets).join("]");
+        const errors = validator.validateTeam(Teams.unpack(packedTeam));
+
+        if (errors === null) {
+            return packedTeam;
+        }
+    }
 }
 
-export function teamBytesToPackedString(teamBytes: Int16Array): string {
-    const packedSets: string[] = [];
+export function generateTeamFromIndices(
+    indices: number[],
+    format?: string,
+): string {
+    const packedSets = [];
+    const setsToChoose = lookUpSets(format ?? "gen3ou");
 
-    for (let i = 0; i < 6; i++) {
-        const setArray = teamBytes.slice(
-            i * numTeamSetFeatures,
-            (i + 1) * numTeamSetFeatures,
-        );
-        packedSets.push(setBytesToPackedString(setArray));
+    for (const index of indices) {
+        if (index >= setsToChoose.length) {
+            throw new Error("IndexError");
+        }
+        packedSets.push(setsToChoose[index]);
     }
 
     return packedSets.join("]");

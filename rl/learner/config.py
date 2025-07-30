@@ -95,7 +95,7 @@ def create_train_state(
     ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
     player_params = player_network.init(rng, ts)
-    builder_params = builder_network.init(rng, rng)
+    builder_params = builder_network.init(rng, rng[None])
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
@@ -120,7 +120,7 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 0, 0), out_axes=0),
+        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(

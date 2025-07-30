@@ -202,15 +202,6 @@ class GenerationEncodings:
             ],
             axis=1,
         )
-        damage_taken_df = get_encodings(
-            self.typechart_df,
-            [
-                {
-                    "feature_fn": lambda x: x.startswith("damageTaken."),
-                    "func": lambda x: x,
-                }
-            ],
-        ).replace({0: 1, 1: 2, 2: 0.5, 3: 0})
 
         type_cols_to_remove = []
         if self.gen < 2:
@@ -218,16 +209,6 @@ class GenerationEncodings:
 
         if self.gen < 6:
             type_cols_to_remove += [".Fairy"]
-
-        if type_cols_to_remove:
-            damage_taken_df = damage_taken_df.drop(
-                [
-                    col
-                    for col in damage_taken_df.columns
-                    if any(col.endswith(suffix) for suffix in type_cols_to_remove)
-                ],
-                axis=1,
-            )
 
         encodings = get_encodings(df, SPECIES_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["species"])
