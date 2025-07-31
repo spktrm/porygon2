@@ -13,7 +13,12 @@ import { EvalActionFnType } from "../eval";
 
 function fixMoveId(moveId: string) {
     if (moveId.startsWith("hiddenpower")) {
-        return moveId.slice(0, -2);
+        const power = parseInt(moveId.slice(-2));
+        if (isNaN(power)) {
+            return "hiddenpower";
+        } else {
+            return moveId.slice(0, -2);
+        }
     } else if (moveId.startsWith("return")) {
         return "return";
     } else if (moveId.startsWith("frustration")) {

@@ -17,7 +17,13 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE, Params, get_most_recent_file, legal_log_policy
+from rl.model.utils import (
+    BIAS_VALUE,
+    Params,
+    get_most_recent_file,
+    legal_log_policy,
+    legal_policy,
+)
 from rl.utils import init_jax_jit_cache
 
 SETS_DATA = PACKED_SETS["gen3ou"]
@@ -56,7 +62,7 @@ class Porygon2BuilderModel(nn.Module):
 
     def _sample_token(
         self,
-        embeddings: jax.Array,
+        embedding: jax.Array,
         key: jax.Array,
         sample_mask: jax.Array,
         forced_token: jax.Array = None,
@@ -64,16 +70,18 @@ class Porygon2BuilderModel(nn.Module):
         """
         Samples a token from the embeddings using the policy head and returns the token, log probability, and entropy.
         """
-        logits = self.policy_head(embeddings)
-        masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
-        log_pi = legal_log_policy(masked_logits, sample_mask)
+        logits = self.policy_head(embedding)
+        pi = legal_policy(logits, sample_mask)
+        log_pi = legal_log_policy(logits, sample_mask)
+
         if forced_token is not None:
             token = forced_token
         else:
+            masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
             token = jax.random.categorical(key, masked_logits)
 
         sample_mask = sample_mask & ~SETS_DATA["mask"][token]
-        ent = -jnp.sum(jnp.exp(log_pi) * log_pi, axis=-1)
+        ent = -jnp.sum(pi * log_pi, axis=-1)
 
         return token, log_pi[token], ent, sample_mask
 
