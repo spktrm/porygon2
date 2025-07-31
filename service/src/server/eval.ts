@@ -2,6 +2,7 @@ import { GetRandomAction } from "./baselines/random";
 import { GetMaxDamageAction } from "./baselines/max_dmg";
 import { GetHeuristicAction } from "./baselines/heuristic";
 import { TrainablePlayerAI } from "./runner";
+import { GetKaizoPlusAction } from "./baselines/kaizo_plus";
 
 export type EvalFuncArgs = {
     player: TrainablePlayerAI;
@@ -22,6 +23,7 @@ export const evalActionMapping: EvalActionFnType[] = [
     GetMaxDamageAction,
     GetHeuristicAction,
     // GetSearchAction,
+    GetKaizoPlusAction,
 ];
 
 export const numEvals = Object.keys(evalActionMapping).length;
