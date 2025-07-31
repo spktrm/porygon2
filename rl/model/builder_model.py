@@ -85,19 +85,21 @@ class Porygon2BuilderModel(nn.Module):
 
         return token, log_pi[token], ent, sample_mask
 
-    def forward(
+    def __call__(
         self, init_key: jax.Array, forced_tokens: jax.Array = None
     ) -> ActorReset:
+        """Autoregressively generates a team and returns (tokens, log_pi)."""
         key_splits = jax.random.split(init_key, num=6)
 
         attn_masks = jnp.tril(jnp.ones((6, 6), dtype=jnp.bool))
 
-        log_pi_accum = 0.0
-        ent_accum = 0.0
-
         tokens = jnp.ones((6,), dtype=jnp.int32) * -1
         sample_mask = jnp.ones((self.embeddings.num_embeddings,), dtype=jnp.bool)
         position_indices = jnp.arange(6, dtype=jnp.int32)
+
+        log_pis = []
+        entropies = []
+        values = []
 
         for i, subkey in enumerate(key_splits):
             embeddings = jnp.where(
@@ -112,38 +114,28 @@ class Porygon2BuilderModel(nn.Module):
                 sample_mask,
                 forced_tokens[i] if forced_tokens is not None else None,
             )
+            pooled = self.decoder(
+                pred_embeddings.mean(axis=0, keepdims=True),
+                pred_embeddings,
+                create_attention_mask(
+                    attn_masks[-1].any(keepdims=True), attn_masks[-1]
+                ),
+            )
+            v = nn.tanh(self.value_head(pooled))
 
-            log_pi_accum += log_pi
-            ent_accum += ent
+            values.append(v)
+            log_pis.append(log_pi)
+            entropies.append(ent)
 
             tokens = tokens.at[i].set(token)
 
-        pred_embeddings = self.encoder(
-            self.embeddings(tokens),
-            create_attention_mask(attn_masks[-1]),
-            position_indices,
-        )
-
-        pooled = self.decoder(
-            pred_embeddings.mean(axis=0, keepdims=True),
-            pred_embeddings,
-            create_attention_mask(attn_masks[-1].any(keepdims=True), attn_masks[-1]),
-        )
-        v = nn.tanh(self.value_head(pooled)).squeeze(-1)
-
         return ActorReset(
             tokens=tokens.reshape(-1),
-            log_pi=log_pi_accum,
-            v=v,
+            log_pi=jnp.stack(log_pis, axis=0),
+            v=jnp.stack(values, axis=0).reshape(-1),
             key=init_key,
-            entropy=ent_accum,
+            entropy=jnp.stack(entropies, axis=0),
         )
-
-    def __call__(
-        self, init_key: jax.Array, forced_tokens: jax.Array = None
-    ) -> ActorReset:
-        """Autoregressively generates a team and returns (tokens, log_pi)."""
-        return jax.vmap(self.forward)(init_key, forced_tokens)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -212,7 +204,7 @@ def main():
         params = step["builder_state"]["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, key[None])
+        params = network.init(key, key)
 
     pprint(get_num_params(params))
 
@@ -224,7 +216,7 @@ def main():
 
     while True:
         key, subkey = jax.random.split(key)
-        output1 = apply_fn(params, subkey[None], None)
+        output1 = apply_fn(params, subkey, None)
         assert jnp.all(output1.key == subkey)
 
         output = apply_fn(params, output1.key, output1.tokens)

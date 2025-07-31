@@ -1,36 +1,19 @@
-#!/usr/bin/env python3
-"""
-Multithreaded crawler that gathers up to N distinct
-https://pokepast.es/<16‑hex> links, then stops.
-
-Usage examples
---------------
-# crawl one page, stop after 30 PokéPastes
-python crawl_pokepastes.py --max 30 \
-  https://www.smogon.com/forums/threads/adv-ou-sample-teams.3687813/
-
-# default limit (100) with the hard‑coded START_URLS
-python crawl_pokepastes.py
-"""
-
+import argparse
+import queue
 import re
 import sys
-import time
-import queue
-import argparse
 import threading
+import time
 import urllib.parse as up
 from collections import OrderedDict
 
 import requests
 from bs4 import BeautifulSoup
 
-###############################################################################
 THREADS = 64  # worker threads (adjust as needed)
 TIMEOUT = 15  # HTTP timeout (s)
 START_URLS = ["https://www.smogon.com/forums/forums/adv/"]
 DEFAULT_MAX = 2000  # default “stop after N PokéPastes”
-###############################################################################
 
 POKEPASTE_RE = re.compile(r"https://pokepast\.es/[0-9a-fA-F]{16}")
 
@@ -58,7 +41,7 @@ def enqueue_url(state: CrawlState, url: str) -> None:
 
 
 def extract_links(base_url: str, html: str):
-    """Return (pokepastes, same‑domain links) from page HTML."""
+    """Return (pokepastes, same-domain links) from page HTML."""
     pokes = set(POKEPASTE_RE.findall(html))
 
     parsed = up.urlparse(base_url)
@@ -79,7 +62,7 @@ def worker(state: CrawlState, session: requests.Session, tid: int):
     Worker exits only when:
       1. stop_event is set  *and*
       2. the queue has been emptied
-    This guarantees every en‑queued item gets a matching task_done().
+    This guarantees every en-queued item gets a matching task_done().
     """
     while True:
         # If we’ve been told to stop but the queue is empty, we’re done
@@ -137,7 +120,7 @@ def crawl(start_urls, max_links=DEFAULT_MAX, threads=THREADS):
             state.stop_event.set()
             break
 
-    elapsed = time.time() - start
+    time.time() - start
 
     ordered = list(OrderedDict.fromkeys(state.pokepaste))[:max_links]
 
@@ -155,7 +138,7 @@ def crawl(start_urls, max_links=DEFAULT_MAX, threads=THREADS):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Crawl for PokéPaste links.")
+    parser = argparse.ArgumentParser(description="Crawl for PokePaste links.")
     parser.add_argument("urls", nargs="*", help="Seed pages to start from")
     parser.add_argument(
         "--max",

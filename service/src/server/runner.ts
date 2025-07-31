@@ -15,7 +15,7 @@ import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
 import { EnvironmentState, StepRequest } from "../../protos/service_pb";
-import { evalActionMapping } from "./eval";
+import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
 
 Teams.setGeneratorFactory(TeamGenerators);
@@ -282,7 +282,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             throw new Error(
                 `Invalid eval index: ${
                     this.baselineIndex
-                }. Must be between 0 and ${evalActionMapping.length - 1}`,
+                }. Must be between 0 and ${numEvals - 1}.`,
             );
         }
         const evalFn = evalActionMapping[this.baselineIndex];

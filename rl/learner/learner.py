@@ -47,9 +47,19 @@ def train_step(
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
     valid = jnp.bitwise_not(batch.timestep.env.done)
+    rewards = batch.timestep.env.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-    vtrace = compute_returns(target_pred.v, actor_target_ratio, batch, config)
+    vtrace = compute_returns(
+        target_pred.v,
+        jnp.concatenate((target_pred.v[1:], target_pred.v[-1:])),
+        jnp.concatenate((rewards[1:], rewards[-1:])),
+        jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:]))) * config.gamma,
+        actor_target_ratio,
+        lambda_=config.lambda_,
+        clip_rho_threshold=config.clip_rho_threshold,
+        clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+    )
     player_adv_mean = vtrace.pg_advantage.mean(where=valid)
     player_adv_std = vtrace.pg_advantage.std(where=valid)
 
@@ -132,11 +142,13 @@ def train_step(
     actor_builder_keys = batch.actor_reset.key
     actor_builder_log_pi = batch.actor_reset.log_pi
     actor_builder_tokens = batch.actor_reset.tokens
+    builder_apply_fn = jax.vmap(
+        builder_state.apply_fn, in_axes=(None, 1, 1), out_axes=1
+    )
 
-    target_builder_output = builder_state.apply_fn(
+    target_builder_output = builder_apply_fn(
         builder_state.target_params, actor_builder_keys, actor_builder_tokens
     )
-    target_builder_v = target_builder_output.v.squeeze((0, -1))
 
     actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_output.log_pi
     actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
@@ -144,19 +156,36 @@ def train_step(
     builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
 
     final_reward = batch.timestep.env.win_reward[-1]
-    builder_advantage = final_reward - target_builder_v
-
-    first_valid = valid[0]
-
-    builder_adv_mean = builder_advantage.mean(where=first_valid)
-    builder_adv_std = builder_advantage.std(where=first_valid)
-    builder_norm_advantages = (builder_advantage - builder_state.target_adv_mean) / (
-        builder_state.target_adv_std + 1e-8
+    builder_rewards = jnp.concatenate(
+        (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
+    builder_vtrace = compute_returns(
+        target_builder_output.v,
+        jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
+        builder_rewards,
+        jnp.concatenate(
+            (
+                jnp.ones_like(builder_is_ratio[:-1], dtype=jnp.bool),
+                jnp.zeros_like(final_reward[None], dtype=jnp.bool),
+            )
+        )
+        * config.gamma,
+        actor_target_builder_ratio,
+        lambda_=config.lambda_,
+        clip_rho_threshold=config.clip_rho_threshold,
+        clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+    )
+    builder_valids = jnp.ones_like(builder_rewards)
+
+    builder_adv_mean = builder_vtrace.pg_advantage.mean(where=builder_valids)
+    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valids)
+    builder_norm_advantages = (
+        builder_vtrace.pg_advantage - builder_state.target_adv_mean
+    ) / (builder_state.target_adv_std + 1e-8)
 
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        learner_builder_output = builder_state.apply_fn(
+        learner_builder_output = builder_apply_fn(
             params, actor_builder_keys, actor_builder_tokens
         )
 
@@ -165,7 +194,7 @@ def train_step(
 
         learner_target_log_ratio = (
             learner_builder_output.log_pi - target_builder_output.log_pi
-        ).squeeze(0)
+        )
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         # Calculate the policy gradient loss.
@@ -177,17 +206,19 @@ def train_step(
             learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
         )
         pg_loss = jnp.minimum(pg_loss1, pg_loss2)
-        loss_pg = -pg_loss.mean(where=first_valid)
+        loss_pg = -pg_loss.mean(where=builder_valids)
 
-        pred_v = learner_builder_output.v.squeeze((0, -1))
-        loss_v = 0.5 * jnp.square(pred_v - final_reward).mean(where=first_valid)
+        pred_v = learner_builder_output.v
+        loss_v = 0.5 * jnp.square(pred_v - builder_vtrace.returns).mean(
+            where=builder_valids
+        )
 
-        loss_entropy = learner_builder_output.entropy.squeeze(0).mean(where=first_valid)
+        loss_entropy = learner_builder_output.entropy.mean(where=builder_valids)
 
         backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
             learner_target_ratio - 1
         )
-        loss_kl = backward_kl_approx.mean(where=first_valid)
+        loss_kl = backward_kl_approx.mean(where=builder_valids)
 
         builder_loss = (
             loss_pg
@@ -202,7 +233,9 @@ def train_step(
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
             builder_value_function_r2=calculate_r2(
-                value_prediction=pred_v, value_target=final_reward, mask=first_valid
+                value_prediction=pred_v,
+                value_target=builder_vtrace.returns,
+                mask=builder_valids,
             ),
         )
 

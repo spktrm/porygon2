@@ -95,7 +95,7 @@ def create_train_state(
     ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
     player_params = player_network.init(rng, ts)
-    builder_params = builder_network.init(rng, rng[None])
+    builder_params = builder_network.init(rng, rng)
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
@@ -120,7 +120,7 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
+        apply_fn=builder_network.apply,
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(
@@ -166,6 +166,8 @@ def save_train_state(
                     params=builder_state.params,
                     target_params=builder_state.target_params,
                     opt_state=builder_state.opt_state,
+                    target_adv_mean=builder_state.target_adv_mean,
+                    target_adv_std=builder_state.target_adv_std,
                 ),
             ),
             f,
@@ -190,6 +192,7 @@ def load_train_state(
         }
     )
 
+    ckpt_player_state = ckpt_data.get("player_state", {})
     player_state = player_state.replace(
         params=ckpt_data["player_state"]["params"],
         target_params=ckpt_data["player_state"]["target_params"],
@@ -197,14 +200,17 @@ def load_train_state(
         num_steps=ckpt_data["player_state"]["num_steps"],
         num_samples=ckpt_data["player_state"]["num_samples"],
         actor_steps=ckpt_data["player_state"]["actor_steps"],
-        target_adv_mean=ckpt_data.get("player_state", {}).get("target_adv_mean", 0.0),
-        target_adv_std=ckpt_data.get("player_state", {}).get("target_adv_std", 1.0),
+        target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
+        target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
     )
 
+    ckpt_builder_state = ckpt_data.get("builder_state", {})
     builder_state = builder_state.replace(
         params=ckpt_data["builder_state"]["params"],
         target_params=ckpt_data["builder_state"]["target_params"],
         opt_state=ckpt_data["builder_state"]["opt_state"],
+        target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
+        target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
 
     return player_state, builder_state
