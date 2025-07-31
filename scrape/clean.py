@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-Read a list of PokéPaste URLs from a .txt file, extract teams with
-pokepastes_scraper, verify each team has 6 Pokémon, and save all valid
-teams to a JSON file—now in parallel with ThreadPoolExecutor.
-
-Usage:
-    python build_teams_json.py pokepastes.txt teams.json [-j 32]
-"""
-
-from __future__ import annotations
-
-import argparse
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,11 +7,9 @@ from typing import Dict, List, Optional
 import requests
 from pokepastes_scraper import team_from_url
 
-# ---------------------------------------------------------------------------
-
 
 def url_is_alive(url: str, timeout: int = 10) -> bool:
-    """Return True if an HTTP GET returns status‑code 200."""
+    """Return True if an HTTP GET returns status-code 200."""
     try:
         r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
         return r.status_code == 200
@@ -34,7 +19,7 @@ def url_is_alive(url: str, timeout: int = 10) -> bool:
 
 def extract_team(url: str) -> Optional[Dict]:
     """
-    Return a team (dict) only if it has exactly 6 Pokémon, otherwise None.
+    Return a team (dict) only if it has exactly 6 Pokémon, otherwise None.
     Any exception from team_from_url is caught and treated as invalid.
     """
     try:
@@ -70,7 +55,7 @@ def process_url(url: str) -> Optional[Dict]:
 
 def build_dataset(txt_path: Path, max_workers: int = 20) -> List[Dict]:
     """
-    Read all URLs, dispatch them to a thread pool, de‑duplicate identical teams,
+    Read all URLs, dispatch them to a thread pool, de-duplicate identical teams,
     and return the ordered list of unique team dicts.
     """
     with open(txt_path, encoding="utf-8") as fh:
