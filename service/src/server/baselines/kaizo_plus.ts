@@ -5,7 +5,7 @@
 import { Pokemon, Battle, Side } from "@pkmn/client";
 import { AnyObject } from "@pkmn/sim";
 import { EvalActionFnType } from "../eval";
-import { GetMoveDamange as GetMoveDamage } from "./max_dmg";
+import { GetMoveDamage } from "./max_dmg";
 import { Protocol } from "@pkmn/protocol";
 
 /* ----------------------------------------------------------------- */

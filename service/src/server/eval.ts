@@ -26,4 +26,4 @@ export const evalActionMapping: EvalActionFnType[] = [
     GetKaizoPlusAction,
 ];
 
-export const numEvals = Object.keys(evalActionMapping).length;
+export const numEvals = evalActionMapping.length;
