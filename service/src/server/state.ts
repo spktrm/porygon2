@@ -95,7 +95,11 @@ export function generateTeamFromIndices(
 
     for (const index of indices) {
         if (index >= setsToChoose.length) {
-            throw new Error("IndexError");
+            throw new Error(
+                `IndexError: Invalid index ${index}. Valid range is 0 to ${
+                    setsToChoose.length - 1
+                }.`,
+            );
         }
         packedSets.push(setsToChoose[index]);
     }

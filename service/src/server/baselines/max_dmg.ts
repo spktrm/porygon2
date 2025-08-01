@@ -27,7 +27,7 @@ function fixMoveId(moveId: string) {
     return moveId;
 }
 
-export const GetMoveDamange: (args: {
+export const GetMoveDamage: (args: {
     battle: Battle;
     attacker: Pokemon;
     defender: Pokemon;
@@ -179,7 +179,7 @@ export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
         const moveData: number[] = moves.map(
             ({ id, disabled }: { id: string; disabled: boolean }) => {
                 let damage = 0;
-                damage = GetMoveDamange({
+                damage = GetMoveDamage({
                     battle,
                     attacker,
                     defender,
