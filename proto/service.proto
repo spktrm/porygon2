@@ -17,6 +17,7 @@ message StepRequest {
 
 message ResetRequest {
   string username = 1;
+  repeated int32 team_indices = 2;
 }
 
 message EnvironmentState {

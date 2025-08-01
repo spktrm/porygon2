@@ -28,8 +28,8 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
     can_switch = batch.timestep.env.legal[..., 4:].any(axis=-1)
     can_act = can_move & can_switch & valid
 
-    move_ratio = renormalize(batch.actorstep.action < 4, can_act)
-    switch_ratio = renormalize(batch.actorstep.action >= 4, can_act)
+    move_ratio = renormalize(batch.actor_step.action < 4, can_act)
+    switch_ratio = renormalize(batch.actor_step.action >= 4, can_act)
 
     return dict(
         trajectory_length_mean=lengths.mean(),
@@ -52,10 +52,6 @@ def calculate_r2(
     eps: float = 1e-8,
 ) -> jax.Array:
     """Calculate the R-squared (coefficient of determination) value."""
-
-    chex.assert_rank(value_prediction, 2)
-    chex.assert_rank(value_target, 2)
-    chex.assert_rank(mask, 2)
 
     if mask is None:
         mask = jnp.ones_like(value_prediction)

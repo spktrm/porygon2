@@ -1,10 +1,13 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature, MovesetFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
-import { EdgeBuffer } from "../server/state";
+import { EdgeBuffer, generateTeamFromFormat } from "../server/state";
 import { OneDBoolean } from "../server/utils";
 import { numMoveFeatures } from "../server/data";
 import { Protocol } from "@pkmn/protocol";
+import { Teams } from "@pkmn/sim";
+import { TeamGenerators } from "@pkmn/randoms";
+Teams.setGeneratorFactory(TeamGenerators);
 
 async function playerController(player: TrainablePlayerAI) {
     while (true) {
@@ -89,18 +92,33 @@ async function playerController(player: TrainablePlayerAI) {
 
 async function runBattle() {
     console.log("Creating battle...");
-    const names = { p1Name: "Bot1", p2Name: "Bot2" };
-    const { p1, p2 } = createBattle(names, true);
+
+    const format = "gen3ou";
+    const names = {
+        p1Name: "Bot1",
+        p2Name: `baseline-4`,
+        p1team: generateTeamFromFormat(format),
+        p2team: generateTeamFromFormat(format),
+    };
+    const { p1, p2 } = createBattle(names, false);
+    const players = [p1];
+    if (!names.p2Name.startsWith("baseline-")) {
+        players.push(p2);
+    }
 
     console.log("Starting asynchronous player controllers...");
 
     try {
         // Create a promise for each player's control loop.
-        const p1Promise = playerController(p1);
-        const p2Promise = playerController(p2);
+        const promises = [];
+        promises.push(playerController(p1));
+        if (!names.p2Name.startsWith("baseline-")) {
+            const p2Promise = playerController(p2);
+            promises.push(p2Promise);
+        }
 
         // Wait for both player loops to complete. This happens when the battle ends.
-        await Promise.all([p1Promise, p2Promise]);
+        await Promise.all(promises);
 
         console.log("\nBattle has concluded.");
     } catch (error) {
@@ -108,8 +126,11 @@ async function runBattle() {
     } finally {
         // Ensure players are properly cleaned up regardless of outcome.
         console.log("Destroying player instances.");
-        p1.destroy();
-        p2.destroy();
+        for (const player of players) {
+            if (player) {
+                player.destroy();
+            }
+        }
     }
 }
 

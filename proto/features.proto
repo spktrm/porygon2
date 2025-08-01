@@ -174,3 +174,4 @@ enum InfoFeature {
   INFO_FEATURE__WIN_REWARD = 4;
   INFO_FEATURE__REQUEST_COUNT = 5;
 }
+

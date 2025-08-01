@@ -59,6 +59,7 @@ def get_model_config():
     dtype = jnp.bfloat16
 
     cfg.entity_size = entity_size
+    cfg.dtype = dtype
 
     cfg.encoder = ConfigDict()
     cfg.encoder.entity_size = entity_size

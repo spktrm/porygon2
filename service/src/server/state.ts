@@ -1,4 +1,4 @@
-import { AnyObject } from "@pkmn/sim";
+import { AnyObject, Teams, TeamValidator } from "@pkmn/sim";
 import {
     Args,
     BattleMajorArgName,
@@ -31,6 +31,7 @@ import {
     MoveIndex,
     NUM_HISTORY,
     jsonDatum,
+    lookUpSets,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
     numFieldFeatures,
@@ -63,6 +64,48 @@ type MajorArgNames =
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const MAX_RATIO_TOKEN = 16384;
+
+export function generateTeamFromFormat(format: string): string {
+    const setsToChoose = lookUpSets(format);
+    const validator = new TeamValidator(format);
+    const numSets = setsToChoose.length;
+
+    while (true) {
+        const packedSets: Set<string> = new Set();
+
+        while (packedSets.size < 6) {
+            packedSets.add(setsToChoose[Math.floor(Math.random() * numSets)]);
+        }
+
+        const packedTeam = Array.from(packedSets).join("]");
+        const errors = validator.validateTeam(Teams.unpack(packedTeam));
+
+        if (errors === null) {
+            return packedTeam;
+        }
+    }
+}
+
+export function generateTeamFromIndices(
+    indices: number[],
+    format?: string,
+): string {
+    const packedSets = [];
+    const setsToChoose = lookUpSets(format ?? "gen3ou");
+
+    for (const index of indices) {
+        if (index >= setsToChoose.length) {
+            throw new Error(
+                `IndexError: Invalid index ${index}. Valid range is 0 to ${
+                    setsToChoose.length - 1
+                }.`,
+            );
+        }
+        packedSets.push(setsToChoose[index]);
+    }
+
+    return packedSets.join("]");
+}
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
     const indices: number[] = [];
@@ -506,7 +549,20 @@ function getArrayFromPokemon(
 
     if (moveSlots) {
         for (const move of moveSlots) {
-            const { id, ppUsed } = move;
+            let { id } = move;
+            if (id.startsWith("return")) {
+                id = "return" as ID;
+            } else if (id.startsWith("frustration")) {
+                id = "frustration" as ID;
+            } else if (id.startsWith("hiddenpower")) {
+                const power = parseInt(id.slice(-2));
+                if (isNaN(power)) {
+                    id = "hiddenpower" as ID;
+                } else {
+                    id = id.slice(0, -2) as ID;
+                }
+            }
+            const ppUsed = move.ppUsed;
             const maxPP = isTransformed
                 ? 5
                 : pokemon.side.battle.gens.dex.moves.get(id).pp;
@@ -2375,10 +2431,23 @@ class PrivateActionHandler {
                 value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
             });
         }
+        let moveId = move.id;
+        if (moveId.startsWith("return")) {
+            moveId = "return" as ID;
+        } else if (moveId.startsWith("frustration")) {
+            moveId = "frustration" as ID;
+        } else if (moveId.startsWith("hiddenpower")) {
+            const power = parseInt(moveId.slice(-2));
+            if (isNaN(power)) {
+                moveId = "hiddenpower" as ID;
+            } else {
+                moveId = moveId.slice(0, -2) as ID;
+            }
+        }
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-            value: IndexValueFromEnum(MovesEnum, move.id),
+            value: IndexValueFromEnum(MovesEnum, moveId),
         });
         this.assignActionBuffer({
             offset: actionOffset,

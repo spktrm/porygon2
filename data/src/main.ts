@@ -117,7 +117,7 @@ const customScrapingFunctions: {
             }
         }
 
-        return [...new Set(matchedVolatiles)]; // Remove duplicates
+        return [...new Set(matchedVolatiles), "futuresight", "doomdesire"]; // Remove duplicates
     },
     genderName: (content: string, file: string): string[] => {
         const match = content.match(
@@ -450,29 +450,7 @@ async function getGenData(dex: ModdedDex): Promise<GenData> {
 }
 
 function formatData(data: GenData) {
-    const moveIds = [
-        ...data.moves.map((item) => {
-            let name = toID(item.name);
-            if (name === "return") {
-                return `${item.id}102`;
-            } else if (
-                name.startsWith("hiddenpower") &&
-                !name.endsWith("hiddenpower")
-            ) {
-                name += `${item.basePower}`;
-                return name;
-            } else {
-                return name;
-            }
-        }),
-        "return",
-    ];
-    moveIds
-        .filter((x) => x.startsWith("hiddenpower") && x !== "hiddenpower")
-        .map((x) => {
-            moveIds.push(x.slice(0, -2));
-            moveIds.push(x.slice(0, -2) + `70`);
-        });
+    const moveIds = data.moves.map((item) => toID(item.name));
 
     const getId = (item: any) => {
         return toID(item.id);
@@ -550,6 +528,9 @@ async function scrapeRepo() {
         ...keywords.volatileStatus,
         "recoil",
         "drain",
+        "itemberry",
+        "itemmysteryberry",
+        "itemgoldberry",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
     data["Natures"] = standardize(

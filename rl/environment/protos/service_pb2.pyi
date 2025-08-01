@@ -1,6 +1,7 @@
+from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from typing import ClassVar as _ClassVar, Mapping as _Mapping, Optional as _Optional, Union as _Union
+from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -23,10 +24,12 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[int] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username",)
+    __slots__ = ("username", "team_indices")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
+    TEAM_INDICES_FIELD_NUMBER: _ClassVar[int]
     username: str
-    def __init__(self, username: _Optional[str] = ...) -> None: ...
+    team_indices: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, username: _Optional[str] = ..., team_indices: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "legal_actions", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "my_actions", "opp_actions", "public_team", "private_team", "field", "rqid")
