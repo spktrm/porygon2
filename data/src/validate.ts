@@ -40,13 +40,13 @@ function processFile(unpackedSets: PokemonSet<string>[], format: string) {
     });
 
     console.log(`Valid teams for ${format}: ${validTeams.length}`);
+    const validatedPackedTeams = validTeams.map((unpacked) =>
+        Teams.pack([unpacked]),
+    );
+    validatedPackedTeams.sort();
     fs.writeFileSync(
         `../data/data/${format}_packed.json`,
-        JSON.stringify(
-            validTeams.map((unpacked) => Teams.pack([unpacked])),
-            null,
-            2,
-        ),
+        JSON.stringify(validatedPackedTeams, null, 2),
     );
 }
 
