@@ -13,14 +13,21 @@ import { EvalActionFnType } from "../eval";
 
 function fixMoveId(moveId: string) {
     if (moveId.startsWith("hiddenpower")) {
-        return moveId.slice(0, -2);
+        const power = parseInt(moveId.slice(-2));
+        if (isNaN(power)) {
+            return "hiddenpower";
+        } else {
+            return moveId.slice(0, -2);
+        }
     } else if (moveId.startsWith("return")) {
         return "return";
+    } else if (moveId.startsWith("frustration")) {
+        return "frustration";
     }
     return moveId;
 }
 
-export const GetMoveDamange: (args: {
+export const GetMoveDamage: (args: {
     battle: Battle;
     attacker: Pokemon;
     defender: Pokemon;
@@ -172,7 +179,7 @@ export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
         const moveData: number[] = moves.map(
             ({ id, disabled }: { id: string; disabled: boolean }) => {
                 let damage = 0;
-                damage = GetMoveDamange({
+                damage = GetMoveDamage({
                     battle,
                     attacker,
                     defender,

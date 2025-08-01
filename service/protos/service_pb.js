@@ -78,7 +78,7 @@ if (goog.DEBUG && !COMPILED) {
  * @constructor
  */
 proto.servicev2.ResetRequest = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, null, null);
+  jspb.Message.initialize(this, opt_data, 0, -1, proto.servicev2.ResetRequest.repeatedFields_, null);
 };
 goog.inherits(proto.servicev2.ResetRequest, jspb.Message);
 if (goog.DEBUG && !COMPILED) {
@@ -612,6 +612,13 @@ proto.servicev2.StepRequest.prototype.setRqid = function(value) {
 
 
 
+/**
+ * List of repeated fields within this message type.
+ * @private {!Array<number>}
+ * @const
+ */
+proto.servicev2.ResetRequest.repeatedFields_ = [2];
+
 
 
 if (jspb.Message.GENERATE_TO_OBJECT) {
@@ -643,7 +650,8 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
  */
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, "")
+    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+    teamIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -684,6 +692,12 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
       var value = /** @type {string} */ (reader.readString());
       msg.setUsername(value);
       break;
+    case 2:
+      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
+      for (var i = 0; i < values.length; i++) {
+        msg.addTeamIndices(values[i]);
+      }
+      break;
     default:
       reader.skipField();
       break;
@@ -720,6 +734,13 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
+  f = message.getTeamIndicesList();
+  if (f.length > 0) {
+    writer.writePackedInt32(
+      2,
+      f
+    );
+  }
 };
 
 
@@ -738,6 +759,43 @@ proto.servicev2.ResetRequest.prototype.getUsername = function() {
  */
 proto.servicev2.ResetRequest.prototype.setUsername = function(value) {
   return jspb.Message.setProto3StringField(this, 1, value);
+};
+
+
+/**
+ * repeated int32 team_indices = 2;
+ * @return {!Array<number>}
+ */
+proto.servicev2.ResetRequest.prototype.getTeamIndicesList = function() {
+  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 2));
+};
+
+
+/**
+ * @param {!Array<number>} value
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.setTeamIndicesList = function(value) {
+  return jspb.Message.setField(this, 2, value || []);
+};
+
+
+/**
+ * @param {number} value
+ * @param {number=} opt_index
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.addTeamIndices = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 2, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.clearTeamIndicesList = function() {
+  return this.setTeamIndicesList([]);
 };
 
 

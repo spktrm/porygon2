@@ -15,7 +15,7 @@ import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
 import { EnvironmentState, StepRequest } from "../../protos/service_pb";
-import { evalActionMapping } from "./eval";
+import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
 
 Teams.setGeneratorFactory(TeamGenerators);
@@ -282,7 +282,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             throw new Error(
                 `Invalid eval index: ${
                     this.baselineIndex
-                }. Must be between 0 and ${evalActionMapping.length - 1}`,
+                }. Must be between 0 and ${numEvals - 1}.`,
             );
         }
         const evalFn = evalActionMapping[this.baselineIndex];
@@ -328,6 +328,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             for (const line of chunk.split("\n")) {
                 if (line) {
                     const [cmd] = line.slice(1).split("|");
+                    if (cmd === "tie" || cmd === "win") {
+                        this.done = true;
+                    }
                     this.addLine(cmd, line);
 
                     if (cmd === "request" && this.isActionRequired()) {
@@ -358,10 +361,16 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 }
 
 export function createBattle(
-    options: { p1Name: string; p2Name: string; maxRequestCount?: number },
+    options: {
+        p1Name: string;
+        p2Name: string;
+        p1team?: string;
+        p2team?: string;
+        maxRequestCount?: number;
+    },
     debug: boolean = false,
 ) {
-    const { p1Name, p2Name } = options;
+    const { p1Name, p2Name, p1team, p2team } = options;
     const maxRequestCount = options.maxRequestCount ?? 100;
 
     const streams = BattleStreams.getPlayerStreams(
@@ -369,12 +378,21 @@ export function createBattle(
     );
     const spec = { formatid };
 
-    const p1Sets = Teams.generate("gen3randombattle");
+    const p1Sets = p1team
+        ? Teams.unpack(p1team)
+        : Teams.generate("gen3randombattle");
+    const p2Sets = p2team
+        ? Teams.unpack(p2team)
+        : Teams.generate("gen3randombattle");
+
+    if (p1Sets === null || p2Sets === null) {
+        throw new Error(`Invalid team format for p1: ${p1team}, p2: ${p2team}`);
+    }
+
     const p1spec = {
         name: p1Name,
         team: Teams.pack(p1Sets),
     };
-    const p2Sets = Teams.generate("gen3randombattle");
     const p2spec = {
         name: p2Name,
         team: Teams.pack(p2Sets),

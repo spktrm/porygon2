@@ -5,9 +5,6 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.interfaces import Transition
-from rl.learner.config import Porygon2LearnerConfig
-
 
 class VTraceOutput(NamedTuple):
     returns: jax.Array
@@ -153,29 +150,22 @@ def vtrace_td_error_and_advantage(
 
 
 def compute_returns(
-    v_tm1: jax.Array,
-    rho_tm1: jax.Array,
-    batch: Transition,
-    config: Porygon2LearnerConfig,
-):
-    """Train for a single step."""
-
-    valid = jnp.bitwise_not(batch.timestep.env.done)
-    rewards = batch.timestep.env.win_reward
-
-    rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
-    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
-    valids = jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:])))
-
-    discount_t = valids * config.gamma
-
+    v_tm1,
+    v_t,
+    rewards,
+    discount_t,
+    rho_tm1,
+    lambda_,
+    clip_rho_threshold,
+    clip_pg_rho_threshold,
+) -> VTraceOutput:
     with jax.default_device(jax.devices("cpu")[0]):
         return jax.vmap(
             functools.partial(
                 vtrace_td_error_and_advantage,
-                lambda_=config.lambda_,
-                clip_rho_threshold=config.clip_rho_threshold,
-                clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+                lambda_=lambda_,
+                clip_rho_threshold=clip_rho_threshold,
+                clip_pg_rho_threshold=clip_pg_rho_threshold,
             ),
             in_axes=1,
             out_axes=1,

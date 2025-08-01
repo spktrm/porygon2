@@ -37,6 +37,7 @@ import {
     EntityEdgeFeature,
     FieldFeature,
 } from "../../protos/features_pb";
+import { Teams, TeamValidator } from "@pkmn/sim";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -95,7 +96,6 @@ export const numEntityNodeFeatures = Object.keys(EntityNodeFeature).length;
 export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
 export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
-
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
 
@@ -136,3 +136,30 @@ function transformJson(
 
 // Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
+
+function loadSets(format: string) {
+    const validator = new TeamValidator(format);
+    const setsToChoose: string[] = JSON.parse(
+        fs.readFileSync(`../data/data/${format}_packed.json`, "utf-8"),
+    );
+    const validSets = setsToChoose.filter((x) => {
+        const unpackedSet = Teams.unpack([x].join("]"));
+        const errors = validator.validateTeam(unpackedSet);
+        if (errors !== null) {
+            console.error(
+                `Invalid team for format ${format}: ${x} - Errors: ${errors}`,
+            );
+        }
+
+        return errors === null;
+    });
+    return validSets;
+}
+
+const sets: { [k: string]: string[] } = {
+    gen3ou: loadSets("gen3ou"),
+};
+
+export function lookUpSets(format: string): string[] {
+    return sets[format];
+}

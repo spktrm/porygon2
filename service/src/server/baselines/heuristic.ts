@@ -1,7 +1,7 @@
 import { AnyObject } from "@pkmn/sim";
 import { Pokemon } from "@pkmn/client";
 import { EvalActionFnType } from "../eval";
-import { GetMoveDamange } from "./max_dmg";
+import { GetMoveDamage } from "./max_dmg";
 
 function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
     if (!poke1 || poke1.fainted) {
@@ -21,8 +21,7 @@ function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
         (offensivePower + defensivePower) * hpFactor * (1 + speedFactor);
 
     // Factor in Pokémon's status condition, if any
-    if (poke1.status === "par")
-        score *= 0.8; // Paralysis reduces utility
+    if (poke1.status === "par") score *= 0.8; // Paralysis reduces utility
     else if (poke1.status === "slp" || poke1.status === "frz")
         score *= 0.5; // Sleep/freeze significantly reduce utility
     else if (poke1.status === "brn" || poke1.status === "psn")
@@ -127,7 +126,7 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
         const moveData: number[] = moves.map(
             ({ id, disabled }: { id: string; disabled: boolean }) => {
                 let damage = 0;
-                damage = GetMoveDamange({
+                damage = GetMoveDamage({
                     battle,
                     attacker,
                     defender,

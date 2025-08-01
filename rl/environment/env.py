@@ -29,9 +29,11 @@ class SinglePlayerSyncEnvironment:
         self.last_state = process_state(server_message.state)
         return self.last_state
 
-    def reset(self):
+    def reset(self, team_indices: list[int]):
         self.rqid = None
-        reset_message = ClientRequest(reset=ResetRequest(username=self.username))
+        reset_message = ClientRequest(
+            reset=ResetRequest(username=self.username, team_indices=team_indices)
+        )
         self.websocket.send(reset_message.SerializeToString())
         return self._recv()
 

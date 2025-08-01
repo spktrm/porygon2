@@ -1,6 +1,5 @@
 import os
 import pickle
-from copy import deepcopy
 from pprint import pprint
 from typing import Any, Callable
 
@@ -12,7 +11,7 @@ from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
 
-from rl.environment.interfaces import ModelOutput, TimeStep
+from rl.environment.interfaces import ActorReset, ModelOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.utils import Params
 
@@ -61,7 +60,7 @@ def get_learner_config():
     return Porygon2LearnerConfig()
 
 
-class Porygon2TrainState(train_state.TrainState):
+class Porygon2PlayerTrainState(train_state.TrainState):
     apply_fn: Callable[[Params, TimeStep], ModelOutput] = struct.field(
         pytree_node=False
     )
@@ -76,56 +75,110 @@ class Porygon2TrainState(train_state.TrainState):
     target_adv_std: float = 1
 
 
-def create_train_state(module: nn.Module, rng: PRNGKey, config: Porygon2LearnerConfig):
+class Porygon2BuilderTrainState(train_state.TrainState):
+    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset] = (
+        struct.field(pytree_node=False)
+    )
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+
+    target_adv_mean: float = 0
+    target_adv_std: float = 1
+
+
+def create_train_state(
+    player_network: nn.Module,
+    builder_network: nn.Module,
+    rng: PRNGKey,
+    config: Porygon2LearnerConfig,
+):
     """Creates an initial `TrainState`."""
     ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
 
-    params = module.init(rng, ts)
-    target_params = deepcopy(params)
+    player_params = player_network.init(rng, ts)
+    builder_params = builder_network.init(rng, rng)
 
-    tx = optax.chain(
-        optax.clip_by_global_norm(config.clip_gradient),
-        optax.scale_by_adam(
-            b1=config.adam.b1,
-            b2=config.adam.b2,
-            eps=config.adam.eps,
+    player_train_state = Porygon2PlayerTrainState.create(
+        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
+        params=player_params,
+        target_params=player_params,
+        tx=optax.chain(
+            optax.clip_by_global_norm(config.clip_gradient),
+            optax.scale_by_adam(
+                b1=config.adam.b1,
+                b2=config.adam.b2,
+                eps=config.adam.eps,
+            ),
+            optax.scale_by_schedule(
+                optax.linear_schedule(
+                    init_value=config.learning_rate,
+                    end_value=0.0,
+                    transition_steps=config.num_steps,
+                )
+            ),
+            optax.scale(-1.0),
         ),
-        optax.scale_by_schedule(
-            optax.linear_schedule(
-                init_value=config.learning_rate,
-                end_value=0.0,
-                transition_steps=config.num_steps,
-            )
-        ),
-        optax.scale(-1.0),
     )
 
-    return Porygon2TrainState.create(
-        apply_fn=jax.vmap(module.apply, in_axes=(None, 1), out_axes=1),
-        params=params,
-        target_params=target_params,
-        tx=tx,
+    builder_train_state = Porygon2BuilderTrainState.create(
+        apply_fn=builder_network.apply,
+        params=builder_params,
+        target_params=builder_params,
+        tx=optax.chain(
+            optax.clip_by_global_norm(config.clip_gradient),
+            optax.scale_by_adam(
+                b1=config.adam.b1,
+                b2=config.adam.b2,
+                eps=config.adam.eps,
+            ),
+            optax.scale_by_schedule(
+                optax.linear_schedule(
+                    init_value=config.learning_rate,
+                    end_value=0.0,
+                    transition_steps=config.num_steps,
+                )
+            ),
+            optax.scale(-1.0),
+        ),
     )
 
+    return player_train_state, builder_train_state
 
-def save_train_state(state: Porygon2TrainState):
-    with open(os.path.abspath(f"ckpts/mmd_ckpt_{state.num_steps:08}"), "wb") as f:
+
+def save_train_state(
+    player_state: Porygon2PlayerTrainState, builder_state: Porygon2BuilderTrainState
+):
+    with open(
+        os.path.abspath(f"ckpts/mmd_ckpt_{player_state.num_steps:08}"), "wb"
+    ) as f:
         pickle.dump(
             dict(
-                params=state.params,
-                target_params=state.target_params,
-                opt_state=state.opt_state,
-                num_steps=state.num_steps,
-                num_samples=state.num_samples,
-                actor_steps=state.actor_steps,
-                target_adv_mean=state.target_adv_mean,
-                target_adv_std=state.target_adv_std,
+                player_state=dict(
+                    params=player_state.params,
+                    target_params=player_state.target_params,
+                    opt_state=player_state.opt_state,
+                    num_steps=player_state.num_steps,
+                    num_samples=player_state.num_samples,
+                    actor_steps=player_state.actor_steps,
+                    target_adv_mean=player_state.target_adv_mean,
+                    target_adv_std=player_state.target_adv_std,
+                ),
+                builder_state=dict(
+                    params=builder_state.params,
+                    target_params=builder_state.target_params,
+                    opt_state=builder_state.opt_state,
+                    target_adv_mean=builder_state.target_adv_mean,
+                    target_adv_std=builder_state.target_adv_std,
+                ),
             ),
             f,
         )
 
 
-def load_train_state(state: Porygon2TrainState, path: str):
+def load_train_state(
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+    path: str,
+):
     print(f"loading checkpoint from {path}")
     with open(path, "rb") as f:
         ckpt_data = pickle.load(f)
@@ -134,20 +187,30 @@ def load_train_state(state: Porygon2TrainState, path: str):
     pprint(
         {
             k: v
-            for k, v in ckpt_data.items()
+            for k, v in ckpt_data["player_state"].items()
             if k not in ["opt_state", "params", "target_params"]
         }
     )
 
-    state = state.replace(
-        params=ckpt_data["params"],
-        target_params=ckpt_data["target_params"],
-        opt_state=ckpt_data["opt_state"],
-        num_steps=ckpt_data["num_steps"],
-        num_samples=ckpt_data["num_samples"],
-        actor_steps=ckpt_data["actor_steps"],
-        target_adv_mean=ckpt_data.get("target_adv_mean", 0.0),
-        target_adv_std=ckpt_data.get("target_adv_std", 1.0),
+    ckpt_player_state = ckpt_data.get("player_state", {})
+    player_state = player_state.replace(
+        params=ckpt_data["player_state"]["params"],
+        target_params=ckpt_data["player_state"]["target_params"],
+        opt_state=ckpt_data["player_state"]["opt_state"],
+        num_steps=ckpt_data["player_state"]["num_steps"],
+        num_samples=ckpt_data["player_state"]["num_samples"],
+        actor_steps=ckpt_data["player_state"]["actor_steps"],
+        target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
+        target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
     )
 
-    return state
+    ckpt_builder_state = ckpt_data.get("builder_state", {})
+    builder_state = builder_state.replace(
+        params=ckpt_data["builder_state"]["params"],
+        target_params=ckpt_data["builder_state"]["target_params"],
+        opt_state=ckpt_data["builder_state"]["opt_state"],
+        target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
+        target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
+    )
+
+    return player_state, builder_state
