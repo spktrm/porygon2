@@ -327,6 +327,11 @@ class Learner:
         self.gpu_lock = gpu_lock
         self.num_samples = num_samples
 
+        self.wandb_run.log_code("inference/")
+        self.wandb_run.log_code(
+            "service/src/client/", include_fn=lambda x: x.endswith(".ts")
+        )
+
         self.update_params_for_actor()
 
     def update_params_for_actor(self):
@@ -367,7 +372,9 @@ class Learner:
                 self.controller.signal_actors()
 
                 if self.player_state.num_steps % 5000 == 0:
-                    save_train_state(self.player_state, self.builder_state)
+                    save_train_state(
+                        self.wandb_run, self.player_state, self.builder_state
+                    )
 
             except Exception as e:
                 traceback.print_exc()

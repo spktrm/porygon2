@@ -12,8 +12,8 @@ import { TrainablePlayerAI } from "../server/runner";
 import { StepRequest } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
-const server = "sim3.psim.us";
-// const server = "localhost:8000";
+// const server = "sim3.psim.us";
+const server = "localhost:8000";
 // const server = "pokeagentshowdown.com";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
@@ -78,7 +78,7 @@ class Connection {
     private ws!: WebSocket;
 
     open(callback: (data: string) => void): void {
-        this.ws = new WebSocket(`wss://${server}/showdown/websocket`);
+        this.ws = new WebSocket(`ws://${server}/showdown/websocket`);
 
         this.ws.onmessage = ({ data }) => callback(data.toString());
         this.ws.onopen = () => {
@@ -127,26 +127,38 @@ class Battle {
     private battleId: string;
     private conn: Connection;
     private username: string;
+    private readonly team: string;
     stream: ObjectReadWriteStream<string>;
     player: TrainablePlayerAI;
     prevMessage: string | undefined;
     active: boolean;
 
-    constructor(roomId: string, conn: Connection, username: string) {
+    constructor(
+        roomId: string,
+        conn: Connection,
+        username: string,
+        team: string,
+    ) {
         this.battleId = roomId;
         this.conn = conn;
         this.active = true;
         this.username = username;
         this.prevMessage = undefined;
+        this.team = team;
 
         this.conn.send(`${this.battleId}|/timer on`);
         // this.ws.send(`${this.battleId}|${welcomeMessage}`);
+        const unpackedTeam = Teams.unpack(team);
+        if (unpackedTeam === null || unpackedTeam.length === 0) {
+            throw new Error("Invalid team provided for battle");
+        }
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
             this.username,
             this.stream,
             {},
             false,
+            unpackedTeam,
         );
         this.player.choose = (choice: string) => {
             this.conn.send(
@@ -199,10 +211,14 @@ class User {
     private username?: string;
     private searchState?: SearchState;
     private battles: { [k: string]: Battle };
+    private teams: string[];
+    private searchUpdated: boolean;
 
     constructor(private readonly connection: Connection) {
         this.searchState = undefined;
         this.battles = {};
+        this.teams = [];
+        this.searchUpdated = false;
     }
 
     get isLoggedIn(): boolean {
@@ -292,6 +308,7 @@ class User {
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
                 if (errors === null) {
+                    this.teams.push(team);
                     this.send(`|/utm ${team}`);
                     break;
                 }
@@ -303,19 +320,29 @@ class User {
     async updateSearch(searchState: SearchState): Promise<void> {
         this.searchState = searchState;
         const { searching, games } = searchState;
-        if (searching.length === 0 && games === null) {
+        if (searching.length === 0 && games === null && !this.searchUpdated) {
             this.search("gen3ou");
+            this.searchUpdated = true;
+            return;
         }
         if (games !== null) {
             if (searching.length > 0) {
                 this.cancelSearch();
+            } else {
+                this.searchUpdated = false;
             }
             for (const gameId in games) {
                 if (this.battles[gameId]) continue; // Already in a battle
+                const team = this.teams.shift();
+                if (!team) {
+                    console.error("No team available for battle");
+                    continue;
+                }
                 const battle = new Battle(
                     gameId,
                     this.connection,
                     this.username!,
+                    team,
                 );
                 this.battles[gameId] = battle;
                 battle.start().then(() => {

@@ -7,6 +7,7 @@ import chex
 import flax.linen as nn
 import jax
 import optax
+import wandb.wandb_run
 from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
@@ -145,11 +146,19 @@ def create_train_state(
 
 
 def save_train_state(
+    wandb_run: wandb.wandb_run.Run,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+):
+    save_path = save_train_state_locally(player_state, builder_state)
+    wandb_run.log_artifact(save_path, "latest")
+
+
+def save_train_state_locally(
     player_state: Porygon2PlayerTrainState, builder_state: Porygon2BuilderTrainState
 ):
-    with open(
-        os.path.abspath(f"ckpts/mmd_ckpt_{player_state.num_steps:08}"), "wb"
-    ) as f:
+    save_path = os.path.abspath(f"ckpts/mmd_ckpt_{player_state.num_steps:08}")
+    with open(save_path, "wb") as f:
         pickle.dump(
             dict(
                 player_state=dict(
@@ -172,6 +181,7 @@ def save_train_state(
             ),
             f,
         )
+    return save_path
 
 
 def load_train_state(
