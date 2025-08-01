@@ -328,6 +328,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             for (const line of chunk.split("\n")) {
                 if (line) {
                     const [cmd] = line.slice(1).split("|");
+                    if (cmd === "tie" || cmd === "win") {
+                        this.done = true;
+                    }
                     this.addLine(cmd, line);
 
                     if (cmd === "request" && this.isActionRequired()) {

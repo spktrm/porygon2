@@ -142,7 +142,20 @@ DEST_DIR.mkdir(exist_ok=True)
 
 def list_remote_jsons() -> List[str]:
     """Scrape the directory listing to collect every *.json file path."""
-    tiers = ["ubers", "ou", "uu", "uubl", "ru", "rubl", "nu", "nubl", "pu", "publ"]
+    tiers = [
+        "ubers",
+        "ou",
+        "uu",
+        "uubl",
+        "ru",
+        "rubl",
+        "nu",
+        "nubl",
+        "pu",
+        "publ",
+        "zu",
+        "zubl",
+    ]
     return [
         f"gen{generation}{tier}.json" for generation in range(1, 10) for tier in tiers
     ]
