@@ -98,10 +98,10 @@ export class EnvironmentState extends jspb.Message {
   getInfo_asB64(): string;
   setInfo(value: Uint8Array | string): void;
 
-  getLegalActions(): Uint8Array | string;
-  getLegalActions_asU8(): Uint8Array;
-  getLegalActions_asB64(): string;
-  setLegalActions(value: Uint8Array | string): void;
+  getActionMask(): Uint8Array | string;
+  getActionMask_asU8(): Uint8Array;
+  getActionMask_asB64(): string;
+  setActionMask(value: Uint8Array | string): void;
 
   getHistoryEntityNodes(): Uint8Array | string;
   getHistoryEntityNodes_asU8(): Uint8Array;
@@ -121,15 +121,10 @@ export class EnvironmentState extends jspb.Message {
   getHistoryLength(): number;
   setHistoryLength(value: number): void;
 
-  getMyActions(): Uint8Array | string;
-  getMyActions_asU8(): Uint8Array;
-  getMyActions_asB64(): string;
-  setMyActions(value: Uint8Array | string): void;
-
-  getOppActions(): Uint8Array | string;
-  getOppActions_asU8(): Uint8Array;
-  getOppActions_asB64(): string;
-  setOppActions(value: Uint8Array | string): void;
+  getMoveset(): Uint8Array | string;
+  getMoveset_asU8(): Uint8Array;
+  getMoveset_asB64(): string;
+  setMoveset(value: Uint8Array | string): void;
 
   getPublicTeam(): Uint8Array | string;
   getPublicTeam_asU8(): Uint8Array;
@@ -162,13 +157,12 @@ export class EnvironmentState extends jspb.Message {
 export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
-    legalActions: Uint8Array | string,
+    actionMask: Uint8Array | string,
     historyEntityNodes: Uint8Array | string,
     historyEntityEdges: Uint8Array | string,
     historyField: Uint8Array | string,
     historyLength: number,
-    myActions: Uint8Array | string,
-    oppActions: Uint8Array | string,
+    moveset: Uint8Array | string,
     publicTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
     field: Uint8Array | string,

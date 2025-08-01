@@ -1,3 +1,4 @@
+from typing import NamedTuple
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -13,6 +14,12 @@ from rl.model.modules import (
 from rl.model.utils import BIAS_VALUE, legal_log_policy, legal_policy
 
 
+class PolicyHeadOutput(NamedTuple):
+    action: jax.Array
+    log_pi: jax.Array
+    entropy: jax.Array
+
+
 class PolicyHead(nn.Module):
     cfg: ConfigDict
 
@@ -26,35 +33,45 @@ class PolicyHead(nn.Module):
 
     def __call__(
         self,
-        entity_embeddings: jax.Array,
-        action_embeddings: jax.Array,
-        entity_mask: jax.Array,
-        action_mask: jax.Array,
+        query_embeddings: jax.Array,
+        key_value_embeddings: jax.Array,
+        query_mask: jax.Array,
+        key_value_mask: jax.Array,
+        rng_key: jax.Array,
+        force_action: jax.Array = None,
         temp: float = 1.0,
     ):
-        action_embeddings = self.encoder(
-            action_embeddings,
-            create_attention_mask(action_mask),
+        query_embeddings = self.encoder(
+            query_embeddings,
+            create_attention_mask(query_mask),
         )
-        action_embeddings = self.decoder(
-            action_embeddings,
-            entity_embeddings,
-            create_attention_mask(action_mask, entity_mask),
+        query_embeddings = self.decoder(
+            query_embeddings,
+            key_value_embeddings,
+            create_attention_mask(query_mask, key_value_mask),
         )
 
-        logits = activation_fn(self.final_norm(action_embeddings))
+        logits = activation_fn(self.final_norm(query_embeddings))
         logits = self.final_layer(logits)
         logits = logits.reshape(-1)
         logits = (logits - logits.mean(axis=-1, keepdims=True)) / temp
 
-        masked_logits = jnp.where(action_mask, logits, BIAS_VALUE)
-        policy = legal_policy(masked_logits, action_mask, temp)
-        log_policy = legal_log_policy(masked_logits, action_mask, temp)
+        policy = legal_policy(logits, query_mask, temp)
+        log_policy = legal_log_policy(logits, query_mask, temp)
 
-        return logits, policy, log_policy
+        entropy = -jnp.sum(policy * log_policy, axis=-1, keepdims=True)
+        if force_action is not None:
+            action = force_action
+        else:
+            masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
+            action = jax.random.categorical(rng_key, masked_logits)
+
+        return PolicyHeadOutput(
+            action=action, log_pi=log_policy[action], entropy=entropy
+        )
 
 
-class ValueHead(nn.Module):
+class ScalarHead(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
@@ -62,7 +79,9 @@ class ValueHead(nn.Module):
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
         self.final_norm = RMSNorm(dtype=self.cfg.dtype)
         self.final_layer = nn.Dense(
-            features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
+            features=self.cfg.output_features,
+            kernel_init=nn.initializers.normal(5e-3),
+            dtype=self.cfg.dtype,
         )
 
     def __call__(self, entity_embeddings: jax.Array, entity_mask: jax.Array):

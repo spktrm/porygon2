@@ -53,6 +53,7 @@ class Agent:
         # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
 
         timestep = TimeStep(
+            rng_key=rng_key,
             env=jax.tree.map(lambda t: t[None, None, ...], timestep.env),
             history=jax.tree.map(lambda t: t[:, None, ...], timestep.history),
         )

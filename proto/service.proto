@@ -22,17 +22,16 @@ message ResetRequest {
 
 message EnvironmentState {
   bytes info = 1;
-  bytes legal_actions = 2;
+  bytes action_mask = 2;
   bytes history_entity_nodes = 3;
   bytes history_entity_edges = 4;
   bytes history_field = 5;
   int32 history_length = 6;
-  bytes my_actions = 7;
-  bytes opp_actions = 8;
-  bytes public_team = 9;
-  bytes private_team = 10;
-  bytes field = 11;
-  int32 rqid = 12;
+  bytes moveset = 7;
+  bytes public_team = 8;
+  bytes private_team = 9;
+  bytes field = 10;
+  int32 rqid = 11;
 }
 
 message EnvironmentResponse {

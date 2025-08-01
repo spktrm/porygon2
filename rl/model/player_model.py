@@ -13,8 +13,17 @@ from rl.environment.interfaces import EnvStep, ModelOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import PolicyHead, ValueHead
-from rl.model.utils import Params, get_most_recent_file, legal_log_policy, legal_policy
+from rl.model.heads import PolicyHead, ScalarHead
+from rl.model.utils import (
+    BIAS_VALUE,
+    Params,
+    get_action_type_mask,
+    get_most_recent_file,
+    get_move_mask,
+    get_switch_mask,
+    legal_log_policy,
+    legal_policy,
+)
 from rl.utils import init_jax_jit_cache
 
 
@@ -26,27 +35,93 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.policy_head = PolicyHead(self.cfg.policy_head)
-        self.value_head = ValueHead(self.cfg.value_head)
+
+        self.action_type_head = ScalarHead(self.cfg.action_type_head)
+        self.move_head = PolicyHead(self.cfg.move_head)
+        self.switch_head = PolicyHead(self.cfg.switch_head)
+
+        self.value_head = ScalarHead(self.cfg.value_head)
 
     def get_head_outputs(
         self,
         entity_embeddings: jax.Array,
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
-        action_mask: jax.Array,
+        timestep: TimeStep,
         temp: float = 1.0,
     ):
-        # Apply action argument heads
-        logit, pi, log_pi = self.policy_head(
-            entity_embeddings, action_embeddings, entity_mask, action_mask, temp
+        action_mask = timestep.env.action_mask
+
+        action_type_key, move_key, switch_key = jax.random.split(timestep.rng_key, 3)
+
+        action_type_mask = get_action_type_mask(action_mask)
+        action_type_head_logits = self.action_type_head(entity_embeddings)
+        action_type_policy = legal_policy(
+            action_type_head_logits, action_type_mask, temp
+        )
+        action_type_log_policy = legal_log_policy(
+            action_type_head_logits, action_type_mask, temp
+        )
+        action_type_entropy = -jnp.sum(
+            action_type_policy * action_type_log_policy, axis=-1, keepdims=True
+        )
+        action_type_force_action = timestep.actor_step.model_output.action_head_action
+        if action_type_force_action is not None:
+            action_type_action = action_type_force_action
+        else:
+            masked_logits = jnp.where(
+                action_type_mask, action_type_head_logits, BIAS_VALUE
+            )
+            action_type_action = jax.random.categorical(action_type_key, masked_logits)
+
+        move_embeddings = action_embeddings[:4]
+        move_mask = get_move_mask(action_mask)
+        move_head_output = self.move_head(
+            move_embeddings,
+            entity_embeddings,
+            move_mask,
+            entity_mask,
+            move_key,
+            temp,
+        )
+
+        switch_embeddings = action_embeddings[4:]
+        switch_mask = get_switch_mask(action_mask)
+        switch_head_output = self.switch_head(
+            switch_embeddings,
+            entity_embeddings,
+            switch_mask,
+            entity_mask,
+            switch_key,
+            temp,
+        )
+
+        sub_head_entropies = jnp.stack(
+            [move_head_output.entropy, switch_head_output.entropy], axis=-1
+        )
+        total_entropy = action_type_entropy + action_type_policy @ sub_head_entropies
+
+        sub_head_log_pis = jnp.stack(
+            [move_head_output.log_pi, switch_head_output.log_pi], axis=-1
+        )
+        total_log_pi = (
+            action_type_log_policy[action_type_action]
+            + jax.nn.one_hot(action_type_action, action_type_log_policy.shape[-1])
+            @ sub_head_log_pis
         )
 
         # Apply the value head
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
-        return ModelOutput(logit=logit, pi=pi, log_pi=log_pi, v=value)
+        return ModelOutput(
+            action_head_action=action_type_action,
+            move_head_action=move_head_output.action,
+            switch_head_action=switch_head_output.action,
+            log_pi=total_log_pi,
+            entropy=total_entropy,
+            v=value,
+        )
 
     def __call__(self, timestep: TimeStep, temp: float = 1.0):
         """
@@ -58,7 +133,7 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
-            entity_embeddings, action_embeddings, entity_mask, timestep.env.legal
+            entity_embeddings, action_embeddings, entity_mask, timestep
         )
 
 
@@ -68,12 +143,12 @@ class DummyModel(nn.Module):
     def __call__(self, timestep: TimeStep) -> ModelOutput:
 
         def _forward(env_step: EnvStep) -> ModelOutput:
-            mask = env_step.legal.astype(jnp.float32)
+            mask = env_step.action_mask.astype(jnp.float32)
             v = jnp.tanh(nn.Dense(1)(mask)).squeeze(-1)
             logit = nn.Dense(mask.shape[-1])(mask)
             masked_logits = jnp.where(mask, logit, -1e30)
-            pi = legal_policy(logit, env_step.legal)
-            log_pi = legal_log_policy(logit, env_step.legal)
+            pi = legal_policy(logit, env_step.action_mask)
+            log_pi = legal_log_policy(logit, env_step.action_mask)
             return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
 
         return jax.vmap(_forward)(timestep.env)

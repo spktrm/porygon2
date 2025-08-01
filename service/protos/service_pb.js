@@ -832,17 +832,16 @@ proto.servicev2.EnvironmentState.prototype.toObject = function(opt_includeInstan
 proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
     info: msg.getInfo_asB64(),
-    legalActions: msg.getLegalActions_asB64(),
+    actionMask: msg.getActionMask_asB64(),
     historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
     historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
     historyField: msg.getHistoryField_asB64(),
     historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
-    myActions: msg.getMyActions_asB64(),
-    oppActions: msg.getOppActions_asB64(),
+    moveset: msg.getMoveset_asB64(),
     publicTeam: msg.getPublicTeam_asB64(),
     privateTeam: msg.getPrivateTeam_asB64(),
     field: msg.getField_asB64(),
-    rqid: jspb.Message.getFieldWithDefault(msg, 12, 0)
+    rqid: jspb.Message.getFieldWithDefault(msg, 11, 0)
   };
 
   if (includeInstance) {
@@ -885,7 +884,7 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       break;
     case 2:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setLegalActions(value);
+      msg.setActionMask(value);
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -905,25 +904,21 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       break;
     case 7:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setMyActions(value);
+      msg.setMoveset(value);
       break;
     case 8:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setOppActions(value);
+      msg.setPublicTeam(value);
       break;
     case 9:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setPublicTeam(value);
+      msg.setPrivateTeam(value);
       break;
     case 10:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setPrivateTeam(value);
-      break;
-    case 11:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setField(value);
       break;
-    case 12:
+    case 11:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRqid(value);
       break;
@@ -963,7 +958,7 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
       f
     );
   }
-  f = message.getLegalActions_asU8();
+  f = message.getActionMask_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       2,
@@ -998,45 +993,38 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
       f
     );
   }
-  f = message.getMyActions_asU8();
+  f = message.getMoveset_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       7,
       f
     );
   }
-  f = message.getOppActions_asU8();
+  f = message.getPublicTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       8,
       f
     );
   }
-  f = message.getPublicTeam_asU8();
+  f = message.getPrivateTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       9,
       f
     );
   }
-  f = message.getPrivateTeam_asU8();
+  f = message.getField_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       10,
       f
     );
   }
-  f = message.getField_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      11,
-      f
-    );
-  }
   f = message.getRqid();
   if (f !== 0) {
     writer.writeInt32(
-      12,
+      11,
       f
     );
   }
@@ -1086,35 +1074,35 @@ proto.servicev2.EnvironmentState.prototype.setInfo = function(value) {
 
 
 /**
- * optional bytes legal_actions = 2;
+ * optional bytes action_mask = 2;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getLegalActions = function() {
+proto.servicev2.EnvironmentState.prototype.getActionMask = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
 /**
- * optional bytes legal_actions = 2;
- * This is a type-conversion wrapper around `getLegalActions()`
+ * optional bytes action_mask = 2;
+ * This is a type-conversion wrapper around `getActionMask()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getLegalActions_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getActionMask_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getLegalActions()));
+      this.getActionMask()));
 };
 
 
 /**
- * optional bytes legal_actions = 2;
+ * optional bytes action_mask = 2;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getLegalActions()`
+ * This is a type-conversion wrapper around `getActionMask()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getLegalActions_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getActionMask_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getLegalActions()));
+      this.getActionMask()));
 };
 
 
@@ -1122,7 +1110,7 @@ proto.servicev2.EnvironmentState.prototype.getLegalActions_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setLegalActions = function(value) {
+proto.servicev2.EnvironmentState.prototype.setActionMask = function(value) {
   return jspb.Message.setProto3BytesField(this, 2, value);
 };
 
@@ -1272,35 +1260,35 @@ proto.servicev2.EnvironmentState.prototype.setHistoryLength = function(value) {
 
 
 /**
- * optional bytes my_actions = 7;
+ * optional bytes moveset = 7;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getMyActions = function() {
+proto.servicev2.EnvironmentState.prototype.getMoveset = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
 };
 
 
 /**
- * optional bytes my_actions = 7;
- * This is a type-conversion wrapper around `getMyActions()`
+ * optional bytes moveset = 7;
+ * This is a type-conversion wrapper around `getMoveset()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getMyActions_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getMoveset_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getMyActions()));
+      this.getMoveset()));
 };
 
 
 /**
- * optional bytes my_actions = 7;
+ * optional bytes moveset = 7;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getMyActions()`
+ * This is a type-conversion wrapper around `getMoveset()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getMyActions_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getMoveset_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getMyActions()));
+      this.getMoveset()));
 };
 
 
@@ -1308,64 +1296,22 @@ proto.servicev2.EnvironmentState.prototype.getMyActions_asU8 = function() {
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setMyActions = function(value) {
+proto.servicev2.EnvironmentState.prototype.setMoveset = function(value) {
   return jspb.Message.setProto3BytesField(this, 7, value);
 };
 
 
 /**
- * optional bytes opp_actions = 8;
+ * optional bytes public_team = 8;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getOppActions = function() {
+proto.servicev2.EnvironmentState.prototype.getPublicTeam = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
 };
 
 
 /**
- * optional bytes opp_actions = 8;
- * This is a type-conversion wrapper around `getOppActions()`
- * @return {string}
- */
-proto.servicev2.EnvironmentState.prototype.getOppActions_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getOppActions()));
-};
-
-
-/**
- * optional bytes opp_actions = 8;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getOppActions()`
- * @return {!Uint8Array}
- */
-proto.servicev2.EnvironmentState.prototype.getOppActions_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getOppActions()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.servicev2.EnvironmentState} returns this
- */
-proto.servicev2.EnvironmentState.prototype.setOppActions = function(value) {
-  return jspb.Message.setProto3BytesField(this, 8, value);
-};
-
-
-/**
- * optional bytes public_team = 9;
- * @return {!(string|Uint8Array)}
- */
-proto.servicev2.EnvironmentState.prototype.getPublicTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
-};
-
-
-/**
- * optional bytes public_team = 9;
+ * optional bytes public_team = 8;
  * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {string}
  */
@@ -1376,7 +1322,7 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asB64 = function() {
 
 
 /**
- * optional bytes public_team = 9;
+ * optional bytes public_team = 8;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPublicTeam()`
@@ -1393,21 +1339,21 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPublicTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 9, value);
+  return jspb.Message.setProto3BytesField(this, 8, value);
 };
 
 
 /**
- * optional bytes private_team = 10;
+ * optional bytes private_team = 9;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getPrivateTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
 };
 
 
 /**
- * optional bytes private_team = 10;
+ * optional bytes private_team = 9;
  * This is a type-conversion wrapper around `getPrivateTeam()`
  * @return {string}
  */
@@ -1418,7 +1364,7 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asB64 = function() {
 
 
 /**
- * optional bytes private_team = 10;
+ * optional bytes private_team = 9;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPrivateTeam()`
@@ -1435,21 +1381,21 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPrivateTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 10, value);
+  return jspb.Message.setProto3BytesField(this, 9, value);
 };
 
 
 /**
- * optional bytes field = 11;
+ * optional bytes field = 10;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
 };
 
 
 /**
- * optional bytes field = 11;
+ * optional bytes field = 10;
  * This is a type-conversion wrapper around `getField()`
  * @return {string}
  */
@@ -1460,7 +1406,7 @@ proto.servicev2.EnvironmentState.prototype.getField_asB64 = function() {
 
 
 /**
- * optional bytes field = 11;
+ * optional bytes field = 10;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getField()`
@@ -1477,16 +1423,16 @@ proto.servicev2.EnvironmentState.prototype.getField_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 11, value);
+  return jspb.Message.setProto3BytesField(this, 10, value);
 };
 
 
 /**
- * optional int32 rqid = 12;
+ * optional int32 rqid = 11;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getRqid = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 12, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 11, 0));
 };
 
 
@@ -1495,7 +1441,7 @@ proto.servicev2.EnvironmentState.prototype.getRqid = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setRqid = function(value) {
-  return jspb.Message.setProto3IntField(this, 12, value);
+  return jspb.Message.setProto3IntField(this, 11, value);
 };
 
 
