@@ -12,7 +12,7 @@
         "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "start-evaluation1-server": "node dist/server/index.js --type evaluation1",
         "start-evaluation2-server": "node dist/server/index.js --type evaluation2",
-        "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
+        "start-evaluation-client": "npm run compile-base && node dist/client/indexv2.js ",
         "test": "npm run compile-base && node dist/tests/main.js",
         "offline": "npm run compile-base && node dist/offline/main.js",
         "matchup": "npm run compile-base && node dist/tests/matchup.js",
@@ -21,6 +21,7 @@
     "dependencies": {
         "@pkmn/client": "^0.7.0",
         "@pkmn/dex": "^0.9.36",
+        "@pkmn/login": "^0.2.0",
         "@pkmn/randoms": "^0.9.36",
         "@pkmn/sim": "^0.9.36",
         "@smogon/calc": "^0.10.0",

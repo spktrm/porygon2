@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from model import InferenceModel
 
-from inference.interfaces import PredictionResponse
+from inference.interfaces import ResetResponse, StepResponse
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
 from rl.utils import init_jax_jit_cache
@@ -22,13 +22,24 @@ def pprint_nparray(arr: np.ndarray):
     print(np.array2string(arr, precision=3, suppress_small=True))
 
 
-@app.post("/predict", response_model=PredictionResponse)
-async def predict(request: Request):
+@app.post("/reset", response_model=ResetResponse)
+async def reset(request: Request):
+    await request.body()
+
+    response = await run_in_threadpool(model.reset)
+
+    devtools.pprint(response)
+
+    return response
+
+
+@app.post("/step", response_model=StepResponse)
+async def step(request: Request):
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
     ts = process_state(state)
-    response = await run_in_threadpool(model.predict, ts)
+    response = await run_in_threadpool(model.step, ts)
 
     devtools.pprint(response)
 
