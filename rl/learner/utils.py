@@ -24,8 +24,8 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
         ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
-    can_move = batch.timestep.env.legal[..., :4].any(axis=-1)
-    can_switch = batch.timestep.env.legal[..., 4:].any(axis=-1)
+    can_move = batch.timestep.env.action_mask[..., :4].any(axis=-1)
+    can_switch = batch.timestep.env.action_mask[..., 4:].any(axis=-1)
     can_act = can_move & can_switch & valid
 
     move_ratio = renormalize(batch.actor_step.action < 4, can_act)

@@ -163,6 +163,22 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__TURN: _ClassVar[InfoFeature]
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
+
+class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTION_MASK_FEATURE___UNSPECIFIED: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_MOVE: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_SWITCH: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__MOVE_SLOT_1: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__MOVE_SLOT_2: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__MOVE_SLOT_3: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__MOVE_SLOT_4: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_1: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_2: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_3: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_4: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_5: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__SWITCH_SLOT_6: _ClassVar[ActionMaskFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -302,3 +318,16 @@ INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
+ACTION_MASK_FEATURE___UNSPECIFIED: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_MOVE: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_SWITCH: ActionMaskFeature
+ACTION_MASK_FEATURE__MOVE_SLOT_1: ActionMaskFeature
+ACTION_MASK_FEATURE__MOVE_SLOT_2: ActionMaskFeature
+ACTION_MASK_FEATURE__MOVE_SLOT_3: ActionMaskFeature
+ACTION_MASK_FEATURE__MOVE_SLOT_4: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_1: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_2: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_3: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_4: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_5: ActionMaskFeature
+ACTION_MASK_FEATURE__SWITCH_SLOT_6: ActionMaskFeature

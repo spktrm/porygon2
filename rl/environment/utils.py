@@ -116,8 +116,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         private_team=private_team,
         public_team=public_team,
         field=field,
-        my_actions=my_actions,
-        legal=get_legal_mask(state),
+        moveset=my_actions,
+        action_mask=get_legal_mask(state),
     )
     history_step = HistoryStep(
         nodes=history_entity_nodes,

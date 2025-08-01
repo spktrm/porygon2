@@ -15,6 +15,7 @@ var jspb = require('google-protobuf');
 var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
+goog.exportSymbol('proto.ActionMaskFeature', null, global);
 goog.exportSymbol('proto.EntityEdgeFeature', null, global);
 goog.exportSymbol('proto.EntityNodeFeature', null, global);
 goog.exportSymbol('proto.FieldFeature', null, global);
@@ -201,6 +202,25 @@ proto.InfoFeature = {
   INFO_FEATURE__TURN: 3,
   INFO_FEATURE__WIN_REWARD: 4,
   INFO_FEATURE__REQUEST_COUNT: 5
+};
+
+/**
+ * @enum {number}
+ */
+proto.ActionMaskFeature = {
+  ACTION_MASK_FEATURE___UNSPECIFIED: 0,
+  ACTION_MASK_FEATURE__CAN_MOVE: 1,
+  ACTION_MASK_FEATURE__CAN_SWITCH: 2,
+  ACTION_MASK_FEATURE__MOVE_SLOT_1: 3,
+  ACTION_MASK_FEATURE__MOVE_SLOT_2: 4,
+  ACTION_MASK_FEATURE__MOVE_SLOT_3: 5,
+  ACTION_MASK_FEATURE__MOVE_SLOT_4: 6,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_1: 7,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_2: 8,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_3: 9,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_4: 10,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_5: 11,
+  ACTION_MASK_FEATURE__SWITCH_SLOT_6: 12
 };
 
 goog.object.extend(exports, proto);
