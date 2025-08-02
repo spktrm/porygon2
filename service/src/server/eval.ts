@@ -3,22 +3,21 @@ import { GetMaxDamageAction } from "./baselines/max_dmg";
 import { GetHeuristicAction } from "./baselines/heuristic";
 import { TrainablePlayerAI } from "./runner";
 import { GetKaizoPlusAction } from "./baselines/kaizo_plus";
+import { Action } from "../../protos/service_pb";
+import { ActionType } from "../../protos/features_pb";
 
 export type EvalFuncArgs = {
     player: TrainablePlayerAI;
 };
 
-export type EvalAction = {
-    actionIndex?: number;
-    actionString?: string;
-};
-
-export type EvalActionFnType = (args: EvalFuncArgs) => EvalAction;
+export type EvalActionFnType = (args: EvalFuncArgs) => Action;
 
 export const evalActionMapping: EvalActionFnType[] = [
     GetRandomAction, // Random - 0
     () => {
-        return { actionIndex: -1 };
+        const action = new Action();
+        action.setActionType(ActionType.ACTION_TYPE__DEFAULT);
+        return action;
     }, // Default - 1
     GetMaxDamageAction,
     GetHeuristicAction,

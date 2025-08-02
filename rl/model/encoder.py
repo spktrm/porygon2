@@ -29,6 +29,7 @@ from rl.environment.protos.enums_pb2 import (
     SpeciesEnum,
 )
 from rl.environment.protos.features_pb2 import (
+    ActionMaskFeature,
     EntityEdgeFeature,
     EntityNodeFeature,
     FieldFeature,
@@ -46,7 +47,7 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import BIAS_VALUE, get_move_mask, get_switch_mask
 
 # Load pretrained embeddings for various features.
 SPECIES_ONEHOT = PretrainedEmbedding(
@@ -182,11 +183,24 @@ class Encoder(nn.Module):
         embed_kwargs = dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         # Initialize embeddings for various entities and features.
-
         self.effect_from_source_embedding = nn.Embed(
             num_embeddings=NUM_FROM_SOURCE_EFFECTS,
             name="effect_from_source_embedding",
             **embed_kwargs,
+        )
+
+        # Cls Embeddings
+        self.move_cls_embedding = self.param(
+            "move_cls_embedding",
+            nn.initializers.lecun_normal(),
+            (1, entity_size),
+            dtype=self.cfg.dtype,
+        )
+        self.switch_cls_embedding = self.param(
+            "switch_cls_embedding",
+            nn.initializers.lecun_normal(),
+            (1, entity_size),
+            dtype=self.cfg.dtype,
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -223,7 +237,8 @@ class Encoder(nn.Module):
         self.timestep_ff = FeedForwardResidual(
             hidden_dim=entity_size, dtype=self.cfg.dtype
         )
-        self.action_ff = FeedForwardResidual(
+        self.move_ff = FeedForwardResidual(hidden_dim=entity_size, dtype=self.cfg.dtype)
+        self.switch_ff = FeedForwardResidual(
             hidden_dim=entity_size, dtype=self.cfg.dtype
         )
 
@@ -238,7 +253,9 @@ class Encoder(nn.Module):
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
-        self.action_encoder = TransformerEncoder(**self.cfg.action_encoder.to_dict())
+
+        self.move_encoder = TransformerEncoder(**self.cfg.move_encoder.to_dict())
+        self.switch_encoder = TransformerEncoder(**self.cfg.switch_encoder.to_dict())
 
         # Transformer Decoders
         self.entity_timestep_decoder = TransformerDecoder(
@@ -797,23 +814,21 @@ class Encoder(nn.Module):
 
         return embedding
 
-    def _embed_actions(
-        self, env_step: EnvStep, entity_embeddings: jax.Array
+    def _embed_moves(
+        self, moveset: jax.Array, active_embedding: jax.Array, move_mask: jax.Array
     ) -> jax.Array:
+        move_embeddings = jax.vmap(self._embed_action, in_axes=(0, None))(
+            moveset, active_embedding
+        )
+        move_embeddings = self.move_ff(move_embeddings)
+        return self.move_encoder(move_embeddings, create_attention_mask(move_mask))
 
-        action_entity_embeddings = jnp.take(
-            entity_embeddings,
-            env_step.my_actions[..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
-            axis=0,
-        )
-        action_embeddings = jax.vmap(self._embed_action)(
-            env_step.my_actions,
-            env_step.legal.astype(int),
-            action_entity_embeddings,
-        )
-        action_embeddings = self.action_ff(action_embeddings)
-        return self.action_encoder(
-            action_embeddings, create_attention_mask(env_step.legal)
+    def _embed_switches(
+        self, switch_embeddings: jax.Array, switch_mask: jax.Array
+    ) -> jax.Array:
+        switch_embeddings = self.switch_ff(switch_embeddings)
+        return self.switch_encoder(
+            switch_embeddings, create_attention_mask(switch_mask)
         )
 
     def __call__(self, env_step: EnvStep, history_step: HistoryStep):
@@ -846,17 +861,32 @@ class Encoder(nn.Module):
                 q_positions=current_position,
                 kv_positions=history_request_count,
             )
-            action_embeddings = self._embed_actions(env_step, entity_embeddings[:6])
+
+            move_embeddings = self._embed_moves(
+                env_step.moveset,
+                entity_embeddings[:6],
+                get_move_mask(env_step.action_mask),
+            )
+            switch_embeddings = self._embed_switches(
+                entity_embeddings[:6], get_switch_mask(env_step.action_mask)
+            )
+            action_embeddings = jnp.concatenate(
+                (
+                    move_embeddings + self.move_cls_embedding,
+                    switch_embeddings + self.switch_cls_embedding,
+                ),
+                axis=0,
+            )
 
             contextual_entities = self.entity_action_decoder(
                 entity_embeddings,
                 action_embeddings,
-                create_attention_mask(entity_mask, env_step.legal),
+                create_attention_mask(entity_mask, env_step.action_mask),
             )
             contextual_actions = self.action_entity_decoder(
                 action_embeddings,
                 entity_embeddings,
-                create_attention_mask(env_step.legal, entity_mask),
+                create_attention_mask(env_step.action_mask, entity_mask),
             )
 
             return contextual_entities, contextual_actions, entity_mask

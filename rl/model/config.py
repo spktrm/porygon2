@@ -145,18 +145,28 @@ def get_model_config():
     cfg.encoder.action_entity_decoder.need_pos = False
 
     # Policy Head Configuration
-    cfg.policy_head = ConfigDict()
-    cfg.policy_head.transformer = ConfigDict()
-    cfg.policy_head.dtype = dtype
+    cfg.action_type_head = ConfigDict()
+    cfg.action_type_head.transformer = ConfigDict()
+    set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
+    cfg.value_head.output_features = 2
+    cfg.action_type_head.dtype = dtype
 
-    set_attributes(cfg.policy_head.transformer, **transformer_encoder_kwargs)
+    cfg.move_head = ConfigDict()
+    cfg.move_head.transformer = ConfigDict()
+    set_attributes(cfg.move_head.transformer, **transformer_encoder_kwargs)
+    cfg.move_head.dtype = dtype
+
+    cfg.switch_head = ConfigDict()
+    cfg.switch_head.transformer = ConfigDict()
+    set_attributes(cfg.switch_head.transformer, **transformer_encoder_kwargs)
+    cfg.switch_head.dtype = dtype
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
     cfg.value_head.transformer = ConfigDict()
-    cfg.value_head.dtype = dtype
-
     set_attributes(cfg.value_head.transformer, **transformer_encoder_kwargs)
+    cfg.value_head.output_features = 1
+    cfg.value_head.dtype = dtype
 
     return cfg
 

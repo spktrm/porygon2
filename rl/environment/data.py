@@ -25,6 +25,7 @@ from rl.environment.protos.enums_pb2 import (
     WeatherEnum,
 )
 from rl.environment.protos.features_pb2 import (
+    ActionMaskFeature,
     EntityEdgeFeature,
     EntityNodeFeature,
     FieldFeature,
@@ -66,6 +67,7 @@ NUM_MOVE_FEATURES = len(MovesetFeature.keys())
 NUM_ENTITY_EDGE_FEATURES = len(EntityEdgeFeature.keys())
 NUM_FIELD_FEATURES = len(FieldFeature.keys())
 NUM_ENTITY_NODE_FEATURES = len(EntityNodeFeature.keys())
+NUM_ACTION_MASK_FEATURES = len(ActionMaskFeature.keys())
 
 NUM_HISTORY = 384
 

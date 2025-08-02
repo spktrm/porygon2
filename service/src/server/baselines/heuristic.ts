@@ -2,6 +2,8 @@ import { AnyObject } from "@pkmn/sim";
 import { Pokemon } from "@pkmn/client";
 import { EvalActionFnType } from "../eval";
 import { GetMoveDamage } from "./max_dmg";
+import { Action } from "../../../protos/service_pb";
+import { ActionType } from "../../../protos/features_pb";
 
 function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
     if (!poke1 || poke1.fainted) {
@@ -66,9 +68,13 @@ function scorePokemon(poke1: Pokemon, poke2: Pokemon) {
 }
 
 export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
+    const action = new Action();
+    action.setActionType(ActionType.ACTION_TYPE__DEFAULT);
+
     if (player.done) {
-        return { actionIndex: -1 };
+        return action;
     }
+
     const battle = player.privateBattle;
     const request = player.getRequest() as AnyObject;
     const active = request.active ?? [];
@@ -115,10 +121,14 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
                 console.error("fainted");
             }
             if (attacker === null) {
-                return { actionIndex: 4 + maxScoreIdx };
+                action.setActionType(ActionType.ACTION_TYPE__SWITCH);
+                action.setSwitchSlot(maxScoreIdx);
+                return action;
             }
             if (scorePokemon(attacker, defender) < scores[maxScoreIdx]) {
-                return { actionIndex: 4 + maxScoreIdx };
+                action.setActionType(ActionType.ACTION_TYPE__SWITCH);
+                action.setSwitchSlot(maxScoreIdx);
+                return action;
             }
         }
     }
@@ -136,7 +146,9 @@ export const GetHeuristicAction: EvalActionFnType = ({ player }) => {
                 return disabled ? -Infinity : damage;
             },
         );
-        return { actionIndex: argMax(moveData) };
+        action.setActionType(ActionType.ACTION_TYPE__MOVE);
+        action.setMoveSlot(argMax(moveData));
+        return action;
     }
-    return { actionIndex: -1 };
+    return action;
 };

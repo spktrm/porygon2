@@ -5,6 +5,8 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from rl.environment.protos.features_pb2 import ActionMaskFeature
+
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
 
@@ -50,6 +52,27 @@ def legal_log_policy(
     # because that leads to 0 * -inf == nan for illegal actions.
     log_policy = jnp.multiply(legal_actions, (logits - max_legal_logit - baseline))
     return log_policy
+
+
+def get_action_type_mask(mask: jax.Array):
+    return mask[
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH
+        + 1
+    ]
+
+
+def get_move_mask(mask: jax.Array):
+    return mask[
+        ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_4
+        + 1
+    ]
+
+
+def get_switch_mask(mask: jax.Array):
+    return mask[
+        ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_4
+        + 1
+    ]
 
 
 def get_most_recent_file(dir_path: str, pattern: str = None):

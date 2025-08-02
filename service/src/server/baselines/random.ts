@@ -1,5 +1,8 @@
+import { ActionMaskFeature, ActionType } from "../../../protos/features_pb";
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
+import { OneDBoolean } from "../utils";
+import { Action } from "../../../protos/service_pb";
 
 export function getRandomOneIndex(arr: number[]): number {
     // Collect indices where the element is 1
@@ -22,12 +25,50 @@ export function getRandomOneIndex(arr: number[]): number {
     return oneIndices[randomIndex];
 }
 
+export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
+    const actionBinary = actionMask.toBinaryVector();
+
+    const action = new Action();
+
+    const actionTypeMask = [
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH],
+    ];
+    const randomActionType = getRandomOneIndex(actionTypeMask);
+    if (randomActionType === 0) {
+        action.setActionType(ActionType.ACTION_TYPE__MOVE);
+    } else if (randomActionType === 1) {
+        action.setActionType(ActionType.ACTION_TYPE__SWITCH);
+    } else {
+        throw new Error(
+            `Invalid action type index: ${randomActionType}. Expected 0 or 1.`,
+        );
+    }
+
+    const moveMask = [
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_2],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_3],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_4],
+    ];
+    action.setMoveSlot(getRandomOneIndex(moveMask));
+
+    const switchMask = [
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_2],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_3],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_4],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_5],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6],
+    ];
+    action.setSwitchSlot(getRandomOneIndex(switchMask));
+
+    return action;
+}
+
 export const GetRandomAction: EvalActionFnType = ({ player }) => {
-    const { legalActions } = StateHandler.getLegalActions(
+    const { actionMask } = StateHandler.getActionMask(
         player.privateBattle.request,
     );
-    const legalIndices = legalActions.toBinaryVector();
-    const randIndex = getRandomOneIndex(legalIndices);
-
-    return { actionIndex: randIndex };
+    return actionMaskToRandomAction(actionMask);
 };

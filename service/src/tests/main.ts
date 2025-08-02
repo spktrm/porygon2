@@ -3,10 +3,12 @@ import { InfoFeature, MovesetFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
 import { EdgeBuffer, generateTeamFromFormat } from "../server/state";
 import { OneDBoolean } from "../server/utils";
-import { numMoveFeatures } from "../server/data";
+import { numActionMaskFeatures, numMoveFeatures } from "../server/data";
 import { Protocol } from "@pkmn/protocol";
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
+import { actionMaskToRandomAction } from "../server/baselines/random";
+
 Teams.setGeneratorFactory(TeamGenerators);
 
 async function playerController(player: TrainablePlayerAI) {
@@ -37,10 +39,10 @@ async function playerController(player: TrainablePlayerAI) {
             const switches = (request?.side?.pokemon ??
                 []) as Protocol.Request.SideInfo["pokemon"];
 
-            const myActions = new Int16Array(state.getMyActions_asU8().buffer);
-            const numMoves = myActions.length / numMoveFeatures;
+            const myMoveset = new Int16Array(state.getMoveset_asU8().buffer);
+            const numMoves = myMoveset.length / numMoveFeatures;
             for (let i = 0; i < numMoves; i++) {
-                const action = myActions.slice(
+                const action = myMoveset.slice(
                     i * numMoveFeatures,
                     (i + 1) * numMoveFeatures,
                 );
@@ -71,15 +73,11 @@ async function playerController(player: TrainablePlayerAI) {
             // A request is pending, so we need to choose an action.
             const stepRequest = new StepRequest();
 
-            const legalActions = new OneDBoolean(10);
-            legalActions.setBuffer(state.getLegalActions_asU8());
-            const legalIndices = legalActions
-                .toBinaryVector()
-                .flatMap((value, index) => (value > 0 ? [index] : []));
-            const randomIndex =
-                legalIndices[Math.floor(Math.random() * legalIndices.length)];
+            const actionMask = new OneDBoolean(numActionMaskFeatures);
+            actionMask.setBuffer(state.getActionMask_asU8());
+            const randomAction = actionMaskToRandomAction(actionMask);
 
-            stepRequest.setAction(randomIndex);
+            stepRequest.setAction(randomAction);
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         } catch (error) {
