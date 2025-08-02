@@ -1,9 +1,9 @@
-from typing import NamedTuple
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.interfaces import PolicyHeadOutput
 from rl.model.modules import (
     RMSNorm,
     TransformerDecoder,
@@ -12,12 +12,6 @@ from rl.model.modules import (
     create_attention_mask,
 )
 from rl.model.utils import BIAS_VALUE, legal_log_policy, legal_policy
-
-
-class PolicyHeadOutput(NamedTuple):
-    action: jax.Array
-    log_pi: jax.Array
-    entropy: jax.Array
 
 
 class PolicyHead(nn.Module):
@@ -37,8 +31,6 @@ class PolicyHead(nn.Module):
         key_value_embeddings: jax.Array,
         query_mask: jax.Array,
         key_value_mask: jax.Array,
-        rng_key: jax.Array,
-        force_action: jax.Array = None,
         temp: float = 1.0,
     ):
         query_embeddings = self.encoder(
@@ -53,21 +45,16 @@ class PolicyHead(nn.Module):
 
         logits = activation_fn(self.final_norm(query_embeddings))
         logits = self.final_layer(logits)
-        logits = logits.reshape(-1)
-        logits = (logits - logits.mean(axis=-1, keepdims=True)) / temp
+        logits = logits.reshape(-1) / temp
 
+        masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
         policy = legal_policy(logits, query_mask, temp)
         log_policy = legal_log_policy(logits, query_mask, temp)
 
-        entropy = -jnp.sum(policy * log_policy, axis=-1, keepdims=True)
-        if force_action is not None:
-            action = force_action
-        else:
-            masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
-            action = jax.random.categorical(rng_key, masked_logits)
-
         return PolicyHeadOutput(
-            action=action, log_pi=log_policy[action], entropy=entropy
+            logits=masked_logits,
+            policy=policy,
+            log_policy=log_policy,
         )
 
 

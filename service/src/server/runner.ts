@@ -348,7 +348,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                         this.rqid = this.getRequest().rqid;
 
                         const choice = await this.getChoice();
-                        this.privateBattle.request = undefined;
 
                         // Process the received action
                         this.choose(choice);

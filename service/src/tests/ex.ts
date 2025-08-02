@@ -80,15 +80,13 @@ async function runBattle() {
     if (stateTracker.lastState) {
         const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
         console.log(`Saving latest environment response to ${filePath}`);
-        try {
-            fs.writeFileSync(
-                filePath,
-                stateTracker.lastState.serializeBinary(),
-            );
+        const data = stateTracker.lastState.serializeBinary();
+        fs.writeFile(filePath, data, (err) => {
+            if (err) {
+                console.error("Failed to save the environment state:", err);
+            }
             console.log("File saved successfully.");
-        } catch (error) {
-            console.error("Failed to save the environment state:", error);
-        }
+        });
     } else {
         console.log("No environment state was generated to save.");
     }

@@ -29,7 +29,6 @@ from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_model_config
 from rl.model.player_model import get_num_params, get_player_model
-from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
 
@@ -114,7 +113,7 @@ def host_to_device_worker(
 
 
 def main():
-    """Main function to run the MMD learner."""
+    """Main function to run the RL learner."""
     init_jax_jit_cache()
 
     learner_config = get_learner_config()
@@ -123,7 +122,6 @@ def main():
 
     player_network = get_player_model(model_config)
     builder_network = get_builder_model(model_config)
-    # player_network = get_dummy_model()
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
@@ -147,7 +145,7 @@ def main():
         )
     )
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         player_state, builder_state = load_train_state(
             player_state, builder_state, latest_ckpt

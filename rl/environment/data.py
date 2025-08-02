@@ -26,12 +26,12 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
+    ActionType,
     EntityEdgeFeature,
     EntityNodeFeature,
     FieldFeature,
-    MovesetActionTypeEnum,
     MovesetFeature,
-    MovesetHasPPEnum,
+    MovesetHasPP,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
 
@@ -53,8 +53,8 @@ NUM_TERRAIN = len(TerrainEnum.keys())
 NUM_SPECIES = len(SpeciesEnum.keys())
 NUM_MOVES = len(MovesEnum.keys())
 NUM_FROM_SOURCE_EFFECTS = len(EffectEnum.keys())
-NUM_ACTION_TYPES = len(MovesetActionTypeEnum.keys())
-NUM_HAS_PP = len(MovesetHasPPEnum.keys())
+NUM_ACTION_TYPES = len(ActionType.keys())
+NUM_HAS_PP = len(MovesetHasPP.keys())
 NUM_ABILITIES = len(AbilitiesEnum.keys())
 NUM_ITEMS = len(ItemsEnum.keys())
 NUM_MINOR_ARGS = len(BattleminorargsEnum.keys())

@@ -29,7 +29,6 @@ from rl.environment.protos.enums_pb2 import (
     SpeciesEnum,
 )
 from rl.environment.protos.features_pb2 import (
-    ActionMaskFeature,
     EntityEdgeFeature,
     EntityNodeFeature,
     FieldFeature,
@@ -47,7 +46,7 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE, get_move_mask, get_switch_mask
+from rl.model.utils import BIAS_VALUE
 
 # Load pretrained embeddings for various features.
 SPECIES_ONEHOT = PretrainedEmbedding(
@@ -253,7 +252,6 @@ class Encoder(nn.Module):
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
-
         self.move_encoder = TransformerEncoder(**self.cfg.move_encoder.to_dict())
         self.switch_encoder = TransformerEncoder(**self.cfg.switch_encoder.to_dict())
 
@@ -783,10 +781,7 @@ class Encoder(nn.Module):
 
     # Encode actions for the current environment step.
     def _embed_action(
-        self,
-        action: jax.Array,
-        legal: jax.Array,
-        entity_embedding: jax.Array,
+        self, action: jax.Array, entity_embedding: jax.Array
     ) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
@@ -862,13 +857,15 @@ class Encoder(nn.Module):
                 kv_positions=history_request_count,
             )
 
+            is_active = env_step.private_team[
+                ..., EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE
+            ]
+            active_embedding = is_active @ entity_embeddings[:6]
             move_embeddings = self._embed_moves(
-                env_step.moveset,
-                entity_embeddings[:6],
-                get_move_mask(env_step.action_mask),
+                env_step.moveset, active_embedding, env_step.move_mask
             )
             switch_embeddings = self._embed_switches(
-                entity_embeddings[:6], get_switch_mask(env_step.action_mask)
+                entity_embeddings[:6], env_step.switch_mask
             )
             action_embeddings = jnp.concatenate(
                 (
@@ -877,16 +874,19 @@ class Encoder(nn.Module):
                 ),
                 axis=0,
             )
+            move_switch_mask = jnp.concatenate(
+                (env_step.move_mask, env_step.switch_mask), axis=-1
+            )
 
             contextual_entities = self.entity_action_decoder(
                 entity_embeddings,
                 action_embeddings,
-                create_attention_mask(entity_mask, env_step.action_mask),
+                create_attention_mask(entity_mask, move_switch_mask),
             )
             contextual_actions = self.action_entity_decoder(
                 action_embeddings,
                 entity_embeddings,
-                create_attention_mask(env_step.action_mask, entity_mask),
+                create_attention_mask(move_switch_mask, entity_mask),
             )
 
             return contextual_entities, contextual_actions, entity_mask
