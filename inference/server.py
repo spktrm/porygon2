@@ -1,9 +1,9 @@
-import devtools
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from model import InferenceModel
+from rich.pretty import pprint
 
 from inference.interfaces import ResetResponse, StepResponse
 from rl.environment.env import process_state
@@ -27,8 +27,7 @@ async def reset(request: Request):
     await request.body()
 
     response = await run_in_threadpool(model.reset)
-
-    devtools.pprint(response)
+    pprint(response)
 
     return response
 
@@ -40,8 +39,7 @@ async def step(request: Request):
 
     ts = process_state(state)
     response = await run_in_threadpool(model.step, ts)
-
-    devtools.pprint(response)
+    pprint(response)
 
     return response
 

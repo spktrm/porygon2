@@ -9,9 +9,17 @@ class ResetResponse(BaseModel):
     v: list[float]
 
 
+class HeadOutput(BaseModel):
+    logits: list[float]
+    policy: list[float]
+    log_policy: list[float]
+
+
 class StepResponse(BaseModel):
-    pi: list[float]
-    log_pi: list[float]
-    logit: list[float]
+    action_type_head: HeadOutput
+    move_head: HeadOutput
+    switch_head: HeadOutput
     v: float
-    action: int
+    action_type: int
+    move_slot: int
+    switch_slot: int
