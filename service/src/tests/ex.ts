@@ -3,6 +3,9 @@ import * as path from "path";
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { InfoFeature } from "../../protos/features_pb";
+import { numActionMaskFeatures } from "../server/data";
+import { actionMaskToRandomAction } from "../server/baselines/random";
+import { OneDBoolean } from "../server/utils";
 
 async function playerController(
     player: TrainablePlayerAI,
@@ -28,8 +31,12 @@ async function playerController(
 
             // A request is pending, so we need to choose an action.
 
+            const actionMask = new OneDBoolean(numActionMaskFeatures);
+            actionMask.setBuffer(state.getActionMask_asU8());
+            const randomAction = actionMaskToRandomAction(actionMask);
+
             const stepRequest = new StepRequest();
-            stepRequest.setAction(-1);
+            stepRequest.setAction(randomAction);
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         } catch (error) {
@@ -73,15 +80,13 @@ async function runBattle() {
     if (stateTracker.lastState) {
         const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
         console.log(`Saving latest environment response to ${filePath}`);
-        try {
-            fs.writeFileSync(
-                filePath,
-                stateTracker.lastState.serializeBinary(),
-            );
+        const data = stateTracker.lastState.serializeBinary();
+        fs.writeFile(filePath, data, (err) => {
+            if (err) {
+                console.error("Failed to save the environment state:", err);
+            }
             console.log("File saved successfully.");
-        } catch (error) {
-            console.error("Failed to save the environment state:", error);
-        }
+        });
     } else {
         console.log("No environment state was generated to save.");
     }

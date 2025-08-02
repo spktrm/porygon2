@@ -9,7 +9,10 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 
 import * as path from "path";
 import { TrainablePlayerAI } from "../server/runner";
-import { StepRequest } from "../../protos/service_pb";
+import {
+    Action as MultiDiscreteAction,
+    StepRequest,
+} from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
 // const server = "sim3.psim.us";
@@ -127,7 +130,7 @@ class Battle {
     private battleId: string;
     private conn: Connection;
     private username: string;
-    private readonly team: string;
+    private readonly team: string | undefined;
     stream: ObjectReadWriteStream<string>;
     player: TrainablePlayerAI;
     prevMessage: string | undefined;
@@ -137,7 +140,7 @@ class Battle {
         roomId: string,
         conn: Connection,
         username: string,
-        team: string,
+        team?: string,
     ) {
         this.battleId = roomId;
         this.conn = conn;
@@ -148,9 +151,9 @@ class Battle {
 
         this.conn.send(`${this.battleId}|/timer on`);
         // this.ws.send(`${this.battleId}|${welcomeMessage}`);
-        const unpackedTeam = Teams.unpack(team);
-        if (unpackedTeam === null || unpackedTeam.length === 0) {
-            throw new Error("Invalid team provided for battle");
+        const unpackedTeam = team === undefined ? team : Teams.unpack(team);
+        if (unpackedTeam === null) {
+            throw new Error("Invalid team provided");
         }
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
@@ -168,7 +171,7 @@ class Battle {
         this.player.start();
     }
 
-    public async start(rateLimit: number = 1000) {
+    public async start(rateLimit: number = 0) {
         while (true) {
             const state = await this.player.receiveEnvironmentState();
             if (!this.player.done) {
@@ -178,9 +181,16 @@ class Battle {
                     body: state.serializeBinary(),
                 });
                 await new Promise((resolve) => setTimeout(resolve, rateLimit));
-                const modelOutput = await response.json();
+
+                const stepResponse = await response.json();
                 const stepRequest = new StepRequest();
-                stepRequest.setAction(modelOutput.action);
+
+                const action = new MultiDiscreteAction();
+                action.setActionType(stepResponse.action_type);
+                action.setMoveSlot(stepResponse.move_slot);
+                action.setSwitchSlot(stepResponse.switch_slot);
+
+                stepRequest.setAction(action);
                 stepRequest.setRqid(state.getRqid());
                 this.player.submitStepRequest(stepRequest);
             } else {
@@ -227,7 +237,11 @@ class User {
 
     async receiveBattleData(roomId: string, data: string): Promise<void> {
         if (!this.battles[roomId]) {
-            throw new Error(`No battle found for room ID: ${roomId}`);
+            const battle = new Battle(roomId, this.connection, this.username!);
+            this.battles[roomId] = battle;
+            battle.start().then(() => {
+                battle.leave();
+            });
         }
         await this.battles[roomId].receive(data);
     }

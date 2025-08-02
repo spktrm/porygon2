@@ -5,9 +5,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from inference.interfaces import ResetResponse, StepResponse
+from inference.interfaces import HeadOutput, ResetResponse, StepResponse
+from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
-from rl.environment.interfaces import TimeStep
+from rl.environment.interfaces import PolicyHeadOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
@@ -30,7 +31,7 @@ def restrict_values(arr: np.ndarray):
 
 
 class InferenceModel:
-    def __init__(self, fpath: str = None, seed: int = 42):
+    def __init__(self, fpath: str = None, seed: int = 42, precision: int = 2):
         self.np_rng = np.random.RandomState(seed)
 
         self.player_network = get_player_model()
@@ -45,7 +46,8 @@ class InferenceModel:
             builder_apply_fn=self.builder_network.apply,
             gpu_lock=threading.Lock(),
         )
-        self.rng_key = jax.random.PRNGKey(seed)
+        self.rng_key = jax.random.key(seed)
+        self.precision = precision
 
         if not fpath:
             fpath = get_most_recent_file("./ckpts")
@@ -70,21 +72,31 @@ class InferenceModel:
         actor_reset = self.agent.reset(rng_key, self.builder_params)
         return ResetResponse(
             tokens=actor_reset.tokens,
-            log_pi=actor_reset.log_pi,
-            entropy=actor_reset.entropy,
+            log_pi=np.round(actor_reset.log_pi, self.precision),
+            entropy=np.round(actor_reset.entropy, self.precision),
             key=actor_reset.key,
-            v=actor_reset.v,
+            v=np.round(actor_reset.v, self.precision),
+        )
+
+    def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
+        return HeadOutput(
+            logits=np.round(restrict_values(head_output.logits), self.precision),
+            policy=np.round(restrict_values(head_output.policy), self.precision),
+            log_policy=np.round(
+                restrict_values(head_output.log_policy), self.precision
+            ),
         )
 
     def step(self, timestep: TimeStep):
         rng_key = self.split_rng()
         actor_step = self.agent.step(rng_key, self.player_params, timestep)
         model_output = actor_step.model_output
-        action = actor_step.action
         return StepResponse(
-            pi=restrict_values(model_output.pi).flatten().tolist(),
-            log_pi=restrict_values(model_output.log_pi).flatten().tolist(),
-            logit=restrict_values(model_output.logit).flatten().tolist(),
+            action_type_head=self._jax_head_to_pydantic(model_output.action_type_head),
+            move_head=self._jax_head_to_pydantic(model_output.move_head),
+            switch_head=self._jax_head_to_pydantic(model_output.switch_head),
             v=model_output.v.item(),
-            action=action.item(),
+            action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
+            move_slot=actor_step.move_head.item(),
+            switch_slot=actor_step.switch_head.item(),
         )

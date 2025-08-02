@@ -44,7 +44,7 @@ class Porygon2BuilderModel(nn.Module):
         self.embeddings = nn.Embed(
             num_embeddings=num_sets, features=entity_size, dtype=dtype
         )
-        transformer_config = self.cfg.policy_head.transformer.to_dict()
+        transformer_config = self.cfg.action_type_head.transformer.to_dict()
         self.decoder = TransformerDecoder(**transformer_config)
 
         transformer_config["need_pos"] = True
