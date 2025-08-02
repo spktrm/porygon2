@@ -12,8 +12,10 @@ class EnvStep(NamedTuple):
     field: ArrayLike = ()
 
     # Private Info
-    my_actions: ArrayLike = ()
-    legal: ArrayLike = ()
+    moveset: ArrayLike = ()
+    action_type_mask: ArrayLike = ()
+    move_mask: ArrayLike = ()
+    switch_mask: ArrayLike = ()
     private_team: ArrayLike = ()
 
 
@@ -23,15 +25,23 @@ class HistoryStep(NamedTuple):
     field: ArrayLike = ()
 
 
+class PolicyHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+    policy: ArrayLike = ()
+    log_policy: ArrayLike = ()
+
+
 class ModelOutput(NamedTuple):
-    pi: ArrayLike = ()
     v: ArrayLike = ()
-    log_pi: ArrayLike = ()
-    logit: ArrayLike = ()
+    action_type_head: PolicyHeadOutput = PolicyHeadOutput()
+    move_head: PolicyHeadOutput = PolicyHeadOutput()
+    switch_head: PolicyHeadOutput = PolicyHeadOutput()
 
 
 class ActorStep(NamedTuple):
-    action: ArrayLike = ()
+    action_type_head: ArrayLike = ()
+    move_head: ArrayLike = ()
+    switch_head: ArrayLike = ()
     model_output: ModelOutput = ModelOutput()
 
 
@@ -50,5 +60,5 @@ class TimeStep(NamedTuple):
 
 class Transition(NamedTuple):
     timestep: TimeStep = TimeStep()
-    actor_step: ActorStep = ActorStep()
     actor_reset: ActorReset = ActorReset()
+    actor_step: ActorStep = ActorStep()

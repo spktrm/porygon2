@@ -1,8 +1,7 @@
-import jax
-import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.protos.service_pb2 import (
+    Action,
     ClientRequest,
     EnvironmentResponse,
     ResetRequest,
@@ -42,11 +41,7 @@ class SinglePlayerSyncEnvironment:
             return False
         return self.last_state.env.done.item()
 
-    def step(self, action: int | np.ndarray | jax.Array):
-        if isinstance(action, jax.Array):
-            action = jax.block_until_ready(action).item()
-        elif isinstance(action, np.ndarray):
-            action = action.item()
+    def step(self, action: Action):
         if self._is_done():
             return self.last_state
         step_message = ClientRequest(

@@ -70,21 +70,22 @@ export interface EntityNodeFeatureMap {
 
 export const EntityNodeFeature: EntityNodeFeatureMap;
 
-export interface MovesetActionTypeEnumMap {
-  MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: 0;
-  MOVESET_ACTION_TYPE_ENUM__MOVE: 1;
-  MOVESET_ACTION_TYPE_ENUM__SWITCH: 2;
+export interface ActionTypeMap {
+  ACTION_TYPE___UNSPECIFIED: 0;
+  ACTION_TYPE__MOVE: 1;
+  ACTION_TYPE__SWITCH: 2;
+  ACTION_TYPE__DEFAULT: 3;
 }
 
-export const MovesetActionTypeEnum: MovesetActionTypeEnumMap;
+export const ActionType: ActionTypeMap;
 
-export interface MovesetHasPPEnumMap {
-  MOVESET_HAS_PP_ENUM___UNSPECIFIED: 0;
-  MOVESET_HAS_PP_ENUM__YES: 1;
-  MOVESET_HAS_PP_ENUM__NO: 2;
+export interface MovesetHasPPMap {
+  MOVESET_HAS_PP___UNSPECIFIED: 0;
+  MOVESET_HAS_PP__YES: 1;
+  MOVESET_HAS_PP__NO: 2;
 }
 
-export const MovesetHasPPEnum: MovesetHasPPEnumMap;
+export const MovesetHasPP: MovesetHasPPMap;
 
 export interface MovesetFeatureMap {
   MOVESET_FEATURE___UNSPECIFIED: 0;
@@ -176,4 +177,22 @@ export interface InfoFeatureMap {
 }
 
 export const InfoFeature: InfoFeatureMap;
+
+export interface ActionMaskFeatureMap {
+  ACTION_MASK_FEATURE___UNSPECIFIED: 0;
+  ACTION_MASK_FEATURE__CAN_MOVE: 1;
+  ACTION_MASK_FEATURE__CAN_SWITCH: 2;
+  ACTION_MASK_FEATURE__MOVE_SLOT_1: 3;
+  ACTION_MASK_FEATURE__MOVE_SLOT_2: 4;
+  ACTION_MASK_FEATURE__MOVE_SLOT_3: 5;
+  ACTION_MASK_FEATURE__MOVE_SLOT_4: 6;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_1: 7;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_2: 8;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_3: 9;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_4: 10;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_5: 11;
+  ACTION_MASK_FEATURE__SWITCH_SLOT_6: 12;
+}
+
+export const ActionMaskFeature: ActionMaskFeatureMap;
 

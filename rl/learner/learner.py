@@ -28,6 +28,41 @@ def get_action_value(arr: jax.Array, action: jax.Array):
     return jnp.take_along_axis(arr, action[..., None], axis=-1).squeeze(-1)
 
 
+def calculate_log_prob(
+    action_type_log_pi: jax.Array,
+    action_type: jax.Array,
+    move_log_pi: jax.Array,
+    move: jax.Array,
+    switch_log_pi: jax.Array,
+    switch: jax.Array,
+):
+    action_type_log_prob = get_action_value(action_type_log_pi, action_type)
+    action_type_one_hot = jax.nn.one_hot(action_type, action_type_log_pi.shape[-1])
+
+    move_log_prob = get_action_value(move_log_pi, move)
+    switch_prob = get_action_value(switch_log_pi, switch)
+    sub_log_prob = jnp.stack((move_log_prob, switch_prob), axis=-1)
+
+    return action_type_log_prob + (action_type_one_hot * sub_log_prob).sum(axis=-1)
+
+
+def calculate_entropy(
+    action_type_log_pi: jax.Array,
+    action_type_pi: jax.Array,
+    move_log_pi: jax.Array,
+    move_pi: jax.Array,
+    switch_log_pi: jax.Array,
+    switch_pi: jax.Array,
+):
+    action_type_entropy = -jnp.sum(action_type_pi * action_type_log_pi, axis=-1)
+
+    move_entropy = -jnp.sum(move_pi * move_log_pi, axis=-1)
+    switch_entropy = -jnp.sum(switch_pi * switch_log_pi, axis=-1)
+    sub_entropy = jnp.stack((move_entropy, switch_entropy), axis=-1)
+
+    return action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
+
+
 @functools.partial(jax.jit, static_argnames=["config"])
 def train_step(
     player_state: Porygon2PlayerTrainState,
@@ -38,9 +73,21 @@ def train_step(
     """Train for a single step."""
 
     target_pred = player_state.apply_fn(player_state.target_params, batch.timestep)
-    target_log_pi = get_action_value(target_pred.log_pi, batch.actor_step.action)
-    actor_log_pi = get_action_value(
-        batch.actor_step.model_output.log_pi, batch.actor_step.action
+    actor_log_pi = calculate_log_prob(
+        batch.actor_step.model_output.action_type_head.log_policy,
+        batch.actor_step.action_type_head,
+        batch.actor_step.model_output.move_head.log_policy,
+        batch.actor_step.move_head,
+        batch.actor_step.model_output.switch_head.log_policy,
+        batch.actor_step.switch_head,
+    )
+    target_log_pi = calculate_log_prob(
+        target_pred.action_type_head.log_policy,
+        batch.actor_step.action_type_head,
+        target_pred.move_head.log_policy,
+        batch.actor_step.move_head,
+        target_pred.switch_head.log_policy,
+        batch.actor_step.switch_head,
     )
 
     actor_target_log_ratio = actor_log_pi - target_log_pi
@@ -76,8 +123,14 @@ def train_step(
     def player_loss_fn(params: Params):
 
         pred = player_state.apply_fn(params, batch.timestep)
-
-        learner_log_pi = get_action_value(pred.log_pi, batch.actor_step.action)
+        learner_log_pi = calculate_log_prob(
+            pred.action_type_head.log_policy,
+            batch.actor_step.action_type_head,
+            pred.move_head.log_policy,
+            batch.actor_step.move_head,
+            pred.switch_head.log_policy,
+            batch.actor_step.switch_head,
+        )
 
         # Calculate the log ratios.
         learner_actor_log_ratio = learner_log_pi - actor_log_pi
@@ -101,7 +154,14 @@ def train_step(
         loss_v = 0.5 * jnp.square(pred.v - vtrace.returns).mean(where=valid)
 
         # Calculate the entropy loss.
-        loss_entropy = -(pred.pi * pred.log_pi).sum(axis=-1).mean(where=valid)
+        loss_entropy = calculate_entropy(
+            pred.action_type_head.log_policy,
+            pred.action_type_head.policy,
+            pred.move_head.log_policy,
+            pred.move_head.policy,
+            pred.switch_head.log_policy,
+            pred.switch_head.policy,
+        ).mean(where=valid)
 
         # Calculate the Backward KL loss.
         # Taken from the MMD paper: https://arxiv.org/pdf/2206.05825
