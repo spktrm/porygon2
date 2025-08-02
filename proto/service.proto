@@ -9,9 +9,16 @@ message ClientRequest {
   }
 }
 
+message Action {
+  int32 action_type = 1;
+  int32 move_slot = 2;
+  int32 switch_slot = 3;
+
+}
+
 message StepRequest {
   string username = 1;
-  int32 action = 2;
+  Action action = 2;
   int32 rqid = 3;
 }
 

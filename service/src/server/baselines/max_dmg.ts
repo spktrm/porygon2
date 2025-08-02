@@ -10,6 +10,8 @@ import {
 } from "@smogon/calc";
 import { Battle, Pokemon } from "@pkmn/client";
 import { EvalActionFnType } from "../eval";
+import { Action } from "../../../protos/service_pb";
+import { ActionType } from "../../../protos/features_pb";
 
 function fixMoveId(moveId: string) {
     if (moveId.startsWith("hiddenpower")) {
@@ -155,8 +157,11 @@ export const GetMoveDamage: (args: {
 };
 
 export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
+    const action = new Action();
+    action.setActionType(ActionType.ACTION_TYPE__DEFAULT);
+
     if (player.done) {
-        return { actionIndex: -1 };
+        return action;
     }
 
     const battle = player.privateBattle;
@@ -194,8 +199,10 @@ export const GetMaxDamageAction: EvalActionFnType = ({ player }) => {
             },
             0,
         );
-        return { actionIndex: indexOfLargestNum };
+        action.setActionType(ActionType.ACTION_TYPE__MOVE);
+        action.setMoveSlot(indexOfLargestNum);
+        return action;
     }
 
-    return { actionIndex: -1 };
+    return action;
 };

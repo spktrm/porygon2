@@ -14,9 +14,10 @@ import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
-import { EnvironmentState, StepRequest } from "../../protos/service_pb";
+import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
+import { ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -97,18 +98,10 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
-const CHOICES = [
-    "move 1",
-    "move 2",
-    "move 3",
-    "move 4",
-    "switch 1",
-    "switch 2",
-    "switch 3",
-    "switch 4",
-    "switch 5",
-    "switch 6",
-];
+const ACTION_TYPES = new Map<number, string>();
+ACTION_TYPES.set(ActionType.ACTION_TYPE__MOVE, "move");
+ACTION_TYPES.set(ActionType.ACTION_TYPE__SWITCH, "switch");
+ACTION_TYPES.set(ActionType.ACTION_TYPE__DEFAULT, "default");
 
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
@@ -227,11 +220,35 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
-    choiceFromAction(action: number) {
-        if (action < 0) {
+    choiceFromAction(action: Action) {
+        const actionTypeIndex = action.getActionType();
+        const moveSlotIndex = action.getMoveSlot()! + 1;
+        const switchSlotIndex = action.getSwitchSlot()! + 1;
+        if (actionTypeIndex === undefined) {
+            throw new Error(
+                "Action type index is undefined. Ensure the action is properly defined.",
+            );
+        }
+        const actionType = ACTION_TYPES.get(actionTypeIndex);
+        if (actionType === undefined) {
+            throw new Error(
+                `Invalid action type index: ${actionTypeIndex}. Must be one of ${Array.from(
+                    ACTION_TYPES.keys(),
+                )}.`,
+            );
+        }
+        if (actionType === "default") {
             return "default";
         }
-        return CHOICES[action];
+        if (actionType === "move" && moveSlotIndex !== undefined) {
+            return `${actionType} ${moveSlotIndex}`;
+        } else if (actionType === "switch" && switchSlotIndex !== undefined) {
+            return `${actionType} ${switchSlotIndex}`;
+        } else {
+            throw new Error(
+                `Invalid action: ${actionType} with moveSlot: ${moveSlotIndex} and switchSlot: ${switchSlotIndex}.`,
+            );
+        }
     }
 
     addLine(cmd: string, line: string) {
@@ -286,16 +303,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             );
         }
         const evalFn = evalActionMapping[this.baselineIndex];
-        const { actionString, actionIndex } = evalFn({
+        const action = evalFn({
             player: this,
         });
-        if (actionString !== undefined) {
-            return actionString;
-        }
-        if (actionIndex !== undefined) {
-            return this.choiceFromAction(actionIndex);
-        }
-        throw new Error("actionString or actionIndex should not be undefined");
+        return this.choiceFromAction(action);
     }
 
     async getChoice(): Promise<string> {

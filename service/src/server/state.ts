@@ -32,6 +32,7 @@ import {
     NUM_HISTORY,
     jsonDatum,
     lookUpSets,
+    numActionMaskFeatures,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
     numFieldFeatures,
@@ -44,15 +45,16 @@ import { ID, MoveTarget, SideID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { OneDBoolean, TypedArray } from "./utils";
 import {
+    ActionMaskFeature,
+    ActionType,
     EntityEdgeFeature,
     EntityEdgeFeatureMap,
     EntityNodeFeature,
     FieldFeature,
     FieldFeatureMap,
     InfoFeature,
-    MovesetActionTypeEnum,
     MovesetFeature,
-    MovesetHasPPEnum,
+    MovesetHasPP,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState } from "../../protos/service_pb";
@@ -2381,7 +2383,7 @@ class PrivateActionHandler {
         this.request = player.getRequest();
 
         // const numActive = (this.request?.active ?? []).length;
-        this.actionBuffer = new Int16Array((1 * 4 + 6) * numMoveFeatures);
+        this.actionBuffer = new Int16Array(1 * 4 * numMoveFeatures);
     }
 
     assignActionBuffer(args: { offset: number; index: number; value: number }) {
@@ -2407,7 +2409,7 @@ class PrivateActionHandler {
             this.assignActionBuffer({
                 offset: actionOffset,
                 index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__YES,
+                value: MovesetHasPP.MOVESET_HAS_PP__YES,
             });
             this.assignActionBuffer({
                 offset: actionOffset,
@@ -2428,7 +2430,7 @@ class PrivateActionHandler {
             this.assignActionBuffer({
                 offset: actionOffset,
                 index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+                value: MovesetHasPP.MOVESET_HAS_PP__NO,
             });
         }
         let moveId = move.id;
@@ -2452,44 +2454,7 @@ class PrivateActionHandler {
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
-        });
-    }
-
-    pushSwitchAction(
-        actionOffset: number,
-        switchIndex: number,
-        potentialSwitch: Protocol.Request.Pokemon,
-    ) {
-        const { index: entityIndex } = this.player.eventHandler.getPokemon(
-            potentialSwitch.ident,
-            false,
-        );
-        // This was to check a test
-        // if (switchIndex !== entityIndex) {
-        //     throw new Error(
-        //         `Switch action index ${switchIndex} does not match entity index ${entityIndex} for ${potentialSwitch.ident}`,
-        //     );
-        // }
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-            value: MovesEnum.MOVES_ENUM___SWITCH,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-            value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-            value: entityIndex,
+            value: ActionType.ACTION_TYPE__MOVE,
         });
     }
 
@@ -2527,16 +2492,6 @@ class PrivateActionHandler {
                 }
             }
             actionOffset += (4 - moves.length) * numMoveFeatures;
-
-            for (const [switchIndex, potentialSwitch] of switches.entries()) {
-                this.pushSwitchAction(
-                    actionOffset,
-                    switchIndex,
-                    potentialSwitch,
-                );
-                actionOffset += numMoveFeatures;
-            }
-            actionOffset += (6 - switches.length) * numMoveFeatures;
         }
 
         return new Uint8Array(this.actionBuffer.buffer);
@@ -2573,7 +2528,7 @@ class PublicActionHandler {
             this.assignActionBuffer({
                 offset: actionOffset,
                 index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__YES,
+                value: MovesetHasPP.MOVESET_HAS_PP__YES,
             });
             this.assignActionBuffer({
                 offset: actionOffset,
@@ -2594,7 +2549,7 @@ class PublicActionHandler {
             this.assignActionBuffer({
                 offset: actionOffset,
                 index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+                value: MovesetHasPP.MOVESET_HAS_PP__NO,
             });
         }
         this.assignActionBuffer({
@@ -2605,7 +2560,7 @@ class PublicActionHandler {
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__MOVE,
+            value: ActionType.ACTION_TYPE__MOVE,
         });
     }
 
@@ -2618,12 +2573,12 @@ class PublicActionHandler {
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: MovesetActionTypeEnum.MOVESET_ACTION_TYPE_ENUM__SWITCH,
+            value: ActionType.ACTION_TYPE__SWITCH,
         });
         this.assignActionBuffer({
             offset: actionOffset,
             index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-            value: MovesetHasPPEnum.MOVESET_HAS_PP_ENUM__NO,
+            value: MovesetHasPP.MOVESET_HAS_PP__NO,
         });
         this.assignActionBuffer({
             offset: actionOffset,
@@ -2697,38 +2652,53 @@ export class StateHandler {
         this.player = player;
     }
 
-    static getLegalActions(
+    static getActionMask(
         request?: AnyObject | null,
         maskMoves: boolean = false,
     ): {
-        legalActions: OneDBoolean;
+        actionMask: OneDBoolean;
         isStruggling: boolean;
     } {
-        const legalActions = new OneDBoolean(10, Uint8Array);
+        const actionMask = new OneDBoolean(numActionMaskFeatures, Uint8Array);
         let isStruggling = false;
 
+        const setAllTrue = () => {
+            for (let i = 0; i < numActionMaskFeatures; i++) {
+                actionMask.set(i, true);
+            }
+        };
+
         if (request === undefined || request === null) {
-            for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-                legalActions.set(index, true);
+            setAllTrue();
         } else {
             if (request.wait) {
-                for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-                    legalActions.set(index, true);
+                setAllTrue();
             } else if (request.forceSwitch) {
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
+                    false,
+                );
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
+                    true,
+                );
+
                 const pokemon = request.side.pokemon;
                 const forceSwitchLength = request.forceSwitch.length;
                 const isReviving = !!pokemon[0].reviving;
 
-                for (let j = 1; j <= 6; j++) {
-                    const currentPokemon = pokemon[j - 1];
+                for (let j = 0; j < 6; j++) {
+                    const currentPokemon = pokemon[j];
                     if (
                         currentPokemon &&
-                        j > forceSwitchLength &&
+                        j >= forceSwitchLength &&
                         (isReviving ? 1 : 0) ^
                             (currentPokemon.condition.endsWith(" fnt") ? 0 : 1)
                     ) {
-                        const switchIndex = j as 1 | 2 | 3 | 4 | 5 | 6;
-                        legalActions.set(3 + switchIndex, true);
+                        const switchIndex =
+                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
+                            j;
+                        actionMask.set(switchIndex, true);
                     }
                 }
             } else if (request.active) {
@@ -2744,55 +2714,79 @@ export class StateHandler {
                         !currentPokemon.active &&
                         !currentPokemon.condition.endsWith(" fnt")
                     ) {
-                        canSwitch.push(j);
+                        const switchIndex =
+                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
+                            j;
+                        canSwitch.push(switchIndex);
                     }
                 }
 
                 const switches =
                     active.trapped || active.maybeTrapped ? [] : canSwitch;
                 const canAddMove = !maskMoves || switches.length === 0;
+                let canMove = false;
 
-                for (let j = 1; j <= possibleMoves.length; j++) {
-                    const currentMove = possibleMoves[j - 1];
+                for (let j = 0; j < possibleMoves.length; j++) {
+                    const currentMove = possibleMoves[j];
                     if (currentMove.id === "struggle") {
                         isStruggling = true;
                     }
                     if ((!currentMove.disabled && canAddMove) || isStruggling) {
-                        const moveIndex = j as 1 | 2 | 3 | 4;
-                        legalActions.set(-1 + moveIndex, true);
+                        const moveIndex =
+                            ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 +
+                            j;
+                        actionMask.set(moveIndex, true);
+                        canMove = true;
                     }
                 }
+                if (canMove) {
+                    actionMask.set(
+                        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
+                        true,
+                    );
+                }
 
-                for (const j of switches) {
-                    const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
-                    legalActions.set(3 + switchIndex, true);
+                if (switches.length > 0) {
+                    actionMask.set(
+                        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
+                        true,
+                    );
+                }
+                for (const switchIndex of switches) {
+                    actionMask.set(switchIndex, true);
                 }
             } else if (request.teamPreview) {
                 const pokemon = request.side.pokemon;
-                const canSwitch = [];
+
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
+                    false,
+                );
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
+                    true,
+                );
 
                 for (let j = 0; j < 6; j++) {
                     const currentPokemon = pokemon[j];
                     if (currentPokemon) {
-                        canSwitch.push(j);
+                        const switchIndex =
+                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
+                            j;
+                        actionMask.set(switchIndex, true);
                     }
-                }
-
-                for (const j of canSwitch) {
-                    const switchIndex = (j + 1) as 1 | 2 | 3 | 4 | 5 | 6;
-                    legalActions.set(3 + switchIndex, true);
                 }
             }
         }
-        return { legalActions, isStruggling };
+        return { actionMask, isStruggling };
     }
 
-    getMyActions(): Uint8Array {
+    getMoveset(): Uint8Array {
         const actionHandler = new PrivateActionHandler(this.player);
         return actionHandler.build();
     }
 
-    getOppActions(): Uint8Array {
+    getOppMoveset(): Uint8Array {
         const actionHandler = new PublicActionHandler(this.player);
         return actionHandler.build();
     }
@@ -2983,8 +2977,8 @@ export class StateHandler {
         const info = this.getInfo();
         state.setInfo(info);
 
-        const { legalActions } = StateHandler.getLegalActions(request);
-        state.setLegalActions(legalActions.buffer);
+        const { actionMask } = StateHandler.getActionMask(request);
+        state.setActionMask(actionMask.buffer);
 
         const {
             historyEntityNodes,
@@ -3008,8 +3002,7 @@ export class StateHandler {
         const publicTeam = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicTeam.buffer));
 
-        state.setMyActions(this.getMyActions());
-        // state.setOppActions(this.getOppActions());
+        state.setMoveset(this.getMoveset());
 
         state.setField(this.getField());
 

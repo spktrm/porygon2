@@ -13,15 +13,25 @@ class ClientRequest(_message.Message):
     reset: ResetRequest
     def __init__(self, step: _Optional[_Union[StepRequest, _Mapping]] = ..., reset: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
+class Action(_message.Message):
+    __slots__ = ("action_type", "move_slot", "switch_slot")
+    ACTION_TYPE_FIELD_NUMBER: _ClassVar[int]
+    MOVE_SLOT_FIELD_NUMBER: _ClassVar[int]
+    SWITCH_SLOT_FIELD_NUMBER: _ClassVar[int]
+    action_type: int
+    move_slot: int
+    switch_slot: int
+    def __init__(self, action_type: _Optional[int] = ..., move_slot: _Optional[int] = ..., switch_slot: _Optional[int] = ...) -> None: ...
+
 class StepRequest(_message.Message):
     __slots__ = ("username", "action", "rqid")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     ACTION_FIELD_NUMBER: _ClassVar[int]
     RQID_FIELD_NUMBER: _ClassVar[int]
     username: str
-    action: int
+    action: Action
     rqid: int
-    def __init__(self, username: _Optional[str] = ..., action: _Optional[int] = ..., rqid: _Optional[int] = ...) -> None: ...
+    def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
     __slots__ = ("username", "team_indices")
