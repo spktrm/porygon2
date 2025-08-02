@@ -2645,6 +2645,7 @@ class PublicActionHandler {
         return new Uint8Array(this.actionBuffer.buffer);
     }
 }
+
 export class StateHandler {
     player: TrainablePlayerAI;
 

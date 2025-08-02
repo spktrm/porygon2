@@ -9,21 +9,12 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import EnvStep, ModelOutput, TimeStep
+from rl.environment.interfaces import EnvStep, ModelOutput, PolicyHeadOutput, TimeStep
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
-from rl.model.utils import (
-    BIAS_VALUE,
-    Params,
-    get_action_type_mask,
-    get_most_recent_file,
-    get_move_mask,
-    get_switch_mask,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import BIAS_VALUE, Params, legal_log_policy, legal_policy
 from rl.utils import init_jax_jit_cache
 
 
@@ -47,79 +38,46 @@ class Porygon2PlayerModel(nn.Module):
         entity_embeddings: jax.Array,
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
-        timestep: TimeStep,
+        env_step: EnvStep,
         temp: float = 1.0,
     ):
-        action_mask = timestep.env.action_mask
-
-        action_type_key, move_key, switch_key = jax.random.split(timestep.rng_key, 3)
-
-        action_type_mask = get_action_type_mask(action_mask)
-        action_type_head_logits = self.action_type_head(entity_embeddings)
+        action_type_head_logits = self.action_type_head(entity_embeddings, entity_mask)
         action_type_policy = legal_policy(
-            action_type_head_logits, action_type_mask, temp
+            action_type_head_logits, env_step.action_type_mask, temp
         )
         action_type_log_policy = legal_log_policy(
-            action_type_head_logits, action_type_mask, temp
+            action_type_head_logits, env_step.action_type_mask, temp
         )
-        action_type_entropy = -jnp.sum(
-            action_type_policy * action_type_log_policy, axis=-1, keepdims=True
-        )
-        action_type_force_action = timestep.actor_step.model_output.action_head_action
-        if action_type_force_action is not None:
-            action_type_action = action_type_force_action
-        else:
-            masked_logits = jnp.where(
-                action_type_mask, action_type_head_logits, BIAS_VALUE
-            )
-            action_type_action = jax.random.categorical(action_type_key, masked_logits)
 
         move_embeddings = action_embeddings[:4]
-        move_mask = get_move_mask(action_mask)
-        move_head_output = self.move_head(
-            move_embeddings,
-            entity_embeddings,
-            move_mask,
-            entity_mask,
-            move_key,
-            temp,
-        )
-
         switch_embeddings = action_embeddings[4:]
-        switch_mask = get_switch_mask(action_mask)
-        switch_head_output = self.switch_head(
-            switch_embeddings,
-            entity_embeddings,
-            switch_mask,
-            entity_mask,
-            switch_key,
-            temp,
-        )
-
-        sub_head_entropies = jnp.stack(
-            [move_head_output.entropy, switch_head_output.entropy], axis=-1
-        )
-        total_entropy = action_type_entropy + action_type_policy @ sub_head_entropies
-
-        sub_head_log_pis = jnp.stack(
-            [move_head_output.log_pi, switch_head_output.log_pi], axis=-1
-        )
-        total_log_pi = (
-            action_type_log_policy[action_type_action]
-            + jax.nn.one_hot(action_type_action, action_type_log_policy.shape[-1])
-            @ sub_head_log_pis
-        )
 
         # Apply the value head
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
         return ModelOutput(
-            action_head_action=action_type_action,
-            move_head_action=move_head_output.action,
-            switch_head_action=switch_head_output.action,
-            log_pi=total_log_pi,
-            entropy=total_entropy,
+            action_type_head=PolicyHeadOutput(
+                logits=jnp.where(
+                    env_step.action_type_mask, action_type_head_logits, BIAS_VALUE
+                ),
+                policy=action_type_policy,
+                log_policy=action_type_log_policy,
+            ),
+            move_head=self.move_head(
+                move_embeddings,
+                entity_embeddings,
+                env_step.move_mask,
+                entity_mask,
+                temp,
+            ),
+            switch_head=self.switch_head(
+                switch_embeddings,
+                entity_embeddings,
+                env_step.switch_mask,
+                entity_mask,
+                temp,
+            ),
             v=value,
         )
 
@@ -133,25 +91,11 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
-            entity_embeddings, action_embeddings, entity_mask, timestep
+            entity_embeddings,
+            action_embeddings,
+            entity_mask,
+            timestep.env,
         )
-
-
-class DummyModel(nn.Module):
-
-    @nn.compact
-    def __call__(self, timestep: TimeStep) -> ModelOutput:
-
-        def _forward(env_step: EnvStep) -> ModelOutput:
-            mask = env_step.action_mask.astype(jnp.float32)
-            v = jnp.tanh(nn.Dense(1)(mask)).squeeze(-1)
-            logit = nn.Dense(mask.shape[-1])(mask)
-            masked_logits = jnp.where(mask, logit, -1e30)
-            pi = legal_policy(logit, env_step.action_mask)
-            log_pi = legal_log_policy(logit, env_step.action_mask)
-            return ModelOutput(logit=masked_logits, pi=pi, log_pi=log_pi, v=v)
-
-        return jax.vmap(_forward)(timestep.env)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -198,10 +142,6 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def get_dummy_model() -> nn.Module:
-    return DummyModel()
-
-
 def assert_no_nan_or_inf(gradients, path=""):
     if isinstance(gradients, dict):
         for key, value in gradients.items():
@@ -217,7 +157,7 @@ def main():
     network = get_player_model()
     ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

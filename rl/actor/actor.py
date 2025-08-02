@@ -5,11 +5,17 @@ import numpy as np
 
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import TimeStep, Transition
-from rl.environment.protos.features_pb2 import InfoFeature
+from rl.environment.interfaces import ActorStep, TimeStep, Transition
+from rl.environment.protos.features_pb2 import ActionType, InfoFeature
+from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history
 from rl.learner.learner import Learner
 from rl.model.utils import Params
+
+ACTION_TYPE_MAPPING = {
+    0: ActionType.ACTION_TYPE__MOVE,
+    1: ActionType.ACTION_TYPE__SWITCH,
+}
 
 
 class Actor:
@@ -37,6 +43,15 @@ class Actor:
             history=clip_history(timestep.history, resolution=128),
         )
 
+    def _postprocess_actor_step(self, actor_step: ActorStep):
+        """Post-processes the actor step to ensure it has the correct shape."""
+        actor_step: ActorStep = jax.block_until_ready(actor_step)
+        return Action(
+            action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
+            move_slot=actor_step.move_head.item(),
+            switch_slot=actor_step.switch_head.item(),
+        )
+
     def unroll(
         self,
         rng_key: jax.Array,
@@ -62,7 +77,9 @@ class Actor:
             traj.append(transition)
             if timestep.env.done.item():
                 break
-            unprocessed_timestep = self._env.step(actor_step.action)
+
+            action = self._postprocess_actor_step(actor_step)
+            unprocessed_timestep = self._env.step(action)
 
         if len(traj) < self._unroll_length:
             traj += [transition] * (self._unroll_length - len(traj))

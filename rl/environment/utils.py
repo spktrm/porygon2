@@ -6,15 +6,19 @@ import numpy as np
 from rl.environment.data import (
     EX_STATE,
     MAX_RATIO_TOKEN,
+    NUM_ACTION_MASK_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_NODE_FEATURES,
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
-    NUM_ACTION_MASK_FEATURES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep, TimeStep
-from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
+from rl.environment.protos.features_pb2 import (
+    ActionMaskFeature,
+    FieldFeature,
+    InfoFeature,
+)
 from rl.environment.protos.service_pb2 import EnvironmentState
 
 T = TypeVar("T")
@@ -58,6 +62,33 @@ def get_action_mask(state: EnvironmentState):
     return mask[:NUM_ACTION_MASK_FEATURES].astype(bool)
 
 
+def get_action_type_mask(mask: jax.Array):
+    mask = mask[
+        ...,
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH
+        + 1,
+    ]
+    return mask | (~mask).all(axis=-1, keepdims=True)
+
+
+def get_move_mask(mask: jax.Array):
+    mask = mask[
+        ...,
+        ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_4
+        + 1,
+    ]
+    return mask | (~mask).all(axis=-1, keepdims=True)
+
+
+def get_switch_mask(mask: jax.Array):
+    mask = mask[
+        ...,
+        ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6
+        + 1,
+    ]
+    return mask | (~mask).all(axis=-1, keepdims=True)
+
+
 def process_state(state: EnvironmentState) -> TimeStep:
     history_length = state.history_length
 
@@ -86,7 +117,7 @@ def process_state(state: EnvironmentState) -> TimeStep:
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
-        .reshape(10, NUM_MOVE_FEATURES)
+        .reshape(4, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
     private_team = (
@@ -110,6 +141,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
     # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
     win_reward = win_reward_token / MAX_RATIO_TOKEN
 
+    action_mask = get_action_mask(state)
+
     env_step = EnvStep(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
@@ -118,7 +151,9 @@ def process_state(state: EnvironmentState) -> TimeStep:
         public_team=public_team,
         field=field,
         moveset=moveset,
-        action_mask=get_action_mask(state),
+        action_type_mask=get_action_type_mask(action_mask),
+        move_mask=get_move_mask(action_mask),
+        switch_mask=get_switch_mask(action_mask),
     )
     history_step = HistoryStep(
         nodes=history_entity_nodes,

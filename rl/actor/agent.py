@@ -4,7 +4,6 @@ from typing import Callable, overload
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from rl.environment.interfaces import ActorReset, ActorStep, ModelOutput, TimeStep
 from rl.model.utils import Params
@@ -53,16 +52,29 @@ class Agent:
         # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
 
         timestep = TimeStep(
-            rng_key=rng_key,
             env=jax.tree.map(lambda t: t[None, None, ...], timestep.env),
             history=jax.tree.map(lambda t: t[:, None, ...], timestep.history),
         )
 
         model_output = self._player_apply_fn(params, timestep)
         # Remove the padding from above.
-        model_output = jax.tree.map(lambda t: jnp.squeeze(t, axis=(0, 1)), model_output)
+        model_output: ModelOutput = jax.tree.map(
+            lambda t: jnp.squeeze(t, axis=(0, 1)), model_output
+        )
+
         # Sample an action and return.
-        action = jax.random.choice(
-            rng_key, np.arange(10), shape=(1,), p=model_output.pi
-        ).squeeze()
-        return ActorStep(action=action, model_output=model_output)
+        action_type_key, move_key, switch_key = jax.random.split(rng_key, 3)
+        action_type_head = jax.random.categorical(
+            action_type_key, model_output.action_type_head.logits
+        )
+        move_head = jax.random.categorical(move_key, model_output.move_head.logits)
+        switch_head = jax.random.categorical(
+            switch_key, model_output.switch_head.logits
+        )
+
+        return ActorStep(
+            action_type_head=action_type_head,
+            move_head=move_head,
+            switch_head=switch_head,
+            model_output=model_output,
+        )
