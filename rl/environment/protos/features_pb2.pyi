@@ -69,17 +69,18 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
 
-class MovesetActionTypeEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: _ClassVar[MovesetActionTypeEnum]
-    MOVESET_ACTION_TYPE_ENUM__MOVE: _ClassVar[MovesetActionTypeEnum]
-    MOVESET_ACTION_TYPE_ENUM__SWITCH: _ClassVar[MovesetActionTypeEnum]
+    ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
+    ACTION_TYPE__MOVE: _ClassVar[ActionType]
+    ACTION_TYPE__SWITCH: _ClassVar[ActionType]
+    ACTION_TYPE__DEFAULT: _ClassVar[ActionType]
 
-class MovesetHasPPEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    MOVESET_HAS_PP_ENUM___UNSPECIFIED: _ClassVar[MovesetHasPPEnum]
-    MOVESET_HAS_PP_ENUM__YES: _ClassVar[MovesetHasPPEnum]
-    MOVESET_HAS_PP_ENUM__NO: _ClassVar[MovesetHasPPEnum]
+    MOVESET_HAS_PP___UNSPECIFIED: _ClassVar[MovesetHasPP]
+    MOVESET_HAS_PP__YES: _ClassVar[MovesetHasPP]
+    MOVESET_HAS_PP__NO: _ClassVar[MovesetHasPP]
 
 class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -241,12 +242,13 @@ ENTITY_NODE_FEATURE__IV_SPA: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
 ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
-MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: MovesetActionTypeEnum
-MOVESET_ACTION_TYPE_ENUM__MOVE: MovesetActionTypeEnum
-MOVESET_ACTION_TYPE_ENUM__SWITCH: MovesetActionTypeEnum
-MOVESET_HAS_PP_ENUM___UNSPECIFIED: MovesetHasPPEnum
-MOVESET_HAS_PP_ENUM__YES: MovesetHasPPEnum
-MOVESET_HAS_PP_ENUM__NO: MovesetHasPPEnum
+ACTION_TYPE___UNSPECIFIED: ActionType
+ACTION_TYPE__MOVE: ActionType
+ACTION_TYPE__SWITCH: ActionType
+ACTION_TYPE__DEFAULT: ActionType
+MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
+MOVESET_HAS_PP__YES: MovesetHasPP
+MOVESET_HAS_PP__NO: MovesetHasPP
 MOVESET_FEATURE___UNSPECIFIED: MovesetFeature
 MOVESET_FEATURE__PP_RATIO: MovesetFeature
 MOVESET_FEATURE__MOVE_ID: MovesetFeature

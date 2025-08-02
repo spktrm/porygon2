@@ -11,6 +11,7 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
+    NUM_ACTION_MASK_FEATURES,
 )
 from rl.environment.interfaces import EnvStep, HistoryStep, TimeStep
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
@@ -51,10 +52,10 @@ def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def get_legal_mask(state: EnvironmentState):
-    buffer = np.frombuffer(state.legal_actions, dtype=np.uint8)
+def get_action_mask(state: EnvironmentState):
+    buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)
-    return mask[:10].astype(bool)
+    return mask[:NUM_ACTION_MASK_FEATURES].astype(bool)
 
 
 def process_state(state: EnvironmentState) -> TimeStep:
@@ -83,8 +84,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         NUM_HISTORY,
     ).astype(np.int32)
 
-    my_actions = (
-        np.frombuffer(state.my_actions, dtype=np.int16)
+    moveset = (
+        np.frombuffer(state.moveset, dtype=np.int16)
         .reshape(10, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
@@ -116,8 +117,8 @@ def process_state(state: EnvironmentState) -> TimeStep:
         private_team=private_team,
         public_team=public_team,
         field=field,
-        moveset=my_actions,
-        action_mask=get_legal_mask(state),
+        moveset=moveset,
+        action_mask=get_action_mask(state),
     )
     history_step = HistoryStep(
         nodes=history_entity_nodes,

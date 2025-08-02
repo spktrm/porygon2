@@ -16,13 +16,13 @@ var goog = jspb;
 var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
 
 goog.exportSymbol('proto.ActionMaskFeature', null, global);
+goog.exportSymbol('proto.ActionType', null, global);
 goog.exportSymbol('proto.EntityEdgeFeature', null, global);
 goog.exportSymbol('proto.EntityNodeFeature', null, global);
 goog.exportSymbol('proto.FieldFeature', null, global);
 goog.exportSymbol('proto.InfoFeature', null, global);
-goog.exportSymbol('proto.MovesetActionTypeEnum', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
-goog.exportSymbol('proto.MovesetHasPPEnum', null, global);
+goog.exportSymbol('proto.MovesetHasPP', null, global);
 /**
  * @enum {number}
  */
@@ -94,19 +94,20 @@ proto.EntityNodeFeature = {
 /**
  * @enum {number}
  */
-proto.MovesetActionTypeEnum = {
-  MOVESET_ACTION_TYPE_ENUM___UNSPECIFIED: 0,
-  MOVESET_ACTION_TYPE_ENUM__MOVE: 1,
-  MOVESET_ACTION_TYPE_ENUM__SWITCH: 2
+proto.ActionType = {
+  ACTION_TYPE___UNSPECIFIED: 0,
+  ACTION_TYPE__MOVE: 1,
+  ACTION_TYPE__SWITCH: 2,
+  ACTION_TYPE__DEFAULT: 3
 };
 
 /**
  * @enum {number}
  */
-proto.MovesetHasPPEnum = {
-  MOVESET_HAS_PP_ENUM___UNSPECIFIED: 0,
-  MOVESET_HAS_PP_ENUM__YES: 1,
-  MOVESET_HAS_PP_ENUM__NO: 2
+proto.MovesetHasPP = {
+  MOVESET_HAS_PP___UNSPECIFIED: 0,
+  MOVESET_HAS_PP__YES: 1,
+  MOVESET_HAS_PP__NO: 2
 };
 
 /**

@@ -36,6 +36,7 @@ import {
     EntityNodeFeature,
     EntityEdgeFeature,
     FieldFeature,
+    ActionMaskFeature,
 } from "../../protos/features_pb";
 import { Teams, TeamValidator } from "@pkmn/sim";
 
@@ -71,6 +72,7 @@ export const numSideConditions = Object.keys(SideconditionEnum).length;
 export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
 export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
 export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
+export const numActionMaskFeatures = Object.keys(ActionMaskFeature).length;
 
 export const actionIndexMapping = {
     0: "move 1",

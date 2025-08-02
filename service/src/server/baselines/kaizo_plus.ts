@@ -7,6 +7,8 @@ import { AnyObject } from "@pkmn/sim";
 import { EvalActionFnType } from "../eval";
 import { GetMoveDamage } from "./max_dmg";
 import { Protocol } from "@pkmn/protocol";
+import { Action } from "../../../protos/service_pb";
+import { ActionType } from "../../../protos/features_pb";
 
 /* ----------------------------------------------------------------- */
 /* -------------------------- constants -----------------------------*/
@@ -869,7 +871,12 @@ function scoreMoves(
 /* ---------------------- MAIN ACTION CHOICE ----------------------- */
 /* ----------------------------------------------------------------- */
 export const GetKaizoPlusAction: EvalActionFnType = ({ player }) => {
-    if (player.done) return { actionIndex: -1 };
+    const action = new Action();
+    action.setActionType(ActionType.ACTION_TYPE__DEFAULT);
+
+    if (player.done) {
+        return action;
+    }
 
     const battle = player.privateBattle;
     const request = player.getRequest() as AnyObject;
@@ -886,7 +893,6 @@ export const GetKaizoPlusAction: EvalActionFnType = ({ player }) => {
         throw new Error("No player index found");
     }
 
-    /* -------- 1. switching logic (forced / emergency / better) -------- */
     const mustSwitch = !!(request.forceSwitch ?? [])[0];
     const availableSwitches = mySide.team.filter(
         (m) => !m.isActive() && !m.fainted,
@@ -903,12 +909,15 @@ export const GetKaizoPlusAction: EvalActionFnType = ({ player }) => {
                 )[0] ?? undefined;
             if (best) {
                 const slot = mySide.team.indexOf(best);
-                if (slot >= 0) return { actionIndex: 4 + slot };
+                if (slot >= 0) {
+                    action.setActionType(ActionType.ACTION_TYPE__SWITCH);
+                    action.setSwitchSlot(slot);
+                    return action;
+                }
             }
         }
     }
 
-    /* -------- 2. move choice -------- */
     const movesReq = activeReq[0]?.moves;
     if (movesReq && attacker && defender) {
         const moveScores = scoreMoves(battle, playerIndex);
@@ -926,10 +935,11 @@ export const GetKaizoPlusAction: EvalActionFnType = ({ player }) => {
             const bestIdx = movesReq.findIndex(
                 (m: { id: string }) => m.id === ranking[0].id,
             );
-            return { actionIndex: bestIdx };
+            action.setActionType(ActionType.ACTION_TYPE__MOVE);
+            action.setMoveSlot(bestIdx);
+            return action;
         }
     }
 
-    /* fallback */
-    return { actionIndex: -1 };
+    return action;
 };
