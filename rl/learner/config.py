@@ -199,31 +199,39 @@ def load_train_state(
         ckpt_data = pickle.load(f)
 
     print("Checkpoint data:")
+    ckpt_player_state = ckpt_data.get("player_state", {})
+    ckpt_builder_state = ckpt_data.get("builder_state", {})
+
     pprint(
         {
             k: v
-            for k, v in ckpt_data["player_state"].items()
+            for k, v in ckpt_player_state.items()
+            if k not in ["opt_state", "params", "target_params"]
+        }
+    )
+    pprint(
+        {
+            k: v
+            for k, v in ckpt_builder_state.items()
             if k not in ["opt_state", "params", "target_params"]
         }
     )
 
-    ckpt_player_state = ckpt_data.get("player_state", {})
     player_state = player_state.replace(
-        params=ckpt_data["player_state"]["params"],
-        target_params=ckpt_data["player_state"]["target_params"],
-        opt_state=ckpt_data["player_state"]["opt_state"],
-        num_steps=ckpt_data["player_state"]["num_steps"],
-        num_samples=ckpt_data["player_state"]["num_samples"],
-        actor_steps=ckpt_data["player_state"]["actor_steps"],
+        params=ckpt_player_state["params"],
+        target_params=ckpt_player_state["target_params"],
+        opt_state=ckpt_player_state["opt_state"],
+        num_steps=ckpt_player_state["num_steps"],
+        num_samples=ckpt_player_state["num_samples"],
+        actor_steps=ckpt_player_state["actor_steps"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
     )
 
-    ckpt_builder_state = ckpt_data.get("builder_state", {})
     builder_state = builder_state.replace(
-        params=ckpt_data["builder_state"]["params"],
-        target_params=ckpt_data["builder_state"]["target_params"],
-        opt_state=ckpt_data["builder_state"]["opt_state"],
+        params=ckpt_builder_state["params"],
+        target_params=ckpt_builder_state["target_params"],
+        opt_state=ckpt_builder_state["opt_state"],
         target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
