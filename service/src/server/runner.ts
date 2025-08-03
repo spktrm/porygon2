@@ -21,7 +21,7 @@ import { ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
-const formatid = "gen3ou";
+const formatid = "gen3randombattle";
 
 interface Queue<T> {
     enqueue(item: T): void;
@@ -388,12 +388,8 @@ export function createBattle(
     );
     const spec = { formatid };
 
-    const p1Sets = p1team
-        ? Teams.unpack(p1team)
-        : Teams.generate("gen3randombattle");
-    const p2Sets = p2team
-        ? Teams.unpack(p2team)
-        : Teams.generate("gen3randombattle");
+    const p1Sets = p1team ? Teams.unpack(p1team) : Teams.generate(formatid);
+    const p2Sets = p2team ? Teams.unpack(p2team) : Teams.generate(formatid);
 
     if (p1Sets === null || p2Sets === null) {
         throw new Error(`Invalid team format for p1: ${p1team}, p2: ${p2team}`);

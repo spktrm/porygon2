@@ -172,7 +172,7 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
     return PlayerActorInput(env=env_step, history=history_step)
 
 
-def get_player_ex_step(expand: bool = True) -> PlayerActorInput:
+def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
     ts = process_state(EX_STATE)
     if expand:
         ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
@@ -182,10 +182,10 @@ def get_player_ex_step(expand: bool = True) -> PlayerActorInput:
         return ts
 
 
-def get_builder_ex_step(format: str) -> BuilderEnvOutput:
+def get_ex_builder_step(format: str) -> BuilderEnvOutput:
     data = PACKED_SETS[format]
     num_sets = len(data["sets"])
     return BuilderEnvOutput(
-        tokens=np.ones((6, 1), dtype=np.int32) * -1,
-        mask=np.ones((num_sets, 1), dtype=bool),
+        tokens=np.ones((1, 1, 6), dtype=np.int32) * -1,
+        mask=np.ones((1, 1, num_sets), dtype=bool),
     )

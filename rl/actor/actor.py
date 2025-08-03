@@ -77,14 +77,21 @@ class Actor:
         builder_env_output = self._builder_env.reset()
         # Rollout the builder environment.
         for subkey in builder_subkeys:
-            builder_agent_output = self._agent.step_builder(subkey, builder_params)
-            builder_env_output = self._builder_env.step(
-                builder_agent_output.action.item()
+            builder_agent_output = self._agent.step_builder(
+                subkey, builder_params, builder_env_output
             )
             builder_transition = BuilderTransition(
                 env_output=builder_env_output, agent_output=builder_agent_output
             )
             build_traj.append(builder_transition)
+            if len(build_traj) >= len(builder_subkeys):
+                break
+            builder_env_output = self._builder_env.step(
+                builder_agent_output.action.item()
+            )
+
+        # Get final team state
+        builder_env_output = self._builder_env.step(builder_agent_output.action.item())
 
         player_traj = []
 

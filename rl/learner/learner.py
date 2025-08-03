@@ -207,7 +207,7 @@ def train_step(
     )
 
     target_builder_log_pi = get_action_value(
-        target_builder_output.actor_output.head.log_policy,
+        target_builder_output.head.log_policy,
         batch.builder_transitions.agent_output.action,
     )
     actor_builder_log_pi = get_action_value(
@@ -225,13 +225,8 @@ def train_step(
         (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
     builder_vtrace = compute_returns(
-        target_builder_output.actor_output.v,
-        jnp.concatenate(
-            (
-                target_builder_output.actor_output.v[1:],
-                target_builder_output.actor_output.v[-1:],
-            )
-        ),
+        target_builder_output.v,
+        jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
         builder_rewards,
         jnp.concatenate(
             (
@@ -259,7 +254,7 @@ def train_step(
             params, batch.builder_transitions.env_output
         )
         learner_builder_log_pi = get_action_value(
-            learner_builder_output.actor_output.head.log_policy,
+            learner_builder_output.head.log_policy,
             batch.builder_transitions.agent_output.action,
         )
 
@@ -287,8 +282,8 @@ def train_step(
 
         loss_entropy = (
             -(
-                learner_builder_output.actor_output.head.policy
-                * learner_builder_output.actor_output.head.log_policy
+                learner_builder_output.head.policy
+                * learner_builder_output.head.log_policy
             )
             .sum(axis=-1)
             .mean(where=builder_valids)
