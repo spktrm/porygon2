@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class ResetResponse(BaseModel):
     tokens: list[int]
-    v: list[float]
+    v: float
 
 
 class HeadOutput(BaseModel):
