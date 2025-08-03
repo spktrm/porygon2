@@ -52,7 +52,6 @@ class Actor:
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
-        agent_output: PlayerAgentOutput = jax.block_until_ready(agent_output)
         return Action(
             action_type=ACTION_TYPE_MAPPING[agent_output.action_type_head.item()],
             move_slot=agent_output.move_head.item(),
