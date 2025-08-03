@@ -10,10 +10,10 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
-    PlayerEnvOutput,
-    PlayerActorOutput,
-    PolicyHeadOutput,
     PlayerActorInput,
+    PlayerActorOutput,
+    PlayerEnvOutput,
+    PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config

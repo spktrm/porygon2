@@ -7,10 +7,10 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import (
     BuilderAgentOutput,
-    PlayerAgentOutput,
     BuilderEnvOutput,
-    PlayerActorOutput,
     PlayerActorInput,
+    PlayerActorOutput,
+    PlayerAgentOutput,
 )
 from rl.model.utils import Params
 

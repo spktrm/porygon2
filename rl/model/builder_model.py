@@ -10,9 +10,8 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import PACKED_SETS
 from rl.environment.interfaces import (
-    BuilderActorInput,
-    BuilderAgentOutput,
     BuilderActorOutput,
+    BuilderAgentOutput,
     BuilderEnvOutput,
     PolicyHeadOutput,
 )

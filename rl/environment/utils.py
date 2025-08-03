@@ -14,9 +14,9 @@ from rl.environment.data import (
     NUM_MOVE_FEATURES,
 )
 from rl.environment.interfaces import (
+    PlayerActorInput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
-    PlayerActorInput,
 )
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,

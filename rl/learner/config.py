@@ -15,8 +15,8 @@ from flax.training import train_state
 from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
-    PlayerActorOutput,
     PlayerActorInput,
+    PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_step
 from rl.model.utils import Params

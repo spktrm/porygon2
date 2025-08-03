@@ -7,8 +7,8 @@ from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderTransition,
-    PlayerAgentOutput,
     PlayerActorInput,
+    PlayerAgentOutput,
     PlayerTransition,
     Trajectory,
 )

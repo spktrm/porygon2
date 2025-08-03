@@ -8,7 +8,7 @@ import numpy as np
 from inference.interfaces import HeadOutput, ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
-from rl.environment.interfaces import PolicyHeadOutput, PlayerActorInput
+from rl.environment.interfaces import PlayerActorInput, PolicyHeadOutput
 from rl.environment.utils import get_ex_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
