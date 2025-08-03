@@ -1,5 +1,7 @@
 import os
 
+from rl.model.utils import get_most_recent_file
+
 # Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # gemm_any=True is ~10% speed up in this setup
@@ -129,7 +131,7 @@ def main():
     stop_signal = [False]
     num_samples = [0]
 
-    num_eval_actors = 0
+    num_eval_actors = 5
     trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )
@@ -147,7 +149,7 @@ def main():
         )
     )
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         player_state, builder_state = load_train_state(
             player_state, builder_state, latest_ckpt

@@ -33,7 +33,7 @@ class AdamConfig:
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 10_000_000
-    num_actors: int = 2
+    num_actors: int = 32
     unroll_length: int = 108
     replay_buffer_capacity: int = 256
 

@@ -84,14 +84,9 @@ class Actor:
                 env_output=builder_env_output, agent_output=builder_agent_output
             )
             build_traj.append(builder_transition)
-            if len(build_traj) >= len(builder_subkeys):
-                break
             builder_env_output = self._builder_env.step(
                 builder_agent_output.action.item()
             )
-
-        # Get final team state
-        builder_env_output = self._builder_env.step(builder_agent_output.action.item())
 
         player_traj = []
 
