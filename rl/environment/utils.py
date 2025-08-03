@@ -12,8 +12,10 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
+    PACKED_SETS,
 )
 from rl.environment.interfaces import (
+    BuilderEnvOutput,
     PlayerActorInput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
@@ -170,7 +172,7 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
     return PlayerActorInput(env=env_step, history=history_step)
 
 
-def get_ex_step(expand: bool = True) -> PlayerActorInput:
+def get_player_ex_step(expand: bool = True) -> PlayerActorInput:
     ts = process_state(EX_STATE)
     if expand:
         ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
@@ -178,3 +180,12 @@ def get_ex_step(expand: bool = True) -> PlayerActorInput:
         return PlayerActorInput(env=ex, history=hx)
     else:
         return ts
+
+
+def get_builder_ex_step(format: str) -> BuilderEnvOutput:
+    data = PACKED_SETS[format]
+    num_sets = len(data["sets"])
+    return BuilderEnvOutput(
+        tokens=np.ones((6, 1), dtype=np.int32) * -1,
+        mask=np.ones((num_sets, 1), dtype=bool),
+    )
