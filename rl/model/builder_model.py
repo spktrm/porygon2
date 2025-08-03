@@ -15,7 +15,7 @@ from rl.environment.interfaces import (
     BuilderEnvOutput,
     PolicyHeadOutput,
 )
-from rl.environment.utils import get_builder_ex_step
+from rl.environment.utils import get_ex_builder_step
 from rl.model.config import get_model_config
 from rl.model.modules import (
     MLP,
@@ -23,13 +23,7 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import (
-    BIAS_VALUE,
-    Params,
-    get_most_recent_file,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import BIAS_VALUE, Params, legal_log_policy, legal_policy
 from rl.utils import init_jax_jit_cache
 
 SETS_DATA = PACKED_SETS["gen3ou"]
@@ -74,38 +68,39 @@ class Porygon2BuilderModel(nn.Module):
         masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
         pi = legal_policy(logits, sample_mask)
         log_pi = legal_log_policy(logits, sample_mask)
-        # sample_mask = sample_mask & ~SETS_DATA["mask"][token]
 
         return PolicyHeadOutput(masked_logits, pi, log_pi)
 
-    def __call__(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
+    def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
-        is_masked = input.tokens == -1
-        is_masked_sum = is_masked.sum(axis=-1)
+        not_masked = input.tokens != -1
+        not_masked_sum = not_masked.sum(axis=-1)
         num_tokens = input.tokens.shape[-1]
 
-        attn_masks = jnp.tril(jnp.eye(num_tokens, dtype=jnp.bool))
-        attn_mask = jnp.take(attn_masks, is_masked_sum, axis=0)
+        attn_mask = jnp.ones_like(input.tokens, dtype=jnp.bool)
 
         position_indices = jnp.arange(num_tokens, dtype=jnp.int32)
 
         embeddings = jnp.where(
-            is_masked[..., None], self.mask_embedding, self.embeddings(input.tokens)
+            not_masked[..., None], self.mask_embedding, self.embeddings(input.tokens)
         )
         pred_embeddings = self.encoder(
             embeddings, create_attention_mask(attn_mask), position_indices
         )
         head_output = self._sample_token(
-            jnp.take(pred_embeddings, is_masked_sum, axis=0), input.mask
+            jnp.take(pred_embeddings, not_masked_sum, axis=0), input.mask
         )
         pooled = self.decoder(
             pred_embeddings.mean(axis=0, keepdims=True),
             pred_embeddings,
             create_attention_mask(attn_mask.any(keepdims=True), attn_mask),
         )
-        v = nn.tanh(self.value_head(pooled))
+        v = nn.tanh(self.value_head(pooled)).squeeze()
 
         return BuilderActorOutput(head=head_output, v=v)
+
+    def __call__(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
+        return jax.vmap(self._forward)(input)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -165,9 +160,10 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     init_jax_jit_cache()
     network = get_builder_model()
-    get_builder_ex_step("gen3ou")
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    ex = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou")))
+
+    latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
@@ -175,7 +171,7 @@ def main():
         params = step["builder_state"]["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, key)
+        params = network.init(key, ex)
 
     pprint(get_num_params(params))
 
@@ -183,19 +179,8 @@ def main():
     # apply_fn = jax.jit(network.apply)
     apply_fn = network.apply
 
-    key = jax.random.key(42)
-
-    while True:
-        key, subkey = jax.random.split(key)
-        output1 = apply_fn(params, subkey, None)
-        assert jnp.all(output1.key == subkey)
-
-        output = apply_fn(params, output1.key, output1.tokens)
-        assert jnp.all(output.key == subkey)
-
-        assert jnp.allclose(output.log_pi, output1.log_pi)
-
-        print()
+    output = apply_fn(params, ex)
+    print(output)
 
 
 if __name__ == "__main__":

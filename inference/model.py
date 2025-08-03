@@ -14,7 +14,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PolicyHeadOutput,
 )
-from rl.environment.utils import get_player_ex_step
+from rl.environment.utils import get_ex_player_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
 from rl.model.utils import BIAS_VALUE, get_most_recent_file
@@ -61,7 +61,7 @@ class InferenceModel:
 
         print("initializing...")
         self.reset()  # warm up the model
-        self.step(get_player_ex_step(expand=False))  # warm up the model
+        self.step(get_ex_player_step(expand=False))  # warm up the model
         print("model initialized!")
 
     def split_rng(self) -> jax.Array:

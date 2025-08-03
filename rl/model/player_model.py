@@ -15,7 +15,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PolicyHeadOutput,
 )
-from rl.environment.utils import get_player_ex_step
+from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
@@ -86,20 +86,20 @@ class Porygon2PlayerModel(nn.Module):
             v=value,
         )
 
-    def __call__(self, timestep: PlayerActorInput, temp: float = 1.0):
+    def __call__(self, actor_input: PlayerActorInput, temp: float = 1.0):
         """
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
         entity_embeddings, action_embeddings, entity_mask = self.encoder(
-            timestep.env, timestep.history
+            actor_input.env, actor_input.history
         )
 
         return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
             entity_embeddings,
             action_embeddings,
             entity_mask,
-            timestep.env,
+            actor_input.env,
         )
 
 
@@ -160,7 +160,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     init_jax_jit_cache()
     network = get_player_model()
-    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_player_ex_step()))
+    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_player_step()))
 
     latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
