@@ -146,9 +146,9 @@ def train_step(
         # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
         ratio = player_is_ratio * learner_actor_ratio
 
-        pg_loss = ratio * player_norm_advantages - jnp.abs(player_norm_advantages) * (
-            1 - ratio
-        ) ** 2 / (2 * config.clip_ppo)
+        pg_loss = ratio * player_norm_advantages - (
+            jnp.abs(player_norm_advantages) * (1 - ratio) ** 2
+        ) / (2 * config.clip_ppo)
         loss_pg = -pg_loss.mean(where=valid)
 
         # Calculate the value loss.
@@ -266,9 +266,9 @@ def train_step(
         # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
         ratio = builder_is_ratio * learner_actor_ratio
 
-        pg_loss = ratio * builder_norm_advantages - jnp.abs(builder_norm_advantages) * (
-            1 - ratio
-        ) ** 2 / (2 * config.clip_ppo)
+        pg_loss = ratio * builder_norm_advantages - (
+            jnp.abs(builder_norm_advantages) * (1 - ratio) ** 2
+        ) / (2 * config.clip_ppo)
         loss_pg = -pg_loss.mean(where=builder_valids)
 
         pred_v = learner_builder_output.v
