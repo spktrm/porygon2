@@ -15,6 +15,7 @@ from rl.environment.interfaces import (
     BuilderEnvOutput,
     PolicyHeadOutput,
 )
+from rl.environment.utils import get_builder_ex_step
 from rl.model.config import get_model_config
 from rl.model.modules import (
     MLP,
@@ -164,6 +165,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     init_jax_jit_cache()
     network = get_builder_model()
+    get_builder_ex_step("gen3ou")
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:

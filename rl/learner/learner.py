@@ -77,11 +77,11 @@ def train_step(
 
     target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
     actor_log_pi = calculate_log_prob(
-        batch.player_transitions.agent_output.model_output.action_type_head.log_policy,
+        batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
         batch.player_transitions.agent_output.action_type_head,
-        batch.player_transitions.agent_output.model_output.move_head.log_policy,
+        batch.player_transitions.agent_output.actor_output.move_head.log_policy,
         batch.player_transitions.agent_output.move_head,
-        batch.player_transitions.agent_output.model_output.switch_head.log_policy,
+        batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
         batch.player_transitions.agent_output.switch_head,
     )
     target_log_pi = calculate_log_prob(
@@ -207,11 +207,11 @@ def train_step(
     )
 
     target_builder_log_pi = get_action_value(
-        target_builder_output.model_output.head.log_policy,
+        target_builder_output.actor_output.head.log_policy,
         batch.builder_transitions.agent_output.action,
     )
     actor_builder_log_pi = get_action_value(
-        batch.builder_transitions.agent_output.model_output.head.log_policy,
+        batch.builder_transitions.agent_output.actor_output.head.log_policy,
         batch.builder_transitions.agent_output.action,
     )
 
@@ -225,11 +225,11 @@ def train_step(
         (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
     builder_vtrace = compute_returns(
-        target_builder_output.model_output.v,
+        target_builder_output.actor_output.v,
         jnp.concatenate(
             (
-                target_builder_output.model_output.v[1:],
-                target_builder_output.model_output.v[-1:],
+                target_builder_output.actor_output.v[1:],
+                target_builder_output.actor_output.v[-1:],
             )
         ),
         builder_rewards,
@@ -259,7 +259,7 @@ def train_step(
             params, batch.builder_transitions.env_output
         )
         learner_builder_log_pi = get_action_value(
-            learner_builder_output.model_output.head.log_policy,
+            learner_builder_output.actor_output.head.log_policy,
             batch.builder_transitions.agent_output.action,
         )
 
@@ -287,8 +287,8 @@ def train_step(
 
         loss_entropy = (
             -(
-                learner_builder_output.model_output.head.policy
-                * learner_builder_output.model_output.head.log_policy
+                learner_builder_output.actor_output.head.policy
+                * learner_builder_output.actor_output.head.log_policy
             )
             .sum(axis=-1)
             .mean(where=builder_valids)

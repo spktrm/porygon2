@@ -48,7 +48,7 @@ class PlayerAgentOutput(NamedTuple):
     action_type_head: ArrayLike = ()
     move_head: ArrayLike = ()
     switch_head: ArrayLike = ()
-    model_output: PlayerActorOutput = PlayerActorOutput()
+    actor_output: PlayerActorOutput = PlayerActorOutput()
 
 
 class PlayerTransition(NamedTuple):
@@ -68,7 +68,7 @@ class BuilderActorOutput(NamedTuple):
 
 class BuilderAgentOutput(NamedTuple):
     action: ArrayLike = ()
-    model_output: BuilderActorOutput = BuilderActorOutput()
+    actor_output: BuilderActorOutput = BuilderActorOutput()
 
 
 class BuilderTransition(NamedTuple):

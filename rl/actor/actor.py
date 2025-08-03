@@ -73,7 +73,9 @@ class Actor:
 
         build_traj = []
 
+        # Reset the builder environment.
         builder_env_output = self._builder_env.reset()
+        # Rollout the builder environment.
         for subkey in builder_subkeys:
             builder_agent_output = self._agent.step_builder(subkey, builder_params)
             builder_env_output = self._builder_env.step(
@@ -84,12 +86,13 @@ class Actor:
             )
             build_traj.append(builder_transition)
 
+        player_traj = []
+
         # Send set tokens to the player environment.
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
+        # Reset the player environment.
         player_actor_input = self._player_env.reset(tokens_buffer.reshape(-1).tolist())
-
-        player_traj = []
-        # Unroll one longer if trajectory is empty.
+        # Rollout the player environment.
         for subkey in player_subkeys:
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
             player_agent_output = self._agent.step_player(

@@ -18,7 +18,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
 )
-from rl.environment.utils import get_ex_step
+from rl.environment.utils import get_player_ex_step
 from rl.model.utils import Params
 
 
@@ -98,7 +98,7 @@ def create_train_state(
     config: Porygon2LearnerConfig,
 ):
     """Creates an initial `TrainState`."""
-    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
+    ts = jax.tree.map(lambda x: x[:, 0], get_player_ex_step())
 
     player_params = player_network.init(rng, ts)
     builder_params = builder_network.init(rng, rng)

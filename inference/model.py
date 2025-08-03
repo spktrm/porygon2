@@ -8,8 +8,13 @@ import numpy as np
 from inference.interfaces import HeadOutput, ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
-from rl.environment.interfaces import PlayerActorInput, PolicyHeadOutput
-from rl.environment.utils import get_ex_step
+from rl.environment.env import TeamBuilderEnvironment
+from rl.environment.interfaces import (
+    BuilderTransition,
+    PlayerActorInput,
+    PolicyHeadOutput,
+)
+from rl.environment.utils import get_player_ex_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
 from rl.model.utils import BIAS_VALUE, get_most_recent_file
@@ -37,13 +42,9 @@ class InferenceModel:
         self.player_network = get_player_model()
         self.builder_network = get_builder_model()
 
-        self.agent = Agent(
-            player_apply_fn=jax.vmap(
-                # functools.partial(self.player_network.apply, temp=0.2),
-                self.player_network.apply,
-                in_axes=(None, 1),
-            ),
-            builder_apply_fn=self.builder_network.apply,
+        self._agent = Agent(
+            player_apply_fn=jax.vmap(self.player_network.apply, in_axes=(None, 1)),
+            builder_apply_fn=jax.vmap(self.builder_network.apply, in_axes=(None, 1)),
             gpu_lock=threading.Lock(),
         )
         self.rng_key = jax.random.key(seed)
@@ -60,7 +61,7 @@ class InferenceModel:
 
         print("initializing...")
         self.reset()  # warm up the model
-        self.step(get_ex_step(expand=False))  # warm up the model
+        self.step(get_player_ex_step(expand=False))  # warm up the model
         print("model initialized!")
 
     def split_rng(self) -> jax.Array:
@@ -69,13 +70,30 @@ class InferenceModel:
 
     def reset(self):
         rng_key = self.split_rng()
-        actor_reset = self.agent.step_builder(rng_key, self.builder_params)
+        builder_subkeys = jax.random.split(rng_key, 6)
+
+        build_traj = []
+        builder_env = TeamBuilderEnvironment()
+
+        builder_env_output = builder_env.reset()
+        for subkey in builder_subkeys:
+            builder_agent_output = self._agent.step_builder(subkey, self.builder_params)
+            builder_env_output = builder_env.step(builder_agent_output.action.item())
+            builder_transition = BuilderTransition(
+                env_output=builder_env_output, agent_output=builder_agent_output
+            )
+            build_traj.append(builder_transition)
+
+        builder_trajectory = jax.device_get(build_traj)
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *builder_trajectory
+        )
+
+        # Send set tokens to the player environment.
+        tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         return ResetResponse(
-            tokens=actor_reset.tokens,
-            log_pi=np.round(actor_reset.log_pi, self.precision),
-            entropy=np.round(actor_reset.entropy, self.precision),
-            key=actor_reset.key,
-            v=np.round(actor_reset.v, self.precision),
+            tokens=tokens_buffer,
+            v=np.round(builder_trajectory.agent_output.actor_output.v, self.precision),
         )
 
     def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
@@ -89,8 +107,8 @@ class InferenceModel:
 
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
-        actor_step = self.agent.step_player(rng_key, self.player_params, timestep)
-        model_output = actor_step.model_output
+        actor_step = self._agent.step_player(rng_key, self.player_params, timestep)
+        model_output = actor_step.actor_output
         return StepResponse(
             action_type_head=self._jax_head_to_pydantic(model_output.action_type_head),
             move_head=self._jax_head_to_pydantic(model_output.move_head),

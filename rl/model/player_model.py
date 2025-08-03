@@ -15,7 +15,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PolicyHeadOutput,
 )
-from rl.environment.utils import get_ex_step
+from rl.environment.utils import get_player_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
@@ -160,7 +160,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     init_jax_jit_cache()
     network = get_player_model()
-    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
+    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_player_ex_step()))
 
     latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
