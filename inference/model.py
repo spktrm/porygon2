@@ -86,16 +86,15 @@ class InferenceModel:
             build_traj.append(builder_transition)
             builder_env_output = builder_env.step(builder_agent_output.action.item())
 
-        builder_trajectory = jax.device_get(build_traj)
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: np.stack(xs), *builder_trajectory
+        builder_agent_output = self._agent.step_builder(
+            subkey, self.builder_params, builder_env_output
         )
 
         # Send set tokens to the player environment.
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         return ResetResponse(
             tokens=tokens_buffer,
-            v=np.round(builder_trajectory.agent_output.actor_output.v, self.precision),
+            v=builder_agent_output.actor_output.v.item(),
         )
 
     def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
