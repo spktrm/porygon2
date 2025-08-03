@@ -77,12 +77,14 @@ class InferenceModel:
 
         builder_env_output = builder_env.reset()
         for subkey in builder_subkeys:
-            builder_agent_output = self._agent.step_builder(subkey, self.builder_params)
-            builder_env_output = builder_env.step(builder_agent_output.action.item())
+            builder_agent_output = self._agent.step_builder(
+                subkey, self.builder_params, builder_env_output
+            )
             builder_transition = BuilderTransition(
                 env_output=builder_env_output, agent_output=builder_agent_output
             )
             build_traj.append(builder_transition)
+            builder_env_output = builder_env.step(builder_agent_output.action.item())
 
         builder_trajectory = jax.device_get(build_traj)
         builder_trajectory: BuilderTransition = jax.tree.map(
