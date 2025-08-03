@@ -12,8 +12,14 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
+    PACKED_SETS,
 )
-from rl.environment.interfaces import EnvStep, HistoryStep, TimeStep
+from rl.environment.interfaces import (
+    BuilderEnvOutput,
+    PlayerActorInput,
+    PlayerEnvOutput,
+    PlayerHistoryOutput,
+)
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
     FieldFeature,
@@ -44,7 +50,9 @@ def expand_dims(x, axis: int):
     return jax.tree.map(lambda i: np.expand_dims(i, axis=axis), x)
 
 
-def clip_history(history: HistoryStep, resolution: int = 64) -> HistoryStep:
+def clip_history(
+    history: PlayerHistoryOutput, resolution: int = 64
+) -> PlayerHistoryOutput:
     history_length = np.max(
         history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0),
         axis=0,
@@ -89,7 +97,7 @@ def get_switch_mask(mask: jax.Array):
     return mask | (~mask).all(axis=-1, keepdims=True)
 
 
-def process_state(state: EnvironmentState) -> TimeStep:
+def process_state(state: EnvironmentState) -> PlayerActorInput:
     history_length = state.history_length
 
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
@@ -143,7 +151,7 @@ def process_state(state: EnvironmentState) -> TimeStep:
 
     action_mask = get_action_mask(state)
 
-    env_step = EnvStep(
+    env_step = PlayerEnvOutput(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
         win_reward=win_reward.astype(np.float32),
@@ -155,20 +163,29 @@ def process_state(state: EnvironmentState) -> TimeStep:
         move_mask=get_move_mask(action_mask),
         switch_mask=get_switch_mask(action_mask),
     )
-    history_step = HistoryStep(
+    history_step = PlayerHistoryOutput(
         nodes=history_entity_nodes,
         edges=history_entity_edges,
         field=history_field,
     )
 
-    return TimeStep(env=env_step, history=history_step)
+    return PlayerActorInput(env=env_step, history=history_step)
 
 
-def get_ex_step(expand: bool = True) -> TimeStep:
+def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
     ts = process_state(EX_STATE)
     if expand:
         ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
         hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-        return TimeStep(env=ex, history=hx)
+        return PlayerActorInput(env=ex, history=hx)
     else:
         return ts
+
+
+def get_ex_builder_step(format: str) -> BuilderEnvOutput:
+    data = PACKED_SETS[format]
+    num_sets = len(data["sets"])
+    return BuilderEnvOutput(
+        tokens=np.ones((1, 1, 6), dtype=np.int32) * -1,
+        mask=np.ones((1, 1, num_sets), dtype=bool),
+    )

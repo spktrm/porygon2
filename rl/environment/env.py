@@ -1,5 +1,12 @@
+import functools
+
+import jax
+import jax.numpy as jnp
+import numpy as np
 from websockets.sync.client import connect
 
+from rl.environment.data import PACKED_SETS
+from rl.environment.interfaces import BuilderEnvOutput
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
@@ -49,3 +56,35 @@ class SinglePlayerSyncEnvironment:
         )
         self.websocket.send(step_message.SerializeToString())
         return self._recv()
+
+
+class TeamBuilderEnvironment:
+    def __init__(self, format: str = "gen3ou"):
+        self.data = PACKED_SETS[format]
+        self.num_sets = len(self.data["sets"])
+
+    def reset(self) -> BuilderEnvOutput:
+        self.pos = 0
+        self.state = self._reset()
+        return self.state
+
+    def step(self, action: int) -> BuilderEnvOutput:
+        if self.pos >= 6:
+            raise ValueError("Cannot step beyond the last position.")
+        self.state = self._step(action, self.pos, self.state)
+        self.pos += 1
+        return self.state
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset(self):
+        mask = jnp.ones(self.num_sets, dtype=bool)
+        tokens = jnp.ones(6, dtype=np.int32) * -1
+        return BuilderEnvOutput(mask=mask, tokens=tokens)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _step(self, action: int, pos: int, state: BuilderEnvOutput):
+        new_mask = self.data["mask"][action]
+        token_mask = jax.nn.one_hot(pos, 6, dtype=jnp.bool)
+        tokens = jnp.where(token_mask, action, state.tokens)
+        mask = state.mask & ~new_mask
+        return BuilderEnvOutput(mask=mask, tokens=tokens)

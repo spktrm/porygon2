@@ -9,8 +9,13 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import EnvStep, ModelOutput, PolicyHeadOutput, TimeStep
-from rl.environment.utils import get_ex_step
+from rl.environment.interfaces import (
+    PlayerActorInput,
+    PlayerActorOutput,
+    PlayerEnvOutput,
+    PolicyHeadOutput,
+)
+from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
@@ -38,7 +43,7 @@ class Porygon2PlayerModel(nn.Module):
         entity_embeddings: jax.Array,
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
-        env_step: EnvStep,
+        env_step: PlayerEnvOutput,
         temp: float = 1.0,
     ):
         action_type_head_logits = self.action_type_head(entity_embeddings, entity_mask)
@@ -56,7 +61,7 @@ class Porygon2PlayerModel(nn.Module):
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
-        return ModelOutput(
+        return PlayerActorOutput(
             action_type_head=PolicyHeadOutput(
                 logits=jnp.where(
                     env_step.action_type_mask, action_type_head_logits, BIAS_VALUE
@@ -81,20 +86,20 @@ class Porygon2PlayerModel(nn.Module):
             v=value,
         )
 
-    def __call__(self, timestep: TimeStep, temp: float = 1.0):
+    def __call__(self, actor_input: PlayerActorInput, temp: float = 1.0):
         """
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
         entity_embeddings, action_embeddings, entity_mask = self.encoder(
-            timestep.env, timestep.history
+            actor_input.env, actor_input.history
         )
 
         return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
             entity_embeddings,
             action_embeddings,
             entity_mask,
-            timestep.env,
+            actor_input.env,
         )
 
 
@@ -155,7 +160,7 @@ def assert_no_nan_or_inf(gradients, path=""):
 def main():
     init_jax_jit_cache()
     network = get_player_model()
-    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_step()))
+    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_player_step()))
 
     latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
