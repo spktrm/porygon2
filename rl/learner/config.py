@@ -12,7 +12,12 @@ from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
 
-from rl.environment.interfaces import ActorReset, ModelOutput, TimeStep
+from rl.environment.interfaces import (
+    BuilderAgentOutput,
+    BuilderEnvOutput,
+    PlayerActorOutput,
+    PlayerActorInput,
+)
 from rl.environment.utils import get_ex_step
 from rl.model.utils import Params
 
@@ -62,7 +67,7 @@ def get_learner_config():
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, TimeStep], ModelOutput] = struct.field(
+    apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput] = struct.field(
         pytree_node=False
     )
 
@@ -77,8 +82,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset] = (
-        struct.field(pytree_node=False)
+    apply_fn: Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] = struct.field(
+        pytree_node=False
     )
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
@@ -121,7 +126,7 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=builder_network.apply,
+        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1), out_axes=1),
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(

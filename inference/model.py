@@ -8,7 +8,7 @@ import numpy as np
 from inference.interfaces import HeadOutput, ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
-from rl.environment.interfaces import PolicyHeadOutput, TimeStep
+from rl.environment.interfaces import PolicyHeadOutput, PlayerActorInput
 from rl.environment.utils import get_ex_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
@@ -69,7 +69,7 @@ class InferenceModel:
 
     def reset(self):
         rng_key = self.split_rng()
-        actor_reset = self.agent.reset(rng_key, self.builder_params)
+        actor_reset = self.agent.step_builder(rng_key, self.builder_params)
         return ResetResponse(
             tokens=actor_reset.tokens,
             log_pi=np.round(actor_reset.log_pi, self.precision),
@@ -87,9 +87,9 @@ class InferenceModel:
             ),
         )
 
-    def step(self, timestep: TimeStep):
+    def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
-        actor_step = self.agent.step(rng_key, self.player_params, timestep)
+        actor_step = self.agent.step_player(rng_key, self.player_params, timestep)
         model_output = actor_step.model_output
         return StepResponse(
             action_type_head=self._jax_head_to_pydantic(model_output.action_type_head),

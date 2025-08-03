@@ -9,7 +9,12 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import EnvStep, ModelOutput, PolicyHeadOutput, TimeStep
+from rl.environment.interfaces import (
+    PlayerEnvOutput,
+    PlayerActorOutput,
+    PolicyHeadOutput,
+    PlayerActorInput,
+)
 from rl.environment.utils import get_ex_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
@@ -38,7 +43,7 @@ class Porygon2PlayerModel(nn.Module):
         entity_embeddings: jax.Array,
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
-        env_step: EnvStep,
+        env_step: PlayerEnvOutput,
         temp: float = 1.0,
     ):
         action_type_head_logits = self.action_type_head(entity_embeddings, entity_mask)
@@ -56,7 +61,7 @@ class Porygon2PlayerModel(nn.Module):
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
-        return ModelOutput(
+        return PlayerActorOutput(
             action_type_head=PolicyHeadOutput(
                 logits=jnp.where(
                     env_step.action_type_mask, action_type_head_logits, BIAS_VALUE
@@ -81,7 +86,7 @@ class Porygon2PlayerModel(nn.Module):
             v=value,
         )
 
-    def __call__(self, timestep: TimeStep, temp: float = 1.0):
+    def __call__(self, timestep: PlayerActorInput, temp: float = 1.0):
         """
         Shared forward pass for encoder and policy head.
         """

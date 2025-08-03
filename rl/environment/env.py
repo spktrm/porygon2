@@ -1,5 +1,8 @@
+import numpy as np
 from websockets.sync.client import connect
 
+from rl.environment.data import PACKED_SETS
+from rl.environment.interfaces import BuilderEnvOutput
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
@@ -49,3 +52,20 @@ class SinglePlayerSyncEnvironment:
         )
         self.websocket.send(step_message.SerializeToString())
         return self._recv()
+
+
+class TeamBuilderEnvironment:
+    def __init__(self, format: str = "gen3ou"):
+        self.data = PACKED_SETS[format]
+        self.num_sets = len(self.data["sets"])
+        self.reset()
+
+    def reset(self):
+        self.mask = np.ones(self.num_sets, dtype=bool)
+        self.tokens = np.ones(6, dtype=np.int32) * -1
+        return BuilderEnvOutput(mask=self.mask, tokens=self.tokens)
+
+    def step(self, action: int):
+        token = self.data["sets"][action]
+        self.mask = self.mask & ~token
+        return BuilderEnvOutput(mask=self.mask, tokens=self.tokens)

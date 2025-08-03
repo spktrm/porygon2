@@ -9,7 +9,13 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import PACKED_SETS
-from rl.environment.interfaces import ActorReset
+from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderAgentOutput,
+    BuilderActorOutput,
+    BuilderEnvOutput,
+    PolicyHeadOutput,
+)
 from rl.model.config import get_model_config
 from rl.model.modules import (
     MLP,
@@ -60,82 +66,46 @@ class Porygon2BuilderModel(nn.Module):
             dtype=dtype,
         )
 
-    def _sample_token(
-        self,
-        embedding: jax.Array,
-        key: jax.Array,
-        sample_mask: jax.Array,
-        forced_token: jax.Array = None,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def _sample_token(self, embedding: jax.Array, sample_mask: jax.Array):
         """
         Samples a token from the embeddings using the policy head and returns the token, log probability, and entropy.
         """
         logits = self.policy_head(embedding)
+        masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
         pi = legal_policy(logits, sample_mask)
         log_pi = legal_log_policy(logits, sample_mask)
+        # sample_mask = sample_mask & ~SETS_DATA["mask"][token]
 
-        if forced_token is not None:
-            token = forced_token
-        else:
-            masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
-            token = jax.random.categorical(key, masked_logits)
+        return PolicyHeadOutput(masked_logits, pi, log_pi)
 
-        sample_mask = sample_mask & ~SETS_DATA["mask"][token]
-        ent = -jnp.sum(pi * log_pi, axis=-1)
-
-        return token, log_pi[token], ent, sample_mask
-
-    def __call__(
-        self, init_key: jax.Array, forced_tokens: jax.Array = None
-    ) -> ActorReset:
+    def __call__(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
-        key_splits = jax.random.split(init_key, num=6)
+        is_masked = input.tokens == -1
+        is_masked_sum = is_masked.sum(axis=-1)
+        num_tokens = input.tokens.shape[-1]
 
-        attn_masks = jnp.tril(jnp.ones((6, 6), dtype=jnp.bool))
+        attn_masks = jnp.tril(jnp.eye(num_tokens, dtype=jnp.bool))
+        attn_mask = jnp.take(attn_masks, is_masked_sum, axis=0)
 
-        tokens = jnp.ones((6,), dtype=jnp.int32) * -1
-        sample_mask = jnp.ones((self.embeddings.num_embeddings,), dtype=jnp.bool)
-        position_indices = jnp.arange(6, dtype=jnp.int32)
+        position_indices = jnp.arange(num_tokens, dtype=jnp.int32)
 
-        log_pis = []
-        entropies = []
-        values = []
-
-        for i, subkey in enumerate(key_splits):
-            embeddings = jnp.where(
-                (tokens == -1)[..., None], self.mask_embedding, self.embeddings(tokens)
-            )
-            pred_embeddings = self.encoder(
-                embeddings, create_attention_mask(attn_masks[i]), position_indices
-            )
-            token, log_pi, ent, sample_mask = self._sample_token(
-                pred_embeddings[i],
-                subkey,
-                sample_mask,
-                forced_tokens[i] if forced_tokens is not None else None,
-            )
-            pooled = self.decoder(
-                pred_embeddings.mean(axis=0, keepdims=True),
-                pred_embeddings,
-                create_attention_mask(
-                    attn_masks[-1].any(keepdims=True), attn_masks[-1]
-                ),
-            )
-            v = nn.tanh(self.value_head(pooled))
-
-            values.append(v)
-            log_pis.append(log_pi)
-            entropies.append(ent)
-
-            tokens = tokens.at[i].set(token)
-
-        return ActorReset(
-            tokens=tokens.reshape(-1),
-            log_pi=jnp.stack(log_pis, axis=0),
-            v=jnp.stack(values, axis=0).reshape(-1),
-            key=init_key,
-            entropy=jnp.stack(entropies, axis=0),
+        embeddings = jnp.where(
+            is_masked[..., None], self.mask_embedding, self.embeddings(input.tokens)
         )
+        pred_embeddings = self.encoder(
+            embeddings, create_attention_mask(attn_mask), position_indices
+        )
+        head_output = self._sample_token(
+            jnp.take(pred_embeddings, is_masked_sum, axis=0), input.mask
+        )
+        pooled = self.decoder(
+            pred_embeddings.mean(axis=0, keepdims=True),
+            pred_embeddings,
+            create_attention_mask(attn_mask.any(keepdims=True), attn_mask),
+        )
+        v = nn.tanh(self.value_head(pooled))
+
+        return BuilderActorOutput(head=head_output, v=v)
 
 
 def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
@@ -208,7 +178,7 @@ def main():
 
     pprint(get_num_params(params))
 
-    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset]
+    apply_fn: Callable[[Params, jax.Array, jax.Array | None], BuilderAgentOutput]
     # apply_fn = jax.jit(network.apply)
     apply_fn = network.apply
 

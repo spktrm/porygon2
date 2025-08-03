@@ -4,9 +4,15 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
-from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import ActorStep, TimeStep, Transition
-from rl.environment.protos.features_pb2 import ActionType, InfoFeature
+from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
+from rl.environment.interfaces import (
+    BuilderTransition,
+    PlayerAgentOutput,
+    PlayerActorInput,
+    PlayerTransition,
+    Trajectory,
+)
+from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history
 from rl.learner.learner import Learner
@@ -31,25 +37,26 @@ class Actor:
         rng_seed: int = 42,
     ):
         self._agent = agent
-        self._env = env
+        self._player_env = env
+        self._builder_env = TeamBuilderEnvironment()
         self._unroll_length = unroll_length
         self._queue = queue
         self._learner = learner
         self._rng_key = jax.random.PRNGKey(rng_seed)
 
-    def _preprocess_timestep(self, timestep: TimeStep):
-        return TimeStep(
+    def clip_actor_history(self, timestep: PlayerActorInput):
+        return PlayerActorInput(
             env=timestep.env,
             history=clip_history(timestep.history, resolution=128),
         )
 
-    def _postprocess_actor_step(self, actor_step: ActorStep):
+    def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
-        actor_step: ActorStep = jax.block_until_ready(actor_step)
+        agent_output: PlayerAgentOutput = jax.block_until_ready(agent_output)
         return Action(
-            action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
-            move_slot=actor_step.move_head.item(),
-            switch_slot=actor_step.switch_head.item(),
+            action_type=ACTION_TYPE_MAPPING[agent_output.action_type_head.item()],
+            move_slot=agent_output.move_head.item(),
+            switch_slot=agent_output.switch_head.item(),
         )
 
     def unroll(
@@ -60,48 +67,66 @@ class Actor:
         builder_params: Params,
     ):
         """Run unroll_length agent/environment steps, returning the trajectory."""
-        subkeys = jax.random.split(rng_key, self._unroll_length + 1)
+        builder_key, player_key = jax.random.split(rng_key)
+        builder_subkeys = jax.random.split(builder_key, 6)
+        player_subkeys = jax.random.split(player_key, self._unroll_length)
 
-        actor_reset = self._agent.reset(subkeys[0], builder_params)
-        tokens_buffer = np.asarray(actor_reset.tokens, dtype=np.int16)
-        unprocessed_timestep = self._env.reset(tokens_buffer.reshape(-1).tolist())
+        build_traj = []
 
-        traj = []
-        # Unroll one longer if trajectory is empty.
-        for i in range(1, self._unroll_length):
-            timestep = self._preprocess_timestep(unprocessed_timestep)
-            actor_step = self._agent.step(subkeys[i], player_params, timestep)
-            transition = Transition(
-                timestep=TimeStep(env=timestep.env), actor_step=actor_step
+        builder_env_output = self._builder_env.reset()
+        for subkey in builder_subkeys:
+            builder_agent_output = self._agent.step_builder(subkey, builder_params)
+            builder_env_output = self._builder_env.step(
+                builder_agent_output.action.item()
             )
-            traj.append(transition)
-            if timestep.env.done.item():
+            builder_transition = BuilderTransition(
+                env_output=builder_env_output, agent_output=builder_agent_output
+            )
+            build_traj.append(builder_transition)
+
+        # Send set tokens to the player environment.
+        tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
+        player_actor_input = self._player_env.reset(tokens_buffer.reshape(-1).tolist())
+
+        player_traj = []
+        # Unroll one longer if trajectory is empty.
+        for subkey in player_subkeys:
+            player_actor_input_clipped = self.clip_actor_history(player_actor_input)
+            player_agent_output = self._agent.step_player(
+                subkey, player_params, player_actor_input_clipped
+            )
+            player_transition = PlayerTransition(
+                env_output=player_actor_input_clipped.env,
+                agent_output=player_agent_output,
+            )
+            player_traj.append(player_transition)
+            if player_actor_input_clipped.env.done.item():
                 break
 
-            action = self._postprocess_actor_step(actor_step)
-            unprocessed_timestep = self._env.step(action)
+            action = self.player_agent_output_to_action(player_agent_output)
+            player_actor_input = self._player_env.step(action)
 
-        if len(traj) < self._unroll_length:
-            traj += [transition] * (self._unroll_length - len(traj))
+        if len(player_traj) < self._unroll_length:
+            player_traj += [player_transition] * (
+                self._unroll_length - len(player_traj)
+            )
 
         # Pack the trajectory and reset parent state.
-        trajectory = jax.device_get(traj)
-        trajectory: Transition = jax.tree.map(lambda *xs: np.stack(xs), *trajectory)
-        trajectory = Transition(
-            timestep=TimeStep(
-                env=trajectory.timestep.env,
-                history=unprocessed_timestep.history,
-            ),
-            actor_step=trajectory.actor_step,
-            # Only the first step uses this
-            actor_reset=actor_reset,
+        builder_trajectory = jax.device_get(build_traj)
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *builder_trajectory
         )
 
-        request_count = trajectory.timestep.env.info[
-            ..., InfoFeature.INFO_FEATURE__REQUEST_COUNT
-        ]
-        if np.any(request_count[1:] < request_count[:-1]):
-            raise ValueError("Request count should be non-decreasing.")
+        player_trajectory = jax.device_get(player_traj)
+        player_trajectory: PlayerTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *player_trajectory
+        )
+
+        trajectory = Trajectory(
+            builder_transitions=builder_trajectory,
+            player_transitions=player_trajectory,
+            player_history=player_actor_input.history,
+        )
 
         return trajectory
 

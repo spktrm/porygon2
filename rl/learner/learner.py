@@ -10,7 +10,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl.environment.interfaces import Transition
+from rl.environment.interfaces import PlayerActorInput, Trajectory, Transition
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -67,34 +67,37 @@ def calculate_entropy(
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-    batch: Transition,
+    batch: Trajectory,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
+    player_actor_input = PlayerActorInput(
+        env=batch.player_transitions.env_output, history=batch.player_history
+    )
 
-    target_pred = player_state.apply_fn(player_state.target_params, batch.timestep)
+    target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
     actor_log_pi = calculate_log_prob(
-        batch.actor_step.model_output.action_type_head.log_policy,
-        batch.actor_step.action_type_head,
-        batch.actor_step.model_output.move_head.log_policy,
-        batch.actor_step.move_head,
-        batch.actor_step.model_output.switch_head.log_policy,
-        batch.actor_step.switch_head,
+        batch.player_transitions.agent_output.model_output.action_type_head.log_policy,
+        batch.player_transitions.agent_output.action_type_head,
+        batch.player_transitions.agent_output.model_output.move_head.log_policy,
+        batch.player_transitions.agent_output.move_head,
+        batch.player_transitions.agent_output.model_output.switch_head.log_policy,
+        batch.player_transitions.agent_output.switch_head,
     )
     target_log_pi = calculate_log_prob(
         target_pred.action_type_head.log_policy,
-        batch.actor_step.action_type_head,
+        batch.player_transitions.agent_output.action_type_head,
         target_pred.move_head.log_policy,
-        batch.actor_step.move_head,
+        batch.player_transitions.agent_output.move_head,
         target_pred.switch_head.log_policy,
-        batch.actor_step.switch_head,
+        batch.player_transitions.agent_output.switch_head,
     )
 
     actor_target_log_ratio = actor_log_pi - target_log_pi
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
-    valid = jnp.bitwise_not(batch.timestep.env.done)
-    rewards = batch.timestep.env.win_reward
+    valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    rewards = batch.player_transitions.env_output.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace = compute_returns(
@@ -122,14 +125,14 @@ def train_step(
 
     def player_loss_fn(params: Params):
 
-        pred = player_state.apply_fn(params, batch.timestep)
+        pred = player_state.apply_fn(params, player_actor_input)
         learner_log_pi = calculate_log_prob(
             pred.action_type_head.log_policy,
-            batch.actor_step.action_type_head,
+            batch.player_transitions.agent_output.action_type_head,
             pred.move_head.log_policy,
-            batch.actor_step.move_head,
+            batch.player_transitions.agent_output.move_head,
             pred.switch_head.log_policy,
-            batch.actor_step.switch_head,
+            batch.player_transitions.agent_output.switch_head,
         )
 
         # Calculate the log ratios.
@@ -199,29 +202,36 @@ def train_step(
             ),
         )
 
-    actor_builder_keys = batch.actor_reset.key
-    actor_builder_log_pi = batch.actor_reset.log_pi
-    actor_builder_tokens = batch.actor_reset.tokens
-    builder_apply_fn = jax.vmap(
-        builder_state.apply_fn, in_axes=(None, 1, 1), out_axes=1
+    target_builder_output = builder_state.apply_fn(
+        builder_state.target_params, batch.builder_transitions.env_output
     )
 
-    target_builder_output = builder_apply_fn(
-        builder_state.target_params, actor_builder_keys, actor_builder_tokens
+    target_builder_log_pi = get_action_value(
+        target_builder_output.model_output.head.log_policy,
+        batch.builder_transitions.agent_output.action,
+    )
+    actor_builder_log_pi = get_action_value(
+        batch.builder_transitions.agent_output.model_output.head.log_policy,
+        batch.builder_transitions.agent_output.action,
     )
 
-    actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_output.log_pi
+    actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_log_pi
     actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
 
     builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
 
-    final_reward = batch.timestep.env.win_reward[-1]
+    final_reward = rewards[-1]
     builder_rewards = jnp.concatenate(
         (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
     builder_vtrace = compute_returns(
-        target_builder_output.v,
-        jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
+        target_builder_output.model_output.v,
+        jnp.concatenate(
+            (
+                target_builder_output.model_output.v[1:],
+                target_builder_output.model_output.v[-1:],
+            )
+        ),
         builder_rewards,
         jnp.concatenate(
             (
@@ -245,16 +255,18 @@ def train_step(
 
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        learner_builder_output = builder_apply_fn(
-            params, actor_builder_keys, actor_builder_tokens
+        learner_builder_output = builder_state.apply_fn(
+            params, batch.builder_transitions.env_output
+        )
+        learner_builder_log_pi = get_action_value(
+            learner_builder_output.model_output.head.log_policy,
+            batch.builder_transitions.agent_output.action,
         )
 
-        learner_actor_log_ratio = learner_builder_output.log_pi - actor_builder_log_pi
+        learner_actor_log_ratio = learner_builder_log_pi - actor_builder_log_pi
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        learner_target_log_ratio = (
-            learner_builder_output.log_pi - target_builder_output.log_pi
-        )
+        learner_target_log_ratio = learner_builder_log_pi - target_builder_log_pi
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         # Calculate the policy gradient loss.
@@ -273,7 +285,14 @@ def train_step(
             where=builder_valids
         )
 
-        loss_entropy = learner_builder_output.entropy.mean(where=builder_valids)
+        loss_entropy = (
+            -(
+                learner_builder_output.model_output.head.policy
+                * learner_builder_output.model_output.head.log_policy
+            )
+            .sum(axis=-1)
+            .mean(where=builder_valids)
+        )
 
         backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
             learner_target_ratio - 1

@@ -53,7 +53,7 @@ def run_eval_actor(
     """Runs an actor to produce num_trajectories trajectories."""
 
     old_step_count, player_params, builder_params = actor.pull_params()
-    session_id = actor._env.username
+    session_id = actor._player_env.username
     win_reward_sum = {old_step_count: (0, 0)}
 
     while not stop_signal[0]:
