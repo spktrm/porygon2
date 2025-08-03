@@ -7,7 +7,7 @@ import jax
 import numpy as np
 from tqdm import tqdm
 
-from rl.environment.interfaces import TimeStep, Transition
+from rl.environment.interfaces import Trajectory
 from rl.environment.utils import clip_history
 from rl.learner.config import Porygon2LearnerConfig
 
@@ -17,7 +17,7 @@ class ReplayBuffer:
 
     def __init__(self, capacity: int):
         self._capacity = capacity
-        self._buffer = collections.deque(maxlen=capacity)
+        self._buffer = collections.deque[Trajectory](maxlen=capacity)
         self._lock = threading.Lock()
         self._pbar = tqdm(desc="producer", smoothing=0)
         self._total_added = 0
@@ -33,13 +33,13 @@ class ReplayBuffer:
     def __len__(self) -> int:
         return len(self._buffer)
 
-    def add(self, transition: Transition):
+    def add(self, trajectory: Trajectory):
         with self._lock:
-            self._buffer.append(transition)
+            self._buffer.append(trajectory)
             self._pbar.update(1)
             self._total_added += 1
 
-    def sample(self, batch_size: int) -> Transition:
+    def sample(self, batch_size: int) -> Trajectory:
         with self._lock:
             if len(self._buffer) < batch_size:
                 raise ValueError(
@@ -48,26 +48,26 @@ class ReplayBuffer:
                 )
             batch = random.sample(self._buffer, batch_size)
 
-        stacked_batch: Transition = jax.tree.map(
+        stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
         )
 
         resolution = 64
-        valid = np.bitwise_not(stacked_batch.timestep.env.done)
+        valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
         num_valid = valid.sum(0).max().item() + 1
         num_valid = int(np.ceil(num_valid / resolution) * resolution)
 
-        clipped_batch = Transition(
-            timestep=TimeStep(
-                # env=stacked_batch.timestep.env,
-                env=jax.tree.map(lambda x: x[:num_valid], stacked_batch.timestep.env),
-                history=clip_history(stacked_batch.timestep.history, resolution=128),
+        clipped_trajectory = Trajectory(
+            builder_transitions=stacked_trajectory.builder_transitions,
+            player_transitions=jax.tree.map(
+                lambda x: x[:num_valid], stacked_trajectory.player_transitions
             ),
-            actor_step=jax.tree.map(lambda x: x[:num_valid], stacked_batch.actor_step),
-            actor_reset=stacked_batch.actor_reset,
+            player_history=clip_history(
+                stacked_trajectory.player_history, resolution=resolution
+            ),
         )
 
-        return jax.device_put(clipped_batch)
+        return jax.device_put(clipped_trajectory)
 
 
 class ReplayRatioController:

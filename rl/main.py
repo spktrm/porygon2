@@ -1,5 +1,7 @@
 import os
 
+from rl.model.utils import get_most_recent_file
+
 # Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # gemm_any=True is ~10% speed up in this setup
@@ -22,7 +24,7 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import Transition
+from rl.environment.interfaces import Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
@@ -53,7 +55,7 @@ def run_eval_actor(
     """Runs an actor to produce num_trajectories trajectories."""
 
     old_step_count, player_params, builder_params = actor.pull_params()
-    session_id = actor._env.username
+    session_id = actor._player_env.username
     win_reward_sum = {old_step_count: (0, 0)}
 
     while not stop_signal[0]:
@@ -83,7 +85,9 @@ def run_eval_actor(
                 subkey, step_count, player_params, builder_params
             )
 
-            win_rewards = np.sign(eval_trajectory.timestep.env.win_reward[-1])
+            win_rewards = np.sign(
+                eval_trajectory.player_transitions.env_output.win_reward[-1]
+            )
             # Update the win reward sum for this step count.
             reward_count, reward_sum = win_reward_sum[step_count]
             win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
@@ -95,7 +99,7 @@ def run_eval_actor(
 
 
 def host_to_device_worker(
-    trajectory_queue: queue.Queue[Transition],
+    trajectory_queue: queue.Queue[Trajectory],
     stop_signal: list[bool],
     replay_buffer: ReplayBuffer,
     controller: ReplayRatioController,
@@ -128,12 +132,12 @@ def main():
     num_samples = [0]
 
     num_eval_actors = 5
-    trajectory_queue: queue.Queue[Transition] = queue.Queue(
+    trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )
 
     player_state, builder_state = create_train_state(
-        player_network, builder_network, jax.random.PRNGKey(42), learner_config
+        player_network, builder_network, jax.random.key(42), learner_config
     )
 
     gpu_lock = FairLock()  # threading.Lock()
@@ -145,7 +149,7 @@ def main():
         )
     )
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         player_state, builder_state = load_train_state(
             player_state, builder_state, latest_ckpt

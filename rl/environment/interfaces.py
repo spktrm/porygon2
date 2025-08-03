@@ -1,9 +1,16 @@
 from typing import NamedTuple
 
+import jax
 from jaxtyping import ArrayLike
 
 
-class EnvStep(NamedTuple):
+class PolicyHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+    policy: ArrayLike = ()
+    log_policy: ArrayLike = ()
+
+
+class PlayerEnvOutput(NamedTuple):
     # Standard Info
     info: ArrayLike = ()
     done: ArrayLike = ()
@@ -19,46 +26,57 @@ class EnvStep(NamedTuple):
     private_team: ArrayLike = ()
 
 
-class HistoryStep(NamedTuple):
+class PlayerHistoryOutput(NamedTuple):
     nodes: ArrayLike = ()
     edges: ArrayLike = ()
     field: ArrayLike = ()
 
 
-class PolicyHeadOutput(NamedTuple):
-    logits: ArrayLike = ()
-    policy: ArrayLike = ()
-    log_policy: ArrayLike = ()
+class PlayerActorInput(NamedTuple):
+    env: PlayerEnvOutput = PlayerEnvOutput()
+    history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
-class ModelOutput(NamedTuple):
+class PlayerActorOutput(NamedTuple):
     v: ArrayLike = ()
     action_type_head: PolicyHeadOutput = PolicyHeadOutput()
     move_head: PolicyHeadOutput = PolicyHeadOutput()
     switch_head: PolicyHeadOutput = PolicyHeadOutput()
 
 
-class ActorStep(NamedTuple):
+class PlayerAgentOutput(NamedTuple):
     action_type_head: ArrayLike = ()
     move_head: ArrayLike = ()
     switch_head: ArrayLike = ()
-    model_output: ModelOutput = ModelOutput()
+    actor_output: PlayerActorOutput = PlayerActorOutput()
 
 
-class ActorReset(NamedTuple):
-    tokens: ArrayLike = ()
-    log_pi: ArrayLike = ()
-    entropy: ArrayLike = ()
-    key: ArrayLike = ()
+class PlayerTransition(NamedTuple):
+    env_output: PlayerEnvOutput = PlayerEnvOutput()
+    agent_output: PlayerAgentOutput = PlayerAgentOutput()
+
+
+class BuilderEnvOutput(NamedTuple):
+    tokens: jax.Array = ()
+    mask: jax.Array = ()
+
+
+class BuilderActorOutput(NamedTuple):
+    head: PolicyHeadOutput = PolicyHeadOutput()
     v: ArrayLike = ()
 
 
-class TimeStep(NamedTuple):
-    env: EnvStep = EnvStep()
-    history: HistoryStep = HistoryStep()
+class BuilderAgentOutput(NamedTuple):
+    action: ArrayLike = ()
+    actor_output: BuilderActorOutput = BuilderActorOutput()
 
 
-class Transition(NamedTuple):
-    timestep: TimeStep = TimeStep()
-    actor_reset: ActorReset = ActorReset()
-    actor_step: ActorStep = ActorStep()
+class BuilderTransition(NamedTuple):
+    env_output: BuilderEnvOutput = BuilderEnvOutput()
+    agent_output: BuilderAgentOutput = BuilderAgentOutput()
+
+
+class Trajectory(NamedTuple):
+    builder_transitions: BuilderTransition = BuilderTransition()
+    player_transitions: PlayerTransition = PlayerTransition()
+    player_history: PlayerHistoryOutput = PlayerHistoryOutput()

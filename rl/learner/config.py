@@ -8,12 +8,16 @@ import flax.linen as nn
 import jax
 import optax
 import wandb.wandb_run
-from chex import PRNGKey
 from flax import core, struct
 from flax.training import train_state
 
-from rl.environment.interfaces import ActorReset, ModelOutput, TimeStep
-from rl.environment.utils import get_ex_step
+from rl.environment.interfaces import (
+    BuilderActorOutput,
+    BuilderEnvOutput,
+    PlayerActorInput,
+    PlayerActorOutput,
+)
+from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.model.utils import Params
 
 
@@ -62,7 +66,7 @@ def get_learner_config():
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, TimeStep], ModelOutput] = struct.field(
+    apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput] = struct.field(
         pytree_node=False
     )
 
@@ -77,8 +81,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, jax.Array, jax.Array | None], ActorReset] = (
-        struct.field(pytree_node=False)
+    apply_fn: Callable[[Params, BuilderEnvOutput], BuilderActorOutput] = struct.field(
+        pytree_node=False
     )
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
@@ -89,14 +93,15 @@ class Porygon2BuilderTrainState(train_state.TrainState):
 def create_train_state(
     player_network: nn.Module,
     builder_network: nn.Module,
-    rng: PRNGKey,
+    rng: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Creates an initial `TrainState`."""
-    ts = jax.tree.map(lambda x: x[:, 0], get_ex_step())
+    ex_player_step = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+    ex_builder_step = jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou"))
 
-    player_params = player_network.init(rng, ts)
-    builder_params = builder_network.init(rng, rng)
+    player_params = player_network.init(rng, ex_player_step)
+    builder_params = builder_network.init(rng, ex_builder_step)
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
@@ -121,7 +126,7 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=builder_network.apply,
+        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1), out_axes=1),
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(
