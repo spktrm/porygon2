@@ -114,7 +114,7 @@ def train_step(
     player_adv_std = vtrace.pg_advantage.std(where=valid)
 
     # Normalize by the ema mean and std of the advantages.
-    player_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
+    player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
         player_state.target_adv_std + 1e-8
     )
 
@@ -146,7 +146,7 @@ def train_step(
         # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
         ratio = player_is_ratio * learner_actor_ratio
 
-        pg_loss = ratio * builder_norm_advantages - jnp.abs(builder_norm_advantages) * (
+        pg_loss = ratio * player_norm_advantages - jnp.abs(player_norm_advantages) * (
             1 - ratio
         ) ** 2 / (2 * config.clip_ppo)
         loss_pg = -pg_loss.mean(where=valid)
@@ -320,8 +320,8 @@ def train_step(
             adv_mean=player_adv_mean,
             adv_std=player_adv_std,
             is_ratio=player_is_ratio.mean(where=valid),
-            norm_adv_mean=player_advantages.mean(where=valid),
-            norm_adv_std=player_advantages.std(where=valid),
+            norm_adv_mean=player_norm_advantages.mean(where=valid),
+            norm_adv_std=player_norm_advantages.std(where=valid),
             value_target_mean=vtrace.returns.mean(where=valid),
             value_target_std=vtrace.returns.std(where=valid),
             Step=player_state.num_steps,
