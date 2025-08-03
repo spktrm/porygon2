@@ -143,14 +143,12 @@ def train_step(
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         # Calculate the policy gradient loss.
-        # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-        learner_actor_ratio_is = player_is_ratio * learner_actor_ratio
+        # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
+        ratio = player_is_ratio * learner_actor_ratio
 
-        pg_loss1 = player_advantages * learner_actor_ratio_is
-        pg_loss2 = player_advantages * jnp.clip(
-            learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
-        )
-        pg_loss = jnp.minimum(pg_loss1, pg_loss2)
+        pg_loss = ratio * builder_norm_advantages - jnp.abs(builder_norm_advantages) * (
+            1 - ratio
+        ) ** 2 / (2 * config.clip_ppo)
         loss_pg = -pg_loss.mean(where=valid)
 
         # Calculate the value loss.
@@ -265,14 +263,12 @@ def train_step(
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         # Calculate the policy gradient loss.
-        # Objective taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-        learner_actor_ratio_is = builder_is_ratio * learner_actor_ratio
+        # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
+        ratio = builder_is_ratio * learner_actor_ratio
 
-        pg_loss1 = builder_norm_advantages * learner_actor_ratio_is
-        pg_loss2 = builder_norm_advantages * jnp.clip(
-            learner_actor_ratio_is, min=1 - config.clip_ppo, max=1 + config.clip_ppo
-        )
-        pg_loss = jnp.minimum(pg_loss1, pg_loss2)
+        pg_loss = ratio * builder_norm_advantages - jnp.abs(builder_norm_advantages) * (
+            1 - ratio
+        ) ** 2 / (2 * config.clip_ppo)
         loss_pg = -pg_loss.mean(where=builder_valids)
 
         pred_v = learner_builder_output.v
