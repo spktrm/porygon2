@@ -5,7 +5,13 @@ from typing import Callable, overload
 import jax
 import jax.numpy as jnp
 
-from rl.environment.interfaces import ActorReset, ActorStep, ModelOutput, TimeStep
+from rl.environment.interfaces import (
+    BuilderAgentOutput,
+    PlayerAgentOutput,
+    BuilderEnvOutput,
+    PlayerActorOutput,
+    PlayerActorInput,
+)
 from rl.model.utils import Params
 
 
@@ -20,8 +26,8 @@ class Agent:
 
     def __init__(
         self,
-        player_apply_fn: Callable[[Params, TimeStep], ModelOutput],
-        builder_apply_fn: Callable[[Params, jax.Array], ActorReset],
+        player_apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput],
+        builder_apply_fn: Callable[[Params, BuilderEnvOutput], BuilderAgentOutput],
         gpu_lock: threading.Lock,
     ):
         """Constructs an Agent object."""
@@ -30,35 +36,41 @@ class Agent:
         self._builder_apply_fn = builder_apply_fn
         self._lock = gpu_lock
 
-    def reset(self, rng_key, params: Params) -> ActorReset:
+    def step_builder(self, rng_key, params: Params) -> BuilderAgentOutput:
         with self._lock:
-            return self._reset(rng_key, params)
+            return self._step_builder(rng_key, params)
 
-    def step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep:
+    def step_player(
+        self, rng_key, params: Params, timestep: PlayerActorInput
+    ) -> PlayerAgentOutput:
         with self._lock:
-            return self._step(rng_key, params, timestep)
+            return self._step_player(rng_key, params, timestep)
 
     @overload
-    def _reset(self, rng_key, params: Params) -> ActorStep: ...
+    def _step_builder(self, rng_key, params: Params) -> PlayerAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self, rng_key, params: Params) -> ActorStep:
+    def _step_builder(self, rng_key, params: Params) -> PlayerAgentOutput:
         return self._builder_apply_fn(params, rng_key, None)
 
     @overload
-    def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep: ...
+    def _step_player(
+        self, rng_key, params: Params, timestep: PlayerActorInput
+    ) -> PlayerAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _step(self, rng_key, params: Params, timestep: TimeStep) -> ActorStep:
+    def _step_player(
+        self, rng_key, params: Params, timestep: PlayerActorInput
+    ) -> PlayerAgentOutput:
         """For a given single-step, unbatched timestep, output the chosen action."""
         # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
 
-        timestep = TimeStep(
+        timestep = PlayerActorInput(
             env=jax.tree.map(lambda t: t[None, None, ...], timestep.env),
             history=jax.tree.map(lambda t: t[:, None, ...], timestep.history),
         )
 
         model_output = self._player_apply_fn(params, timestep)
         # Remove the padding from above.
-        model_output: ModelOutput = jax.tree.map(
+        model_output: PlayerActorOutput = jax.tree.map(
             lambda t: jnp.squeeze(t, axis=(0, 1)), model_output
         )
 
@@ -72,7 +84,7 @@ class Agent:
             switch_key, model_output.switch_head.logits
         )
 
-        return ActorStep(
+        return PlayerAgentOutput(
             action_type_head=action_type_head,
             move_head=move_head,
             switch_head=switch_head,

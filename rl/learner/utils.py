@@ -28,8 +28,8 @@ def collect_batch_telemetry_data(batch: Transition) -> Dict[str, Any]:
     can_switch = batch.timestep.env.action_type_mask[..., 1]
     can_act = can_move & can_switch & valid
 
-    move_ratio = renormalize(batch.actor_step.action_type_head == 0, can_act)
-    switch_ratio = renormalize(batch.actor_step.action_type_head == 1, can_act)
+    move_ratio = renormalize(batch.player_output.action_type_head == 0, can_act)
+    switch_ratio = renormalize(batch.player_output.action_type_head == 1, can_act)
 
     return dict(
         trajectory_length_mean=lengths.mean(),

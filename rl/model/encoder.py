@@ -19,7 +19,7 @@ from rl.environment.data import (
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
 )
-from rl.environment.interfaces import EnvStep, HistoryStep
+from rl.environment.interfaces import PlayerEnvOutput, PlayerHistoryOutput
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -705,7 +705,7 @@ class Encoder(nn.Module):
 
         return embedding, mask, request_count
 
-    def _embed_entities(self, env_step: EnvStep):
+    def _embed_entities(self, env_step: PlayerEnvOutput):
         entity_encodings = entity_embeddings = jnp.concatenate(
             (env_step.private_team, env_step.public_team)
         )
@@ -719,7 +719,7 @@ class Encoder(nn.Module):
         return contextual_entities, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
-    def _embed_timestep(self, history: HistoryStep):
+    def _embed_timestep(self, history: PlayerHistoryOutput):
         """
         Encode features of a single timestep, including entities and edges.
         """
@@ -756,7 +756,7 @@ class Encoder(nn.Module):
             history_request_count,
         )
 
-    def _embed_timesteps(self, history: HistoryStep):
+    def _embed_timesteps(self, history: PlayerHistoryOutput):
         timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
             self._embed_timestep
         )(history)
@@ -826,7 +826,7 @@ class Encoder(nn.Module):
             switch_embeddings, create_attention_mask(switch_mask)
         )
 
-    def __call__(self, env_step: EnvStep, history_step: HistoryStep):
+    def __call__(self, env_step: PlayerEnvOutput, history_step: PlayerHistoryOutput):
         """
         Forward pass of the Encoder model. Processes an environment step and outputs
         contextual embeddings for actions.
@@ -842,7 +842,7 @@ class Encoder(nn.Module):
         )
 
         def _batched_forward(
-            env_step: EnvStep,
+            env_step: PlayerEnvOutput,
             timestep_mask: jax.Array,
             current_position: jax.Array,
         ):
