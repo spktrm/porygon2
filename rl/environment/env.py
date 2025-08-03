@@ -1,3 +1,5 @@
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -73,13 +75,13 @@ class TeamBuilderEnvironment:
         self.pos += 1
         return self.state
 
-    # @functools.partial(jax.jit, static_argnums=(0,))
+    @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self):
         mask = jnp.ones(self.num_sets, dtype=bool)
         tokens = jnp.ones(6, dtype=np.int32) * -1
         return BuilderEnvOutput(mask=mask, tokens=tokens)
 
-    # @functools.partial(jax.jit, static_argnums=(0,))
+    @functools.partial(jax.jit, static_argnums=(0,))
     def _step(self, action: int, pos: int, state: BuilderEnvOutput):
         new_mask = self.data["mask"][action]
         token_mask = jax.nn.one_hot(pos, 6, dtype=jnp.bool)
