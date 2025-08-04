@@ -82,8 +82,8 @@ class Porygon2BuilderModel(nn.Module):
 
     def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
-        not_masked = input.tokens != -1
-        not_masked_sum = not_masked.sum(axis=-1)
+        masked = input.tokens == -1
+        masked_sum = masked.sum(axis=-1)
         num_tokens = input.tokens.shape[-1]
 
         attn_mask = jnp.ones_like(input.tokens, dtype=jnp.bool)
@@ -91,13 +91,13 @@ class Porygon2BuilderModel(nn.Module):
         position_indices = jnp.arange(num_tokens, dtype=jnp.int32)
 
         embeddings = jnp.where(
-            not_masked[..., None], self.mask_embedding, self.embeddings(input.tokens)
+            masked[..., None], self.mask_embedding, self.embeddings(input.tokens)
         )
         pred_embeddings = self.encoder(
             embeddings, create_attention_mask(attn_mask), position_indices
         )
         head_output = self._sample_token(
-            jnp.take(pred_embeddings, not_masked_sum, axis=0, mode="clip"), input.mask
+            jnp.take(pred_embeddings, masked_sum, axis=0, mode="clip"), input.mask
         )
         pooled = self.decoder(
             pred_embeddings.mean(axis=0, keepdims=True),
@@ -194,7 +194,7 @@ def main():
 
     while True:
         rng_key, key = jax.random.split(key)
-        *builder_subkeys, final_builder_subkey = jax.random.split(rng_key, 7)
+        builder_subkeys = jax.random.split(rng_key, 7)
 
         build_traj = []
         builder_env = TeamBuilderEnvironment()
@@ -204,19 +204,14 @@ def main():
             builder_agent_output = agent.step_builder(
                 subkey, params, builder_env_output
             )
-            # print(builder_env_output.tokens)
-            # print(builder_agent_output.actor_output.v)
-            # print(builder_agent_output.action)
             builder_transition = BuilderTransition(
                 env_output=builder_env_output, agent_output=builder_agent_output
             )
             build_traj.append(builder_transition)
+            if builder_env_output.done.item():
+                break
             builder_env_output = builder_env.step(builder_agent_output.action.item())
 
-        print(final_builder_subkey)
-        builder_agent_output = agent.step_builder(
-            final_builder_subkey, params, builder_env_output
-        )
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         print("tokens:", tokens_buffer)
 
