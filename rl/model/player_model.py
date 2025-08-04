@@ -1,8 +1,6 @@
 import functools
-import math
 import pickle
 from pprint import pprint
-from typing import Dict
 
 import flax.linen as nn
 import jax
@@ -19,7 +17,7 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
-from rl.model.utils import BIAS_VALUE, Params, legal_log_policy, legal_policy
+from rl.model.utils import BIAS_VALUE, get_num_params, legal_log_policy, legal_policy
 from rl.utils import init_jax_jit_cache
 
 
@@ -103,58 +101,10 @@ class Porygon2PlayerModel(nn.Module):
         )
 
 
-def get_num_params(vars: Params, n: int = 3) -> Dict[str, Dict[str, float]]:
-    def calculate_params(key: str, vars: Params) -> int:
-        total = 0
-        for key, value in vars.items():
-            if isinstance(value, jax.Array):
-                total += math.prod(value.shape)
-            else:
-                total += calculate_params(key, value)
-        return total
-
-    def build_param_dict(
-        vars: Params, total_params: int, current_depth: int
-    ) -> Dict[str, Dict[str, float]]:
-        param_dict = {}
-        for key, value in vars.items():
-            if isinstance(value, jax.Array):
-                num_params = math.prod(value.shape)
-                param_dict[key] = {
-                    "num_params": num_params,
-                    "ratio": num_params / total_params,
-                }
-            else:
-                nested_params = calculate_params(key, value)
-                param_entry = {
-                    "num_params": nested_params,
-                    "ratio": nested_params / total_params,
-                }
-                if current_depth < n - 1:
-                    param_entry["details"] = build_param_dict(
-                        value, total_params, current_depth + 1
-                    )
-                param_dict[key] = param_entry
-        return param_dict
-
-    total_params = calculate_params("base", vars)
-    return build_param_dict(vars, total_params, 0)
-
-
 def get_player_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
         config = get_model_config()
     return Porygon2PlayerModel(config)
-
-
-def assert_no_nan_or_inf(gradients, path=""):
-    if isinstance(gradients, dict):
-        for key, value in gradients.items():
-            new_path = f"{path}/{key}" if path else key
-            assert_no_nan_or_inf(value, new_path)
-    else:
-        if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
-            raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
 
 
 def main():
