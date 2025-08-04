@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Callable
 
@@ -70,3 +71,51 @@ def get_most_recent_file(dir_path: str, pattern: str = None):
     most_recent_file = max(files, key=os.path.getctime)
 
     return most_recent_file
+
+
+def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
+    def calculate_params(key: str, vars: Params) -> int:
+        total = 0
+        for key, value in vars.items():
+            if isinstance(value, jax.Array):
+                total += math.prod(value.shape)
+            else:
+                total += calculate_params(key, value)
+        return total
+
+    def build_param_dict(
+        vars: Params, total_params: int, current_depth: int
+    ) -> dict[str, dict[str, float]]:
+        param_dict = {}
+        for key, value in vars.items():
+            if isinstance(value, jax.Array):
+                num_params = math.prod(value.shape)
+                param_dict[key] = {
+                    "num_params": num_params,
+                    "ratio": num_params / total_params,
+                }
+            else:
+                nested_params = calculate_params(key, value)
+                param_entry = {
+                    "num_params": nested_params,
+                    "ratio": nested_params / total_params,
+                }
+                if current_depth < n - 1:
+                    param_entry["details"] = build_param_dict(
+                        value, total_params, current_depth + 1
+                    )
+                param_dict[key] = param_entry
+        return param_dict
+
+    total_params = calculate_params("base", vars)
+    return build_param_dict(vars, total_params, 0)
+
+
+def assert_no_nan_or_inf(gradients, path=""):
+    if isinstance(gradients, dict):
+        for key, value in gradients.items():
+            new_path = f"{path}/{key}" if path else key
+            assert_no_nan_or_inf(value, new_path)
+    else:
+        if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
+            raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
