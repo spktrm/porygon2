@@ -293,7 +293,7 @@ def train_step(
         )
 
         loss_v = value_loss(
-            learner_builder_output.v, builder_vtrace.returns, builder_valid, config
+            learner_builder_output.v, builder_vtrace.returns, builder_valid
         )
 
         loss_entropy = builder_entropy_loss(
@@ -303,7 +303,7 @@ def train_step(
         )
 
         loss_kl = backward_kl_loss(
-            learner_target_ratio, learner_builder_output, builder_valid
+            learner_target_ratio, learner_target_log_ratio, builder_valid
         )
 
         builder_loss = (
