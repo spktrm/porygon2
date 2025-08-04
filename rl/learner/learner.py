@@ -21,6 +21,7 @@ from rl.learner.config import (
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.utils import Params
+from rl.utils import average
 
 
 def get_action_value(arr: jax.Array, action: jax.Array):
@@ -53,12 +54,12 @@ def policy_gradient_loss(
     pg_loss = policy_ratios * advantages - (
         jnp.abs(advantages) * (1 - policy_ratios) ** 2
     ) / (2 * clip_ppo)
-    return -pg_loss.mean(where=valid)
+    return -average(pg_loss, valid)
 
 
 def value_loss(pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     mse_loss = jnp.square(pred_v - target_v)
-    return 0.5 * mse_loss.mean(where=valid)
+    return 0.5 * average(mse_loss, valid)
 
 
 def player_entropy_loss(
@@ -77,12 +78,12 @@ def player_entropy_loss(
     sub_entropy = jnp.stack((move_entropy, switch_entropy), axis=-1)
 
     total_entropy = action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
-    return total_entropy.mean(valid)
+    return average(total_entropy, valid)
 
 
 def builder_entropy_loss(pi: jax.Array, log_pi: jax.Array, valid: jax.Array):
     loss = -jnp.sum(pi * log_pi, axis=-1)
-    return loss.mean(where=valid)
+    return average(loss, valid)
 
 
 def backward_kl_loss(
@@ -94,7 +95,7 @@ def backward_kl_loss(
     as well as: https://arxiv.org/pdf/2502.08938
     """
     loss = policy_ratio * log_policy_ratio - (policy_ratio - 1)
-    return loss.mean(where=valid)
+    return average(loss, valid)
 
 
 @functools.partial(jax.jit, static_argnames=["config"])
@@ -130,7 +131,7 @@ def train_step(
     actor_target_log_ratio = actor_log_pi - target_log_pi
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
-    player_valid = jnp.logical_not(batch.player_transitions.env_output.done)
+    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     rewards = batch.player_transitions.env_output.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
@@ -145,8 +146,8 @@ def train_step(
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
-    player_adv_mean = vtrace.pg_advantage.mean(where=player_valid)
-    player_adv_std = vtrace.pg_advantage.std(where=player_valid)
+    player_adv_mean = average(vtrace.pg_advantage, player_valid)
+    player_adv_std = average(vtrace.pg_advantage, player_valid)
 
     # Normalize by the ema mean and std of the advantages.
     player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
@@ -206,8 +207,8 @@ def train_step(
             + ent_kl_coef_mult
             * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
         )
-        learner_actor_approx_kl = (-learner_actor_log_ratio).mean(where=player_valid)
-        learner_target_approx_kl = (-learner_target_log_ratio).mean(where=player_valid)
+        learner_actor_approx_kl = average(-learner_actor_log_ratio, player_valid)
+        learner_target_approx_kl = average(-learner_target_log_ratio, player_valid)
 
         return loss, dict(
             # Loss values
@@ -216,8 +217,8 @@ def train_step(
             loss_entropy=loss_entropy,
             loss_kl=loss_kl,
             # Ratios
-            learner_actor_ratio=learner_actor_ratio.mean(where=player_valid),
-            learner_target_ratio=learner_target_ratio.mean(where=player_valid),
+            learner_actor_ratio=average(learner_actor_ratio, player_valid),
+            learner_target_ratio=average(learner_target_ratio, player_valid),
             # Approx KL values
             learner_actor_approx_kl=learner_actor_approx_kl,
             learner_target_approx_kl=learner_target_approx_kl,
@@ -250,7 +251,7 @@ def train_step(
     builder_rewards = jnp.concatenate(
         (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
-    builder_valid = jnp.logical_not(batch.builder_transitions.env_output.done)
+    builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
     builder_vtrace = compute_returns(
         target_builder_output.v,
         jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
@@ -263,8 +264,8 @@ def train_step(
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
 
-    builder_adv_mean = builder_vtrace.pg_advantage.mean(where=builder_valid)
-    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valid)
+    builder_adv_mean = average(builder_vtrace.pg_advantage, builder_valid)
+    builder_adv_std = average(builder_vtrace.pg_advantage, builder_valid)
     builder_norm_advantages = (
         builder_vtrace.pg_advantage - builder_state.target_adv_mean
     ) / (builder_state.target_adv_std + 1e-8)
@@ -335,11 +336,11 @@ def train_step(
             gradient_norm=optax.global_norm(player_grads),
             adv_mean=player_adv_mean,
             adv_std=player_adv_std,
-            is_ratio=player_is_ratio.mean(where=player_valid),
-            norm_adv_mean=player_norm_advantages.mean(where=player_valid),
-            norm_adv_std=player_norm_advantages.std(where=player_valid),
-            value_target_mean=vtrace.returns.mean(where=player_valid),
-            value_target_std=vtrace.returns.std(where=player_valid),
+            is_ratio=average(player_is_ratio, player_valid),
+            norm_adv_mean=average(player_norm_advantages, player_valid),
+            norm_adv_std=average(player_norm_advantages, player_valid),
+            value_target_mean=average(vtrace.returns, player_valid),
+            value_target_std=average(vtrace.returns, player_valid),
             Step=player_state.num_steps,
         )
     )
