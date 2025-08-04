@@ -35,7 +35,7 @@ class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
     unroll_length: int = 108
-    replay_buffer_capacity: int = 256
+    replay_buffer_capacity: int = 1024
 
     # Batch iteration params
     batch_size: int = 4
@@ -58,7 +58,7 @@ class Porygon2LearnerConfig:
     value_loss_coef: float = 0.5
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.05
-    kl_loss_coef: float = 0.5
+    kl_loss_coef: float = 0.05
 
 
 def get_learner_config():

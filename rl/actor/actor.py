@@ -67,7 +67,7 @@ class Actor:
     ):
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = jax.random.split(rng_key)
-        builder_subkeys = jax.random.split(builder_key, 6)
+        builder_subkeys = jax.random.split(builder_key, 7)
         player_subkeys = jax.random.split(player_key, self._unroll_length)
 
         build_traj = []
@@ -83,6 +83,8 @@ class Actor:
                 env_output=builder_env_output, agent_output=builder_agent_output
             )
             build_traj.append(builder_transition)
+            if builder_env_output.done.item():
+                break
             builder_env_output = self._builder_env.step(
                 builder_agent_output.action.item()
             )
@@ -93,6 +95,7 @@ class Actor:
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         # Reset the player environment.
         player_actor_input = self._player_env.reset(tokens_buffer.reshape(-1).tolist())
+
         # Rollout the player environment.
         for subkey in player_subkeys:
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)

@@ -79,7 +79,7 @@ class TeamBuilderEnvironment:
     def _reset(self):
         mask = jnp.ones(self.num_sets, dtype=bool)
         tokens = jnp.ones(6, dtype=np.int32) * -1
-        return BuilderEnvOutput(mask=mask, tokens=tokens)
+        return BuilderEnvOutput(mask=mask, tokens=tokens, done=jnp.array(False))
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(self, action: int, pos: int, state: BuilderEnvOutput):
@@ -87,4 +87,4 @@ class TeamBuilderEnvironment:
         token_mask = jax.nn.one_hot(pos, 6, dtype=jnp.bool)
         tokens = jnp.where(token_mask, action, state.tokens)
         mask = state.mask & ~new_mask
-        return BuilderEnvOutput(mask=mask, tokens=tokens)
+        return BuilderEnvOutput(mask=mask, tokens=tokens, done=jnp.array(pos >= 5))

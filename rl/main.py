@@ -131,7 +131,7 @@ def main():
     stop_signal = [False]
     num_samples = [0]
 
-    num_eval_actors = 5
+    num_eval_actors = 0
     trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )
