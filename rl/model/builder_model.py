@@ -88,7 +88,7 @@ class Porygon2BuilderModel(nn.Module):
     def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
         masked = input.tokens == -1
-        not_masked_sum = 6 - masked.sum(axis=-1)
+        not_masked_sum = (6 - masked.sum(axis=-1)).clip(0, 5)
         num_tokens = input.tokens.shape[-1]
 
         attn_mask = jnp.ones_like(input.tokens, dtype=jnp.bool)
@@ -102,7 +102,7 @@ class Porygon2BuilderModel(nn.Module):
             embeddings, create_attention_mask(attn_mask), position_indices
         )
         head_output = self._sample_token(
-            jnp.take(pred_embeddings, not_masked_sum, axis=0, mode="clip"), input.mask
+            jnp.take(pred_embeddings, not_masked_sum, axis=0), input.mask
         )
         pooled = self.decoder(
             pred_embeddings.mean(axis=0, keepdims=True),
