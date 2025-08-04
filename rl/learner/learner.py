@@ -147,7 +147,7 @@ def train_step(
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
     player_adv_mean = average(vtrace.pg_advantage, player_valid)
-    player_adv_std = average(vtrace.pg_advantage, player_valid)
+    player_adv_std = vtrace.pg_advantage.std(where=player_valid)
 
     # Normalize by the ema mean and std of the advantages.
     player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
@@ -265,7 +265,7 @@ def train_step(
     )
 
     builder_adv_mean = average(builder_vtrace.pg_advantage, builder_valid)
-    builder_adv_std = average(builder_vtrace.pg_advantage, builder_valid)
+    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valid)
     builder_norm_advantages = (
         builder_vtrace.pg_advantage - builder_state.target_adv_mean
     ) / (builder_state.target_adv_std + 1e-8)
@@ -338,9 +338,9 @@ def train_step(
             adv_std=player_adv_std,
             is_ratio=average(player_is_ratio, player_valid),
             norm_adv_mean=average(player_norm_advantages, player_valid),
-            norm_adv_std=average(player_norm_advantages, player_valid),
+            norm_adv_std=player_norm_advantages.std(where=player_valid),
             value_target_mean=average(vtrace.returns, player_valid),
-            value_target_std=average(vtrace.returns, player_valid),
+            value_target_std=vtrace.returns.std(where=player_valid),
             Step=player_state.num_steps,
         )
     )
