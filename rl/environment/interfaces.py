@@ -59,6 +59,7 @@ class PlayerTransition(NamedTuple):
 class BuilderEnvOutput(NamedTuple):
     tokens: jax.Array = ()
     mask: jax.Array = ()
+    done: jax.Array = ()
 
 
 class BuilderActorOutput(NamedTuple):

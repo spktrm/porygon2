@@ -46,13 +46,29 @@ def calculate_log_prob(
     return action_type_log_prob + (action_type_one_hot * sub_log_prob).sum(axis=-1)
 
 
-def calculate_entropy(
+def policy_gradient_loss(
+    policy_ratios: jax.Array, advantages: jax.Array, valid: jax.Array, clip_ppo: float
+):
+    """Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025"""
+    pg_loss = policy_ratios * advantages - (
+        jnp.abs(advantages) * (1 - policy_ratios) ** 2
+    ) / (2 * clip_ppo)
+    return -pg_loss.mean(where=valid)
+
+
+def value_loss(pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
+    mse_loss = jnp.square(pred_v - target_v)
+    return 0.5 * mse_loss.mean(where=valid)
+
+
+def player_entropy_loss(
     action_type_log_pi: jax.Array,
     action_type_pi: jax.Array,
     move_log_pi: jax.Array,
     move_pi: jax.Array,
     switch_log_pi: jax.Array,
     switch_pi: jax.Array,
+    valid: jax.Array,
 ):
     action_type_entropy = -jnp.sum(action_type_pi * action_type_log_pi, axis=-1)
 
@@ -60,7 +76,25 @@ def calculate_entropy(
     switch_entropy = -jnp.sum(switch_pi * switch_log_pi, axis=-1)
     sub_entropy = jnp.stack((move_entropy, switch_entropy), axis=-1)
 
-    return action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
+    total_entropy = action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
+    return total_entropy.mean(valid)
+
+
+def builder_entropy_loss(pi: jax.Array, log_pi: jax.Array, valid: jax.Array):
+    loss = -jnp.sum(pi * log_pi, axis=-1)
+    return loss.mean(where=valid)
+
+
+def backward_kl_loss(
+    policy_ratio: jax.Array, log_policy_ratio: jax.Array, valid: jax.Array
+):
+    """
+    Calculate the Backward KL loss.
+    Taken from the MMD paper: https://arxiv.org/pdf/2206.05825
+    as well as: https://arxiv.org/pdf/2502.08938
+    """
+    loss = policy_ratio * log_policy_ratio - (policy_ratio - 1)
+    return loss.mean(where=valid)
 
 
 @functools.partial(jax.jit, static_argnames=["config"])
@@ -96,7 +130,7 @@ def train_step(
     actor_target_log_ratio = actor_log_pi - target_log_pi
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
-    valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    player_valid = jnp.logical_not(batch.player_transitions.env_output.done)
     rewards = batch.player_transitions.env_output.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
@@ -104,14 +138,15 @@ def train_step(
         target_pred.v,
         jnp.concatenate((target_pred.v[1:], target_pred.v[-1:])),
         jnp.concatenate((rewards[1:], rewards[-1:])),
-        jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:]))) * config.gamma,
+        jnp.concatenate((player_valid[1:], jnp.zeros_like(player_valid[-1:])))
+        * config.gamma,
         actor_target_ratio,
         lambda_=config.lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
-    player_adv_mean = vtrace.pg_advantage.mean(where=valid)
-    player_adv_std = vtrace.pg_advantage.std(where=valid)
+    player_adv_mean = vtrace.pg_advantage.mean(where=player_valid)
+    player_adv_std = vtrace.pg_advantage.std(where=player_valid)
 
     # Normalize by the ema mean and std of the advantages.
     player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
@@ -142,35 +177,28 @@ def train_step(
         learner_target_log_ratio = learner_log_pi - target_log_pi
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Calculate the policy gradient loss.
-        # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
         ratio = player_is_ratio * learner_actor_ratio
 
-        pg_loss = ratio * player_norm_advantages - (
-            jnp.abs(player_norm_advantages) * (1 - ratio) ** 2
-        ) / (2 * config.clip_ppo)
-        loss_pg = -pg_loss.mean(where=valid)
+        # Calculate losses.
+        loss_pg = policy_gradient_loss(
+            ratio, player_norm_advantages, player_valid, config.clip_ppo
+        )
 
-        # Calculate the value loss.
-        loss_v = 0.5 * jnp.square(pred.v - vtrace.returns).mean(where=valid)
+        loss_v = value_loss(pred.v, vtrace.returns, player_valid)
 
-        # Calculate the entropy loss.
-        loss_entropy = calculate_entropy(
+        loss_entropy = player_entropy_loss(
             pred.action_type_head.log_policy,
             pred.action_type_head.policy,
             pred.move_head.log_policy,
             pred.move_head.policy,
             pred.switch_head.log_policy,
             pred.switch_head.policy,
-        ).mean(where=valid)
-
-        # Calculate the Backward KL loss.
-        # Taken from the MMD paper: https://arxiv.org/pdf/2206.05825
-        # as well as: https://arxiv.org/pdf/2502.08938
-        backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
-            learner_target_ratio - 1
+            player_valid,
         )
-        loss_kl = backward_kl_approx.mean(where=valid)
+
+        loss_kl = backward_kl_loss(
+            learner_target_ratio, learner_target_log_ratio, player_valid
+        )
 
         loss = (
             loss_pg
@@ -178,8 +206,8 @@ def train_step(
             + ent_kl_coef_mult
             * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
         )
-        learner_actor_approx_kl = (-learner_actor_log_ratio).mean(where=valid)
-        learner_target_approx_kl = (-learner_target_log_ratio).mean(where=valid)
+        learner_actor_approx_kl = (-learner_actor_log_ratio).mean(where=player_valid)
+        learner_target_approx_kl = (-learner_target_log_ratio).mean(where=player_valid)
 
         return loss, dict(
             # Loss values
@@ -188,15 +216,15 @@ def train_step(
             loss_entropy=loss_entropy,
             loss_kl=loss_kl,
             # Ratios
-            learner_actor_ratio=learner_actor_ratio.mean(where=valid),
-            learner_target_ratio=learner_target_ratio.mean(where=valid),
+            learner_actor_ratio=learner_actor_ratio.mean(where=player_valid),
+            learner_target_ratio=learner_target_ratio.mean(where=player_valid),
             # Approx KL values
             learner_actor_approx_kl=learner_actor_approx_kl,
             learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             ent_kl_coef_mult=ent_kl_coef_mult,
             value_function_r2=calculate_r2(
-                value_prediction=pred.v, value_target=vtrace.returns, mask=valid
+                value_prediction=pred.v, value_target=vtrace.returns, mask=player_valid
             ),
         )
 
@@ -222,26 +250,21 @@ def train_step(
     builder_rewards = jnp.concatenate(
         (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
     )
+    builder_valid = jnp.logical_not(batch.builder_transitions.env_output.done)
     builder_vtrace = compute_returns(
         target_builder_output.v,
         jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
-        builder_rewards,
-        jnp.concatenate(
-            (
-                jnp.ones_like(builder_is_ratio[:-1], dtype=jnp.bool),
-                jnp.zeros_like(final_reward[None], dtype=jnp.bool),
-            )
-        )
+        jnp.concatenate((builder_rewards[1:], builder_rewards[-1:])),
+        jnp.concatenate((builder_valid[1:], jnp.zeros_like(builder_valid[-1:])))
         * config.gamma,
         actor_target_builder_ratio,
         lambda_=config.lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
-    builder_valids = jnp.ones_like(builder_rewards)
 
-    builder_adv_mean = builder_vtrace.pg_advantage.mean(where=builder_valids)
-    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valids)
+    builder_adv_mean = builder_vtrace.pg_advantage.mean(where=builder_valid)
+    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valid)
     builder_norm_advantages = (
         builder_vtrace.pg_advantage - builder_state.target_adv_mean
     ) / (builder_state.target_adv_std + 1e-8)
@@ -262,33 +285,26 @@ def train_step(
         learner_target_log_ratio = learner_builder_log_pi - target_builder_log_pi
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Calculate the policy gradient loss.
-        # Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025
         ratio = builder_is_ratio * learner_actor_ratio
 
-        pg_loss = ratio * builder_norm_advantages - (
-            jnp.abs(builder_norm_advantages) * (1 - ratio) ** 2
-        ) / (2 * config.clip_ppo)
-        loss_pg = -pg_loss.mean(where=builder_valids)
-
-        pred_v = learner_builder_output.v
-        loss_v = 0.5 * jnp.square(pred_v - builder_vtrace.returns).mean(
-            where=builder_valids
+        # Calculate the losses.
+        loss_pg = policy_gradient_loss(
+            ratio, builder_norm_advantages, builder_valid, config.clip_ppo
         )
 
-        loss_entropy = (
-            -(
-                learner_builder_output.head.policy
-                * learner_builder_output.head.log_policy
-            )
-            .sum(axis=-1)
-            .mean(where=builder_valids)
+        loss_v = value_loss(
+            learner_builder_output.v, builder_vtrace.returns, builder_valid, config
         )
 
-        backward_kl_approx = learner_target_ratio * learner_target_log_ratio - (
-            learner_target_ratio - 1
+        loss_entropy = builder_entropy_loss(
+            learner_builder_output.head.policy,
+            learner_builder_output.head.log_policy,
+            builder_valid,
         )
-        loss_kl = backward_kl_approx.mean(where=builder_valids)
+
+        loss_kl = backward_kl_loss(
+            learner_target_ratio, learner_builder_output, builder_valid
+        )
 
         builder_loss = (
             loss_pg
@@ -303,9 +319,9 @@ def train_step(
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
             builder_value_function_r2=calculate_r2(
-                value_prediction=pred_v,
+                value_prediction=learner_builder_output.v,
                 value_target=builder_vtrace.returns,
-                mask=builder_valids,
+                mask=builder_valid,
             ),
         )
 
@@ -319,11 +335,11 @@ def train_step(
             gradient_norm=optax.global_norm(player_grads),
             adv_mean=player_adv_mean,
             adv_std=player_adv_std,
-            is_ratio=player_is_ratio.mean(where=valid),
-            norm_adv_mean=player_norm_advantages.mean(where=valid),
-            norm_adv_std=player_norm_advantages.std(where=valid),
-            value_target_mean=vtrace.returns.mean(where=valid),
-            value_target_std=vtrace.returns.std(where=valid),
+            is_ratio=player_is_ratio.mean(where=player_valid),
+            norm_adv_mean=player_norm_advantages.mean(where=player_valid),
+            norm_adv_std=player_norm_advantages.std(where=player_valid),
+            value_target_mean=vtrace.returns.mean(where=player_valid),
+            value_target_std=vtrace.returns.std(where=player_valid),
             Step=player_state.num_steps,
         )
     )
@@ -341,7 +357,7 @@ def train_step(
         # Update num steps sampled.
         num_steps=player_state.num_steps + 1,
         # Add 1 for the final step in each trajectory
-        actor_steps=player_state.actor_steps + valid.sum(),
+        actor_steps=player_state.actor_steps + player_valid.sum(),
     )
 
     player_logs.update(dict(actor_steps=player_state.actor_steps))

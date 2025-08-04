@@ -6,13 +6,17 @@ from typing import Callable, Dict
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 from ml_collections import ConfigDict
 
+from rl.actor.agent import Agent
 from rl.environment.data import PACKED_SETS
+from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderAgentOutput,
     BuilderEnvOutput,
+    BuilderTransition,
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_builder_step
@@ -40,14 +44,19 @@ class Porygon2BuilderModel(nn.Module):
         dtype = self.cfg.dtype
 
         num_sets = len(SETS_DATA["sets"])
+        embedding_init_function = nn.initializers.normal()
 
         self.embeddings = nn.Embed(
-            num_embeddings=num_sets, features=entity_size, dtype=dtype
+            num_embeddings=num_sets,
+            features=entity_size,
+            dtype=dtype,
+            embedding_init=embedding_init_function,
         )
-        transformer_config = self.cfg.action_type_head.transformer.to_dict()
-        self.decoder = TransformerDecoder(**transformer_config)
 
+        transformer_config = self.cfg.action_type_head.transformer.to_dict()
         transformer_config["need_pos"] = True
+
+        self.decoder = TransformerDecoder(**transformer_config)
         self.encoder = TransformerEncoder(**transformer_config)
 
         self.policy_head = MLP((entity_size, num_sets), dtype=dtype)
@@ -55,7 +64,7 @@ class Porygon2BuilderModel(nn.Module):
 
         self.mask_embedding = self.param(
             "mask_embedding",
-            nn.initializers.truncated_normal(),
+            embedding_init_function,
             (1, entity_size),
             dtype=dtype,
         )
@@ -88,7 +97,7 @@ class Porygon2BuilderModel(nn.Module):
             embeddings, create_attention_mask(attn_mask), position_indices
         )
         head_output = self._sample_token(
-            jnp.take(pred_embeddings, not_masked_sum, axis=0), input.mask
+            jnp.take(pred_embeddings, not_masked_sum, axis=0, mode="clip"), input.mask
         )
         pooled = self.decoder(
             pred_embeddings.mean(axis=0, keepdims=True),
@@ -162,6 +171,7 @@ def main():
     network = get_builder_model()
 
     ex = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou")))
+    key = jax.random.key(42)
 
     latest_ckpt = None  # get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -170,7 +180,6 @@ def main():
             step = pickle.load(f)
         params = step["builder_state"]["params"]
     else:
-        key = jax.random.key(42)
         params = network.init(key, ex)
 
     pprint(get_num_params(params))
@@ -179,8 +188,37 @@ def main():
     # apply_fn = jax.jit(network.apply)
     apply_fn = network.apply
 
-    output = apply_fn(params, ex)
-    print(output)
+    agent = Agent(
+        builder_apply_fn=jax.vmap(apply_fn, in_axes=(None, 1), out_axes=1),
+    )
+
+    while True:
+        rng_key, key = jax.random.split(key)
+        *builder_subkeys, final_builder_subkey = jax.random.split(rng_key, 7)
+
+        build_traj = []
+        builder_env = TeamBuilderEnvironment()
+
+        builder_env_output = builder_env.reset()
+        for subkey in builder_subkeys:
+            builder_agent_output = agent.step_builder(
+                subkey, params, builder_env_output
+            )
+            # print(builder_env_output.tokens)
+            # print(builder_agent_output.actor_output.v)
+            # print(builder_agent_output.action)
+            builder_transition = BuilderTransition(
+                env_output=builder_env_output, agent_output=builder_agent_output
+            )
+            build_traj.append(builder_transition)
+            builder_env_output = builder_env.step(builder_agent_output.action.item())
+
+        print(final_builder_subkey)
+        builder_agent_output = agent.step_builder(
+            final_builder_subkey, params, builder_env_output
+        )
+        tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
+        print("tokens:", tokens_buffer)
 
 
 if __name__ == "__main__":
