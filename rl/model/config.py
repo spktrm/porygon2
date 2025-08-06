@@ -54,8 +54,10 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 def get_model_config():
     cfg = ConfigDict()
 
-    num_heads = 3
-    entity_size = 64 * num_heads
+    num_heads = 4
+    scale = 1
+
+    entity_size = int(scale * 64 * num_heads)
     dtype = jnp.bfloat16
 
     cfg.entity_size = entity_size
@@ -125,6 +127,10 @@ def get_model_config():
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
+    cfg.encoder.action_encoder = ConfigDict()
+    set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
+    cfg.encoder.action_encoder.need_pos = False
+
     cfg.encoder.move_encoder = ConfigDict()
     set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
     cfg.encoder.move_encoder.need_pos = False
@@ -132,10 +138,6 @@ def get_model_config():
     cfg.encoder.switch_encoder = ConfigDict()
     set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
     cfg.encoder.switch_encoder.need_pos = False
-
-    cfg.encoder.action_encoder = ConfigDict()
-    set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.action_encoder.need_pos = False
 
     cfg.encoder.entity_timestep_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
@@ -156,7 +158,6 @@ def get_model_config():
     cfg.action_type_head = ConfigDict()
     cfg.action_type_head.transformer = ConfigDict()
     set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
-    cfg.action_type_head.output_features = 2
     cfg.action_type_head.dtype = dtype
 
     cfg.move_head = ConfigDict()

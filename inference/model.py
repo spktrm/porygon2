@@ -9,11 +9,7 @@ from inference.interfaces import HeadOutput, ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
-from rl.environment.interfaces import (
-    BuilderTransition,
-    PlayerActorInput,
-    PolicyHeadOutput,
-)
+from rl.environment.interfaces import PlayerActorInput, PolicyHeadOutput
 from rl.environment.utils import get_ex_player_step
 from rl.model.builder_model import get_builder_model
 from rl.model.player_model import get_player_model
@@ -70,9 +66,8 @@ class InferenceModel:
 
     def reset(self):
         rng_key = self.split_rng()
-        builder_subkeys = jax.random.split(rng_key, 6)
+        builder_subkeys = jax.random.split(rng_key, 7)
 
-        build_traj = []
         builder_env = TeamBuilderEnvironment()
 
         builder_env_output = builder_env.reset()
@@ -80,15 +75,9 @@ class InferenceModel:
             builder_agent_output = self._agent.step_builder(
                 subkey, self.builder_params, builder_env_output
             )
-            builder_transition = BuilderTransition(
-                env_output=builder_env_output, agent_output=builder_agent_output
-            )
-            build_traj.append(builder_transition)
+            if builder_env_output.done.item():
+                break
             builder_env_output = builder_env.step(builder_agent_output.action.item())
-
-        builder_agent_output = self._agent.step_builder(
-            subkey, self.builder_params, builder_env_output
-        )
 
         # Send set tokens to the player environment.
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
@@ -99,11 +88,9 @@ class InferenceModel:
 
     def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
         return HeadOutput(
-            logits=np.round(restrict_values(head_output.logits), self.precision),
-            policy=np.round(restrict_values(head_output.policy), self.precision),
-            log_policy=np.round(
-                restrict_values(head_output.log_policy), self.precision
-            ),
+            logits=restrict_values(head_output.logits),
+            policy=restrict_values(head_output.policy),
+            log_policy=restrict_values(head_output.log_policy),
         )
 
     def step(self, timestep: PlayerActorInput):

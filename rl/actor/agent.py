@@ -5,6 +5,7 @@ from typing import Callable, overload
 import jax
 import jax.numpy as jnp
 
+from rl.concurrency.lock import NoOpLock
 from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderAgentOutput,
@@ -27,15 +28,19 @@ class Agent:
 
     def __init__(
         self,
-        player_apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput],
-        builder_apply_fn: Callable[[Params, BuilderEnvOutput], BuilderAgentOutput],
-        gpu_lock: threading.Lock,
+        player_apply_fn: (
+            Callable[[Params, PlayerActorInput], PlayerActorOutput] | None
+        ) = None,
+        builder_apply_fn: (
+            Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
+        ) = None,
+        gpu_lock: threading.Lock = None,
     ):
         """Constructs an Agent object."""
 
         self._player_apply_fn = player_apply_fn
         self._builder_apply_fn = builder_apply_fn
-        self._lock = gpu_lock
+        self._lock = gpu_lock if gpu_lock is not None else NoOpLock()
 
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput

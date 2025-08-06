@@ -894,9 +894,10 @@ export const GetKaizoPlusAction: EvalActionFnType = ({ player }) => {
     }
 
     const mustSwitch = !!(request.forceSwitch ?? [])[0];
-    const availableSwitches = mySide.team.filter(
-        (m) => !m.isActive() && !m.fainted,
-    );
+    const availableSwitches =
+        activeReq[0]?.trapped ?? false
+            ? []
+            : mySide.team.filter((m) => !m.isActive() && !m.fainted);
     if (
         mustSwitch ||
         (attacker && shouldEmergencySwitch(battle, playerIndex))

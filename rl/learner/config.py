@@ -35,11 +35,11 @@ class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
     unroll_length: int = 108
-    replay_buffer_capacity: int = 256
+    replay_buffer_capacity: int = 1024
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: int = 2
+    target_replay_ratio: int = 3
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
@@ -58,7 +58,7 @@ class Porygon2LearnerConfig:
     value_loss_coef: float = 0.5
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.05
-    kl_loss_coef: float = 0.5
+    kl_loss_coef: float = 0.05
 
 
 def get_learner_config():
@@ -199,31 +199,39 @@ def load_train_state(
         ckpt_data = pickle.load(f)
 
     print("Checkpoint data:")
+    ckpt_player_state = ckpt_data.get("player_state", {})
+    ckpt_builder_state = ckpt_data.get("builder_state", {})
+
     pprint(
         {
             k: v
-            for k, v in ckpt_data["player_state"].items()
+            for k, v in ckpt_player_state.items()
+            if k not in ["opt_state", "params", "target_params"]
+        }
+    )
+    pprint(
+        {
+            k: v
+            for k, v in ckpt_builder_state.items()
             if k not in ["opt_state", "params", "target_params"]
         }
     )
 
-    ckpt_player_state = ckpt_data.get("player_state", {})
     player_state = player_state.replace(
-        params=ckpt_data["player_state"]["params"],
-        target_params=ckpt_data["player_state"]["target_params"],
-        opt_state=ckpt_data["player_state"]["opt_state"],
-        num_steps=ckpt_data["player_state"]["num_steps"],
-        num_samples=ckpt_data["player_state"]["num_samples"],
-        actor_steps=ckpt_data["player_state"]["actor_steps"],
+        params=ckpt_player_state["params"],
+        target_params=ckpt_player_state["target_params"],
+        opt_state=ckpt_player_state["opt_state"],
+        num_steps=ckpt_player_state["num_steps"],
+        num_samples=ckpt_player_state["num_samples"],
+        actor_steps=ckpt_player_state["actor_steps"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
     )
 
-    ckpt_builder_state = ckpt_data.get("builder_state", {})
     builder_state = builder_state.replace(
-        params=ckpt_data["builder_state"]["params"],
-        target_params=ckpt_data["builder_state"]["target_params"],
-        opt_state=ckpt_data["builder_state"]["opt_state"],
+        params=ckpt_builder_state["params"],
+        target_params=ckpt_builder_state["target_params"],
+        opt_state=ckpt_builder_state["opt_state"],
         target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
