@@ -88,11 +88,9 @@ class InferenceModel:
 
     def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
         return HeadOutput(
-            logits=np.round(restrict_values(head_output.logits), self.precision),
-            policy=np.round(restrict_values(head_output.policy), self.precision),
-            log_policy=np.round(
-                restrict_values(head_output.log_policy), self.precision
-            ),
+            logits=restrict_values(head_output.logits),
+            policy=restrict_values(head_output.policy),
+            log_policy=restrict_values(head_output.log_policy),
         )
 
     def step(self, timestep: PlayerActorInput):

@@ -29,6 +29,7 @@ from rl.model.modules import (
 from rl.model.utils import (
     BIAS_VALUE,
     Params,
+    get_most_recent_file,
     get_num_params,
     legal_log_policy,
     legal_policy,
@@ -49,13 +50,13 @@ class Porygon2BuilderModel(nn.Module):
         dtype = self.cfg.dtype
 
         num_sets = len(SETS_DATA["sets"])
-        embedding_init_function = nn.initializers.normal()
+        embedding_init_fn = nn.initializers.normal()
 
         self.embeddings = nn.Embed(
             num_embeddings=num_sets,
             features=entity_size,
             dtype=dtype,
-            embedding_init=embedding_init_function,
+            embedding_init=embedding_init_fn,
         )
 
         transformer_config = self.cfg.action_type_head.transformer.to_dict()
@@ -68,10 +69,7 @@ class Porygon2BuilderModel(nn.Module):
         self.value_head = MLP((entity_size, 1), dtype=dtype)
 
         self.mask_embedding = self.param(
-            "mask_embedding",
-            embedding_init_function,
-            (1, entity_size),
-            dtype=dtype,
+            "mask_embedding", embedding_init_fn, (1, entity_size), dtype=dtype
         )
 
     def _sample_token(self, embedding: jax.Array, sample_mask: jax.Array):
@@ -109,7 +107,7 @@ class Porygon2BuilderModel(nn.Module):
             pred_embeddings,
             create_attention_mask(attn_mask.any(keepdims=True), attn_mask),
         )
-        v = nn.tanh(self.value_head(pooled)).squeeze()
+        v = (2 / jnp.pi) * jnp.atan((jnp.pi / 2) * self.value_head(pooled)).squeeze()
 
         return BuilderActorOutput(head=head_output, v=v)
 
@@ -130,7 +128,7 @@ def main():
     ex = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou")))
     key = jax.random.key(42)
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
@@ -169,8 +167,13 @@ def main():
                 break
             builder_env_output = builder_env.step(builder_agent_output.action.item())
 
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *build_traj
+        )
+
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         print("tokens:", tokens_buffer)
+        print("value:", builder_trajectory.agent_output.actor_output.v)
 
 
 if __name__ == "__main__":

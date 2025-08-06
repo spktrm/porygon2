@@ -326,6 +326,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     override async start() {
         for await (const chunk of this.stream) {
+            if (chunk.includes("error|")) {
+                console.log(`Error in stream: ${chunk}`);
+            }
+
             if (this.done || this.finishedEarly) {
                 break;
             }

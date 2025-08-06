@@ -11,13 +11,12 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
-    PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyHead, ScalarHead
-from rl.model.utils import BIAS_VALUE, get_num_params, legal_log_policy, legal_policy
+from rl.model.utils import get_num_params
 from rl.utils import init_jax_jit_cache
 
 
@@ -30,7 +29,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.action_type_head = ScalarHead(self.cfg.action_type_head)
+        self.action_type_head = PolicyHead(self.cfg.action_type_head)
         self.move_head = PolicyHead(self.cfg.move_head)
         self.switch_head = PolicyHead(self.cfg.switch_head)
 
@@ -44,28 +43,29 @@ class Porygon2PlayerModel(nn.Module):
         env_step: PlayerEnvOutput,
         temp: float = 1.0,
     ):
-        action_type_head_logits = self.action_type_head(entity_embeddings, entity_mask)
-        action_type_policy = legal_policy(
-            action_type_head_logits, env_step.action_type_mask, temp
-        )
-        action_type_log_policy = legal_log_policy(
-            action_type_head_logits, env_step.action_type_mask, temp
-        )
 
         move_embeddings = action_embeddings[:4]
         switch_embeddings = action_embeddings[4:]
+        action_embeddings = jnp.stack(
+            (
+                (env_step.move_mask @ move_embeddings)
+                / env_step.move_mask.sum(axis=-1, keepdims=True).clip(min=1),
+                (env_step.switch_mask @ switch_embeddings)
+                / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1),
+            )
+        )
 
         # Apply the value head
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Return the model output
         return PlayerActorOutput(
-            action_type_head=PolicyHeadOutput(
-                logits=jnp.where(
-                    env_step.action_type_mask, action_type_head_logits, BIAS_VALUE
-                ),
-                policy=action_type_policy,
-                log_policy=action_type_log_policy,
+            action_type_head=self.move_head(
+                action_embeddings,
+                entity_embeddings,
+                env_step.action_type_mask,
+                entity_mask,
+                temp,
             ),
             move_head=self.move_head(
                 move_embeddings,
