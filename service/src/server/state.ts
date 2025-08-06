@@ -2721,9 +2721,8 @@ export class StateHandler {
                         canSwitch.push(switchIndex);
                     }
                 }
-                const probablyTrapped =
-                    !!active.trapped || !!active.maybeTrapped;
-                const switches = probablyTrapped ? [] : canSwitch;
+
+                const switches = active.trapped ? [] : canSwitch;
                 const canAddMove = !maskMoves || switches.length === 0;
                 let canMove = false;
 
