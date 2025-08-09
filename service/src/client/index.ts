@@ -15,9 +15,9 @@ import {
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
-const server = "ws://localhost:8000/showdown/websocket";
+// const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
-// const server = "wss://pokeagentshowdown.com/showdown/websocket";
+const server = "wss://pokeagentshowdown.com/showdown/websocket";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -363,7 +363,7 @@ class User {
                 this.battles[gameId] = battle;
                 battle.start().then(() => {
                     battle.leave();
-                    if (this.numBattles >= 10) {
+                    if (this.numBattles >= 50) {
                         console.log(
                             "Reached maximum number of battles, logging out.",
                         );

@@ -34,7 +34,7 @@ class AdamConfig:
 class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
-    unroll_length: int = 108
+    unroll_length: int = 378
     replay_buffer_capacity: int = 1024
 
     # Batch iteration params
@@ -48,8 +48,10 @@ class Porygon2LearnerConfig:
     tau: float = 1e-3
 
     # Vtrace params
-    lambda_: float = 0.95
-    gamma: float = 1.0
+    player_lambda_: float = 0.95
+    builder_lambda_: float = 0.85
+    player_gamma: float = 1.0
+    builder_gamma: float = 0.85
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3

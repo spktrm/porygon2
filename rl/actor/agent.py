@@ -23,6 +23,16 @@ def threshold_policy(pi: jax.Array, threshold: float = 0.03) -> jax.Array:
     return thresholded_pi / jnp.sum(thresholded_pi, axis=-1, keepdims=True)
 
 
+def sample_action(rng_key: jax.Array, logits: jax.Array) -> jax.Array:
+    """Samples an action from the logits using the provided mask."""
+    return jax.random.categorical(
+        rng_key,
+        # Must use float32 here since bfloat16 does some weird things.
+        logits.astype(jnp.float32),
+        mode="high",
+    )
+
+
 class Agent:
     """A stateless agent interface."""
 
@@ -73,7 +83,7 @@ class Agent:
             lambda t: jnp.squeeze(t, axis=(0, 1)), actor_output
         )
 
-        action = jax.random.categorical(rng_key, actor_output.head.logits)
+        action = sample_action(rng_key, actor_output.head.logits)
         return BuilderAgentOutput(action=action, actor_output=actor_output)
 
     @overload
@@ -100,13 +110,11 @@ class Agent:
 
         # Sample an action and return.
         action_type_key, move_key, switch_key = jax.random.split(rng_key, 3)
-        action_type_head = jax.random.categorical(
+        action_type_head = sample_action(
             action_type_key, actor_output.action_type_head.logits
         )
-        move_head = jax.random.categorical(move_key, actor_output.move_head.logits)
-        switch_head = jax.random.categorical(
-            switch_key, actor_output.switch_head.logits
-        )
+        move_head = sample_action(move_key, actor_output.move_head.logits)
+        switch_head = sample_action(switch_key, actor_output.switch_head.logits)
 
         return PlayerAgentOutput(
             action_type_head=action_type_head,
