@@ -81,7 +81,7 @@ class Porygon2BuilderModel(nn.Module):
         pi = legal_policy(logits, sample_mask)
         log_pi = legal_log_policy(logits, sample_mask)
 
-        return PolicyHeadOutput(masked_logits, pi, log_pi)
+        return PolicyHeadOutput(logits=masked_logits, policy=pi, log_policy=log_pi)
 
     def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
@@ -174,6 +174,14 @@ def main():
         tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         print("tokens:", tokens_buffer)
         print("value:", builder_trajectory.agent_output.actor_output.v)
+        print(
+            "probs:",
+            jnp.take_along_axis(
+                builder_trajectory.agent_output.actor_output.head.policy,
+                builder_trajectory.agent_output.action[..., None],
+                axis=-1,
+            ).squeeze(-1),
+        )
 
 
 if __name__ == "__main__":

@@ -140,9 +140,9 @@ def train_step(
         jnp.concatenate((target_pred.v[1:], target_pred.v[-1:])),
         jnp.concatenate((rewards[1:], rewards[-1:])),
         jnp.concatenate((player_valid[1:], jnp.zeros_like(player_valid[-1:])))
-        * config.gamma,
+        * config.player_gamma,
         actor_target_ratio,
-        lambda_=config.lambda_,
+        lambda_=config.player_lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
@@ -257,9 +257,9 @@ def train_step(
         jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
         jnp.concatenate((builder_rewards[1:], builder_rewards[-1:])),
         jnp.concatenate((builder_valid[1:], jnp.zeros_like(builder_valid[-1:])))
-        * config.gamma,
+        * config.builder_gamma,
         actor_target_builder_ratio,
-        lambda_=config.lambda_,
+        lambda_=config.builder_lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
@@ -294,7 +294,10 @@ def train_step(
         )
 
         loss_v = value_loss(
-            learner_builder_output.v, builder_vtrace.returns, builder_valid
+            learner_builder_output.v,
+            builder_vtrace.returns,
+            # Do this so we learn the value of final teams
+            jnp.ones_like(builder_valid),
         )
 
         loss_entropy = builder_entropy_loss(

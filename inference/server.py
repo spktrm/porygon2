@@ -26,10 +26,7 @@ def pprint_nparray(arr: np.ndarray):
 async def reset(request: Request):
     await request.body()
 
-    while True:
-        response = await run_in_threadpool(model.reset)
-        if response.v > 0.5:
-            break
+    response = await run_in_threadpool(model.reset)
     pprint(response)
 
     return response
