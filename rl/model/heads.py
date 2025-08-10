@@ -5,10 +5,9 @@ from ml_collections import ConfigDict
 
 from rl.environment.interfaces import PolicyHeadOutput
 from rl.model.modules import (
-    RMSNorm,
+    MLP,
     TransformerDecoder,
     TransformerEncoder,
-    activation_fn,
     create_attention_mask,
 )
 from rl.model.utils import BIAS_VALUE, legal_log_policy, legal_policy
@@ -20,10 +19,7 @@ class PolicyHead(nn.Module):
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
-        self.final_layer = nn.Dense(
-            features=1, kernel_init=nn.initializers.normal(5e-3), dtype=self.cfg.dtype
-        )
+        self.final_mlp = MLP(1, dtype=self.cfg.dtype)
 
     def __call__(
         self,
@@ -43,8 +39,7 @@ class PolicyHead(nn.Module):
             create_attention_mask(query_mask, key_value_mask),
         )
 
-        logits = activation_fn(self.final_norm(query_embeddings))
-        logits = self.final_layer(logits)
+        logits = self.final_mlp(query_embeddings)
         logits = logits.reshape(-1) / temp
 
         masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
@@ -64,12 +59,7 @@ class ScalarHead(nn.Module):
     def setup(self):
         self.encoder = TransformerEncoder(**self.cfg.transformer.to_dict())
         self.decoder = TransformerDecoder(**self.cfg.transformer.to_dict())
-        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
-        self.final_layer = nn.Dense(
-            features=self.cfg.output_features,
-            kernel_init=nn.initializers.normal(5e-3),
-            dtype=self.cfg.dtype,
-        )
+        self.final_mlp = MLP(self.cfg.output_features, dtype=self.cfg.dtype)
 
     def __call__(self, entity_embeddings: jax.Array, entity_mask: jax.Array):
         entity_embeddings = self.encoder(
@@ -83,7 +73,6 @@ class ScalarHead(nn.Module):
         pooled = self.decoder(
             query, entity_embeddings, create_attention_mask(query_mask, entity_mask)
         )
-        pooled = activation_fn(self.final_norm(pooled))
-        value = self.final_layer(pooled)
+        value = self.final_mlp(pooled)
 
         return value.squeeze()
