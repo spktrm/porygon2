@@ -48,16 +48,6 @@ from rl.model.modules import (
 )
 from rl.model.utils import BIAS_VALUE
 
-# Load pretrained embeddings for various features.
-SPECIES_ONEHOT = PretrainedEmbedding(
-    fpath="data/data/gen3/species.npy", dtype=jnp.bfloat16
-)
-ABILITY_ONEHOT = PretrainedEmbedding(
-    fpath="data/data/gen3/abilities.npy", dtype=jnp.bfloat16
-)
-ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy", dtype=jnp.bfloat16)
-MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bfloat16)
-
 
 def _binary_scale_encoding(
     to_encode: jax.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
@@ -176,6 +166,22 @@ class Encoder(nn.Module):
 
     def setup(self):
 
+        # Load pretrained embeddings for various features.
+        self.species_onehot = PretrainedEmbedding(
+            fpath=f"data/data/gen{self.cfg.generation}/species.npy",
+            dtype=self.cfg.dtype,
+        )
+        self.ability_onehot = PretrainedEmbedding(
+            fpath=f"data/data/gen{self.cfg.generation}/abilities.npy",
+            dtype=self.cfg.dtype,
+        )
+        self.item_onehot = PretrainedEmbedding(
+            fpath=f"data/data/gen{self.cfg.generation}/items.npy", dtype=self.cfg.dtype
+        )
+        self.move_onehot = PretrainedEmbedding(
+            fpath=f"data/data/gen{self.cfg.generation}/moves.npy", dtype=self.cfg.dtype
+        )
+
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
 
@@ -274,7 +280,7 @@ class Encoder(nn.Module):
             | (token == SpeciesEnum.SPECIES_ENUM___PAD)
             | (token == SpeciesEnum.SPECIES_ENUM___NULL)
         )
-        return mask * self.species_linear(SPECIES_ONEHOT(token))
+        return mask * self.species_linear(self.species_onehot(token))
 
     def _embed_item(self, token: jax.Array):
         mask = ~(
@@ -282,7 +288,7 @@ class Encoder(nn.Module):
             | (token == ItemsEnum.ITEMS_ENUM___PAD)
             | (token == ItemsEnum.ITEMS_ENUM___NULL)
         )
-        return mask * self.items_linear(ITEM_ONEHOT(token))
+        return mask * self.items_linear(self.item_onehot(token))
 
     def _embed_ability(self, token: jax.Array):
         mask = ~(
@@ -290,7 +296,7 @@ class Encoder(nn.Module):
             | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
             | (token == AbilitiesEnum.ABILITIES_ENUM___NULL)
         )
-        return mask * self.abilities_linear(ABILITY_ONEHOT(token))
+        return mask * self.abilities_linear(self.ability_onehot(token))
 
     def _embed_move(self, token: jax.Array):
         mask = ~(
@@ -298,7 +304,7 @@ class Encoder(nn.Module):
             | (token == MovesEnum.MOVES_ENUM___PAD)
             | (token == MovesEnum.MOVES_ENUM___NULL)
         )
-        return mask * self.moves_linear(MOVE_ONEHOT(token))
+        return mask * self.moves_linear(self.move_onehot(token))
 
     def _embed_entity(self, entity: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.

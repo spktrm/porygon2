@@ -121,7 +121,7 @@ def main():
     init_jax_jit_cache()
 
     learner_config = get_learner_config()
-    model_config = get_model_config()
+    model_config = get_model_config(learner_config.generation)
     pprint(learner_config)
 
     player_network = get_player_model(model_config)

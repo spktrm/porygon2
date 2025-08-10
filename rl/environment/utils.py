@@ -182,8 +182,8 @@ def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
         return ts
 
 
-def get_ex_builder_step(format: str) -> BuilderEnvOutput:
-    data = PACKED_SETS[format]
+def get_ex_builder_step(generation: int = 3) -> BuilderEnvOutput:
+    data = PACKED_SETS[f"gen{generation}ou"]
     num_sets = len(data["sets"])
     return BuilderEnvOutput(
         tokens=np.ones((1, 1, 6), dtype=np.int32) * -1,

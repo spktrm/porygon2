@@ -20,13 +20,16 @@ SERVER_URI = "ws://localhost:8080"
 
 
 class SinglePlayerSyncEnvironment:
-    def __init__(self, username: str):
+    def __init__(self, username: str, generation: int = 3):
 
         self.username = username
         self.rqid = None
         self.last_state = None
 
-        self.websocket = connect(SERVER_URI, additional_headers={"username": username})
+        self.websocket = connect(
+            SERVER_URI,
+            additional_headers={"username": username, "generation": str(generation)},
+        )
 
     def _recv(self):
         server_message_data = self.websocket.recv()
@@ -59,8 +62,8 @@ class SinglePlayerSyncEnvironment:
 
 
 class TeamBuilderEnvironment:
-    def __init__(self, format: str = "gen3ou"):
-        self.data = PACKED_SETS[format]
+    def __init__(self, generation: int = 3):
+        self.data = PACKED_SETS[f"gen{generation}ou"]
         self.num_sets = len(self.data["sets"])
 
     def reset(self) -> BuilderEnvOutput:

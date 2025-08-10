@@ -36,8 +36,6 @@ from rl.model.utils import (
 )
 from rl.utils import init_jax_jit_cache
 
-SETS_DATA = PACKED_SETS["gen3ou"]
-
 
 class Porygon2BuilderModel(nn.Module):
     cfg: ConfigDict
@@ -49,7 +47,8 @@ class Porygon2BuilderModel(nn.Module):
         entity_size = self.cfg.entity_size
         dtype = self.cfg.dtype
 
-        num_sets = len(SETS_DATA["sets"])
+        sets_data = PACKED_SETS[f"gen{self.cfg.generation}ou"]
+        num_sets = len(sets_data["sets"])
         embedding_init_fn = nn.initializers.normal()
 
         self.embeddings = nn.Embed(
@@ -125,7 +124,9 @@ def main():
     init_jax_jit_cache()
     network = get_builder_model()
 
-    ex = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou")))
+    ex = jax.device_put(
+        jax.tree.map(lambda x: x[:, 0], get_ex_builder_step(generation=3))
+    )
     key = jax.random.key(42)
 
     latest_ckpt = get_most_recent_file("./ckpts")

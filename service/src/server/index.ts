@@ -206,7 +206,9 @@ export class GameServer {
     }
 
     private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
-        this.logger.info(`Username ${req.headers.username} connected`);
+        this.logger.info(
+            `Username ${req.headers.username} connected for generation ${req.headers.generation}`,
+        );
 
         ws.on("message", async (clientRequestData: Buffer) => {
             const clientRequest =
@@ -217,8 +219,9 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.STEP: {
                     const stepRequest = clientRequest.getStep();
                     if (stepRequest !== undefined) {
-                        const environmentResponse =
-                            await this.pool.step(stepRequest);
+                        const environmentResponse = await this.pool.step(
+                            stepRequest,
+                        );
                         ws.send(environmentResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");
@@ -228,8 +231,9 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.RESET: {
                     const resetRequest = clientRequest.getReset();
                     if (resetRequest !== undefined) {
-                        const environmentResponse =
-                            await this.pool.reset(resetRequest);
+                        const environmentResponse = await this.pool.reset(
+                            resetRequest,
+                        );
                         ws.send(environmentResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");
