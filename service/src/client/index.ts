@@ -15,9 +15,10 @@ import {
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
-// const server = "sim3.psim.us";
-const server = "localhost:8000";
-// const server = "pokeagentshowdown.com";
+// const server = "ws://localhost:8000/showdown/websocket";
+// const server = "wss://sim3.psim.us/showdown/websocket";
+const server = "wss://pokeagentshowdown.com/showdown/websocket";
+const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -81,7 +82,7 @@ class Connection {
     private ws!: WebSocket;
 
     open(callback: (data: string) => void): void {
-        this.ws = new WebSocket(`ws://${server}/showdown/websocket`);
+        this.ws = new WebSocket(server);
 
         this.ws.onmessage = ({ data }) => callback(data.toString());
         this.ws.onopen = () => {
@@ -223,12 +224,14 @@ class User {
     private battles: { [k: string]: Battle };
     private teams: string[];
     private searchUpdated: boolean;
+    private numBattles: number;
 
     constructor(private readonly connection: Connection) {
         this.searchState = undefined;
         this.battles = {};
         this.teams = [];
         this.searchUpdated = false;
+        this.numBattles = 0;
     }
 
     get isLoggedIn(): boolean {
@@ -361,7 +364,17 @@ class User {
                 this.battles[gameId] = battle;
                 battle.start().then(() => {
                     battle.leave();
+                    if (this.numBattles >= MAX_BATTLES) {
+                        console.log(
+                            "Reached maximum number of battles, logging out.",
+                        );
+                        this.logout().then(() => {
+                            this.connection.close();
+                            process.exit(0);
+                        });
+                    }
                 });
+                this.numBattles++;
             }
         }
     }

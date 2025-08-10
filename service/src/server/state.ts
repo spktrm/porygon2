@@ -2722,8 +2722,7 @@ export class StateHandler {
                     }
                 }
 
-                const switches =
-                    active.trapped || active.maybeTrapped ? [] : canSwitch;
+                const switches = active.trapped ? [] : canSwitch;
                 const canAddMove = !maskMoves || switches.length === 0;
                 let canMove = false;
 

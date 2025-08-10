@@ -22,7 +22,7 @@ async function playerController(
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
-            if (done) {
+            if (done || info[InfoFeature.INFO_FEATURE__TURN] >= 15) {
                 console.log(
                     `${playerName}: Received 'done' state. Exiting loop.`,
                 );
