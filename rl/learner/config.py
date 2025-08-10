@@ -1,7 +1,7 @@
 import os
 import pickle
 from pprint import pprint
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import chex
 import flax.linen as nn
@@ -61,6 +61,9 @@ class Porygon2LearnerConfig:
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.05
     kl_loss_coef: float = 0.05
+
+    # Smogon Generation
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
 
 
 def get_learner_config():

@@ -21,7 +21,7 @@ import { ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
-const formatid = "gen3randombattle";
+const formatid = "gen3ou";
 
 interface Queue<T> {
     enqueue(item: T): void;
