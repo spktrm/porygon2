@@ -884,7 +884,8 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
     username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    teamIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f
+    teamIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
+    smogonFormat: jspb.Message.getFieldWithDefault(msg, 3, "")
   };
 
   if (includeInstance) {
@@ -931,6 +932,10 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
         msg.addTeamIndices(values[i]);
       }
       break;
+    case 3:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setSmogonFormat(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -971,6 +976,13 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
   if (f.length > 0) {
     writer.writePackedInt32(
       2,
+      f
+    );
+  }
+  f = message.getSmogonFormat();
+  if (f.length > 0) {
+    writer.writeString(
+      3,
       f
     );
   }
@@ -1029,6 +1041,24 @@ proto.servicev2.ResetRequest.prototype.addTeamIndices = function(value, opt_inde
  */
 proto.servicev2.ResetRequest.prototype.clearTeamIndicesList = function() {
   return this.setTeamIndicesList([]);
+};
+
+
+/**
+ * optional string smogon_format = 3;
+ * @return {string}
+ */
+proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.setSmogonFormat = function(value) {
+  return jspb.Message.setProto3StringField(this, 3, value);
 };
 
 

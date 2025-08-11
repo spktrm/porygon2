@@ -319,9 +319,9 @@ class User {
                 });
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
-                    modelOutput.tokens,
                     format,
-                );
+                    modelOutput.tokens,
+                )!;
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
                 if (errors === null) {

@@ -21,8 +21,6 @@ import { ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
-const formatid = "gen3ou";
-
 interface Queue<T> {
     enqueue(item: T): void;
     dequeue(): T | undefined;
@@ -378,22 +376,25 @@ export function createBattle(
     options: {
         p1Name: string;
         p2Name: string;
-        p1team?: string;
-        p2team?: string;
+        p1team: string | null;
+        p2team: string | null;
         maxRequestCount?: number;
+        smogonFormat: string;
     },
     debug: boolean = false,
 ) {
-    const { p1Name, p2Name, p1team, p2team } = options;
+    const { p1Name, p2Name, p1team, p2team, smogonFormat } = options;
     const maxRequestCount = options.maxRequestCount ?? 300;
 
     const streams = BattleStreams.getPlayerStreams(
         new BattleStreams.BattleStream(),
     );
-    const spec = { formatid };
+    const spec = { formatid: smogonFormat };
 
-    const p1Sets = p1team ? Teams.unpack(p1team) : Teams.generate(formatid);
-    const p2Sets = p2team ? Teams.unpack(p2team) : Teams.generate(formatid);
+    const p1Sets =
+        p1team === null ? Teams.generate(smogonFormat) : Teams.unpack(p1team);
+    const p2Sets =
+        p2team === null ? Teams.generate(smogonFormat) : Teams.unpack(p2team);
 
     if (p1Sets === null || p2Sets === null) {
         throw new Error(`Invalid team format for p1: ${p1team}, p2: ${p2team}`);

@@ -97,15 +97,16 @@ async function runBattle() {
     console.log("Creating battle...");
 
     const format = "gen3ou";
-    const names = {
+    const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-4`,
         p1team: [problemTeam1, problemTeam2][Math.floor(Math.random() * 2)],
         p2team: generateTeamFromFormat(format),
+        smogonFormat: format,
     };
-    const { p1, p2 } = createBattle(names, false);
+    const { p1, p2 } = createBattle(battleOptions, false);
     const players = [p1];
-    if (!names.p2Name.startsWith("baseline-")) {
+    if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);
     }
 
@@ -115,7 +116,7 @@ async function runBattle() {
         // Create a promise for each player's control loop.
         const promises = [];
         promises.push(playerController(p1));
-        if (!names.p2Name.startsWith("baseline-")) {
+        if (!battleOptions.p2Name.startsWith("baseline-")) {
             const p2Promise = playerController(p2);
             promises.push(p2Promise);
         }
