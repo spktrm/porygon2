@@ -32,7 +32,13 @@ def restrict_values(arr: np.ndarray):
 
 
 class InferenceModel:
-    def __init__(self, fpath: str = None, seed: int = 42, precision: int = 2):
+    def __init__(
+        self,
+        fpath: str = None,
+        seed: int = 42,
+        precision: int = 2,
+        do_threshold: bool = False,
+    ):
         self.np_rng = np.random.RandomState(seed)
 
         self.player_network = get_player_model()
@@ -42,6 +48,7 @@ class InferenceModel:
             player_apply_fn=jax.vmap(self.player_network.apply, in_axes=(None, 1)),
             builder_apply_fn=jax.vmap(self.builder_network.apply, in_axes=(None, 1)),
             gpu_lock=threading.Lock(),
+            do_threshold=do_threshold,
         )
         self.rng_key = jax.random.key(seed)
         self.precision = precision
