@@ -55,7 +55,7 @@ async function runBattle() {
         p2Name: "Bot2",
         p1team: null,
         p2team: null,
-        smogonFormat: "gen3randombattle",
+        smogonFormat: "gen9randombattle",
     });
 
     // This object will be shared between the two player controllers

@@ -531,6 +531,7 @@ async function scrapeRepo() {
         "itemberry",
         "itemmysteryberry",
         "itemgoldberry",
+        "movehealblock",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
     data["Natures"] = standardize(

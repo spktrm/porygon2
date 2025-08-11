@@ -466,6 +466,10 @@ function getUnkPokemon(n: number) {
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] = -31;
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] = -31;
 
+    // Teratype
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
+        TypechartEnum.TYPECHART_ENUM___UNK;
+
     // Set Nature
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
         NaturesEnum.NATURES_ENUM___UNK;
@@ -542,6 +546,12 @@ function getArrayFromPokemon(
         pokemon.nature === undefined
             ? NaturesEnum.NATURES_ENUM___UNK
             : IndexValueFromEnum(NaturesEnum, pokemon.nature);
+
+    // Teratype
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
+        pokemon.teraType === undefined
+            ? TypechartEnum.TYPECHART_ENUM___UNK
+            : IndexValueFromEnum(TypechartEnum, pokemon.teraType.toString());
 
     const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;
@@ -800,11 +810,12 @@ class Edge {
 
     updateEntityData(side: Side, playerIndex: number) {
         const team = side.team.slice(0, side.totalPokemon);
-        for (const pokemon of team) {
+        for (const [pokemonInTeamIndex, pokemon] of team.entries()) {
             const pokemonBuffer = getArrayFromPokemon(pokemon, playerIndex);
-            const index = this.player.eventHandler.identToIndex.get(
-                pokemon.originalIdent,
-            );
+            const index =
+                this.player.eventHandler.identToIndex.get(
+                    pokemon.originalIdent,
+                ) ?? pokemonInTeamIndex;
             if (index === undefined) {
                 throw new Error(
                     `Pokemon ${pokemon.originalIdent} not found in eventHandler`,
@@ -990,7 +1001,26 @@ class Edge {
 function getEffectToken(effect: Partial<Effect>): number {
     const { id } = effect;
     if (id) {
-        return IndexValueFromEnum(EffectEnum, id);
+        let value = undefined;
+        const testIds: string[] = [id];
+        while (testIds.length > 0) {
+            const testId = testIds.pop()!;
+            try {
+                value = IndexValueFromEnum(EffectEnum, testId);
+                return value;
+            } catch (err) {
+                testIds.push(
+                    ...[
+                        id.slice("move".length),
+                        id.slice("item".length),
+                        id.slice("ability".length),
+                        id.slice("condition".length),
+                    ],
+                );
+                console.log(err);
+            }
+        }
+        throw new Error("Effect token not found");
     }
     return EffectEnum.EFFECT_ENUM___NULL;
 }
@@ -1342,6 +1372,7 @@ export class EventHandler implements Protocol.Handler {
         if (isPublic) {
             const { pokemonid: parsedPokemonid } =
                 this.player.publicBattle.parsePokemonId(pokemonid);
+
             if (!this.identToIndex.has(parsedPokemonid)) {
                 this.identToIndex.set(parsedPokemonid, this.identToIndex.size);
             }
@@ -1391,6 +1422,11 @@ export class EventHandler implements Protocol.Handler {
     }
 
     getCondition(ident?: string) {
+        if (ident) {
+            if (ident.startsWith("fallen")) {
+                ident = ident.slice("fallen".length);
+            }
+        }
         return this.player.publicBattle.get(
             "conditions",
             ident,
@@ -1430,6 +1466,11 @@ export class EventHandler implements Protocol.Handler {
         const preprocessedEdge = this._preprocessEdge(edge);
         this.edgeBuffer.addEdge(preprocessedEdge);
     }
+
+    // "|poke|"(args: Args["|poke|"]) {
+    //     const pokeIdent = args[1];
+    //     this.getPokemon(pokeIdent as PokemonIdent);
+    // }
 
     "|move|"(args: Args["|move|"], kwArgs: KWArgs["|move|"]) {
         const [argName, poke1Ident, moveId] = args;
@@ -2264,6 +2305,19 @@ export class EventHandler implements Protocol.Handler {
 
     "|-zbroken|"() {}
 
+    "|-terastallize|"(args: Args["|-terastallize|"]) {
+        const [argName, poke1Ident] = args;
+
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const { index: edgeIndex } = this.getPokemon(poke1Ident)!;
+
+        this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
+    }
+
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
         const [argName, poke1Ident, conditionId1] = args;
 
@@ -2334,7 +2388,7 @@ export class EventHandler implements Protocol.Handler {
         const [argName] = args;
 
         const edge = new Edge(this.player);
-        for (const side of this.player.privateBattle.sides) {
+        for (const side of this.player.publicBattle.sides) {
             for (const active of side.active) {
                 if (active !== null) {
                     const { index: edgeIndex } = this.getPokemon(
@@ -2346,6 +2400,8 @@ export class EventHandler implements Protocol.Handler {
                 }
             }
         }
+
+        this.identToIndex = new Map();
         if (this.turnOrder > 0) {
             this.addEdge(edge);
         }
@@ -2712,6 +2768,21 @@ export class StateHandler {
             } else if (request.active) {
                 const pokemon = request.side.pokemon;
                 const active = request.active[0];
+
+                const { canMegaEvo, canDynamax, canTerastallize } = active;
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MEGA,
+                    !!canMegaEvo,
+                );
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX,
+                    !!canDynamax,
+                );
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA,
+                    !!canTerastallize,
+                );
+
                 const possibleMoves = active.moves ?? [];
                 const canSwitch = [];
 
@@ -2771,6 +2842,10 @@ export class StateHandler {
                 );
                 actionMask.set(
                     ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
+                    false,
+                );
+                actionMask.set(
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW,
                     true,
                 );
 

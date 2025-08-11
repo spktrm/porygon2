@@ -160,7 +160,8 @@ function loadSets(format: string) {
 
 const sets: { [k: string]: string[] } = Object.fromEntries(
     ["gen1ou", "gen2ou", "gen3ou", "gen4ou", "gen9ou"].map((smogonFormat) => [
-        [smogonFormat, loadSets(smogonFormat)],
+        smogonFormat,
+        loadSets(smogonFormat),
     ]),
 );
 

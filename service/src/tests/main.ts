@@ -88,19 +88,14 @@ async function playerController(player: TrainablePlayerAI) {
     }
 }
 
-const problemTeam1 =
-    "Tyranitar||Leftovers|SandStream|rockslide,pursuit,earthquake,fireblast|Careful|252,64,,,176,16|||||]Skarmory||Leftovers|KeenEye|spikes,whirlwind,drillpeck,toxic|Impish|252,,252,,,,|||||]Blissey||Leftovers|NaturalCure|softboiled,seismictoss,thunderwave,icebeam|Bold|4,,252,,252,|||||]Gengar||Leftovers|Levitate|thunderbolt,icepunch,willowisp,explosion|Timid|4,,,252,,252|||||]Magneton||Magnet|MagnetPull|thunderbolt,hiddenpowerfire,substitute,thunderwave|Modest|128,,,252,,128|||||,Fire,,,,]Dugtrio||ChoiceBand|ArenaTrap|earthquake,rockslide,aerialace,hiddenpowerbug|Jolly|4,252,,,,252|||||,Bug,,,,";
-const problemTeam2 =
-    "Salamence||Leftovers|Intimidate|dragondance,hiddenpowerflying,earthquake,rockslide|Jolly|,252,4,,,252|||||,Flying,,,,]Metagross||ChoiceBand|ClearBody|meteormash,earthquake,rockslide,explosion|Adamant|252,252,,,,4|||||]Celebi||Leftovers|NaturalCure|leechseed,recover,psychic,batonpass|Bold|252,,220,,,36|||||]Suicune||Leftovers|Pressure|calmmind,surf,icebeam,roar|Bold|252,,252,,,4|||||]Zapdos||Leftovers|Pressure|thunderbolt,hiddenpowerice,batonpass,thunderwave|Timid|,,4,252,,252|||||,Ice,,,,]Dugtrio||SalacBerry|ArenaTrap|endure,reversal,earthquake,rockslide|Jolly|,252,4,,,252|||||";
-
 async function runBattle() {
     console.log("Creating battle...");
 
-    const format = "gen3ou";
+    const format = "gen9ou";
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-4`,
-        p1team: [problemTeam1, problemTeam2][Math.floor(Math.random() * 2)],
+        p1team: generateTeamFromFormat(format),
         p2team: generateTeamFromFormat(format),
         smogonFormat: format,
     };
