@@ -99,6 +99,7 @@ export class AsyncQueue<T> implements Queue<T> {
 const ACTION_TYPES = new Map<number, string>();
 ACTION_TYPES.set(ActionType.ACTION_TYPE__MOVE, "move");
 ACTION_TYPES.set(ActionType.ACTION_TYPE__SWITCH, "switch");
+ACTION_TYPES.set(ActionType.ACTION_TYPE__TEAMPREVIEW, "team");
 ACTION_TYPES.set(ActionType.ACTION_TYPE__DEFAULT, "default");
 
 export class TrainablePlayerAI extends RandomPlayerAI {
@@ -222,6 +223,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const actionTypeIndex = action.getActionType();
         const moveSlotIndex = action.getMoveSlot()! + 1;
         const switchSlotIndex = action.getSwitchSlot()! + 1;
+
+        // Wildcards
+        const shouldMega = action.getShouldMega();
+        const shouldZmove = action.getShouldZmove();
+        const shouldMax = action.getShouldMax();
+        const shouldTera = action.getShouldTera();
+
         if (actionTypeIndex === undefined) {
             throw new Error(
                 "Action type index is undefined. Ensure the action is properly defined.",
@@ -239,9 +247,26 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             return "default";
         }
         if (actionType === "move" && moveSlotIndex !== undefined) {
-            return `${actionType} ${moveSlotIndex}`;
+            let moveString = `${actionType} ${moveSlotIndex}`;
+            if (shouldMega) {
+                moveString += " mega";
+            }
+            if (shouldZmove) {
+                moveString += " zmove";
+            }
+            if (shouldMax) {
+                moveString += " dynamax";
+            }
+            if (shouldTera) {
+                moveString += " terastallize";
+            }
+            return moveString;
         } else if (actionType === "switch" && switchSlotIndex !== undefined) {
             return `${actionType} ${switchSlotIndex}`;
+        } else if (actionType === "team" && switchSlotIndex !== undefined) {
+            const rest = [1, 2, 3, 4, 5, 6];
+            rest.splice(rest.indexOf(switchSlotIndex), 1);
+            return `${actionType} ${switchSlotIndex}${rest.join("")}`;
         } else {
             throw new Error(
                 `Invalid action: ${actionType} with moveSlot: ${moveSlotIndex} and switchSlot: ${switchSlotIndex}.`,

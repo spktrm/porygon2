@@ -33,12 +33,15 @@ export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
     const actionTypeMask = [
         actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE],
         actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH],
+        actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW],
     ];
     const randomActionType = getRandomOneIndex(actionTypeMask);
     if (randomActionType === 0) {
         action.setActionType(ActionType.ACTION_TYPE__MOVE);
     } else if (randomActionType === 1) {
         action.setActionType(ActionType.ACTION_TYPE__SWITCH);
+    } else if (randomActionType === 2) {
+        action.setActionType(ActionType.ACTION_TYPE__TEAMPREVIEW);
     } else {
         throw new Error(
             `Invalid action type index: ${randomActionType}. Expected 0 or 1.`,
@@ -62,6 +65,10 @@ export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
         actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6],
     ];
     action.setSwitchSlot(getRandomOneIndex(switchMask));
+
+    const canTerastallize =
+        !!actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA];
+    action.setShouldTera(canTerastallize && Math.random() < 0.3);
 
     return action;
 }

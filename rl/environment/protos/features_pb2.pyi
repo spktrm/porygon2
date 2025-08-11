@@ -72,13 +72,6 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__MEGA: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__PRIMAL: _ClassVar[EntityNodeFeature]
 
-class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
-    ACTION_TYPE__MOVE: _ClassVar[ActionType]
-    ACTION_TYPE__SWITCH: _ClassVar[ActionType]
-    ACTION_TYPE__DEFAULT: _ClassVar[ActionType]
-
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     MOVESET_HAS_PP___UNSPECIFIED: _ClassVar[MovesetHasPP]
@@ -168,11 +161,20 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
 
+class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
+    ACTION_TYPE__MOVE: _ClassVar[ActionType]
+    ACTION_TYPE__SWITCH: _ClassVar[ActionType]
+    ACTION_TYPE__TEAMPREVIEW: _ClassVar[ActionType]
+    ACTION_TYPE__DEFAULT: _ClassVar[ActionType]
+
 class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_MASK_FEATURE___UNSPECIFIED: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_MOVE: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_SWITCH: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_TEAMPREVIEW: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_1: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_2: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_3: _ClassVar[ActionMaskFeature]
@@ -252,10 +254,6 @@ ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
 ENTITY_NODE_FEATURE__TERA_TYPE: EntityNodeFeature
 ENTITY_NODE_FEATURE__MEGA: EntityNodeFeature
 ENTITY_NODE_FEATURE__PRIMAL: EntityNodeFeature
-ACTION_TYPE___UNSPECIFIED: ActionType
-ACTION_TYPE__MOVE: ActionType
-ACTION_TYPE__SWITCH: ActionType
-ACTION_TYPE__DEFAULT: ActionType
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP
 MOVESET_HAS_PP__NO: MovesetHasPP
@@ -330,9 +328,15 @@ INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
+ACTION_TYPE___UNSPECIFIED: ActionType
+ACTION_TYPE__MOVE: ActionType
+ACTION_TYPE__SWITCH: ActionType
+ACTION_TYPE__TEAMPREVIEW: ActionType
+ACTION_TYPE__DEFAULT: ActionType
 ACTION_MASK_FEATURE___UNSPECIFIED: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_MOVE: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_SWITCH: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_TEAMPREVIEW: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_1: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_2: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_3: ActionMaskFeature

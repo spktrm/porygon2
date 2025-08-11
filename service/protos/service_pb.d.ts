@@ -48,6 +48,18 @@ export class Action extends jspb.Message {
   getSwitchSlot(): number;
   setSwitchSlot(value: number): void;
 
+  getShouldMega(): boolean;
+  setShouldMega(value: boolean): void;
+
+  getShouldZmove(): boolean;
+  setShouldZmove(value: boolean): void;
+
+  getShouldMax(): boolean;
+  setShouldMax(value: boolean): void;
+
+  getShouldTera(): boolean;
+  setShouldTera(value: boolean): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
   static toObject(includeInstance: boolean, msg: Action): Action.AsObject;
@@ -63,6 +75,10 @@ export namespace Action {
     actionType: number,
     moveSlot: number,
     switchSlot: number,
+    shouldMega: boolean,
+    shouldZmove: boolean,
+    shouldMax: boolean,
+    shouldTera: boolean,
   }
 }
 
