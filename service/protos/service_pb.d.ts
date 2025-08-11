@@ -105,6 +105,9 @@ export class ResetRequest extends jspb.Message {
   setTeamIndicesList(value: Array<number>): void;
   addTeamIndices(value: number, index?: number): number;
 
+  getSmogonFormat(): string;
+  setSmogonFormat(value: string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
   static toObject(includeInstance: boolean, msg: ResetRequest): ResetRequest.AsObject;
@@ -119,6 +122,7 @@ export namespace ResetRequest {
   export type AsObject = {
     username: string,
     teamIndicesList: Array<number>,
+    smogonFormat: string,
   }
 }
 

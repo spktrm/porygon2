@@ -219,9 +219,8 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.STEP: {
                     const stepRequest = clientRequest.getStep();
                     if (stepRequest !== undefined) {
-                        const environmentResponse = await this.pool.step(
-                            stepRequest,
-                        );
+                        const environmentResponse =
+                            await this.pool.step(stepRequest);
                         ws.send(environmentResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");
@@ -231,9 +230,8 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.RESET: {
                     const resetRequest = clientRequest.getReset();
                     if (resetRequest !== undefined) {
-                        const environmentResponse = await this.pool.reset(
-                            resetRequest,
-                        );
+                        const environmentResponse =
+                            await this.pool.reset(resetRequest);
                         ws.send(environmentResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");

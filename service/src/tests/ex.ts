@@ -50,7 +50,13 @@ async function playerController(
 
 async function runBattle() {
     console.log("Creating battle...");
-    const { p1, p2 } = createBattle({ p1Name: "Bot1", p2Name: "Bot2" });
+    const { p1, p2 } = createBattle({
+        p1Name: "Bot1",
+        p2Name: "Bot2",
+        p1team: null,
+        p2team: null,
+        smogonFormat: "gen3randombattle",
+    });
 
     // This object will be shared between the two player controllers
     // to keep track of the most recent game state.

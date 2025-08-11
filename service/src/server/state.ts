@@ -89,24 +89,31 @@ export function generateTeamFromFormat(format: string): string {
 }
 
 export function generateTeamFromIndices(
-    indices: number[],
-    format?: string,
-): string {
-    const packedSets = [];
-    const setsToChoose = lookUpSets(format ?? "gen3ou");
-
-    for (const index of indices) {
-        if (index >= setsToChoose.length) {
-            throw new Error(
-                `IndexError: Invalid index ${index}. Valid range is 0 to ${
-                    setsToChoose.length - 1
-                }.`,
-            );
+    smogonFormat: string,
+    indices?: number[],
+): string | null {
+    if (indices !== undefined && !smogonFormat.endsWith("randombattle")) {
+        const packedSets = [];
+        const setsToChoose = lookUpSets(smogonFormat);
+        for (const index of indices) {
+            if (index >= setsToChoose.length) {
+                throw new Error(
+                    `IndexError: Invalid index ${index}. Valid range is 0 to ${
+                        setsToChoose.length - 1
+                    }.`,
+                );
+            }
+            packedSets.push(setsToChoose[index]);
         }
-        packedSets.push(setsToChoose[index]);
-    }
 
-    return packedSets.join("]");
+        return packedSets.join("]");
+    } else if (smogonFormat.endsWith("randombattle")) {
+        return null;
+    } else {
+        throw new Error(
+            `Invalid format: ${smogonFormat}. Must end with 'randombattle' or provide indices.`,
+        );
+    }
 }
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {

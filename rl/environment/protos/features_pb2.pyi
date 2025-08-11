@@ -68,6 +68,9 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__IV_SPD: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__MEGA: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__PRIMAL: _ClassVar[EntityNodeFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -180,6 +183,10 @@ class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_MASK_FEATURE__SWITCH_SLOT_4: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_5: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_6: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_MEGA: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_ZMOVE: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_MAX: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_TERA: _ClassVar[ActionMaskFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -242,6 +249,9 @@ ENTITY_NODE_FEATURE__IV_SPA: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
 ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
+ENTITY_NODE_FEATURE__TERA_TYPE: EntityNodeFeature
+ENTITY_NODE_FEATURE__MEGA: EntityNodeFeature
+ENTITY_NODE_FEATURE__PRIMAL: EntityNodeFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType
@@ -333,3 +343,7 @@ ACTION_MASK_FEATURE__SWITCH_SLOT_3: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_4: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_5: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_6: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_MEGA: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_ZMOVE: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_MAX: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_TERA: ActionMaskFeature

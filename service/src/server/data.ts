@@ -158,10 +158,16 @@ function loadSets(format: string) {
     return validSets;
 }
 
-const sets: { [k: string]: string[] } = {
-    gen3ou: loadSets("gen3ou"),
-};
+const sets: { [k: string]: string[] } = Object.fromEntries(
+    ["gen1ou", "gen2ou", "gen3ou", "gen4ou", "gen9ou"].map((smogonFormat) => [
+        [smogonFormat, loadSets(smogonFormat)],
+    ]),
+);
 
-export function lookUpSets(format: string): string[] {
-    return sets[format];
+export function lookUpSets(smogonFormat: string): string[] {
+    const maybeSets = sets[smogonFormat];
+    if (maybeSets === undefined) {
+        throw new Error(`No sets found for format: ${smogonFormat}`);
+    }
+    return maybeSets;
 }

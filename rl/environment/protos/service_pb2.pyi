@@ -34,12 +34,14 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username", "team_indices")
+    __slots__ = ("username", "team_indices", "smogon_format")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     TEAM_INDICES_FIELD_NUMBER: _ClassVar[int]
+    SMOGON_FORMAT_FIELD_NUMBER: _ClassVar[int]
     username: str
     team_indices: _containers.RepeatedScalarFieldContainer[int]
-    def __init__(self, username: _Optional[str] = ..., team_indices: _Optional[_Iterable[int]] = ...) -> None: ...
+    smogon_format: str
+    def __init__(self, username: _Optional[str] = ..., team_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "private_team", "field", "rqid")

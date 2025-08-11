@@ -28,8 +28,9 @@ class SinglePlayerSyncEnvironment:
 
         self.websocket = connect(
             SERVER_URI,
-            additional_headers={"username": username, "generation": str(generation)},
+            additional_headers={"username": username},
         )
+        self.generation = generation
 
     def _recv(self):
         server_message_data = self.websocket.recv()
@@ -41,7 +42,11 @@ class SinglePlayerSyncEnvironment:
     def reset(self, team_indices: list[int]):
         self.rqid = None
         reset_message = ClientRequest(
-            reset=ResetRequest(username=self.username, team_indices=team_indices)
+            reset=ResetRequest(
+                username=self.username,
+                team_indices=team_indices,
+                smogon_format=f"gen{self.generation}ou",
+            )
         )
         self.websocket.send(reset_message.SerializeToString())
         return self._recv()
