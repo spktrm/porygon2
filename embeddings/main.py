@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import traceback
@@ -15,6 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from embeddings.protocols import (
     ABILITIES_PROTOCOLS,
     ITEMS_PROTOCOLS,
+    LEARNSET_PROTOCOLS,
     MOVES_PROTOCOLS,
     SPECIES_PROTOCOLS,
     FeatureType,
@@ -150,7 +152,7 @@ def to_lookup_table(encodings_df: pd.DataFrame, stoi: Dict[str, int]) -> np.ndar
 
     vector_length = encodings_df.shape[-1] + num_padding_keys
 
-    store = np.zeros((len(stoi), vector_length))
+    store = np.zeros((len(stoi), vector_length), dtype=np.float32)
 
     for key, row in encodings_df.iterrows():
         idx = stoi[key]
@@ -228,6 +230,36 @@ class GenerationEncodings:
         encodings = get_encodings(df, ITEMS_PROTOCOLS)
         return to_lookup_table(encodings, self.stoi["items"])
 
+    def get_learnset_df(self):
+        moves_df = get_df(self.gendata["moves"])
+        species_df = get_df(self.gendata["species"])
+        df = pd.DataFrame(
+            columns=moves_df.id.tolist(),
+            index=self.stoi["species"].keys(),
+            dtype=np.float32,
+        )
+        df[:] = 0.0
+        for learnset in self.gendata["learnsets"]:
+            species_id = learnset["species"]["id"]
+            if species_id not in df.index or species_id not in species_df.index:
+                continue
+            for move, learned_when in learnset.get("learnset", {}).items():
+                value = True
+                if isinstance(learned_when, list):
+                    value = any(
+                        possibilities.startswith(str(self.gen))
+                        for possibilities in learned_when
+                    )
+                if value:
+                    move_id = to_id(move)
+                    if move_id in df.columns:
+                        df.loc[species_id, move_id] = 1.0
+                    else:
+                        print(
+                            f"Move ID {move_id} not found in df.columns for species ID {species_id}"
+                        )
+        return df.values
+
 
 def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     """
@@ -296,7 +328,7 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     return net
 
 
-def main():
+def main(make_graphs: bool = False):
     with open("data/data/data.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -305,6 +337,7 @@ def main():
         print(gen)
         enc = GenerationEncodings(gen, data)
         for name, func in [
+            ("learnset", enc.get_learnset_df),
             ("species", enc.get_species_df),
             ("moves", enc.get_moves_df),
             ("abilities", enc.get_abilities_df),
@@ -326,13 +359,13 @@ def main():
             # pca = PCA(0.99)
             # encoded = pca.fit_transform(encodings_arr[mask])
 
-            names = np.array(list(enc.stoi[name]))[mask.flatten()]
-
-            fig = ff.create_dendrogram(encoded, labels=names)
-            fig.update_layout(width=5 * 1920, height=1080)
-            img_bytes = fig.to_image("jpg")
-            with open(f"data/data/gen{gen}/{name}_hierarchy.jpg", "wb") as f:
-                f.write(img_bytes)
+            if make_graphs:
+                names = np.array(list(enc.stoi[name]))[mask.flatten()]
+                fig = ff.create_dendrogram(encoded, labels=names)
+                fig.update_layout(width=5 * 1920, height=1080)
+                img_bytes = fig.to_image("jpg")
+                with open(f"data/data/gen{gen}/{name}_hierarchy.jpg", "wb") as f:
+                    f.write(img_bytes)
 
             print(
                 (
@@ -347,36 +380,37 @@ def main():
             # encoded = StandardScaler().fit_transform(encoded)
             # encoded = encoded.clip(min=-3, max=3)
 
-            new = np.zeros((encodings_arr.shape[0], encoded.shape[-1]))
-            new[mask] = encoded
             with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
-                np.save(f, new)
+                np.save(f, encodings_arr)
 
-            cosine_sim = cosine_similarity(encoded)
-            cosine_sim_flat = cosine_sim.flatten()
-            threshold_mask = (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
-            cosine_sim_flat = cosine_sim_flat[threshold_mask]
-            threshold = np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
+            if make_graphs:
+                cosine_sim = cosine_similarity(encoded)
+                cosine_sim_flat = cosine_sim.flatten()
+                threshold_mask = (
+                    (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
+                )
+                cosine_sim_flat = cosine_sim_flat[threshold_mask]
+                threshold = np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
 
-            graph = cosine_matrix_to_pyvis(
-                cosine_matrix=cosine_sim, labels=names, threshold=threshold
-            )
-            graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
+                graph = cosine_matrix_to_pyvis(
+                    cosine_matrix=cosine_sim, labels=names, threshold=threshold
+                )
+                graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
 
-            df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
+                df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
 
-            fig = px.imshow(
-                df_cosine_sim,
-                text_auto=True,
-                aspect="auto",
-                labels=dict(
-                    x="Sample Index",
-                    y="Sample Index",
-                    color="Cosine Similarity",
-                ),
-                title=f"Gen{gen} {name.capitalize()} Cosine Similarity Heatmap",
-            )
-            fig.write_html(f"data/data/gen{gen}/{name}_cosine_sim.html")
+                fig = px.imshow(
+                    df_cosine_sim,
+                    text_auto=True,
+                    aspect="auto",
+                    labels=dict(
+                        x="Sample Index",
+                        y="Sample Index",
+                        color="Cosine Similarity",
+                    ),
+                    title=f"Gen{gen} {name.capitalize()} Cosine Similarity Heatmap",
+                )
+                fig.write_html(f"data/data/gen{gen}/{name}_cosine_sim.html")
 
 
 if __name__ == "__main__":
