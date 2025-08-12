@@ -34,6 +34,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.model.modules import PretrainedEmbedding
 
 with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
     EX_BUFFER = f.read()
@@ -115,6 +116,7 @@ ENTITY_NODE_MAX_VALUES = {
     EntityNodeFeature.ENTITY_NODE_FEATURE__SLEEP_TURNS: 4,
     EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED: 2,
     EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE: NUM_NATURES,
+    EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE: NUM_TYPECHART,
 }
 
 ENTITY_EDGE_MAX_VALUES = {
@@ -176,3 +178,28 @@ for fpath in os.listdir("data/data/"):
             "sets": packed_data,
             "mask": unique_mask[None] == unique_mask[..., None],
         }
+
+
+ONEHOT_DTYPE = jnp.bfloat16
+ONEHOT_ENCODERS = {
+    generation: {
+        "species": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/species.npy",
+            dtype=ONEHOT_DTYPE,
+        ),
+        "abilities": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/abilities.npy",
+            dtype=ONEHOT_DTYPE,
+        ),
+        "items": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/items.npy", dtype=ONEHOT_DTYPE
+        ),
+        "moves": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/moves.npy", dtype=ONEHOT_DTYPE
+        ),
+        "learnset": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/learnset.npy", dtype=ONEHOT_DTYPE
+        ),
+    }
+    for generation in [3, 9]
+}

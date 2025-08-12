@@ -185,6 +185,7 @@ class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_MASK_FEATURE__SWITCH_SLOT_4: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_5: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_6: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_NORMAL: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_MEGA: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_ZMOVE: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_MAX: _ClassVar[ActionMaskFeature]
@@ -347,6 +348,7 @@ ACTION_MASK_FEATURE__SWITCH_SLOT_3: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_4: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_5: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_6: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_NORMAL: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_MEGA: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_ZMOVE: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_MAX: ActionMaskFeature

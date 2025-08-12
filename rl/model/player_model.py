@@ -15,7 +15,7 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import PolicyHead, ScalarHead
+from rl.model.heads import MoveHead, PolicyHead, ScalarHead
 from rl.model.utils import get_num_params
 from rl.utils import init_jax_jit_cache
 
@@ -30,7 +30,7 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
 
         self.action_type_head = PolicyHead(self.cfg.action_type_head)
-        self.move_head = PolicyHead(self.cfg.move_head)
+        self.move_head = MoveHead(self.cfg.move_head)
         self.switch_head = PolicyHead(self.cfg.switch_head)
 
         self.value_head = ScalarHead(self.cfg.value_head)
@@ -52,28 +52,35 @@ class Porygon2PlayerModel(nn.Module):
                 / env_step.move_mask.sum(axis=-1, keepdims=True).clip(min=1),
                 (env_step.switch_mask @ switch_embeddings)
                 / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1),
+                (env_step.switch_mask @ switch_embeddings)
+                / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1),
             )
         )
 
         # Apply the value head
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
+        # Get the moves and wild cards
+        move_head, wildcard_head = self.move_head(
+            move_embeddings,
+            entity_embeddings,
+            env_step.move_mask,
+            entity_mask,
+            env_step.tera_mask,
+            temp,
+        )
+
         # Return the model output
         return PlayerActorOutput(
-            action_type_head=self.move_head(
+            action_type_head=self.action_type_head(
                 action_embeddings,
                 entity_embeddings,
                 env_step.action_type_mask,
                 entity_mask,
                 temp,
             ),
-            move_head=self.move_head(
-                move_embeddings,
-                entity_embeddings,
-                env_step.move_mask,
-                entity_mask,
-                temp,
-            ),
+            move_head=move_head,
+            wildcard_head=wildcard_head,
             switch_head=self.switch_head(
                 switch_embeddings,
                 entity_embeddings,

@@ -21,6 +21,7 @@ from rl.model.utils import Params
 ACTION_TYPE_MAPPING = {
     0: ActionType.ACTION_TYPE__MOVE,
     1: ActionType.ACTION_TYPE__SWITCH,
+    2: ActionType.ACTION_TYPE__TEAMPREVIEW,
 }
 
 
@@ -38,7 +39,7 @@ class Actor:
     ):
         self._agent = agent
         self._player_env = env
-        self._builder_env = TeamBuilderEnvironment()
+        self._builder_env = TeamBuilderEnvironment(env.generation)
         self._unroll_length = unroll_length
         self._queue = queue
         self._learner = learner

@@ -95,11 +95,14 @@ async function runBattle() {
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-4`,
-        p1team: generateTeamFromFormat(format),
-        p2team: generateTeamFromFormat(format),
-        smogonFormat: format,
+        p1team: null,
+        p2team: null,
+        smogonFormat: "gen9randombattle",
+        // p1team: generateTeamFromFormat(format),
+        // p2team: generateTeamFromFormat(format),
+        // smogonFormat: format,
     };
-    const { p1, p2 } = createBattle(battleOptions, true);
+    const { p1, p2 } = createBattle(battleOptions, false);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);

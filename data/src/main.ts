@@ -118,7 +118,13 @@ const customScrapingFunctions: {
             }
         }
 
-        return [...new Set(matchedVolatiles), "futuresight", "doomdesire"]; // Remove duplicates
+        return [
+            // Remove duplicates
+            ...new Set(matchedVolatiles),
+            "futuresight",
+            "doomdesire",
+            "fallen",
+        ];
     },
     genderName: (content: string, file: string): string[] => {
         const match = content.match(
@@ -465,7 +471,7 @@ function formatData(data: GenData) {
     return {
         species: data.species.map(getId),
         moves: [SWITCH_IN_TOKEN, SWITCH_OUT_TOKEN, ...moveIds, "recharge"],
-        abilities: data.abilities.map(getId),
+        abilities: [...data.abilities.map(getId), "asone"],
         items: data.items.map(getId),
         typechart: [...data.typechart.map(getId), "typeless"],
     };

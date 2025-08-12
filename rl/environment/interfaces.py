@@ -20,10 +20,12 @@ class PlayerEnvOutput(NamedTuple):
 
     # Private Info
     moveset: ArrayLike = ()
+    private_team: ArrayLike = ()
+
     action_type_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
     switch_mask: ArrayLike = ()
-    private_team: ArrayLike = ()
+    tera_mask: ArrayLike = ()
 
 
 class PlayerHistoryOutput(NamedTuple):
@@ -42,12 +44,14 @@ class PlayerActorOutput(NamedTuple):
     action_type_head: PolicyHeadOutput = PolicyHeadOutput()
     move_head: PolicyHeadOutput = PolicyHeadOutput()
     switch_head: PolicyHeadOutput = PolicyHeadOutput()
+    wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
 
 
 class PlayerAgentOutput(NamedTuple):
     action_type_head: ArrayLike = ()
     move_head: ArrayLike = ()
     switch_head: ArrayLike = ()
+    wildcard_head: ArrayLike = ()
     actor_output: PlayerActorOutput = PlayerActorOutput()
 
 

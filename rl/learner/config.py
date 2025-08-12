@@ -63,7 +63,7 @@ class Porygon2LearnerConfig:
     kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
 
 
 def get_learner_config():
@@ -103,7 +103,9 @@ def create_train_state(
 ):
     """Creates an initial `TrainState`."""
     ex_player_step = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    ex_builder_step = jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou"))
+    ex_builder_step = jax.tree.map(
+        lambda x: x[:, 0], get_ex_builder_step(config.generation)
+    )
 
     player_params = player_network.init(rng, ex_player_step)
     builder_params = builder_network.init(rng, ex_builder_step)

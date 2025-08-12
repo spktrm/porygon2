@@ -17,7 +17,7 @@ import { Protocol } from "@pkmn/protocol";
 import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
-import { ActionType } from "../../protos/features_pb";
+import { ActionMaskFeature, ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -223,12 +223,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const actionTypeIndex = action.getActionType();
         const moveSlotIndex = action.getMoveSlot()! + 1;
         const switchSlotIndex = action.getSwitchSlot()! + 1;
-
-        // Wildcards
-        const shouldMega = action.getShouldMega();
-        const shouldZmove = action.getShouldZmove();
-        const shouldMax = action.getShouldMax();
-        const shouldTera = action.getShouldTera();
+        const wildCardSlot = action.getWildcardSlot();
 
         if (actionTypeIndex === undefined) {
             throw new Error(
@@ -248,16 +243,32 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
         if (actionType === "move" && moveSlotIndex !== undefined) {
             let moveString = `${actionType} ${moveSlotIndex}`;
-            if (shouldMega) {
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MEGA -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
                 moveString += " mega";
             }
-            if (shouldZmove) {
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_ZMOVE -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
                 moveString += " zmove";
             }
-            if (shouldMax) {
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
                 moveString += " dynamax";
             }
-            if (shouldTera) {
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
                 moveString += " terastallize";
             }
             return moveString;

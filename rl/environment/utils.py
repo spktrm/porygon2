@@ -73,7 +73,7 @@ def get_action_mask(state: EnvironmentState):
 def get_action_type_mask(mask: jax.Array):
     mask = mask[
         ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW
         + 1,
     ]
     return mask | (~mask).all(axis=-1, keepdims=True)
@@ -92,6 +92,15 @@ def get_switch_mask(mask: jax.Array):
     mask = mask[
         ...,
         ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6
+        + 1,
+    ]
+    return mask | (~mask).all(axis=-1, keepdims=True)
+
+
+def get_tera_mask(mask: jax.Array):
+    mask = mask[
+        ...,
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA
         + 1,
     ]
     return mask | (~mask).all(axis=-1, keepdims=True)
@@ -162,6 +171,7 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
         action_type_mask=get_action_type_mask(action_mask),
         move_mask=get_move_mask(action_mask),
         switch_mask=get_switch_mask(action_mask),
+        tera_mask=get_tera_mask(action_mask),
     )
     history_step = PlayerHistoryOutput(
         nodes=history_entity_nodes,

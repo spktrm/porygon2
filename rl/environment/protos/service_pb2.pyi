@@ -14,22 +14,16 @@ class ClientRequest(_message.Message):
     def __init__(self, step: _Optional[_Union[StepRequest, _Mapping]] = ..., reset: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
 class Action(_message.Message):
-    __slots__ = ("action_type", "move_slot", "switch_slot", "should_mega", "should_zmove", "should_max", "should_tera")
+    __slots__ = ("action_type", "move_slot", "switch_slot", "wildcard_slot")
     ACTION_TYPE_FIELD_NUMBER: _ClassVar[int]
     MOVE_SLOT_FIELD_NUMBER: _ClassVar[int]
     SWITCH_SLOT_FIELD_NUMBER: _ClassVar[int]
-    SHOULD_MEGA_FIELD_NUMBER: _ClassVar[int]
-    SHOULD_ZMOVE_FIELD_NUMBER: _ClassVar[int]
-    SHOULD_MAX_FIELD_NUMBER: _ClassVar[int]
-    SHOULD_TERA_FIELD_NUMBER: _ClassVar[int]
+    WILDCARD_SLOT_FIELD_NUMBER: _ClassVar[int]
     action_type: int
     move_slot: int
     switch_slot: int
-    should_mega: bool
-    should_zmove: bool
-    should_max: bool
-    should_tera: bool
-    def __init__(self, action_type: _Optional[int] = ..., move_slot: _Optional[int] = ..., switch_slot: _Optional[int] = ..., should_mega: bool = ..., should_zmove: bool = ..., should_max: bool = ..., should_tera: bool = ...) -> None: ...
+    wildcard_slot: int
+    def __init__(self, action_type: _Optional[int] = ..., move_slot: _Optional[int] = ..., switch_slot: _Optional[int] = ..., wildcard_slot: _Optional[int] = ...) -> None: ...
 
 class StepRequest(_message.Message):
     __slots__ = ("username", "action", "rqid")

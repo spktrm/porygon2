@@ -68,7 +68,16 @@ export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
 
     const canTerastallize =
         !!actionBinary[ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA];
-    action.setShouldTera(canTerastallize && Math.random() < 0.3);
+    action.setWildcardSlot(
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL -
+            ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL,
+    );
+    if (canTerastallize && Math.random() < 0.3) {
+        action.setWildcardSlot(
+            ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA -
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL,
+        );
+    }
 
     return action;
 }

@@ -65,7 +65,7 @@ def get_model_config(generation: int = 3) -> ConfigDict:
     cfg.dtype = dtype
 
     cfg.encoder = ConfigDict()
-    cfg.encoder.smogon_format = generation
+    cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = dtype
 
