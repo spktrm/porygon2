@@ -1,4 +1,3 @@
-import functools
 import json
 import os
 import traceback
@@ -16,7 +15,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from embeddings.protocols import (
     ABILITIES_PROTOCOLS,
     ITEMS_PROTOCOLS,
-    LEARNSET_PROTOCOLS,
     MOVES_PROTOCOLS,
     SPECIES_PROTOCOLS,
     FeatureType,
