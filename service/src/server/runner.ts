@@ -139,7 +139,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.eventHandler = new EventHandler(this);
         this.privateBattle = new Battle(new Generations(Dex), null, sets);
-        this.publicBattle = new Battle(new Generations(Dex), null, sets);
+        this.publicBattle = new Battle(new Generations(Dex), null);
         this.done = false;
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
