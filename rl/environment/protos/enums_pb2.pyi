@@ -2418,6 +2418,7 @@ class AbilitiesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ABILITIES_ENUM__ARENATRAP: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ARMORTAIL: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__AROMAVEIL: _ClassVar[AbilitiesEnum]
+    ABILITIES_ENUM__ASONE: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ASONEGLASTRIER: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ASONESPECTRIER: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__AURABREAK: _ClassVar[AbilitiesEnum]
@@ -3366,6 +3367,7 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     VOLATILESTATUS_ENUM__ENCORE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__ENDURE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FAKEPARTIALLYTRAPPED: _ClassVar[VolatilestatusEnum]
+    VOLATILESTATUS_ENUM__FALLEN: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FIRESPIN: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FLASHFIRE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FLINCH: _ClassVar[VolatilestatusEnum]
@@ -8171,6 +8173,7 @@ ABILITIES_ENUM__ANTICIPATION: AbilitiesEnum
 ABILITIES_ENUM__ARENATRAP: AbilitiesEnum
 ABILITIES_ENUM__ARMORTAIL: AbilitiesEnum
 ABILITIES_ENUM__AROMAVEIL: AbilitiesEnum
+ABILITIES_ENUM__ASONE: AbilitiesEnum
 ABILITIES_ENUM__ASONEGLASTRIER: AbilitiesEnum
 ABILITIES_ENUM__ASONESPECTRIER: AbilitiesEnum
 ABILITIES_ENUM__AURABREAK: AbilitiesEnum
@@ -9104,6 +9107,7 @@ VOLATILESTATUS_ENUM__EMBARGO: VolatilestatusEnum
 VOLATILESTATUS_ENUM__ENCORE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__ENDURE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FAKEPARTIALLYTRAPPED: VolatilestatusEnum
+VOLATILESTATUS_ENUM__FALLEN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FIRESPIN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FLASHFIRE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FLINCH: VolatilestatusEnum

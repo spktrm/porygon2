@@ -206,9 +206,7 @@ export class GameServer {
     }
 
     private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
-        this.logger.info(
-            `Username ${req.headers.username} connected for generation ${req.headers.generation}`,
-        );
+        this.logger.info(`Username ${req.headers.username} connected`);
 
         ws.on("message", async (clientRequestData: Buffer) => {
             const clientRequest =

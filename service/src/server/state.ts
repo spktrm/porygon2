@@ -208,6 +208,10 @@ const entityNodeArrayToObject = (array: Int16Array) => {
         status: jsonDatum["status"][
             array[EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS]
         ],
+        teraType:
+            jsonDatum["typechart"][
+                array[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE]
+            ],
     };
 };
 
@@ -711,7 +715,9 @@ function getArrayFromPokemon(
     // Only copy candidate volatiles
     let volatiles = BigInt(0b0);
     for (const [key] of Object.entries(candidate.volatiles)) {
-        const index = getVolatileStatusToken(key);
+        const index = getVolatileStatusToken(
+            key.startsWith("fallen") ? "fallen" : key,
+        );
         volatiles |= BigInt(1) << BigInt(index);
     }
     dataArr.set(
@@ -780,12 +786,15 @@ class Edge {
 
         this.unkEntityIndex = player.publicBattle.sides
             .map((x) =>
-                x.team.reduce(
-                    (a, b) =>
-                        +player.eventHandler.identToIndex.has(b.originalIdent) +
-                        a,
-                    0,
-                ),
+                x.team
+                    .slice(0, 6)
+                    .reduce(
+                        (a, b) =>
+                            +player.eventHandler.identToIndex.has(
+                                b.originalIdent,
+                            ) + a,
+                        0,
+                    ),
             )
             .reduce((a, b) => a + b);
 
@@ -1041,7 +1050,6 @@ function getEffectToken(effect: Partial<Effect>): number {
                                 id.slice("condition".length),
                             ],
                         );
-                        console.log(err);
                         haveAdded = true;
                     } else {
                         throw err;
@@ -1074,7 +1082,6 @@ function getVolatileStatusToken(id: string): number {
                             id.slice("condition".length),
                         ],
                     );
-                    console.log(err);
                     haveAdded = true;
                 } else {
                     throw err;
@@ -2376,18 +2383,20 @@ export class EventHandler implements Protocol.Handler {
 
     "|-zbroken|"() {}
 
-    "|-terastallize|"(args: Args["|-terastallize|"]) {
-        const [argName, pokeIdent] = args;
+    // Suprisingly not needed?
 
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error();
-        }
+    // "|-terastallize|"(args: Args["|-terastallize|"]) {
+    //     const [argName, pokeIdent] = args;
 
-        const { index: edgeIndex } = this.getPokemon(pokeIdent)!;
+    //     const playerIndex = this.player.getPlayerIndex();
+    //     if (playerIndex === undefined) {
+    //         throw new Error();
+    //     }
 
-        this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
-    }
+    //     const { index: edgeIndex } = this.getPokemon(pokeIdent)!;
+
+    //     this.edgeBuffer.updateLatestMinorArgs({ argName, edgeIndex });
+    // }
 
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
         const [argName, pokeIdent, conditionId1] = args;
@@ -2807,6 +2816,8 @@ export class StateHandler {
         const actionMask = new OneDBoolean(numActionMaskFeatures, Uint8Array);
         let isStruggling = false;
 
+        actionMask.set(ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL, true);
+
         const setAllTrue = () => {
             for (let i = 0; i < numActionMaskFeatures; i++) {
                 actionMask.set(i, true);
@@ -2828,7 +2839,8 @@ export class StateHandler {
                     true,
                 );
 
-                const pokemon = request.side.pokemon;
+                const pokemon = request.side
+                    .pokemon as Protocol.Request.SideInfo["pokemon"];
                 const forceSwitchLength = request.forceSwitch.length;
                 const isReviving = !!pokemon[0].reviving;
 
@@ -2859,9 +2871,13 @@ export class StateHandler {
                     ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX,
                     !!canDynamax,
                 );
+
+                const noOtherTeras = !pokemon.some(
+                    (x: { terastallized?: string }) => x?.terastallized !== "",
+                );
                 actionMask.set(
                     ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA,
-                    !!canTerastallize,
+                    !!canTerastallize && noOtherTeras,
                 );
 
                 const possibleMoves = active.moves ?? [];

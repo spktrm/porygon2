@@ -13,10 +13,7 @@ message Action {
   int32 action_type = 1;
   int32 move_slot = 2;
   int32 switch_slot = 3;
-  bool should_mega = 4;
-  bool should_zmove = 5;
-  bool should_max = 6;
-  bool should_tera = 7;
+  int32 wildcard_slot = 4;
 }
 
 message StepRequest {

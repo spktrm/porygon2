@@ -1,14 +1,11 @@
 import os
 
-from rl.model.utils import get_most_recent_file
-
 # Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # gemm_any=True is ~10% speed up in this setup
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
 )
-
 import json
 import queue
 import threading
@@ -31,6 +28,7 @@ from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_model_config
 from rl.model.player_model import get_num_params, get_player_model
+from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
 
@@ -183,7 +181,10 @@ def main():
         for player_id in range(2):
             actor = Actor(
                 agent=agent,
-                env=SinglePlayerSyncEnvironment(f"train-{game_id:02d}{player_id:02d}"),
+                env=SinglePlayerSyncEnvironment(
+                    f"train-{game_id:02d}{player_id:02d}",
+                    generation=learner_config.generation,
+                ),
                 unroll_length=learner_config.unroll_length,
                 queue=trajectory_queue,
                 learner=learner,
@@ -201,7 +202,9 @@ def main():
     for eval_id in range(num_eval_actors):
         actor = Actor(
             agent=agent,
-            env=SinglePlayerSyncEnvironment(f"eval-{eval_id:04d}"),
+            env=SinglePlayerSyncEnvironment(
+                f"eval-{eval_id:04d}", generation=learner_config.generation
+            ),
             unroll_length=learner_config.unroll_length,
             learner=learner,
             rng_seed=len(actor_threads),

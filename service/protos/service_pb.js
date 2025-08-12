@@ -478,10 +478,7 @@ proto.servicev2.Action.toObject = function(includeInstance, msg) {
     actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
     moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
     switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
-    shouldMega: jspb.Message.getBooleanFieldWithDefault(msg, 4, false),
-    shouldZmove: jspb.Message.getBooleanFieldWithDefault(msg, 5, false),
-    shouldMax: jspb.Message.getBooleanFieldWithDefault(msg, 6, false),
-    shouldTera: jspb.Message.getBooleanFieldWithDefault(msg, 7, false)
+    wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
 
   if (includeInstance) {
@@ -531,20 +528,8 @@ proto.servicev2.Action.deserializeBinaryFromReader = function(msg, reader) {
       msg.setSwitchSlot(value);
       break;
     case 4:
-      var value = /** @type {boolean} */ (reader.readBool());
-      msg.setShouldMega(value);
-      break;
-    case 5:
-      var value = /** @type {boolean} */ (reader.readBool());
-      msg.setShouldZmove(value);
-      break;
-    case 6:
-      var value = /** @type {boolean} */ (reader.readBool());
-      msg.setShouldMax(value);
-      break;
-    case 7:
-      var value = /** @type {boolean} */ (reader.readBool());
-      msg.setShouldTera(value);
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setWildcardSlot(value);
       break;
     default:
       reader.skipField();
@@ -596,31 +581,10 @@ proto.servicev2.Action.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getShouldMega();
-  if (f) {
-    writer.writeBool(
+  f = message.getWildcardSlot();
+  if (f !== 0) {
+    writer.writeInt32(
       4,
-      f
-    );
-  }
-  f = message.getShouldZmove();
-  if (f) {
-    writer.writeBool(
-      5,
-      f
-    );
-  }
-  f = message.getShouldMax();
-  if (f) {
-    writer.writeBool(
-      6,
-      f
-    );
-  }
-  f = message.getShouldTera();
-  if (f) {
-    writer.writeBool(
-      7,
       f
     );
   }
@@ -682,74 +646,20 @@ proto.servicev2.Action.prototype.setSwitchSlot = function(value) {
 
 
 /**
- * optional bool should_mega = 4;
- * @return {boolean}
+ * optional int32 wildcard_slot = 4;
+ * @return {number}
  */
-proto.servicev2.Action.prototype.getShouldMega = function() {
-  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 4, false));
+proto.servicev2.Action.prototype.getWildcardSlot = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 4, 0));
 };
 
 
 /**
- * @param {boolean} value
+ * @param {number} value
  * @return {!proto.servicev2.Action} returns this
  */
-proto.servicev2.Action.prototype.setShouldMega = function(value) {
-  return jspb.Message.setProto3BooleanField(this, 4, value);
-};
-
-
-/**
- * optional bool should_zmove = 5;
- * @return {boolean}
- */
-proto.servicev2.Action.prototype.getShouldZmove = function() {
-  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 5, false));
-};
-
-
-/**
- * @param {boolean} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setShouldZmove = function(value) {
-  return jspb.Message.setProto3BooleanField(this, 5, value);
-};
-
-
-/**
- * optional bool should_max = 6;
- * @return {boolean}
- */
-proto.servicev2.Action.prototype.getShouldMax = function() {
-  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 6, false));
-};
-
-
-/**
- * @param {boolean} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setShouldMax = function(value) {
-  return jspb.Message.setProto3BooleanField(this, 6, value);
-};
-
-
-/**
- * optional bool should_tera = 7;
- * @return {boolean}
- */
-proto.servicev2.Action.prototype.getShouldTera = function() {
-  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 7, false));
-};
-
-
-/**
- * @param {boolean} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setShouldTera = function(value) {
-  return jspb.Message.setProto3BooleanField(this, 7, value);
+proto.servicev2.Action.prototype.setWildcardSlot = function(value) {
+  return jspb.Message.setProto3IntField(this, 4, value);
 };
 
 
