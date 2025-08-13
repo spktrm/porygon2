@@ -34,8 +34,8 @@ class AdamConfig:
 class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
-    unroll_length: int = 378
-    replay_buffer_capacity: int = 1024
+    unroll_length: int = 128 * 2
+    replay_buffer_capacity: int = 512
 
     # Batch iteration params
     batch_size: int = 4

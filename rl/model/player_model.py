@@ -46,15 +46,15 @@ class Porygon2PlayerModel(nn.Module):
 
         move_embeddings = action_embeddings[:4]
         switch_embeddings = action_embeddings[4:]
+
+        average_move_embedding = (
+            env_step.move_mask @ move_embeddings
+        ) / env_step.move_mask.sum(axis=-1, keepdims=True).clip(min=1)
+        average_switch_embedding = (
+            env_step.switch_mask @ switch_embeddings
+        ) / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1)
         action_embeddings = jnp.stack(
-            (
-                (env_step.move_mask @ move_embeddings)
-                / env_step.move_mask.sum(axis=-1, keepdims=True).clip(min=1),
-                (env_step.switch_mask @ switch_embeddings)
-                / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1),
-                (env_step.switch_mask @ switch_embeddings)
-                / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1),
-            )
+            (average_move_embedding, average_switch_embedding, average_switch_embedding)
         )
 
         # Apply the value head

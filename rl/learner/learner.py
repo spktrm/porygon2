@@ -46,11 +46,11 @@ def calculate_log_prob(
     switch_prob = get_action_value(switch_log_pi, switch)
     sub_log_prob = jnp.stack((move_log_prob, switch_prob, switch_prob), axis=-1)
 
+    relevant_wild_card_log_pi = jnp.take_along_axis(
+        wildcard_log_pi, move[..., None, None], axis=-2
+    )
     wild_card_log_prob = get_action_value(
-        jnp.take_along_axis(wildcard_log_pi, move[..., None, None], axis=-2).squeeze(
-            -2
-        ),
-        wildcard,
+        relevant_wild_card_log_pi.squeeze(-2), wildcard
     )
 
     return (
@@ -130,24 +130,24 @@ def train_step(
 
     target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
     actor_log_pi = calculate_log_prob(
-        batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
-        batch.player_transitions.agent_output.action_type_head,
-        batch.player_transitions.agent_output.actor_output.move_head.log_policy,
-        batch.player_transitions.agent_output.move_head,
-        batch.player_transitions.agent_output.actor_output.wildcard_head.log_policy,
-        batch.player_transitions.agent_output.wildcard_head,
-        batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
-        batch.player_transitions.agent_output.switch_head,
+        action_type_log_pi=batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
+        action_type=batch.player_transitions.agent_output.action_type_head,
+        move_log_pi=batch.player_transitions.agent_output.actor_output.move_head.log_policy,
+        move=batch.player_transitions.agent_output.move_head,
+        wildcard_log_pi=batch.player_transitions.agent_output.actor_output.wildcard_head.log_policy,
+        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        switch_log_pi=batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
+        switch=batch.player_transitions.agent_output.switch_head,
     )
     target_log_pi = calculate_log_prob(
-        target_pred.action_type_head.log_policy,
-        batch.player_transitions.agent_output.action_type_head,
-        target_pred.move_head.log_policy,
-        batch.player_transitions.agent_output.move_head,
-        target_pred.wildcard_head.log_policy,
-        batch.player_transitions.agent_output.wildcard_head,
-        target_pred.switch_head.log_policy,
-        batch.player_transitions.agent_output.switch_head,
+        action_type_log_pi=target_pred.action_type_head.log_policy,
+        action_type=batch.player_transitions.agent_output.action_type_head,
+        move_log_pi=target_pred.move_head.log_policy,
+        move=batch.player_transitions.agent_output.move_head,
+        wildcard_log_pi=target_pred.wildcard_head.log_policy,
+        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        switch_log_pi=target_pred.switch_head.log_policy,
+        switch=batch.player_transitions.agent_output.switch_head,
     )
 
     actor_target_log_ratio = actor_log_pi - target_log_pi
@@ -185,14 +185,14 @@ def train_step(
 
         pred = player_state.apply_fn(params, player_actor_input)
         learner_log_pi = calculate_log_prob(
-            pred.action_type_head.log_policy,
-            batch.player_transitions.agent_output.action_type_head,
-            pred.move_head.log_policy,
-            batch.player_transitions.agent_output.move_head,
-            pred.wildcard_head.log_policy,
-            batch.player_transitions.agent_output.wildcard_head,
-            pred.switch_head.log_policy,
-            batch.player_transitions.agent_output.switch_head,
+            action_type_log_pi=pred.action_type_head.log_policy,
+            action_type=batch.player_transitions.agent_output.action_type_head,
+            move_log_pi=pred.move_head.log_policy,
+            move=batch.player_transitions.agent_output.move_head,
+            wildcard_log_pi=pred.wildcard_head.log_policy,
+            wildcard=batch.player_transitions.agent_output.wildcard_head,
+            switch_log_pi=pred.switch_head.log_policy,
+            switch=batch.player_transitions.agent_output.switch_head,
         )
 
         # Calculate the log ratios.
