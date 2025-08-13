@@ -55,7 +55,7 @@ def get_model_config(generation: int = 3) -> ConfigDict:
     cfg = ConfigDict()
     cfg.generation = generation
 
-    num_heads = 4
+    num_heads = 3
     scale = 1
 
     entity_size = int(scale * 64 * num_heads)

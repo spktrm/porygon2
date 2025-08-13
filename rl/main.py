@@ -1,5 +1,6 @@
 import os
 
+os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc"
 # Can cause memory issues if set to True
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # gemm_any=True is ~10% speed up in this setup

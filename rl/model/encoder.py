@@ -892,7 +892,7 @@ class Encoder(nn.Module):
             move_switch_mask = jnp.concatenate(
                 (
                     env_step.action_type_mask[0] * env_step.move_mask,
-                    env_step.action_type_mask[1] * env_step.switch_mask,
+                    env_step.action_type_mask[1:].any(axis=-1) * env_step.switch_mask,
                 ),
                 axis=-1,
             )

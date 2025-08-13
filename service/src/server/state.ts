@@ -518,7 +518,7 @@ function getArrayFromPokemon(
 ) {
     const dataArr = getBlankPokemonArr();
 
-    if (candidate === null) {
+    if (candidate === null || candidate === undefined) {
         return nullPokemon;
     }
 
@@ -3008,30 +3008,48 @@ export class StateHandler {
                 | undefined;
             if (requestPokemon !== undefined) {
                 const requestIdents = requestPokemon.map((x) => x.ident);
-                team = [0, 1, 2, 3, 4, 5].map(
-                    (i) =>
-                        team.find((x) => x.originalIdent === requestIdents[i])!,
+                team = requestIdents.map(
+                    (ident) => team.find((x) => x.originalIdent === ident)!,
                 );
+                if (team.some((x) => x === undefined)) {
+                    throw new Error("Team member not found");
+                }
             }
         }
 
-        for (const member of team) {
-            buffer.set(
-                getArrayFromPokemon(member, playerIndex, isPublic),
-                offset,
+        try {
+            for (const member of team) {
+                buffer.set(
+                    getArrayFromPokemon(member, playerIndex, isPublic),
+                    offset,
+                );
+                offset += numEntityNodeFeatures;
+            }
+
+            if (isPublic) {
+                const unkPoke = isMySide(side.n, playerIndex)
+                    ? unkPokemon1
+                    : unkPokemon0;
+                for (let i = team.length; i < side.totalPokemon; i++) {
+                    buffer.set(unkPoke, offset);
+                    offset += numEntityNodeFeatures;
+                }
+            }
+
+            for (let i = side.totalPokemon; i < 6; i++) {
+                buffer.set(nullPokemon, offset);
+                offset += numEntityNodeFeatures;
+            }
+        } catch (error) {
+            console.log(error);
+            console.log(team);
+            return buffer;
+        }
+
+        if (offset !== buffer.length) {
+            throw new Error(
+                `Buffer length mismatch: expected ${buffer.length}, got ${offset}`,
             );
-            offset += numEntityNodeFeatures;
-        }
-        const unkPoke = isMySide(side.n, playerIndex)
-            ? unkPokemon1
-            : unkPokemon0;
-        for (let i = team.length; i < side.totalPokemon; i++) {
-            buffer.set(unkPoke, offset);
-            offset += numEntityNodeFeatures;
-        }
-        for (let i = side.totalPokemon; i < 6; i++) {
-            buffer.set(nullPokemon, offset);
-            offset += numEntityNodeFeatures;
         }
         return buffer;
     }
