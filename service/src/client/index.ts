@@ -189,6 +189,7 @@ class Battle {
                 const action = new MultiDiscreteAction();
                 action.setActionType(stepResponse.action_type);
                 action.setMoveSlot(stepResponse.move_slot);
+                action.setWildcardSlot(stepResponse.wildcard_slot);
                 action.setSwitchSlot(stepResponse.switch_slot);
 
                 stepRequest.setAction(action);

@@ -71,6 +71,12 @@ class EnvironmentState(_message.Message):
     rqid: int
     def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_nodes: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ...) -> None: ...
 
+class EnvironmentTrajectory(_message.Message):
+    __slots__ = ("states",)
+    STATES_FIELD_NUMBER: _ClassVar[int]
+    states: _containers.RepeatedCompositeFieldContainer[EnvironmentState]
+    def __init__(self, states: _Optional[_Iterable[_Union[EnvironmentState, _Mapping]]] = ...) -> None: ...
+
 class EnvironmentResponse(_message.Message):
     __slots__ = ("username", "state")
     USERNAME_FIELD_NUMBER: _ClassVar[int]

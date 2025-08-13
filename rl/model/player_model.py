@@ -66,7 +66,7 @@ class Porygon2PlayerModel(nn.Module):
             entity_embeddings,
             env_step.move_mask,
             entity_mask,
-            env_step.tera_mask,
+            env_step.wildcard_mask,
             temp,
         )
 

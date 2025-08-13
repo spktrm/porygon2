@@ -215,6 +215,20 @@ const entityNodeArrayToObject = (array: Int16Array) => {
     };
 };
 
+const moveArrayToObject = (array: Int16Array) => {
+    return {
+        pp_ratio:
+            array[MovesetFeature.MOVESET_FEATURE__PP_RATIO] / MAX_RATIO_TOKEN,
+        move_id:
+            jsonDatum["moves"][array[MovesetFeature.MOVESET_FEATURE__MOVE_ID]],
+        pp: array[MovesetFeature.MOVESET_FEATURE__PP],
+        maxpp: array[MovesetFeature.MOVESET_FEATURE__MAXPP],
+        has_pp: !!array[MovesetFeature.MOVESET_FEATURE__HAS_PP],
+        action_type: array[MovesetFeature.MOVESET_FEATURE__ACTION_TYPE],
+        entity_idx: array[MovesetFeature.MOVESET_FEATURE__ENTITY_IDX],
+    };
+};
+
 const entityEdgeArrayToObject = (array: Int16Array) => {
     const minorArgsFlat = array.slice(
         EntityEdgeFeature.ENTITY_EDGE_FEATURE__MINOR_ARG0,
@@ -472,7 +486,8 @@ function getUnkPokemon(n: number) {
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] = -31;
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] = -31;
 
-    // Teratype
+    // Terastallized
+    data[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = 0;
     data[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
         TypechartEnum.TYPECHART_ENUM___UNK;
 
@@ -553,7 +568,10 @@ function getArrayFromPokemon(
             ? NaturesEnum.NATURES_ENUM___UNK
             : IndexValueFromEnum(NaturesEnum, pokemon.nature);
 
-    // Teratype
+    // Terastallized
+    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = +(
+        pokemon.terastallized ?? false
+    );
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
         pokemon.teraType === undefined
             ? TypechartEnum.TYPECHART_ENUM___UNK
@@ -2978,7 +2996,24 @@ export class StateHandler {
         const buffer = new Int16Array(6 * numEntityNodeFeatures);
 
         let offset = 0;
-        const team = side.team.slice(0, 6);
+        let team = side.team.slice(0, 6);
+
+        if (!isPublic) {
+            const request = this.player.getRequest();
+            if (request === undefined) {
+                throw new Error("Request is undefined");
+            }
+            const requestPokemon = request.side?.pokemon as
+                | Protocol.Request.SideInfo["pokemon"]
+                | undefined;
+            if (requestPokemon !== undefined) {
+                const requestIdents = requestPokemon.map((x) => x.ident);
+                team = [0, 1, 2, 3, 4, 5].map(
+                    (i) =>
+                        team.find((x) => x.originalIdent === requestIdents[i])!,
+                );
+            }
+        }
 
         for (const member of team) {
             buffer.set(
@@ -3085,14 +3120,29 @@ export class StateHandler {
         return new Uint8Array(infoBuffer.buffer);
     }
 
-    static toReadableTeam(buffer: Int16Array) {
+    static toReadableTeam(buffer: Uint8Array) {
+        const teamBuffer = new Int16Array(buffer.buffer);
         const entityDatums = [];
-        const numEntites = buffer.length / numEntityNodeFeatures;
+        const numEntites = teamBuffer.length / numEntityNodeFeatures;
         for (let entityIndex = 0; entityIndex < numEntites; entityIndex++) {
             const start = entityIndex * numEntityNodeFeatures;
             const end = (entityIndex + 1) * numEntityNodeFeatures;
             entityDatums.push(
-                entityNodeArrayToObject(buffer.slice(start, end)),
+                entityNodeArrayToObject(teamBuffer.slice(start, end)),
+            );
+        }
+        return entityDatums;
+    }
+
+    static toReadableMoveset(buffer: Uint8Array) {
+        const movesetBuffer = new Int16Array(buffer.buffer);
+        const entityDatums = [];
+        const numMoves = movesetBuffer.length / numMoveFeatures;
+        for (let moveIndex = 0; moveIndex < numMoves; moveIndex++) {
+            const start = moveIndex * numMoveFeatures;
+            const end = (moveIndex + 1) * numMoveFeatures;
+            entityDatums.push(
+                moveArrayToObject(movesetBuffer.slice(start, end)),
             );
         }
         return entityDatums;

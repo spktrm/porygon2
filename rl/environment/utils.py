@@ -4,7 +4,7 @@ import jax
 import numpy as np
 
 from rl.environment.data import (
-    EX_STATE,
+    EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ACTION_MASK_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
@@ -171,7 +171,7 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
         action_type_mask=get_action_type_mask(action_mask),
         move_mask=get_move_mask(action_mask),
         switch_mask=get_switch_mask(action_mask),
-        tera_mask=get_tera_mask(action_mask),
+        wildcard_mask=get_tera_mask(action_mask),
     )
     history_step = PlayerHistoryOutput(
         nodes=history_entity_nodes,
@@ -182,10 +182,21 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
     return PlayerActorInput(env=env_step, history=history_step)
 
 
+def get_ex_trajectory() -> PlayerActorInput:
+    states = []
+    for state in EX_TRAJECTORY.states:
+        processed_state = process_state(state)
+        states.append(processed_state.env)
+    return PlayerActorInput(
+        env=jax.tree.map(lambda *xs: np.stack(xs), *states),
+        history=processed_state.history,
+    )
+
+
 def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
-    ts = process_state(EX_STATE)
+    ts = get_ex_trajectory()
     if expand:
-        ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
+        ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
         hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
         return PlayerActorInput(env=ex, history=hx)
     else:

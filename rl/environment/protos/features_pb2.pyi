@@ -69,6 +69,7 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__TERASTALLIZED: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__MEGA: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__PRIMAL: _ClassVar[EntityNodeFeature]
 
@@ -253,6 +254,7 @@ ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
 ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
 ENTITY_NODE_FEATURE__TERA_TYPE: EntityNodeFeature
+ENTITY_NODE_FEATURE__TERASTALLIZED: EntityNodeFeature
 ENTITY_NODE_FEATURE__MEGA: EntityNodeFeature
 ENTITY_NODE_FEATURE__PRIMAL: EntityNodeFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
