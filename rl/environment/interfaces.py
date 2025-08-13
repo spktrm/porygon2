@@ -25,7 +25,7 @@ class PlayerEnvOutput(NamedTuple):
     action_type_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
     switch_mask: ArrayLike = ()
-    tera_mask: ArrayLike = ()
+    wildcard_mask: ArrayLike = ()
 
 
 class PlayerHistoryOutput(NamedTuple):

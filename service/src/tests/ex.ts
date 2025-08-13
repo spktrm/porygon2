@@ -1,28 +1,27 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createBattle, TrainablePlayerAI } from "../server/runner";
-import { EnvironmentState, StepRequest } from "../../protos/service_pb";
+import { EnvironmentTrajectory, StepRequest } from "../../protos/service_pb";
 import { InfoFeature } from "../../protos/features_pb";
 import { numActionMaskFeatures } from "../server/data";
 import { actionMaskToRandomAction } from "../server/baselines/random";
 import { OneDBoolean } from "../server/utils";
 
-async function playerController(
-    player: TrainablePlayerAI,
-    playerName: string,
-    stateTracker: { lastState: EnvironmentState | null },
-) {
+async function playerController(player: TrainablePlayerAI, playerName: string) {
     console.log(`${playerName}: Controller started.`);
     // The loop will continue as long as the player's stream is open.
     // The `receiveEnvironmentResponse` will resolve when a request is available.
+
+    const trajectory = new EnvironmentTrajectory();
+
     while (true) {
         try {
             const state = await player.receiveEnvironmentState();
-            stateTracker.lastState = state; // Update the shared last state
+            trajectory.addStates(state);
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
-            if (done || info[InfoFeature.INFO_FEATURE__TURN] >= 15) {
+            if (done) {
                 console.log(
                     `${playerName}: Received 'done' state. Exiting loop.`,
                 );
@@ -46,6 +45,8 @@ async function playerController(
         }
     }
     console.log(`${playerName}: Controller finished.`);
+
+    return trajectory;
 }
 
 async function runBattle() {
@@ -58,19 +59,16 @@ async function runBattle() {
         smogonFormat: "gen9randombattle",
     });
 
-    // This object will be shared between the two player controllers
-    // to keep track of the most recent game state.
-    const stateTracker = { lastState: null as EnvironmentState | null };
-
     console.log("Starting asynchronous player controllers...");
+    let trajectories: EnvironmentTrajectory[] = [];
 
     try {
         // Create a promise for each player's control loop.
-        const p1Promise = playerController(p1, "P1", stateTracker);
-        const p2Promise = playerController(p2, "P2", stateTracker);
+        const p1Promise = playerController(p1, "P1");
+        const p2Promise = playerController(p2, "P2");
 
         // Wait for both player loops to complete. This happens when the battle ends.
-        await Promise.all([p1Promise, p2Promise]);
+        trajectories = await Promise.all([p1Promise, p2Promise]);
 
         console.log("\nBattle has concluded.");
     } catch (error) {
@@ -83,19 +81,15 @@ async function runBattle() {
     }
 
     // Save the very last state that was recorded.
-    if (stateTracker.lastState) {
-        const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
-        console.log(`Saving latest environment response to ${filePath}`);
-        const data = stateTracker.lastState.serializeBinary();
-        fs.writeFile(filePath, data, (err) => {
-            if (err) {
-                console.error("Failed to save the environment state:", err);
-            }
-            console.log("File saved successfully.");
-        });
-    } else {
-        console.log("No environment state was generated to save.");
-    }
+    const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
+    console.log(`Saving latest environment response to ${filePath}`);
+    const data = trajectories[0].serializeBinary();
+    fs.writeFile(filePath, data, (err) => {
+        if (err) {
+            console.error("Failed to save the environment state:", err);
+        }
+        console.log("File saved successfully.");
+    });
 }
 
 // Execute the battle run

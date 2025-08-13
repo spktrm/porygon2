@@ -42,6 +42,10 @@ message EnvironmentState {
   int32 rqid = 11;
 }
 
+message EnvironmentTrajectory {
+  repeated EnvironmentState states = 1;
+}
+
 message EnvironmentResponse {
   string username = 1;
   EnvironmentState state = 2;

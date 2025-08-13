@@ -107,9 +107,11 @@ class InferenceModel:
         return StepResponse(
             action_type_head=self._jax_head_to_pydantic(model_output.action_type_head),
             move_head=self._jax_head_to_pydantic(model_output.move_head),
+            wildcard_head=self._jax_head_to_pydantic(model_output.wildcard_head),
             switch_head=self._jax_head_to_pydantic(model_output.switch_head),
             v=model_output.v.item(),
             action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
             move_slot=actor_step.move_head.item(),
             switch_slot=actor_step.switch_head.item(),
+            wildcard_slot=actor_step.wildcard_head.item(),
         )

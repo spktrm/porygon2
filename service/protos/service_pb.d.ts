@@ -208,6 +208,28 @@ export namespace EnvironmentState {
   }
 }
 
+export class EnvironmentTrajectory extends jspb.Message {
+  clearStatesList(): void;
+  getStatesList(): Array<EnvironmentState>;
+  setStatesList(value: Array<EnvironmentState>): void;
+  addStates(value?: EnvironmentState, index?: number): EnvironmentState;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): EnvironmentTrajectory.AsObject;
+  static toObject(includeInstance: boolean, msg: EnvironmentTrajectory): EnvironmentTrajectory.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: EnvironmentTrajectory, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): EnvironmentTrajectory;
+  static deserializeBinaryFromReader(message: EnvironmentTrajectory, reader: jspb.BinaryReader): EnvironmentTrajectory;
+}
+
+export namespace EnvironmentTrajectory {
+  export type AsObject = {
+    statesList: Array<EnvironmentState.AsObject>,
+  }
+}
+
 export class EnvironmentResponse extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;

@@ -216,6 +216,7 @@ class Encoder(nn.Module):
         )
 
         # Layer normalization for action embeddings.
+        self.timestep_ln = RMSNorm()
         self.entities_ln = RMSNorm()
         self.moves_ln = RMSNorm()
         self.switch_ln = RMSNorm()
@@ -444,6 +445,9 @@ class Encoder(nn.Module):
                 ),
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE
+                ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED
                 ),
             ]
         )
@@ -755,7 +759,10 @@ class Encoder(nn.Module):
         )
 
         timestep_embedding = (
-            node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
+            # More stable for summing over affected historical nodes
+            self.timestep_ln(
+                node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
+            )
             + field_embedding
         )
 

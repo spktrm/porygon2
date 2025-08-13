@@ -33,13 +33,13 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
     MovesetHasPP,
 )
-from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.environment.protos.service_pb2 import EnvironmentTrajectory
 from rl.model.modules import PretrainedEmbedding
 
 with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
     EX_BUFFER = f.read()
 
-EX_STATE = EnvironmentState.FromString(EX_BUFFER)
+EX_TRAJECTORY = EnvironmentTrajectory.FromString(EX_BUFFER)
 
 NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())
@@ -117,6 +117,7 @@ ENTITY_NODE_MAX_VALUES = {
     EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED: 2,
     EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE: NUM_NATURES,
     EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE: NUM_TYPECHART,
+    EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED: 2,
 }
 
 ENTITY_EDGE_MAX_VALUES = {
