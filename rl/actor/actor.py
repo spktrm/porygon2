@@ -76,9 +76,11 @@ class Actor:
         # Reset the builder environment.
         builder_env_output = self._builder_env.reset()
         # Rollout the builder environment.
-        for subkey in builder_subkeys:
+        for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
-                subkey, builder_params, builder_env_output
+                builder_subkeys[builder_step_index],
+                builder_params,
+                builder_env_output,
             )
             builder_transition = BuilderTransition(
                 env_output=builder_env_output, agent_output=builder_agent_output
@@ -98,10 +100,12 @@ class Actor:
         player_actor_input = self._player_env.reset(tokens_buffer.reshape(-1).tolist())
 
         # Rollout the player environment.
-        for subkey in player_subkeys:
+        for player_step_index in range(player_subkeys.shape[0]):
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
             player_agent_output = self._agent.step_player(
-                subkey, player_params, player_actor_input_clipped
+                player_subkeys[player_step_index],
+                player_params,
+                player_actor_input_clipped,
             )
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,

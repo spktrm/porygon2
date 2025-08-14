@@ -7,9 +7,9 @@ class ResetResponse(BaseModel):
 
 
 class HeadOutput(BaseModel):
-    logits: list[float]
-    policy: list[float]
-    log_policy: list[float]
+    logits: list[float] | list[list[float]]
+    policy: list[float] | list[list[float]]
+    log_policy: list[float] | list[list[float]]
 
 
 class StepResponse(BaseModel):
