@@ -18,7 +18,7 @@ import { generateTeamFromIndices } from "../server/state";
 // const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
 const server = "wss://pokeagentshowdown.com/showdown/websocket";
-const MAX_BATTLES = 50; // Maximum number of battles to run in sequence
+const MAX_BATTLES = 10; // Maximum number of battles to run in sequence
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
