@@ -41,8 +41,6 @@ class InferenceModel:
         precision: int = 2,
         do_threshold: bool = False,
     ):
-        self.np_rng = np.random.RandomState(seed)
-
         self.learner_config = get_learner_config()
         self.model_config = get_model_config(self.learner_config.generation)
 

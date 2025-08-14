@@ -71,7 +71,7 @@ class Porygon2BuilderModel(nn.Module):
             "mask_embedding", embedding_init_fn, (1, entity_size), dtype=dtype
         )
 
-    def _sample_token(self, embedding: jax.Array, sample_mask: jax.Array):
+    def _forward_head(self, embedding: jax.Array, sample_mask: jax.Array):
         """
         Samples a token from the embeddings using the policy head and returns the token, log probability, and entropy.
         """
@@ -98,7 +98,7 @@ class Porygon2BuilderModel(nn.Module):
         pred_embeddings = self.encoder(
             embeddings, create_attention_mask(attn_mask), position_indices
         )
-        head_output = self._sample_token(
+        head_output = self._forward_head(
             jnp.take(pred_embeddings, not_masked_sum, axis=0), input.mask
         )
         pooled = self.decoder(
@@ -122,10 +122,12 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 def main():
     init_jax_jit_cache()
-    network = get_builder_model()
+
+    generation = 9
+    network = get_builder_model(get_model_config(generation))
 
     ex = jax.device_put(
-        jax.tree.map(lambda x: x[:, 0], get_ex_builder_step(generation=3))
+        jax.tree.map(lambda x: x[:, 0], get_ex_builder_step(generation=generation))
     )
     key = jax.random.key(42)
 
@@ -141,11 +143,12 @@ def main():
     pprint(get_num_params(params))
 
     apply_fn: Callable[[Params, jax.Array, jax.Array | None], BuilderAgentOutput]
-    # apply_fn = jax.jit(network.apply)
+
     apply_fn = network.apply
 
     agent = Agent(
         builder_apply_fn=jax.vmap(apply_fn, in_axes=(None, 1), out_axes=1),
+        do_threshold=True,
     )
 
     while True:
@@ -153,7 +156,7 @@ def main():
         builder_subkeys = jax.random.split(rng_key, 7)
 
         build_traj = []
-        builder_env = TeamBuilderEnvironment()
+        builder_env = TeamBuilderEnvironment(generation=generation)
 
         builder_env_output = builder_env.reset()
         for subkey in builder_subkeys:
@@ -176,12 +179,10 @@ def main():
         print("tokens:", tokens_buffer)
         print("value:", builder_trajectory.agent_output.actor_output.v)
         print(
-            "probs:",
-            jnp.take_along_axis(
-                builder_trajectory.agent_output.actor_output.head.policy,
-                builder_trajectory.agent_output.action[..., None],
-                axis=-1,
-            ).squeeze(-1),
+            "\n".join(
+                PACKED_SETS[f"gen{generation}ou"]["sets"][t]
+                for t in tokens_buffer.reshape(-1).tolist()
+            )
         )
 
 

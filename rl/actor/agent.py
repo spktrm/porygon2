@@ -17,9 +17,9 @@ from rl.environment.interfaces import (
 from rl.model.utils import BIAS_VALUE, Params
 
 
-def threshold_policy(pi: jax.Array, min_p: float = 0.1) -> jax.Array:
+def threshold_policy(pi: jax.Array, min_p: float = 0.05) -> jax.Array:
     """Thresholds the policy for evaluation."""
-    thresholded_pi = jnp.where(pi < pi.max() * min_p, 0.0, pi)
+    thresholded_pi = jnp.where(pi < (pi.max() * min_p), 0.0, pi)
     return thresholded_pi / jnp.sum(thresholded_pi, axis=-1, keepdims=True)
 
 
