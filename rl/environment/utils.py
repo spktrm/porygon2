@@ -193,14 +193,11 @@ def get_ex_trajectory() -> PlayerActorInput:
     )
 
 
-def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
+def get_ex_player_step() -> PlayerActorInput:
     ts = get_ex_trajectory()
-    if expand:
-        ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
-        hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-        return PlayerActorInput(env=ex, history=hx)
-    else:
-        return ts
+    ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
+    hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
+    return PlayerActorInput(env=ex, history=hx)
 
 
 def get_ex_builder_step(generation: int = 3) -> BuilderEnvOutput:

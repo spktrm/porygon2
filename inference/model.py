@@ -11,7 +11,9 @@ from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import PlayerActorInput, PolicyHeadOutput
 from rl.environment.utils import get_ex_player_step
+from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
+from rl.model.config import get_model_config
 from rl.model.player_model import get_player_model
 from rl.model.utils import BIAS_VALUE, get_most_recent_file
 
@@ -41,8 +43,11 @@ class InferenceModel:
     ):
         self.np_rng = np.random.RandomState(seed)
 
-        self.player_network = get_player_model()
-        self.builder_network = get_builder_model()
+        self.learner_config = get_learner_config()
+        self.model_config = get_model_config(self.learner_config.generation)
+
+        self.player_network = get_player_model(self.model_config)
+        self.builder_network = get_builder_model(self.model_config)
 
         self._agent = Agent(
             player_apply_fn=jax.vmap(self.player_network.apply, in_axes=(None, 1)),
@@ -64,7 +69,13 @@ class InferenceModel:
 
         print("initializing...")
         self.reset()  # warm up the model
-        self.step(get_ex_player_step(expand=False))  # warm up the model
+
+        ts: PlayerActorInput = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+        self.step(
+            PlayerActorInput(
+                env=jax.tree.map(lambda x: x[0], ts.env), history=ts.history
+            )
+        )  # warm up the model
         print("model initialized!")
 
     def split_rng(self) -> jax.Array:
@@ -75,7 +86,7 @@ class InferenceModel:
         rng_key = self.split_rng()
         builder_subkeys = jax.random.split(rng_key, 7)
 
-        builder_env = TeamBuilderEnvironment()
+        builder_env = TeamBuilderEnvironment(self.learner_config.generation)
 
         builder_env_output = builder_env.reset()
         for subkey in builder_subkeys:

@@ -70,6 +70,7 @@ class TeamBuilderEnvironment:
     def __init__(self, generation: int = 3):
         self.data = PACKED_SETS[f"gen{generation}ou"]
         self.num_sets = len(self.data["sets"])
+        self.state = BuilderEnvOutput()
 
     def reset(self) -> BuilderEnvOutput:
         self.pos = 0
@@ -77,8 +78,8 @@ class TeamBuilderEnvironment:
         return self.state
 
     def step(self, action: int) -> BuilderEnvOutput:
-        if self.pos >= 6:
-            raise ValueError("Cannot step beyond the last position.")
+        if self.state.done.item():
+            return self.state
         self.state = self._step(action, self.pos, self.state)
         self.pos += 1
         return self.state
