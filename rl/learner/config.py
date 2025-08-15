@@ -18,7 +18,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.model.utils import Params
+from rl.model.utils import Params, get_most_recent_file
 
 
 @chex.dataclass(frozen=True)
@@ -63,7 +63,7 @@ class Porygon2LearnerConfig:
     kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
 
 
 def get_learner_config():
@@ -159,17 +159,28 @@ def create_train_state(
 
 def save_train_state(
     wandb_run: wandb.wandb_run.Run,
+    learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
 ):
-    save_path = save_train_state_locally(player_state, builder_state)
-    wandb_run.log_artifact(save_path, "latest")
+    save_path = save_train_state_locally(learner_config, player_state, builder_state)
+    wandb_run.log_artifact(
+        artifact_or_path=save_path,
+        name=f"latest-gen{learner_config.generation}",
+        type="model",
+    )
 
 
 def save_train_state_locally(
-    player_state: Porygon2PlayerTrainState, builder_state: Porygon2BuilderTrainState
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
 ):
-    save_path = os.path.abspath(f"ckpts/mmd_ckpt_{player_state.num_steps:08}")
+    save_path = os.path.abspath(
+        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
+    )
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, "wb") as f:
         pickle.dump(
             dict(
@@ -197,12 +208,19 @@ def save_train_state_locally(
 
 
 def load_train_state(
+    learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-    path: str,
 ):
-    print(f"loading checkpoint from {path}")
-    with open(path, "rb") as f:
+    save_path = f"./ckpts/gen{learner_config.generation}/"
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    latest_ckpt = get_most_recent_file(save_path)
+    if not latest_ckpt:
+        return player_state, builder_state
+
+    print(f"loading checkpoint from {latest_ckpt}")
+    with open(latest_ckpt, "rb") as f:
         ckpt_data = pickle.load(f)
 
     print("Checkpoint data:")
