@@ -140,8 +140,12 @@ export const jsonDatum = transformJson(JSON.parse(fileContent));
 
 const sets: { [k: string]: string[] } = {};
 for (let i = 1; i <= 9; i++) {
-    for (const [set, formats] of JSON.parse(
-        fs.readFileSync(`../data/data/validated_gen${i}_packed.json`, "utf-8"),
+    const data = fs.readFileSync(
+        `../data/data/validated_gen${i}_packed.json`,
+        "utf-8",
+    );
+    for (const [set, formats] of Object.entries(
+        JSON.parse(data) as Record<string, Record<string, boolean>>,
     )) {
         for (const [format, isValid] of Object.entries(formats)) {
             if (!sets[format]) {
