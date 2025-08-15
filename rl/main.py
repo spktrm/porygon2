@@ -22,12 +22,12 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import Trajectory
+from rl.environment.interfaces import SamplingConfig, Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
-from rl.model.config import get_model_config
+from rl.model.config import get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
@@ -120,7 +120,7 @@ def main():
     init_jax_jit_cache()
 
     learner_config = get_learner_config()
-    model_config = get_model_config(learner_config.generation)
+    model_config = get_player_model_config(learner_config.generation)
     pprint(learner_config)
 
     player_network = get_player_model(model_config)
@@ -140,7 +140,13 @@ def main():
     )
 
     gpu_lock = FairLock()  # threading.Lock()
-    agent = Agent(player_state.apply_fn, builder_state.apply_fn, gpu_lock)
+    agent = Agent(
+        player_state.apply_fn,
+        builder_state.apply_fn,
+        gpu_lock,
+        player_sampling_config=SamplingConfig(temp=1.0, min_p=None),
+        builder_sampling_config=SamplingConfig(temp=1.0, min_p=None),
+    )
 
     replay_buffer = ReplayBuffer(
         capacity=max(

@@ -1,4 +1,3 @@
-import functools
 import pickle
 from pprint import pprint
 
@@ -13,10 +12,10 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
 )
 from rl.environment.utils import get_ex_player_step
-from rl.model.config import get_model_config
+from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import MoveHead, PolicyHead, ScalarHead
-from rl.model.utils import get_num_params
+from rl.model.utils import get_most_recent_file, get_num_params
 from rl.utils import init_jax_jit_cache
 
 
@@ -41,7 +40,6 @@ class Porygon2PlayerModel(nn.Module):
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
         env_step: PlayerEnvOutput,
-        temp: float = 1.0,
     ):
 
         move_embeddings = action_embeddings[:4]
@@ -61,37 +59,34 @@ class Porygon2PlayerModel(nn.Module):
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Get the moves and wild cards
-        move_head, wildcard_head = self.move_head(
+        move_logits, wildcard_logits = self.move_head(
             move_embeddings,
             entity_embeddings,
             env_step.move_mask,
             entity_mask,
             env_step.wildcard_mask,
-            temp,
         )
 
         # Return the model output
         return PlayerActorOutput(
-            action_type_head=self.action_type_head(
+            action_type_logits=self.action_type_head(
                 action_embeddings,
                 entity_embeddings,
                 env_step.action_type_mask,
                 entity_mask,
-                temp,
             ),
-            move_head=move_head,
-            wildcard_head=wildcard_head,
-            switch_head=self.switch_head(
+            move_logits=move_logits,
+            wildcard_logits=wildcard_logits,
+            switch_logits=self.switch_head(
                 switch_embeddings,
                 entity_embeddings,
                 env_step.switch_mask,
                 entity_mask,
-                temp,
             ),
             v=value,
         )
 
-    def __call__(self, actor_input: PlayerActorInput, temp: float = 1.0):
+    def __call__(self, actor_input: PlayerActorInput):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -100,17 +95,14 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.history
         )
 
-        return jax.vmap(functools.partial(self.get_head_outputs, temp=temp))(
-            entity_embeddings,
-            action_embeddings,
-            entity_mask,
-            actor_input.env,
+        return jax.vmap(self.get_head_outputs)(
+            entity_embeddings, action_embeddings, entity_mask, actor_input.env
         )
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
-        config = get_model_config()
+        config = get_player_model_config()
     return Porygon2PlayerModel(config)
 
 
@@ -119,7 +111,7 @@ def main():
     network = get_player_model()
     ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_player_step()))
 
-    latest_ckpt = None  # get_most_recent_file("./ckpts")
+    latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

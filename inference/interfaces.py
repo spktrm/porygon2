@@ -6,17 +6,14 @@ class ResetResponse(BaseModel):
     v: float
 
 
-class HeadOutput(BaseModel):
-    logits: list[float] | list[list[float]]
-    policy: list[float] | list[list[float]]
-    log_policy: list[float] | list[list[float]]
+Logits = list[float] | list[list[float]]
 
 
 class StepResponse(BaseModel):
-    action_type_head: HeadOutput
-    move_head: HeadOutput
-    wildcard_head: HeadOutput
-    switch_head: HeadOutput
+    action_type_logits: Logits
+    move_logits: Logits
+    wildcard_logits: Logits
+    switch_logits: Logits
     v: float
     action_type: int
     move_slot: int
