@@ -46,12 +46,7 @@ def calculate_log_prob(
     switch_prob = get_action_value(switch_log_pi, switch)
     sub_log_prob = jnp.stack((move_log_prob, switch_prob, switch_prob), axis=-1)
 
-    relevant_wild_card_log_pi = jnp.take_along_axis(
-        wildcard_log_pi, move[..., None, None], axis=-2
-    )
-    wild_card_log_prob = get_action_value(
-        relevant_wild_card_log_pi.squeeze(-2), wildcard
-    )
+    wild_card_log_prob = get_action_value(wildcard_log_pi, wildcard)
 
     return (
         action_type_log_prob
@@ -134,44 +129,52 @@ def train_step(
             batch.player_transitions.agent_output.actor_output.action_type_logits,
             batch.player_transitions.env_output.action_type_mask,
         ),
-        action_type=batch.player_transitions.agent_output.action_type_head,
+        action_type=batch.player_transitions.agent_output.action_type,
         move_log_pi=legal_log_policy(
             batch.player_transitions.agent_output.actor_output.move_logits,
             batch.player_transitions.env_output.move_mask,
         ),
-        move=batch.player_transitions.agent_output.move_head,
+        move=batch.player_transitions.agent_output.move_slot,
         wildcard_log_pi=legal_log_policy(
-            batch.player_transitions.agent_output.actor_output.wildcard_logits,
+            jnp.take_along_axis(
+                batch.player_transitions.agent_output.actor_output.wildcard_logits,
+                batch.player_transitions.agent_output.move_slot[..., None, None],
+                axis=-2,
+            ).squeeze(-2),
             batch.player_transitions.env_output.wildcard_mask,
         ),
-        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        wildcard=batch.player_transitions.agent_output.wildcard_slot,
         switch_log_pi=legal_log_policy(
             batch.player_transitions.agent_output.actor_output.switch_logits,
             batch.player_transitions.env_output.switch_mask,
         ),
-        switch=batch.player_transitions.agent_output.switch_head,
+        switch=batch.player_transitions.agent_output.switch_slot,
     )
     target_log_prob = calculate_log_prob(
         action_type_log_pi=legal_log_policy(
             target_pred.action_type_logits,
             batch.player_transitions.env_output.action_type_mask,
         ),
-        action_type=batch.player_transitions.agent_output.action_type_head,
+        action_type=batch.player_transitions.agent_output.action_type,
         move_log_pi=legal_log_policy(
             target_pred.move_logits,
             batch.player_transitions.env_output.move_mask,
         ),
-        move=batch.player_transitions.agent_output.move_head,
+        move=batch.player_transitions.agent_output.move_slot,
         wildcard_log_pi=legal_log_policy(
-            target_pred.wildcard_logits,
+            jnp.take_along_axis(
+                target_pred.wildcard_logits,
+                batch.player_transitions.agent_output.move_slot[..., None, None],
+                axis=-2,
+            ).squeeze(-2),
             batch.player_transitions.env_output.wildcard_mask,
         ),
-        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        wildcard=batch.player_transitions.agent_output.wildcard_slot,
         switch_log_pi=legal_log_policy(
             target_pred.switch_logits,
             batch.player_transitions.env_output.switch_mask,
         ),
-        switch=batch.player_transitions.agent_output.switch_head,
+        switch=batch.player_transitions.agent_output.switch_slot,
     )
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
@@ -218,7 +221,7 @@ def train_step(
         )
         pred_wildcard_log_pi = legal_log_policy(
             pred.wildcard_logits,
-            batch.player_transitions.env_output.wildcard_mask,
+            batch.player_transitions.env_output.wildcard_mask[..., None, :],
         )
         pred_switch_log_pi = legal_log_policy(
             pred.switch_logits,
@@ -234,7 +237,7 @@ def train_step(
         )
         pred_wildcard_pi = legal_policy(
             pred.wildcard_logits,
-            batch.player_transitions.env_output.wildcard_mask,
+            batch.player_transitions.env_output.wildcard_mask[..., None, :],
         )
         pred_switch_pi = legal_policy(
             pred.switch_logits,
@@ -243,13 +246,17 @@ def train_step(
 
         learner_log_prob = calculate_log_prob(
             action_type_log_pi=pred_action_type_log_pi,
-            action_type=batch.player_transitions.agent_output.action_type_head,
+            action_type=batch.player_transitions.agent_output.action_type,
             move_log_pi=pred_move_log_pi,
-            move=batch.player_transitions.agent_output.move_head,
-            wildcard_log_pi=pred_wildcard_log_pi,
-            wildcard=batch.player_transitions.agent_output.wildcard_head,
+            move=batch.player_transitions.agent_output.move_slot,
+            wildcard_log_pi=jnp.take_along_axis(
+                pred_wildcard_log_pi,
+                batch.player_transitions.agent_output.move_slot[..., None, None],
+                axis=-2,
+            ).squeeze(-2),
+            wildcard=batch.player_transitions.agent_output.wildcard_slot,
             switch_log_pi=pred_switch_log_pi,
-            switch=batch.player_transitions.agent_output.switch_head,
+            switch=batch.player_transitions.agent_output.switch_slot,
         )
 
         # Calculate the log ratios.

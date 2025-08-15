@@ -141,9 +141,9 @@ class Agent:
         )
 
         return PlayerAgentOutput(
-            action_type_head=action_type_head,
-            move_head=move_head,
-            switch_head=switch_head,
-            wildcard_head=wildcard_head,
+            action_type=action_type_head,
+            move_slot=move_head,
+            switch_slot=switch_head,
+            wildcard_slot=wildcard_head,
             actor_output=actor_output,
         )
