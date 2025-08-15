@@ -106,9 +106,12 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def main():
+def main(generation: int = 9):
     init_jax_jit_cache()
-    network = get_player_model()
+
+    model_config = get_player_model_config(generation)
+    network = get_player_model(model_config)
+
     ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_player_step()))
 
     latest_ckpt = get_most_recent_file("./ckpts")

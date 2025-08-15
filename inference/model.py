@@ -1,5 +1,4 @@
 import pickle
-import threading
 
 import jax
 import jax.numpy as jnp
@@ -19,11 +18,6 @@ from rl.model.utils import BIAS_VALUE, get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
-
-
-def threshold(arr: np.ndarray, thresh: float = 0.1):
-    pi = np.where(arr < thresh, 0, arr)
-    return pi / pi.sum(axis=-1, keepdims=True)
 
 
 def restrict_values(arr: np.ndarray):
