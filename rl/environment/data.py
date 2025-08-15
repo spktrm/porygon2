@@ -2,6 +2,7 @@ import json
 import os
 
 import jax.numpy as jnp
+import pandas as pd
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -160,14 +161,16 @@ STOI = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
 
 PACKED_SETS = {}
 for fpath in os.listdir("data/data/"):
-    if "packed" in fpath:
+    if "packed" in fpath and fpath.startswith("validated"):
         with open(os.path.join("data/data/", fpath), "r") as f:
             packed_data = json.load(f)
+
+        valid_formats = pd.DataFrame(packed_data)
 
         unique_species = {}
         unique_mask = []
 
-        for packed_set in packed_data:
+        for packed_set in packed_data.keys():
             species = packed_set.split("|")[0]
             if species not in unique_species:
                 unique_species[species] = len(unique_species)
@@ -175,10 +178,16 @@ for fpath in os.listdir("data/data/"):
             unique_mask.append(unique_species[species])
 
         unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
-        PACKED_SETS[fpath.split("_")[0]] = {
+
+        generation_string = fpath.split("_")[1]
+        PACKED_SETS[generation_string] = {
             "sets": packed_data,
             "mask": unique_mask[None] == unique_mask[..., None],
         }
+        for row_name in valid_formats.index:
+            PACKED_SETS[generation_string][row_name] = valid_formats.loc[
+                row_name
+            ].values
 
 
 ONEHOT_DTYPE = jnp.bfloat16
