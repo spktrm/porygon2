@@ -17,11 +17,9 @@ import { Protocol } from "@pkmn/protocol";
 import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
-import { ActionType } from "../../protos/features_pb";
+import { ActionMaskFeature, ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
-
-const formatid = "gen3randombattle";
 
 interface Queue<T> {
     enqueue(item: T): void;
@@ -101,6 +99,7 @@ export class AsyncQueue<T> implements Queue<T> {
 const ACTION_TYPES = new Map<number, string>();
 ACTION_TYPES.set(ActionType.ACTION_TYPE__MOVE, "move");
 ACTION_TYPES.set(ActionType.ACTION_TYPE__SWITCH, "switch");
+ACTION_TYPES.set(ActionType.ACTION_TYPE__TEAMPREVIEW, "team");
 ACTION_TYPES.set(ActionType.ACTION_TYPE__DEFAULT, "default");
 
 export class TrainablePlayerAI extends RandomPlayerAI {
@@ -140,7 +139,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.eventHandler = new EventHandler(this);
         this.privateBattle = new Battle(new Generations(Dex), null, sets);
-        this.publicBattle = new Battle(new Generations(Dex), null, sets);
+        this.publicBattle = new Battle(new Generations(Dex), null);
         this.done = false;
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
@@ -224,6 +223,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const actionTypeIndex = action.getActionType();
         const moveSlotIndex = action.getMoveSlot()! + 1;
         const switchSlotIndex = action.getSwitchSlot()! + 1;
+        const wildCardSlot = action.getWildcardSlot();
+
         if (actionTypeIndex === undefined) {
             throw new Error(
                 "Action type index is undefined. Ensure the action is properly defined.",
@@ -241,9 +242,42 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             return "default";
         }
         if (actionType === "move" && moveSlotIndex !== undefined) {
-            return `${actionType} ${moveSlotIndex}`;
+            let moveString = `${actionType} ${moveSlotIndex}`;
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MEGA -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
+                moveString += " mega";
+            }
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_ZMOVE -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
+                moveString += " zmove";
+            }
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
+                moveString += " dynamax";
+            }
+            if (
+                wildCardSlot ===
+                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA -
+                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+            ) {
+                moveString += " terastallize";
+            }
+            return moveString;
         } else if (actionType === "switch" && switchSlotIndex !== undefined) {
             return `${actionType} ${switchSlotIndex}`;
+        } else if (actionType === "team" && switchSlotIndex !== undefined) {
+            const rest = [1, 2, 3, 4, 5, 6];
+            rest.splice(rest.indexOf(switchSlotIndex), 1);
+            return `${actionType} ${switchSlotIndex}${rest.join("")}`;
         } else {
             throw new Error(
                 `Invalid action: ${actionType} with moveSlot: ${moveSlotIndex} and switchSlot: ${switchSlotIndex}.`,
@@ -378,22 +412,25 @@ export function createBattle(
     options: {
         p1Name: string;
         p2Name: string;
-        p1team?: string;
-        p2team?: string;
+        p1team: string | null;
+        p2team: string | null;
         maxRequestCount?: number;
+        smogonFormat: string;
     },
     debug: boolean = false,
 ) {
-    const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? 300;
+    const { p1Name, p2Name, p1team, p2team, smogonFormat } = options;
+    const maxRequestCount = options.maxRequestCount ?? 200;
 
     const streams = BattleStreams.getPlayerStreams(
         new BattleStreams.BattleStream(),
     );
-    const spec = { formatid };
+    const spec = { formatid: smogonFormat };
 
-    const p1Sets = p1team ? Teams.unpack(p1team) : Teams.generate(formatid);
-    const p2Sets = p2team ? Teams.unpack(p2team) : Teams.generate(formatid);
+    const p1Sets =
+        p1team === null ? Teams.generate(smogonFormat) : Teams.unpack(p1team);
+    const p2Sets =
+        p2team === null ? Teams.generate(smogonFormat) : Teams.unpack(p2team);
 
     if (p1Sets === null || p2Sets === null) {
         throw new Error(`Invalid team format for p1: ${p1team}, p2: ${p2team}`);

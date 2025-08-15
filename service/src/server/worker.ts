@@ -13,7 +13,8 @@ import { generateTeamFromFormat, generateTeamFromIndices } from "./state";
 
 interface WaitingPlayer {
     userName: string;
-    team: string;
+    team: string | null;
+    smogonFormat: string;
     resolve: (player: TrainablePlayerAI) => void;
 }
 
@@ -47,7 +48,8 @@ export class WorkerHandler {
 
     private resetPlayerFromTrainingUserName(
         userName: string,
-        teamString: string,
+        teamString: string | null,
+        smogonFormat: string,
     ): Promise<TrainablePlayerAI> {
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
@@ -57,11 +59,17 @@ export class WorkerHandler {
         if (this.waitingPlayers.length > 0) {
             // Pair found, create battle
             const opponent = this.waitingPlayers.shift()!;
+            if (opponent.smogonFormat !== smogonFormat) {
+                throw new Error(
+                    `Mismatched formats: ${opponent.smogonFormat} vs ${smogonFormat}`,
+                );
+            }
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.userName,
                 p2Name: userName,
                 p1team: opponent.team,
                 p2team: teamString,
+                smogonFormat,
             });
 
             this.playerMapping.set(opponent.userName, player1);
@@ -75,13 +83,18 @@ export class WorkerHandler {
                 this.waitingPlayers.push({
                     userName,
                     team: teamString,
+                    smogonFormat,
                     resolve,
                 });
             });
         }
     }
 
-    private resetPlayerFromEvalUserName(userName: string, teamString: string) {
+    private resetPlayerFromEvalUserName(
+        userName: string,
+        teamString: string | null,
+        smogonFormat: string,
+    ) {
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -90,7 +103,8 @@ export class WorkerHandler {
             p1Name: userName,
             p2Name: `baseline-${userName}`,
             p1team: teamString,
-            p2team: generateTeamFromFormat("gen3ou"),
+            p2team: generateTeamFromFormat(smogonFormat),
+            smogonFormat,
         });
         this.playerMapping.set(userName, player1);
         return player1;
@@ -165,15 +179,24 @@ export class WorkerHandler {
 
     private resetPlayerFromUserName(
         userName: string,
-        teamIndices: number[],
+        smogonFormat: string,
+        teamIndices?: number[],
     ): Promise<TrainablePlayerAI> {
-        const teamString = generateTeamFromIndices(teamIndices);
+        const teamString = generateTeamFromIndices(smogonFormat, teamIndices);
         if (isEvalUser(userName)) {
             return Promise.resolve(
-                this.resetPlayerFromEvalUserName(userName, teamString),
+                this.resetPlayerFromEvalUserName(
+                    userName,
+                    teamString,
+                    smogonFormat,
+                ),
             );
         } else {
-            return this.resetPlayerFromTrainingUserName(userName, teamString);
+            return this.resetPlayerFromTrainingUserName(
+                userName,
+                teamString,
+                smogonFormat,
+            );
         }
     }
 
@@ -183,9 +206,11 @@ export class WorkerHandler {
     ): Promise<void> {
         const userName = resetRequest.getUsername();
         const teamIndices = resetRequest.getTeamIndicesList();
+        const smogonFormat = resetRequest.getSmogonFormat();
 
         const player = await this.resetPlayerFromUserName(
             userName,
+            smogonFormat,
             teamIndices,
         );
         const state = await player.receiveEnvironmentState();

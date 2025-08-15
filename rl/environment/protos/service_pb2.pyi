@@ -14,14 +14,16 @@ class ClientRequest(_message.Message):
     def __init__(self, step: _Optional[_Union[StepRequest, _Mapping]] = ..., reset: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
 class Action(_message.Message):
-    __slots__ = ("action_type", "move_slot", "switch_slot")
+    __slots__ = ("action_type", "move_slot", "switch_slot", "wildcard_slot")
     ACTION_TYPE_FIELD_NUMBER: _ClassVar[int]
     MOVE_SLOT_FIELD_NUMBER: _ClassVar[int]
     SWITCH_SLOT_FIELD_NUMBER: _ClassVar[int]
+    WILDCARD_SLOT_FIELD_NUMBER: _ClassVar[int]
     action_type: int
     move_slot: int
     switch_slot: int
-    def __init__(self, action_type: _Optional[int] = ..., move_slot: _Optional[int] = ..., switch_slot: _Optional[int] = ...) -> None: ...
+    wildcard_slot: int
+    def __init__(self, action_type: _Optional[int] = ..., move_slot: _Optional[int] = ..., switch_slot: _Optional[int] = ..., wildcard_slot: _Optional[int] = ...) -> None: ...
 
 class StepRequest(_message.Message):
     __slots__ = ("username", "action", "rqid")
@@ -34,12 +36,14 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username", "team_indices")
+    __slots__ = ("username", "team_indices", "smogon_format")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     TEAM_INDICES_FIELD_NUMBER: _ClassVar[int]
+    SMOGON_FORMAT_FIELD_NUMBER: _ClassVar[int]
     username: str
     team_indices: _containers.RepeatedScalarFieldContainer[int]
-    def __init__(self, username: _Optional[str] = ..., team_indices: _Optional[_Iterable[int]] = ...) -> None: ...
+    smogon_format: str
+    def __init__(self, username: _Optional[str] = ..., team_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "private_team", "field", "rqid")
@@ -66,6 +70,12 @@ class EnvironmentState(_message.Message):
     field: bytes
     rqid: int
     def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_nodes: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ...) -> None: ...
+
+class EnvironmentTrajectory(_message.Message):
+    __slots__ = ("states",)
+    STATES_FIELD_NUMBER: _ClassVar[int]
+    states: _containers.RepeatedCompositeFieldContainer[EnvironmentState]
+    def __init__(self, states: _Optional[_Iterable[_Union[EnvironmentState, _Mapping]]] = ...) -> None: ...
 
 class EnvironmentResponse(_message.Message):
     __slots__ = ("username", "state")

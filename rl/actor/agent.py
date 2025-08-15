@@ -17,9 +17,9 @@ from rl.environment.interfaces import (
 from rl.model.utils import BIAS_VALUE, Params
 
 
-def threshold_policy(pi: jax.Array, min_p: float = 0.1) -> jax.Array:
+def threshold_policy(pi: jax.Array, min_p: float = 0.05) -> jax.Array:
     """Thresholds the policy for evaluation."""
-    thresholded_pi = jnp.where(pi < pi.max() * min_p, 0.0, pi)
+    thresholded_pi = jnp.where(pi < (pi.max() * min_p), 0.0, pi)
     return thresholded_pi / jnp.sum(thresholded_pi, axis=-1, keepdims=True)
 
 
@@ -121,7 +121,9 @@ class Agent:
         )
 
         # Sample an action and return.
-        action_type_key, move_key, switch_key = jax.random.split(rng_key, 3)
+        action_type_key, move_key, switch_key, wildcard_key = jax.random.split(
+            rng_key, 4
+        )
         action_type_head = sample_action(
             action_type_key,
             actor_output.action_type_head.logits,
@@ -140,10 +142,17 @@ class Agent:
             actor_output.switch_head.policy,
             self._do_threshold,
         )
+        wildcard_head = sample_action(
+            wildcard_key,
+            actor_output.wildcard_head.logits[move_head],
+            actor_output.wildcard_head.policy[move_head],
+            self._do_threshold,
+        )
 
         return PlayerAgentOutput(
             action_type_head=action_type_head,
             move_head=move_head,
             switch_head=switch_head,
+            wildcard_head=wildcard_head,
             actor_output=actor_output,
         )

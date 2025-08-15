@@ -20,13 +20,17 @@ SERVER_URI = "ws://localhost:8080"
 
 
 class SinglePlayerSyncEnvironment:
-    def __init__(self, username: str):
+    def __init__(self, username: str, generation: int = 3):
 
         self.username = username
         self.rqid = None
         self.last_state = None
 
-        self.websocket = connect(SERVER_URI, additional_headers={"username": username})
+        self.websocket = connect(
+            SERVER_URI,
+            additional_headers={"username": username},
+        )
+        self.generation = generation
 
     def _recv(self):
         server_message_data = self.websocket.recv()
@@ -38,7 +42,11 @@ class SinglePlayerSyncEnvironment:
     def reset(self, team_indices: list[int]):
         self.rqid = None
         reset_message = ClientRequest(
-            reset=ResetRequest(username=self.username, team_indices=team_indices)
+            reset=ResetRequest(
+                username=self.username,
+                team_indices=team_indices,
+                smogon_format=f"gen{self.generation}ou",
+            )
         )
         self.websocket.send(reset_message.SerializeToString())
         return self._recv()
@@ -59,9 +67,10 @@ class SinglePlayerSyncEnvironment:
 
 
 class TeamBuilderEnvironment:
-    def __init__(self, format: str = "gen3ou"):
-        self.data = PACKED_SETS[format]
+    def __init__(self, generation: int = 3):
+        self.data = PACKED_SETS[f"gen{generation}ou"]
         self.num_sets = len(self.data["sets"])
+        self.state = BuilderEnvOutput()
 
     def reset(self) -> BuilderEnvOutput:
         self.pos = 0
@@ -69,8 +78,8 @@ class TeamBuilderEnvironment:
         return self.state
 
     def step(self, action: int) -> BuilderEnvOutput:
-        if self.pos >= 6:
-            raise ValueError("Cannot step beyond the last position.")
+        if self.state.done.item():
+            return self.state
         self.state = self._step(action, self.pos, self.state)
         self.pos += 1
         return self.state

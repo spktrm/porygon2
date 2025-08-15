@@ -51,10 +51,11 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
         setattr(config_dict, key, value)
 
 
-def get_model_config():
+def get_model_config(generation: int = 3) -> ConfigDict:
     cfg = ConfigDict()
+    cfg.generation = generation
 
-    num_heads = 4
+    num_heads = 3
     scale = 1
 
     entity_size = int(scale * 64 * num_heads)
@@ -64,6 +65,7 @@ def get_model_config():
     cfg.dtype = dtype
 
     cfg.encoder = ConfigDict()
+    cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = dtype
 
@@ -156,16 +158,19 @@ def get_model_config():
 
     # Policy Head Configuration
     cfg.action_type_head = ConfigDict()
+    cfg.action_type_head.generation = generation
     cfg.action_type_head.transformer = ConfigDict()
     set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
     cfg.action_type_head.dtype = dtype
 
     cfg.move_head = ConfigDict()
+    cfg.move_head.generation = generation
     cfg.move_head.transformer = ConfigDict()
     set_attributes(cfg.move_head.transformer, **transformer_encoder_kwargs)
     cfg.move_head.dtype = dtype
 
     cfg.switch_head = ConfigDict()
+    cfg.switch_head.generation = generation
     cfg.switch_head.transformer = ConfigDict()
     set_attributes(cfg.switch_head.transformer, **transformer_encoder_kwargs)
     cfg.switch_head.dtype = dtype

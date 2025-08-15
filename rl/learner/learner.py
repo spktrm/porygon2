@@ -34,6 +34,8 @@ def calculate_log_prob(
     action_type: jax.Array,
     move_log_pi: jax.Array,
     move: jax.Array,
+    wildcard_log_pi: jax.Array,
+    wildcard: jax.Array,
     switch_log_pi: jax.Array,
     switch: jax.Array,
 ):
@@ -42,9 +44,20 @@ def calculate_log_prob(
 
     move_log_prob = get_action_value(move_log_pi, move)
     switch_prob = get_action_value(switch_log_pi, switch)
-    sub_log_prob = jnp.stack((move_log_prob, switch_prob), axis=-1)
+    sub_log_prob = jnp.stack((move_log_prob, switch_prob, switch_prob), axis=-1)
 
-    return action_type_log_prob + (action_type_one_hot * sub_log_prob).sum(axis=-1)
+    relevant_wild_card_log_pi = jnp.take_along_axis(
+        wildcard_log_pi, move[..., None, None], axis=-2
+    )
+    wild_card_log_prob = get_action_value(
+        relevant_wild_card_log_pi.squeeze(-2), wildcard
+    )
+
+    return (
+        action_type_log_prob
+        + (action_type_one_hot * sub_log_prob).sum(axis=-1)
+        + (action_type == 0) * wild_card_log_prob
+    )
 
 
 def policy_gradient_loss(
@@ -63,19 +76,24 @@ def value_loss(pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
 
 
 def player_entropy_loss(
-    action_type_log_pi: jax.Array,
-    action_type_pi: jax.Array,
-    move_log_pi: jax.Array,
-    move_pi: jax.Array,
-    switch_log_pi: jax.Array,
-    switch_pi: jax.Array,
-    valid: jax.Array,
+    action_type_log_pi: jax.Array,  # T, B, 2
+    action_type_pi: jax.Array,  # T, B, 2
+    move_log_pi: jax.Array,  # T, B, 4
+    move_pi: jax.Array,  # T, B, 4
+    wildcard_log_pis: jax.Array,  # T, B, 4, 5
+    wildcard_pis: jax.Array,  # T, B, 4, 5
+    switch_log_pi: jax.Array,  # T, B, 6
+    switch_pi: jax.Array,  # T, B, 6
+    valid: jax.Array,  # T, B
 ):
     action_type_entropy = -jnp.sum(action_type_pi * action_type_log_pi, axis=-1)
 
-    move_entropy = -jnp.sum(move_pi * move_log_pi, axis=-1)
+    wildcard_entropy = -jnp.sum(wildcard_pis * wildcard_log_pis, axis=-1)
+    move_entropy = -jnp.sum(move_pi * move_log_pi, axis=-1) + (
+        move_pi * wildcard_entropy
+    ).sum(axis=-1)
     switch_entropy = -jnp.sum(switch_pi * switch_log_pi, axis=-1)
-    sub_entropy = jnp.stack((move_entropy, switch_entropy), axis=-1)
+    sub_entropy = jnp.stack((move_entropy, switch_entropy, switch_entropy), axis=-1)
 
     total_entropy = action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
     return average(total_entropy, valid)
@@ -112,20 +130,24 @@ def train_step(
 
     target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
     actor_log_pi = calculate_log_prob(
-        batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
-        batch.player_transitions.agent_output.action_type_head,
-        batch.player_transitions.agent_output.actor_output.move_head.log_policy,
-        batch.player_transitions.agent_output.move_head,
-        batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
-        batch.player_transitions.agent_output.switch_head,
+        action_type_log_pi=batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
+        action_type=batch.player_transitions.agent_output.action_type_head,
+        move_log_pi=batch.player_transitions.agent_output.actor_output.move_head.log_policy,
+        move=batch.player_transitions.agent_output.move_head,
+        wildcard_log_pi=batch.player_transitions.agent_output.actor_output.wildcard_head.log_policy,
+        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        switch_log_pi=batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
+        switch=batch.player_transitions.agent_output.switch_head,
     )
     target_log_pi = calculate_log_prob(
-        target_pred.action_type_head.log_policy,
-        batch.player_transitions.agent_output.action_type_head,
-        target_pred.move_head.log_policy,
-        batch.player_transitions.agent_output.move_head,
-        target_pred.switch_head.log_policy,
-        batch.player_transitions.agent_output.switch_head,
+        action_type_log_pi=target_pred.action_type_head.log_policy,
+        action_type=batch.player_transitions.agent_output.action_type_head,
+        move_log_pi=target_pred.move_head.log_policy,
+        move=batch.player_transitions.agent_output.move_head,
+        wildcard_log_pi=target_pred.wildcard_head.log_policy,
+        wildcard=batch.player_transitions.agent_output.wildcard_head,
+        switch_log_pi=target_pred.switch_head.log_policy,
+        switch=batch.player_transitions.agent_output.switch_head,
     )
 
     actor_target_log_ratio = actor_log_pi - target_log_pi
@@ -163,12 +185,14 @@ def train_step(
 
         pred = player_state.apply_fn(params, player_actor_input)
         learner_log_pi = calculate_log_prob(
-            pred.action_type_head.log_policy,
-            batch.player_transitions.agent_output.action_type_head,
-            pred.move_head.log_policy,
-            batch.player_transitions.agent_output.move_head,
-            pred.switch_head.log_policy,
-            batch.player_transitions.agent_output.switch_head,
+            action_type_log_pi=pred.action_type_head.log_policy,
+            action_type=batch.player_transitions.agent_output.action_type_head,
+            move_log_pi=pred.move_head.log_policy,
+            move=batch.player_transitions.agent_output.move_head,
+            wildcard_log_pi=pred.wildcard_head.log_policy,
+            wildcard=batch.player_transitions.agent_output.wildcard_head,
+            switch_log_pi=pred.switch_head.log_policy,
+            switch=batch.player_transitions.agent_output.switch_head,
         )
 
         # Calculate the log ratios.
@@ -192,6 +216,8 @@ def train_step(
             pred.action_type_head.policy,
             pred.move_head.log_policy,
             pred.move_head.policy,
+            pred.wildcard_head.log_policy,
+            pred.wildcard_head.policy,
             pred.switch_head.log_policy,
             pred.switch_head.policy,
             player_valid,

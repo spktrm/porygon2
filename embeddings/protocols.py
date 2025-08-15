@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Callable, List, TypedDict
+from typing import Callable, TypedDict
 
 import pandas as pd
 
@@ -18,7 +18,7 @@ class Protocol(TypedDict):
     func: Callable[[pd.Series], pd.DataFrame]
 
 
-SPECIES_PROTOCOLS: List[Protocol] = [
+SPECIES_PROTOCOLS: list[Protocol] = [
     *[
         {
             "feature": stat_feature,
@@ -92,7 +92,7 @@ SPECIES_PROTOCOLS: List[Protocol] = [
     # },
 ]
 
-MOVES_PROTOCOLS: List[Protocol] = [
+MOVES_PROTOCOLS: list[Protocol] = [
     *[
         {
             "feature": stat_feature,
@@ -221,7 +221,7 @@ MOVES_PROTOCOLS: List[Protocol] = [
     },
 ]
 
-ITEMS_PROTOCOLS: List[Protocol] = [
+ITEMS_PROTOCOLS: list[Protocol] = [
     *[
         {
             "feature": stat_feature,
@@ -279,7 +279,7 @@ ITEMS_PROTOCOLS: List[Protocol] = [
     # },
 ]
 
-ABILITIES_PROTOCOLS: List[Protocol] = [
+ABILITIES_PROTOCOLS: list[Protocol] = [
     *[
         {
             "feature": stat_feature,

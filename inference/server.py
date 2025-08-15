@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
@@ -15,7 +17,7 @@ init_jax_jit_cache()
 
 
 # Initialize the model
-model = InferenceModel(do_threshold=True)
+model = InferenceModel(seed=random.randint(0, 2**32 - 1), do_threshold=True)
 
 
 def pprint_nparray(arr: np.ndarray):

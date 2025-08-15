@@ -48,6 +48,9 @@ export class Action extends jspb.Message {
   getSwitchSlot(): number;
   setSwitchSlot(value: number): void;
 
+  getWildcardSlot(): number;
+  setWildcardSlot(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
   static toObject(includeInstance: boolean, msg: Action): Action.AsObject;
@@ -63,6 +66,7 @@ export namespace Action {
     actionType: number,
     moveSlot: number,
     switchSlot: number,
+    wildcardSlot: number,
   }
 }
 
@@ -105,6 +109,9 @@ export class ResetRequest extends jspb.Message {
   setTeamIndicesList(value: Array<number>): void;
   addTeamIndices(value: number, index?: number): number;
 
+  getSmogonFormat(): string;
+  setSmogonFormat(value: string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
   static toObject(includeInstance: boolean, msg: ResetRequest): ResetRequest.AsObject;
@@ -119,6 +126,7 @@ export namespace ResetRequest {
   export type AsObject = {
     username: string,
     teamIndicesList: Array<number>,
+    smogonFormat: string,
   }
 }
 
@@ -197,6 +205,28 @@ export namespace EnvironmentState {
     privateTeam: Uint8Array | string,
     field: Uint8Array | string,
     rqid: number,
+  }
+}
+
+export class EnvironmentTrajectory extends jspb.Message {
+  clearStatesList(): void;
+  getStatesList(): Array<EnvironmentState>;
+  setStatesList(value: Array<EnvironmentState>): void;
+  addStates(value?: EnvironmentState, index?: number): EnvironmentState;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): EnvironmentTrajectory.AsObject;
+  static toObject(includeInstance: boolean, msg: EnvironmentTrajectory): EnvironmentTrajectory.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: EnvironmentTrajectory, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): EnvironmentTrajectory;
+  static deserializeBinaryFromReader(message: EnvironmentTrajectory, reader: jspb.BinaryReader): EnvironmentTrajectory;
+}
+
+export namespace EnvironmentTrajectory {
+  export type AsObject = {
+    statesList: Array<EnvironmentState.AsObject>,
   }
 }
 

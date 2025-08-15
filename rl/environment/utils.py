@@ -4,7 +4,7 @@ import jax
 import numpy as np
 
 from rl.environment.data import (
-    EX_STATE,
+    EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ACTION_MASK_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
@@ -73,7 +73,7 @@ def get_action_mask(state: EnvironmentState):
 def get_action_type_mask(mask: jax.Array):
     mask = mask[
         ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW
         + 1,
     ]
     return mask | (~mask).all(axis=-1, keepdims=True)
@@ -92,6 +92,15 @@ def get_switch_mask(mask: jax.Array):
     mask = mask[
         ...,
         ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6
+        + 1,
+    ]
+    return mask | (~mask).all(axis=-1, keepdims=True)
+
+
+def get_tera_mask(mask: jax.Array):
+    mask = mask[
+        ...,
+        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA
         + 1,
     ]
     return mask | (~mask).all(axis=-1, keepdims=True)
@@ -162,6 +171,7 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
         action_type_mask=get_action_type_mask(action_mask),
         move_mask=get_move_mask(action_mask),
         switch_mask=get_switch_mask(action_mask),
+        wildcard_mask=get_tera_mask(action_mask),
     )
     history_step = PlayerHistoryOutput(
         nodes=history_entity_nodes,
@@ -172,18 +182,26 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
     return PlayerActorInput(env=env_step, history=history_step)
 
 
-def get_ex_player_step(expand: bool = True) -> PlayerActorInput:
-    ts = process_state(EX_STATE)
-    if expand:
-        ex = jax.tree.map(lambda x: x[None, None, ...], ts.env)
-        hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-        return PlayerActorInput(env=ex, history=hx)
-    else:
-        return ts
+def get_ex_trajectory() -> PlayerActorInput:
+    states = []
+    for state in EX_TRAJECTORY.states:
+        processed_state = process_state(state)
+        states.append(processed_state.env)
+    return PlayerActorInput(
+        env=jax.tree.map(lambda *xs: np.stack(xs), *states),
+        history=processed_state.history,
+    )
 
 
-def get_ex_builder_step(format: str) -> BuilderEnvOutput:
-    data = PACKED_SETS[format]
+def get_ex_player_step() -> PlayerActorInput:
+    ts = get_ex_trajectory()
+    ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
+    hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
+    return PlayerActorInput(env=ex, history=hx)
+
+
+def get_ex_builder_step(generation: int = 3) -> BuilderEnvOutput:
+    data = PACKED_SETS[f"gen{generation}ou"]
     num_sets = len(data["sets"])
     return BuilderEnvOutput(
         tokens=np.ones((1, 1, 6), dtype=np.int32) * -1,
