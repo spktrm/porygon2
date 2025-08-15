@@ -108,11 +108,11 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main():
+def main(generation: int = 9):
     init_jax_jit_cache()
 
-    generation = 9
-    network = get_builder_model(get_builder_model_config(generation))
+    model_config = get_builder_model_config(generation)
+    network = get_builder_model(model_config)
 
     ex = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_builder_step(generation=generation))
