@@ -20,7 +20,7 @@ from rl.learner.config import (
 )
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.utils import Params
+from rl.model.utils import Params, legal_log_policy, legal_policy
 from rl.utils import average
 
 
@@ -129,28 +129,52 @@ def train_step(
     )
 
     target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
-    actor_log_pi = calculate_log_prob(
-        action_type_log_pi=batch.player_transitions.agent_output.actor_output.action_type_head.log_policy,
+    actor_log_prob = calculate_log_prob(
+        action_type_log_pi=legal_log_policy(
+            batch.player_transitions.agent_output.actor_output.action_type_logits,
+            batch.player_transitions.env_output.action_type_mask,
+        ),
         action_type=batch.player_transitions.agent_output.action_type_head,
-        move_log_pi=batch.player_transitions.agent_output.actor_output.move_head.log_policy,
+        move_log_pi=legal_log_policy(
+            batch.player_transitions.agent_output.actor_output.move_logits,
+            batch.player_transitions.env_output.move_mask,
+        ),
         move=batch.player_transitions.agent_output.move_head,
-        wildcard_log_pi=batch.player_transitions.agent_output.actor_output.wildcard_head.log_policy,
+        wildcard_log_pi=legal_log_policy(
+            batch.player_transitions.agent_output.actor_output.wildcard_logits,
+            batch.player_transitions.env_output.wildcard_mask,
+        ),
         wildcard=batch.player_transitions.agent_output.wildcard_head,
-        switch_log_pi=batch.player_transitions.agent_output.actor_output.switch_head.log_policy,
+        switch_log_pi=legal_log_policy(
+            batch.player_transitions.agent_output.actor_output.switch_logits,
+            batch.player_transitions.env_output.switch_mask,
+        ),
         switch=batch.player_transitions.agent_output.switch_head,
     )
-    target_log_pi = calculate_log_prob(
-        action_type_log_pi=target_pred.action_type_head.log_policy,
+    target_log_prob = calculate_log_prob(
+        action_type_log_pi=legal_log_policy(
+            target_pred.action_type_logits,
+            batch.player_transitions.env_output.action_type_mask,
+        ),
         action_type=batch.player_transitions.agent_output.action_type_head,
-        move_log_pi=target_pred.move_head.log_policy,
+        move_log_pi=legal_log_policy(
+            target_pred.move_logits,
+            batch.player_transitions.env_output.move_mask,
+        ),
         move=batch.player_transitions.agent_output.move_head,
-        wildcard_log_pi=target_pred.wildcard_head.log_policy,
+        wildcard_log_pi=legal_log_policy(
+            target_pred.wildcard_logits,
+            batch.player_transitions.env_output.wildcard_mask,
+        ),
         wildcard=batch.player_transitions.agent_output.wildcard_head,
-        switch_log_pi=target_pred.switch_head.log_policy,
+        switch_log_pi=legal_log_policy(
+            target_pred.switch_logits,
+            batch.player_transitions.env_output.switch_mask,
+        ),
         switch=batch.player_transitions.agent_output.switch_head,
     )
 
-    actor_target_log_ratio = actor_log_pi - target_log_pi
+    actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
@@ -184,22 +208,55 @@ def train_step(
     def player_loss_fn(params: Params):
 
         pred = player_state.apply_fn(params, player_actor_input)
-        learner_log_pi = calculate_log_prob(
-            action_type_log_pi=pred.action_type_head.log_policy,
+        pred_action_type_log_pi = legal_log_policy(
+            pred.action_type_logits,
+            batch.player_transitions.env_output.action_type_mask,
+        )
+        pred_move_log_pi = legal_log_policy(
+            pred.move_logits,
+            batch.player_transitions.env_output.move_mask,
+        )
+        pred_wildcard_log_pi = legal_log_policy(
+            pred.wildcard_logits,
+            batch.player_transitions.env_output.wildcard_mask,
+        )
+        pred_switch_log_pi = legal_log_policy(
+            pred.switch_logits,
+            batch.player_transitions.env_output.switch_mask,
+        )
+        pred_action_type_pi = legal_policy(
+            pred.action_type_logits,
+            batch.player_transitions.env_output.action_type_mask,
+        )
+        pred_move_pi = legal_policy(
+            pred.move_logits,
+            batch.player_transitions.env_output.move_mask,
+        )
+        pred_wildcard_pi = legal_policy(
+            pred.wildcard_logits,
+            batch.player_transitions.env_output.wildcard_mask,
+        )
+        pred_switch_pi = legal_policy(
+            pred.switch_logits,
+            batch.player_transitions.env_output.switch_mask,
+        )
+
+        learner_log_prob = calculate_log_prob(
+            action_type_log_pi=pred_action_type_log_pi,
             action_type=batch.player_transitions.agent_output.action_type_head,
-            move_log_pi=pred.move_head.log_policy,
+            move_log_pi=pred_move_log_pi,
             move=batch.player_transitions.agent_output.move_head,
-            wildcard_log_pi=pred.wildcard_head.log_policy,
+            wildcard_log_pi=pred_wildcard_log_pi,
             wildcard=batch.player_transitions.agent_output.wildcard_head,
-            switch_log_pi=pred.switch_head.log_policy,
+            switch_log_pi=pred_switch_log_pi,
             switch=batch.player_transitions.agent_output.switch_head,
         )
 
         # Calculate the log ratios.
-        learner_actor_log_ratio = learner_log_pi - actor_log_pi
+        learner_actor_log_ratio = learner_log_prob - actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        learner_target_log_ratio = learner_log_pi - target_log_pi
+        learner_target_log_ratio = learner_log_prob - target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = player_is_ratio * learner_actor_ratio
@@ -212,14 +269,14 @@ def train_step(
         loss_v = value_loss(pred.v, vtrace.returns, player_valid)
 
         loss_entropy = player_entropy_loss(
-            pred.action_type_head.log_policy,
-            pred.action_type_head.policy,
-            pred.move_head.log_policy,
-            pred.move_head.policy,
-            pred.wildcard_head.log_policy,
-            pred.wildcard_head.policy,
-            pred.switch_head.log_policy,
-            pred.switch_head.policy,
+            pred_action_type_log_pi,
+            pred_action_type_pi,
+            pred_move_log_pi,
+            pred_move_pi,
+            pred_wildcard_log_pi,
+            pred_wildcard_pi,
+            pred_switch_log_pi,
+            pred_switch_pi,
             player_valid,
         )
 
@@ -259,16 +316,22 @@ def train_step(
         builder_state.target_params, batch.builder_transitions.env_output
     )
 
-    target_builder_log_pi = get_action_value(
-        target_builder_output.head.log_policy,
+    target_builder_log_prob = get_action_value(
+        legal_log_policy(
+            target_builder_output.logits,
+            batch.builder_transitions.env_output.mask,
+        ),
         batch.builder_transitions.agent_output.action,
     )
-    actor_builder_log_pi = get_action_value(
-        batch.builder_transitions.agent_output.actor_output.head.log_policy,
+    actor_builder_log_prob = get_action_value(
+        legal_log_policy(
+            batch.builder_transitions.agent_output.actor_output.logits,
+            batch.builder_transitions.env_output.mask,
+        ),
         batch.builder_transitions.agent_output.action,
     )
 
-    actor_target_builder_log_ratio = actor_builder_log_pi - target_builder_log_pi
+    actor_target_builder_log_ratio = actor_builder_log_prob - target_builder_log_prob
     actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
 
     builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
@@ -301,15 +364,24 @@ def train_step(
         learner_builder_output = builder_state.apply_fn(
             params, batch.builder_transitions.env_output
         )
-        learner_builder_log_pi = get_action_value(
-            learner_builder_output.head.log_policy,
+        leaner_builder_log_pi = legal_log_policy(
+            batch.builder_transitions.agent_output.actor_output.logits,
+            batch.builder_transitions.env_output.mask,
+        )
+        leaner_builder_pi = legal_policy(
+            batch.builder_transitions.agent_output.actor_output.logits,
+            batch.builder_transitions.env_output.mask,
+        )
+
+        learner_builder_log_prob = get_action_value(
+            leaner_builder_log_pi,
             batch.builder_transitions.agent_output.action,
         )
 
-        learner_actor_log_ratio = learner_builder_log_pi - actor_builder_log_pi
+        learner_actor_log_ratio = learner_builder_log_prob - actor_builder_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        learner_target_log_ratio = learner_builder_log_pi - target_builder_log_pi
+        learner_target_log_ratio = learner_builder_log_prob - target_builder_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = builder_is_ratio * learner_actor_ratio
@@ -327,8 +399,8 @@ def train_step(
         )
 
         loss_entropy = builder_entropy_loss(
-            learner_builder_output.head.policy,
-            learner_builder_output.head.log_policy,
+            leaner_builder_pi,
+            leaner_builder_log_pi,
             builder_valid,
         )
 

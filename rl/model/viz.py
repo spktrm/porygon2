@@ -4,12 +4,12 @@ import pickle
 import jax
 
 from rl.environment.utils import get_ex_player_step
-from rl.model.config import get_model_config
+from rl.model.config import get_player_model_config
 from rl.model.player_model import get_player_model
 
 
 def main():
-    config = get_model_config()
+    config = get_player_model_config()
     network = get_player_model(config)
     ex, hx = get_ex_player_step()
 

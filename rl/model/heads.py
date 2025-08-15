@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import PolicyHeadOutput
 from rl.environment.protos.features_pb2 import ActionMaskFeature
 from rl.model.modules import (
     MLP,
@@ -11,7 +10,7 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE, legal_log_policy, legal_policy
+from rl.model.utils import BIAS_VALUE
 
 
 class MoveHead(nn.Module):
@@ -35,7 +34,6 @@ class MoveHead(nn.Module):
         query_mask: jax.Array,
         key_value_mask: jax.Array,
         wildcard_mask: jax.Array,
-        temp: float = 1.0,
     ):
         query_embeddings = self.encoder(
             query_embeddings,
@@ -47,35 +45,15 @@ class MoveHead(nn.Module):
             create_attention_mask(query_mask, key_value_mask),
         )
 
-        logits = self.final_mlp(query_embeddings)
-        logits = logits.reshape(-1) / temp
-
-        masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
-        policy = legal_policy(logits, query_mask, temp)
-        log_policy = legal_log_policy(logits, query_mask, temp)
+        move_logits = self.final_mlp(query_embeddings).reshape(-1)
+        masked_move_logits = jnp.where(query_mask, move_logits, BIAS_VALUE)
 
         wildcard_logits = self.wildcard_head(query_embeddings)
-        wildcard_logits = wildcard_logits / temp
-
         wildcard_masked_logits = jnp.where(
             wildcard_mask[None], wildcard_logits, BIAS_VALUE
         )
-        wildcard_policy = jax.vmap(legal_policy, in_axes=(0, None, None))(
-            wildcard_logits, wildcard_mask, temp
-        )
-        wildcard_log_policy = jax.vmap(legal_log_policy, in_axes=(0, None, None))(
-            wildcard_logits, wildcard_mask, temp
-        )
 
-        return PolicyHeadOutput(
-            logits=masked_logits,
-            policy=policy,
-            log_policy=log_policy,
-        ), PolicyHeadOutput(
-            logits=wildcard_masked_logits,
-            policy=wildcard_policy,
-            log_policy=wildcard_log_policy,
-        )
+        return masked_move_logits, wildcard_masked_logits
 
 
 class PolicyHead(nn.Module):
@@ -92,7 +70,6 @@ class PolicyHead(nn.Module):
         key_value_embeddings: jax.Array,
         query_mask: jax.Array,
         key_value_mask: jax.Array,
-        temp: float = 1.0,
     ):
         query_embeddings = self.encoder(
             query_embeddings,
@@ -105,17 +82,11 @@ class PolicyHead(nn.Module):
         )
 
         logits = self.final_mlp(query_embeddings)
-        logits = logits.reshape(-1) / temp
+        logits = logits.reshape(-1)
 
         masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
-        policy = legal_policy(logits, query_mask, temp)
-        log_policy = legal_log_policy(logits, query_mask, temp)
 
-        return PolicyHeadOutput(
-            logits=masked_logits,
-            policy=policy,
-            log_policy=log_policy,
-        )
+        return masked_logits
 
 
 class ScalarHead(nn.Module):

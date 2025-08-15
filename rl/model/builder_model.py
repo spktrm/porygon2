@@ -1,6 +1,5 @@
 import pickle
 from pprint import pprint
-from typing import Callable
 
 import flax.linen as nn
 import jax
@@ -16,24 +15,17 @@ from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
     BuilderTransition,
-    PolicyHeadOutput,
+    SamplingConfig,
 )
 from rl.environment.utils import get_ex_builder_step
-from rl.model.config import get_model_config
+from rl.model.config import get_builder_model_config
 from rl.model.modules import (
     MLP,
     TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import (
-    BIAS_VALUE,
-    Params,
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import BIAS_VALUE, get_most_recent_file, get_num_params
 from rl.utils import init_jax_jit_cache
 
 
@@ -58,8 +50,7 @@ class Porygon2BuilderModel(nn.Module):
             embedding_init=embedding_init_fn,
         )
 
-        transformer_config = self.cfg.action_type_head.transformer.to_dict()
-        transformer_config["need_pos"] = True
+        transformer_config = self.cfg.transformer.to_dict()
 
         self.decoder = TransformerDecoder(**transformer_config)
         self.encoder = TransformerEncoder(**transformer_config)
@@ -77,10 +68,7 @@ class Porygon2BuilderModel(nn.Module):
         """
         logits = self.policy_head(embedding)
         masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
-        pi = legal_policy(logits, sample_mask)
-        log_pi = legal_log_policy(logits, sample_mask)
-
-        return PolicyHeadOutput(logits=masked_logits, policy=pi, log_policy=log_pi)
+        return masked_logits
 
     def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
@@ -98,7 +86,7 @@ class Porygon2BuilderModel(nn.Module):
         pred_embeddings = self.encoder(
             embeddings, create_attention_mask(attn_mask), position_indices
         )
-        head_output = self._forward_head(
+        logits = self._forward_head(
             jnp.take(pred_embeddings, not_masked_sum, axis=0), input.mask
         )
         pooled = self.decoder(
@@ -108,7 +96,7 @@ class Porygon2BuilderModel(nn.Module):
         )
         v = (2 / jnp.pi) * jnp.atan((jnp.pi / 2) * self.value_head(pooled)).squeeze()
 
-        return BuilderActorOutput(head=head_output, v=v)
+        return BuilderActorOutput(logits=logits, v=v)
 
     def __call__(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         return jax.vmap(self._forward)(input)
@@ -116,7 +104,7 @@ class Porygon2BuilderModel(nn.Module):
 
 def get_builder_model(config: ConfigDict = None) -> nn.Module:
     if config is None:
-        config = get_model_config()
+        config = get_builder_model_config()
     return Porygon2BuilderModel(config)
 
 
@@ -124,7 +112,7 @@ def main():
     init_jax_jit_cache()
 
     generation = 9
-    network = get_builder_model(get_model_config(generation))
+    network = get_builder_model(get_builder_model_config(generation))
 
     ex = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_builder_step(generation=generation))
@@ -142,13 +130,9 @@ def main():
 
     pprint(get_num_params(params))
 
-    apply_fn: Callable[[Params, jax.Array, jax.Array | None], BuilderAgentOutput]
-
-    apply_fn = network.apply
-
     agent = Agent(
-        builder_apply_fn=jax.vmap(apply_fn, in_axes=(None, 1), out_axes=1),
-        do_threshold=True,
+        builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
+        builder_sampling_config=SamplingConfig(temp=1, min_p=0.01),
     )
 
     while True:
