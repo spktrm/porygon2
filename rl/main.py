@@ -20,7 +20,7 @@ import wandb.wandb_run
 import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
-from rl.concurrency.lock import FairLock, FairLockV2
+from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import SamplingConfig, Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
