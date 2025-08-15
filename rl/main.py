@@ -145,8 +145,14 @@ def main():
         player_state.apply_fn,
         builder_state.apply_fn,
         gpu_lock,
-        player_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
-        builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
+        player_sampling_config=SamplingConfig(
+            temp=1.0,
+            # min_p=0.025,
+        ),
+        builder_sampling_config=SamplingConfig(
+            temp=1.0,
+            # min_p=0.025,
+        ),
     )
 
     replay_buffer = ReplayBuffer(

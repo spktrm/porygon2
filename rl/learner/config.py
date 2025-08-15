@@ -63,7 +63,7 @@ class Porygon2LearnerConfig:
     kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
 
 
 def get_learner_config():
@@ -212,7 +212,10 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
 ):
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{learner_config.generation}")
+    save_path = f"./ckpts/gen{learner_config.generation}/"
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    latest_ckpt = get_most_recent_file(save_path)
     if not latest_ckpt:
         return player_state, builder_state
 
