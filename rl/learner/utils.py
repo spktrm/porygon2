@@ -29,10 +29,10 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
     can_act = can_move & can_switch & valid
 
     move_ratio = renormalize(
-        batch.player_transitions.agent_output.action_type_head == 0, can_act
+        batch.player_transitions.agent_output.action_type == 0, can_act
     )
     switch_ratio = renormalize(
-        batch.player_transitions.agent_output.action_type_head == 1, can_act
+        batch.player_transitions.agent_output.action_type == 1, can_act
     )
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]

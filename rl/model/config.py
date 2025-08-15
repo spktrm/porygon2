@@ -51,18 +51,20 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
         setattr(config_dict, key, value)
 
 
-def get_model_config(generation: int = 3) -> ConfigDict:
+def get_player_model_config(generation: int = 3) -> ConfigDict:
     cfg = ConfigDict()
-    cfg.generation = generation
 
     num_heads = 3
     scale = 1
+    temp = 1.0
 
     entity_size = int(scale * 64 * num_heads)
     dtype = jnp.bfloat16
 
+    cfg.generation = generation
     cfg.entity_size = entity_size
     cfg.dtype = dtype
+    cfg.temp = temp
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -162,18 +164,21 @@ def get_model_config(generation: int = 3) -> ConfigDict:
     cfg.action_type_head.transformer = ConfigDict()
     set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
     cfg.action_type_head.dtype = dtype
+    cfg.action_type_head.temp = temp
 
     cfg.move_head = ConfigDict()
     cfg.move_head.generation = generation
     cfg.move_head.transformer = ConfigDict()
     set_attributes(cfg.move_head.transformer, **transformer_encoder_kwargs)
     cfg.move_head.dtype = dtype
+    cfg.move_head.temp = temp
 
     cfg.switch_head = ConfigDict()
     cfg.switch_head.generation = generation
     cfg.switch_head.transformer = ConfigDict()
     set_attributes(cfg.switch_head.transformer, **transformer_encoder_kwargs)
     cfg.switch_head.dtype = dtype
+    cfg.switch_head.temp = temp
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
@@ -185,8 +190,51 @@ def get_model_config(generation: int = 3) -> ConfigDict:
     return cfg
 
 
+def get_builder_model_config(generation: int = 3) -> ConfigDict:
+    cfg = ConfigDict()
+
+    num_heads = 3
+    scale = 1
+
+    entity_size = int(scale * 64 * num_heads)
+    dtype = jnp.bfloat16
+
+    cfg.entity_size = entity_size
+    cfg.generation = generation
+    cfg.dtype = dtype
+    cfg.temp = 1.0
+
+    num_layers = 1
+    num_heads = num_heads
+    hidden_size_scale = 1
+    hidden_size = int(hidden_size_scale * entity_size)
+    qkv_scale = 1 / num_heads
+    qkv_size = int(qkv_scale * entity_size)
+    qk_layer_norm = True
+    use_bias = True
+
+    transformer_kwargs = dict(
+        num_layers=num_layers,
+        num_heads=num_heads,
+        qk_size=qkv_size,
+        v_size=qkv_size,
+        model_size=entity_size,
+        use_bias=use_bias,
+        resblocks_hidden_size=hidden_size,
+        qk_layer_norm=qk_layer_norm,
+        dtype=dtype,
+    )
+
+    cfg.transformer = ConfigDict()
+    set_attributes(cfg.transformer, **transformer_kwargs)
+    cfg.transformer.need_pos = True
+    cfg.dtype = dtype
+
+    return cfg
+
+
 def main():
-    cfg = get_model_config()
+    cfg = get_player_model_config()
     pprint.pprint(cfg)
 
 

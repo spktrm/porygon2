@@ -12,12 +12,9 @@ Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
 BIAS_VALUE = -1e30
 
 
-def legal_policy(
-    logits: jax.Array, legal_actions: jax.Array, temp: jax.Array = 1
-) -> jax.Array:
+def legal_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """A soft-max policy that respects legal_actions."""
-    chex.assert_equal_shape((logits, legal_actions))
-    logits = logits / temp
+    chex.assert_equal_shape((logits, legal_actions), dims=(0, 1, -1))
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
     l_min = logits.min(axis=-1, keepdims=True)
     logits = jnp.where(legal_actions, logits, l_min)
@@ -30,12 +27,9 @@ def legal_policy(
     return exp_logits / exp_logits_sum
 
 
-def legal_log_policy(
-    logits: jax.Array, legal_actions: jax.Array, temp: jax.Array = 1
-) -> jax.Array:
+def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
-    chex.assert_equal_shape((logits, legal_actions))
-    logits = logits / temp
+    chex.assert_equal_shape((logits, legal_actions), dims=(0, 1, -1))
     # logits_masked has illegal actions set to -inf.
     logits_masked = logits + jnp.log(legal_actions)
     max_legal_logit = logits_masked.max(axis=-1, keepdims=True)

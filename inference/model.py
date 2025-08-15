@@ -1,29 +1,23 @@
 import pickle
-import threading
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from inference.interfaces import HeadOutput, ResetResponse, StepResponse
+from inference.interfaces import ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
-from rl.environment.interfaces import PlayerActorInput, PolicyHeadOutput
+from rl.environment.interfaces import PlayerActorInput, SamplingConfig
 from rl.environment.utils import get_ex_player_step
 from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
-from rl.model.config import get_model_config
+from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
 from rl.model.utils import BIAS_VALUE, get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
-
-
-def threshold(arr: np.ndarray, thresh: float = 0.1):
-    pi = np.where(arr < thresh, 0, arr)
-    return pi / pi.sum(axis=-1, keepdims=True)
 
 
 def restrict_values(arr: np.ndarray):
@@ -34,24 +28,23 @@ def restrict_values(arr: np.ndarray):
 
 
 class InferenceModel:
-    def __init__(
-        self,
-        fpath: str = None,
-        seed: int = 42,
-        precision: int = 2,
-        do_threshold: bool = False,
-    ):
+    def __init__(self, fpath: str = None, seed: int = 42, precision: int = 2):
         self.learner_config = get_learner_config()
-        self.model_config = get_model_config(self.learner_config.generation)
+        self.player_model_config = get_player_model_config(
+            self.learner_config.generation
+        )
+        self.builder_model_config = get_builder_model_config(
+            self.learner_config.generation
+        )
 
-        self.player_network = get_player_model(self.model_config)
-        self.builder_network = get_builder_model(self.model_config)
+        self.player_network = get_player_model(self.player_model_config)
+        self.builder_network = get_builder_model(self.builder_model_config)
 
         self._agent = Agent(
             player_apply_fn=jax.vmap(self.player_network.apply, in_axes=(None, 1)),
             builder_apply_fn=jax.vmap(self.builder_network.apply, in_axes=(None, 1)),
-            gpu_lock=threading.Lock(),
-            do_threshold=do_threshold,
+            player_sampling_config=SamplingConfig(temp=1.0, min_p=0.05),
+            builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.05),
         )
         self.rng_key = jax.random.key(seed)
         self.precision = precision
@@ -102,25 +95,18 @@ class InferenceModel:
             v=builder_agent_output.actor_output.v.item(),
         )
 
-    def _jax_head_to_pydantic(self, head_output: PolicyHeadOutput) -> HeadOutput:
-        return HeadOutput(
-            logits=restrict_values(head_output.logits),
-            policy=restrict_values(head_output.policy),
-            log_policy=restrict_values(head_output.log_policy),
-        )
-
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
         actor_step = self._agent.step_player(rng_key, self.player_params, timestep)
         model_output = actor_step.actor_output
         return StepResponse(
-            action_type_head=self._jax_head_to_pydantic(model_output.action_type_head),
-            move_head=self._jax_head_to_pydantic(model_output.move_head),
-            wildcard_head=self._jax_head_to_pydantic(model_output.wildcard_head),
-            switch_head=self._jax_head_to_pydantic(model_output.switch_head),
+            action_type_logits=restrict_values(model_output.action_type_logits),
+            move_logits=restrict_values(model_output.move_logits),
+            wildcard_logits=restrict_values(model_output.wildcard_logits),
+            switch_logits=restrict_values(model_output.switch_logits),
             v=model_output.v.item(),
-            action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
-            move_slot=actor_step.move_head.item(),
-            switch_slot=actor_step.switch_head.item(),
-            wildcard_slot=actor_step.wildcard_head.item(),
+            action_type=ACTION_TYPE_MAPPING[actor_step.action_type.item()],
+            move_slot=actor_step.move_slot.item(),
+            switch_slot=actor_step.switch_slot.item(),
+            wildcard_slot=actor_step.wildcard_slot.item(),
         )
