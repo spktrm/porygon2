@@ -20,7 +20,7 @@ import wandb.wandb_run
 import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
-from rl.concurrency.lock import FairLockV2
+from rl.concurrency.lock import FairLock, FairLockV2
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import SamplingConfig, Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
@@ -141,7 +141,7 @@ def main():
         player_network, builder_network, jax.random.key(42), learner_config
     )
 
-    gpu_lock = FairLockV2()
+    gpu_lock = FairLock()
     agent = Agent(
         player_state.apply_fn,
         builder_state.apply_fn,
