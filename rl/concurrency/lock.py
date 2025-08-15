@@ -1,18 +1,13 @@
+import collections
 import threading
 import time
-from collections import deque
 
 
 class FairLock:
-    """
-    A fair, re-entrant lock for Python.
-    Grants lock access on a first-in, first-out basis.
-    """
-
     def __init__(self):
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
-        self._queue = deque()
+        self._queue = collections.deque()
         self._owner = None
         self._count = 0
 

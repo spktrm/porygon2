@@ -54,9 +54,9 @@ class Actor:
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(
-            action_type=ACTION_TYPE_MAPPING[agent_output.action_type_head.item()],
-            move_slot=agent_output.move_head.item(),
-            switch_slot=agent_output.switch_head.item(),
+            action_type=ACTION_TYPE_MAPPING[agent_output.action_type.item()],
+            move_slot=agent_output.move_slot.item(),
+            switch_slot=agent_output.switch_slot.item(),
         )
 
     def unroll(

@@ -13,29 +13,25 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAgentOutput,
+    SamplingConfig,
 )
 from rl.model.utils import BIAS_VALUE, Params
 
 
-def threshold_policy(pi: jax.Array, min_p: float = 0.05) -> jax.Array:
-    """Thresholds the policy for evaluation."""
-    thresholded_pi = jnp.where(pi < (pi.max() * min_p), 0.0, pi)
-    return thresholded_pi / jnp.sum(thresholded_pi, axis=-1, keepdims=True)
-
-
 def sample_action(
-    rng_key: jax.Array, logits: jax.Array, pi: jax.Array, do_threshold: bool = False
+    rng_key: jax.Array,
+    logits: jax.Array,
+    sampling_config: SamplingConfig = SamplingConfig(),
 ) -> jax.Array:
     """Samples an action from the logits using the provided mask."""
-    if do_threshold:
-        thresholded_pi = threshold_policy(pi)
-        logits = jnp.where(thresholded_pi > 0, logits.astype(jnp.float32), BIAS_VALUE)
-    return jax.random.categorical(
-        rng_key,
-        # Must use float32 here since bfloat16 does some weird things.
-        logits.astype(jnp.float32),
-        mode="high",
-    )
+    # Must use float32 here since bfloat16 does some weird things.
+    logits = logits.astype(jnp.float32) / sampling_config.temp
+    if sampling_config.min_p is not None:
+        policy = jax.nn.softmax(logits, axis=-1)
+        logits = jnp.where(
+            policy >= (policy.max() * sampling_config.min_p), logits, BIAS_VALUE
+        )
+    return jax.random.categorical(rng_key, logits, mode="high")
 
 
 class Agent:
@@ -50,14 +46,16 @@ class Agent:
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
         gpu_lock: threading.Lock = None,
-        do_threshold: bool = False,
+        player_sampling_config: SamplingConfig | None = None,
+        builder_sampling_config: SamplingConfig | None = None,
     ):
         """Constructs an Agent object."""
 
         self._player_apply_fn = player_apply_fn
         self._builder_apply_fn = builder_apply_fn
         self._lock = gpu_lock if gpu_lock is not None else NoOpLock()
-        self._do_threshold = do_threshold
+        self._player_sampling_config = player_sampling_config or SamplingConfig()
+        self._builder_sampling_config = builder_sampling_config or SamplingConfig()
 
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
@@ -91,10 +89,7 @@ class Agent:
         )
 
         action = sample_action(
-            rng_key,
-            actor_output.head.logits,
-            actor_output.head.policy,
-            self._do_threshold,
+            rng_key, actor_output.logits, self._builder_sampling_config
         )
         return BuilderAgentOutput(action=action, actor_output=actor_output)
 
@@ -126,33 +121,29 @@ class Agent:
         )
         action_type_head = sample_action(
             action_type_key,
-            actor_output.action_type_head.logits,
-            actor_output.action_type_head.policy,
-            self._do_threshold,
+            actor_output.action_type_logits,
+            self._player_sampling_config,
         )
         move_head = sample_action(
             move_key,
-            actor_output.move_head.logits,
-            actor_output.move_head.policy,
-            self._do_threshold,
+            actor_output.move_logits,
+            self._player_sampling_config,
         )
         switch_head = sample_action(
             switch_key,
-            actor_output.switch_head.logits,
-            actor_output.switch_head.policy,
-            self._do_threshold,
+            actor_output.switch_logits,
+            self._player_sampling_config,
         )
         wildcard_head = sample_action(
             wildcard_key,
-            actor_output.wildcard_head.logits[move_head],
-            actor_output.wildcard_head.policy[move_head],
-            self._do_threshold,
+            actor_output.wildcard_logits[move_head],
+            self._player_sampling_config,
         )
 
         return PlayerAgentOutput(
-            action_type_head=action_type_head,
-            move_head=move_head,
-            switch_head=switch_head,
-            wildcard_head=wildcard_head,
+            action_type=action_type_head,
+            move_slot=move_head,
+            switch_slot=switch_head,
+            wildcard_slot=wildcard_head,
             actor_output=actor_output,
         )

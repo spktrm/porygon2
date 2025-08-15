@@ -4,12 +4,6 @@ import jax
 from jaxtyping import ArrayLike
 
 
-class PolicyHeadOutput(NamedTuple):
-    logits: ArrayLike = ()
-    policy: ArrayLike = ()
-    log_policy: ArrayLike = ()
-
-
 class PlayerEnvOutput(NamedTuple):
     # Standard Info
     info: ArrayLike = ()
@@ -41,17 +35,17 @@ class PlayerActorInput(NamedTuple):
 
 class PlayerActorOutput(NamedTuple):
     v: ArrayLike = ()
-    action_type_head: PolicyHeadOutput = PolicyHeadOutput()
-    move_head: PolicyHeadOutput = PolicyHeadOutput()
-    switch_head: PolicyHeadOutput = PolicyHeadOutput()
-    wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
+    action_type_logits: ArrayLike = ()
+    move_logits: ArrayLike = ()
+    switch_logits: ArrayLike = ()
+    wildcard_logits: ArrayLike = ()
 
 
 class PlayerAgentOutput(NamedTuple):
-    action_type_head: ArrayLike = ()
-    move_head: ArrayLike = ()
-    switch_head: ArrayLike = ()
-    wildcard_head: ArrayLike = ()
+    action_type: ArrayLike = ()
+    move_slot: ArrayLike = ()
+    switch_slot: ArrayLike = ()
+    wildcard_slot: ArrayLike = ()
     actor_output: PlayerActorOutput = PlayerActorOutput()
 
 
@@ -67,7 +61,7 @@ class BuilderEnvOutput(NamedTuple):
 
 
 class BuilderActorOutput(NamedTuple):
-    head: PolicyHeadOutput = PolicyHeadOutput()
+    logits: ArrayLike = ()
     v: ArrayLike = ()
 
 
@@ -85,3 +79,8 @@ class Trajectory(NamedTuple):
     builder_transitions: BuilderTransition = BuilderTransition()
     player_transitions: PlayerTransition = PlayerTransition()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
+
+
+class SamplingConfig(NamedTuple):
+    temp: float = 1.0
+    min_p: float | None = 0.05

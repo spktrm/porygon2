@@ -17,7 +17,7 @@ init_jax_jit_cache()
 
 
 # Initialize the model
-model = InferenceModel(seed=random.randint(0, 2**32 - 1), do_threshold=True)
+model = InferenceModel(seed=random.randint(0, 2**32 - 1))
 
 
 def pprint_nparray(arr: np.ndarray):
