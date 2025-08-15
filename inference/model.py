@@ -105,8 +105,8 @@ class InferenceModel:
             wildcard_logits=restrict_values(model_output.wildcard_logits),
             switch_logits=restrict_values(model_output.switch_logits),
             v=model_output.v.item(),
-            action_type=ACTION_TYPE_MAPPING[actor_step.action_type_head.item()],
-            move_slot=actor_step.move_head.item(),
-            switch_slot=actor_step.switch_head.item(),
-            wildcard_slot=actor_step.wildcard_head.item(),
+            action_type=ACTION_TYPE_MAPPING[actor_step.action_type.item()],
+            move_slot=actor_step.move_slot.item(),
+            switch_slot=actor_step.switch_slot.item(),
+            wildcard_slot=actor_step.wildcard_slot.item(),
         )

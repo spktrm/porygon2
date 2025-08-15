@@ -42,10 +42,10 @@ class PlayerActorOutput(NamedTuple):
 
 
 class PlayerAgentOutput(NamedTuple):
-    action_type_head: ArrayLike = ()
-    move_head: ArrayLike = ()
-    switch_head: ArrayLike = ()
-    wildcard_head: ArrayLike = ()
+    action_type: ArrayLike = ()
+    move_slot: ArrayLike = ()
+    switch_slot: ArrayLike = ()
+    wildcard_slot: ArrayLike = ()
     actor_output: PlayerActorOutput = PlayerActorOutput()
 
 

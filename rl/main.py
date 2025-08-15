@@ -20,14 +20,14 @@ import wandb.wandb_run
 import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
-from rl.concurrency.lock import FairLock
+from rl.concurrency.lock import FairLockV2
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import SamplingConfig, Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
-from rl.model.config import get_player_model_config
+from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
@@ -120,11 +120,13 @@ def main():
     init_jax_jit_cache()
 
     learner_config = get_learner_config()
-    model_config = get_player_model_config(learner_config.generation)
     pprint(learner_config)
 
-    player_network = get_player_model(model_config)
-    builder_network = get_builder_model(model_config)
+    player_model_config = get_player_model_config(learner_config.generation)
+    builder_model_config = get_builder_model_config(learner_config.generation)
+
+    player_network = get_player_model(player_model_config)
+    builder_network = get_builder_model(builder_model_config)
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
@@ -139,13 +141,13 @@ def main():
         player_network, builder_network, jax.random.key(42), learner_config
     )
 
-    gpu_lock = FairLock()  # threading.Lock()
+    gpu_lock = FairLockV2()
     agent = Agent(
         player_state.apply_fn,
         builder_state.apply_fn,
         gpu_lock,
-        player_sampling_config=SamplingConfig(temp=1.0, min_p=None),
-        builder_sampling_config=SamplingConfig(temp=1.0, min_p=None),
+        player_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
+        builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
     )
 
     replay_buffer = ReplayBuffer(
@@ -169,7 +171,12 @@ def main():
         config={
             "num_params": get_num_params(player_state.params),
             "learner_config": learner_config,
-            "model_config": json.loads(model_config.to_json_best_effort()),
+            "player_model_config": json.loads(
+                player_model_config.to_json_best_effort()
+            ),
+            "builder_model_config": json.loads(
+                builder_model_config.to_json_best_effort()
+            ),
         },
     )
 
