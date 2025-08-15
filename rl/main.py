@@ -29,7 +29,6 @@ from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
-from rl.model.utils import get_most_recent_file
 from rl.utils import init_jax_jit_cache
 
 
@@ -156,11 +155,9 @@ def main():
         )
     )
 
-    latest_ckpt = get_most_recent_file("./ckpts")
-    if latest_ckpt:
-        player_state, builder_state = load_train_state(
-            player_state, builder_state, latest_ckpt
-        )
+    player_state, builder_state = load_train_state(
+        learner_config, player_state, builder_state
+    )
 
     controller = ReplayRatioController(
         replay_buffer, lambda: num_samples[0], learner_config

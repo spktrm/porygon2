@@ -568,7 +568,10 @@ class Learner:
 
                 if self.player_state.num_steps % 5000 == 0:
                     save_train_state(
-                        self.wandb_run, self.player_state, self.builder_state
+                        self.wandb_run,
+                        self.learner_config,
+                        self.player_state,
+                        self.builder_state,
                     )
 
             except Exception as e:
