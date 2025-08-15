@@ -1,7 +1,7 @@
 import os
 import pickle
 from pprint import pprint
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import chex
 import flax.linen as nn
@@ -34,8 +34,8 @@ class AdamConfig:
 class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
-    unroll_length: int = 378
-    replay_buffer_capacity: int = 1024
+    unroll_length: int = 128 * 2
+    replay_buffer_capacity: int = 512
 
     # Batch iteration params
     batch_size: int = 4
@@ -61,6 +61,9 @@ class Porygon2LearnerConfig:
     policy_loss_coef: float = 1.0
     entropy_loss_coef: float = 0.05
     kl_loss_coef: float = 0.05
+
+    # Smogon Generation
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
 
 
 def get_learner_config():
@@ -100,7 +103,9 @@ def create_train_state(
 ):
     """Creates an initial `TrainState`."""
     ex_player_step = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    ex_builder_step = jax.tree.map(lambda x: x[:, 0], get_ex_builder_step("gen3ou"))
+    ex_builder_step = jax.tree.map(
+        lambda x: x[:, 0], get_ex_builder_step(config.generation)
+    )
 
     player_params = player_network.init(rng, ex_player_step)
     builder_params = builder_network.init(rng, ex_builder_step)

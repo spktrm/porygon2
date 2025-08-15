@@ -1444,7 +1444,8 @@ class MovesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVES_ENUM___NULL: _ClassVar[MovesEnum]
     MOVES_ENUM___PAD: _ClassVar[MovesEnum]
     MOVES_ENUM___UNK: _ClassVar[MovesEnum]
-    MOVES_ENUM___SWITCH: _ClassVar[MovesEnum]
+    MOVES_ENUM___SWITCH_IN: _ClassVar[MovesEnum]
+    MOVES_ENUM___SWITCH_OUT: _ClassVar[MovesEnum]
     MOVES_ENUM__10000000VOLTTHUNDERBOLT: _ClassVar[MovesEnum]
     MOVES_ENUM__ABSORB: _ClassVar[MovesEnum]
     MOVES_ENUM__ACCELEROCK: _ClassVar[MovesEnum]
@@ -2417,6 +2418,7 @@ class AbilitiesEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ABILITIES_ENUM__ARENATRAP: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ARMORTAIL: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__AROMAVEIL: _ClassVar[AbilitiesEnum]
+    ABILITIES_ENUM__ASONE: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ASONEGLASTRIER: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__ASONESPECTRIER: _ClassVar[AbilitiesEnum]
     ABILITIES_ENUM__AURABREAK: _ClassVar[AbilitiesEnum]
@@ -3289,6 +3291,7 @@ class TypechartEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TYPECHART_ENUM__ROCK: _ClassVar[TypechartEnum]
     TYPECHART_ENUM__STEEL: _ClassVar[TypechartEnum]
     TYPECHART_ENUM__STELLAR: _ClassVar[TypechartEnum]
+    TYPECHART_ENUM__TYPELESS: _ClassVar[TypechartEnum]
     TYPECHART_ENUM__WATER: _ClassVar[TypechartEnum]
 
 class PseudoweatherEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -3364,6 +3367,7 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     VOLATILESTATUS_ENUM__ENCORE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__ENDURE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FAKEPARTIALLYTRAPPED: _ClassVar[VolatilestatusEnum]
+    VOLATILESTATUS_ENUM__FALLEN: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FIRESPIN: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FLASHFIRE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__FLINCH: _ClassVar[VolatilestatusEnum]
@@ -3567,22 +3571,35 @@ class BattlemajorargsEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BATTLEMAJORARGS_ENUM___PAD: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM___UNK: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__CANT: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__CLEARPOKE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__CUSTOM: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__DETAILSCHANGE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__DONE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__DRAG: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__FAINT: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__GAMETYPE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__GEN: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__INACTIVE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__INACTIVEOFF: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__MESSAGE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__MOVE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__PLAYER: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__POKE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__RATED: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__REPLACE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__REQUEST: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__RULE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__SEED: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__SENTCHOICE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__START: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__SWAP: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__SWITCH: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__TEAMPREVIEW: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__TEAMSIZE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__TIE: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__TIER: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__TURN: _ClassVar[BattlemajorargsEnum]
+    BATTLEMAJORARGS_ENUM__UPDATEPOKE: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__UPKEEP: _ClassVar[BattlemajorargsEnum]
     BATTLEMAJORARGS_ENUM__WIN: _ClassVar[BattlemajorargsEnum]
 
@@ -3739,6 +3756,7 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__ENCORE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__ENDURE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__FAKEPARTIALLYTRAPPED: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__FALLEN: _ClassVar[ConditionEnum]
     CONDITION_ENUM__FIRESPIN: _ClassVar[ConditionEnum]
     CONDITION_ENUM__FLASHFIRE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__FLINCH: _ClassVar[ConditionEnum]
@@ -3769,9 +3787,6 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__INFESTATION: _ClassVar[ConditionEnum]
     CONDITION_ENUM__INGRAIN: _ClassVar[ConditionEnum]
     CONDITION_ENUM__INVULNERABILITY: _ClassVar[ConditionEnum]
-    CONDITION_ENUM__ITEMBERRY: _ClassVar[ConditionEnum]
-    CONDITION_ENUM__ITEMGOLDBERRY: _ClassVar[ConditionEnum]
-    CONDITION_ENUM__ITEMMYSTERYBERRY: _ClassVar[ConditionEnum]
     CONDITION_ENUM__ITEMREMOVED: _ClassVar[ConditionEnum]
     CONDITION_ENUM__KINGSSHIELD: _ClassVar[ConditionEnum]
     CONDITION_ENUM__LASERFOCUS: _ClassVar[ConditionEnum]
@@ -3791,6 +3806,7 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__METRONOME: _ClassVar[ConditionEnum]
     CONDITION_ENUM__MICLEBERRY: _ClassVar[ConditionEnum]
     CONDITION_ENUM__MIMIC: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__MIMIKYUBUSTED: _ClassVar[ConditionEnum]
     CONDITION_ENUM__MINIMIZE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__MIRACLEEYE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__MIRRORCOAT: _ClassVar[ConditionEnum]
@@ -3810,8 +3826,18 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__POWERTRICK: _ClassVar[ConditionEnum]
     CONDITION_ENUM__PROTECT: _ClassVar[ConditionEnum]
     CONDITION_ENUM__PROTOSYNTHESIS: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__PROTOSYNTHESISATK: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__PROTOSYNTHESISDEF: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__PROTOSYNTHESISSPA: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__PROTOSYNTHESISSPD: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__PROTOSYNTHESISSPE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__PURSUIT: _ClassVar[ConditionEnum]
     CONDITION_ENUM__QUARKDRIVE: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__QUARKDRIVEATK: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__QUARKDRIVEDEF: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__QUARKDRIVESPA: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__QUARKDRIVESPD: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__QUARKDRIVESPE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__QUICKGUARD: _ClassVar[ConditionEnum]
     CONDITION_ENUM__RAGE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__RAGEPOWDER: _ClassVar[ConditionEnum]
@@ -4342,6 +4368,7 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__FAKEOUT: _ClassVar[EffectEnum]
     EFFECT_ENUM__FAKEPARTIALLYTRAPPED: _ClassVar[EffectEnum]
     EFFECT_ENUM__FAKETEARS: _ClassVar[EffectEnum]
+    EFFECT_ENUM__FALLEN: _ClassVar[EffectEnum]
     EFFECT_ENUM__FALSESURRENDER: _ClassVar[EffectEnum]
     EFFECT_ENUM__FALSESWIPE: _ClassVar[EffectEnum]
     EFFECT_ENUM__FASTBALL: _ClassVar[EffectEnum]
@@ -4663,9 +4690,6 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__IRONHEAD: _ClassVar[EffectEnum]
     EFFECT_ENUM__IRONPLATE: _ClassVar[EffectEnum]
     EFFECT_ENUM__IRONTAIL: _ClassVar[EffectEnum]
-    EFFECT_ENUM__ITEMBERRY: _ClassVar[EffectEnum]
-    EFFECT_ENUM__ITEMGOLDBERRY: _ClassVar[EffectEnum]
-    EFFECT_ENUM__ITEMMYSTERYBERRY: _ClassVar[EffectEnum]
     EFFECT_ENUM__ITEMREMOVED: _ClassVar[EffectEnum]
     EFFECT_ENUM__IVYCUDGEL: _ClassVar[EffectEnum]
     EFFECT_ENUM__JABOCABERRY: _ClassVar[EffectEnum]
@@ -4847,6 +4871,7 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__MIMIC: _ClassVar[EffectEnum]
     EFFECT_ENUM__MIMICRY: _ClassVar[EffectEnum]
     EFFECT_ENUM__MIMIKIUMZ: _ClassVar[EffectEnum]
+    EFFECT_ENUM__MIMIKYUBUSTED: _ClassVar[EffectEnum]
     EFFECT_ENUM__MINDBLOWN: _ClassVar[EffectEnum]
     EFFECT_ENUM__MINDPLATE: _ClassVar[EffectEnum]
     EFFECT_ENUM__MINDREADER: _ClassVar[EffectEnum]
@@ -5051,6 +5076,11 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__PROTECTIVEPADS: _ClassVar[EffectEnum]
     EFFECT_ENUM__PROTECTOR: _ClassVar[EffectEnum]
     EFFECT_ENUM__PROTOSYNTHESIS: _ClassVar[EffectEnum]
+    EFFECT_ENUM__PROTOSYNTHESISATK: _ClassVar[EffectEnum]
+    EFFECT_ENUM__PROTOSYNTHESISDEF: _ClassVar[EffectEnum]
+    EFFECT_ENUM__PROTOSYNTHESISSPA: _ClassVar[EffectEnum]
+    EFFECT_ENUM__PROTOSYNTHESISSPD: _ClassVar[EffectEnum]
+    EFFECT_ENUM__PROTOSYNTHESISSPE: _ClassVar[EffectEnum]
     EFFECT_ENUM__PRZCUREBERRY: _ClassVar[EffectEnum]
     EFFECT_ENUM__PSN: _ClassVar[EffectEnum]
     EFFECT_ENUM__PSNCUREBERRY: _ClassVar[EffectEnum]
@@ -5084,6 +5114,11 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__PYROBALL: _ClassVar[EffectEnum]
     EFFECT_ENUM__QUALOTBERRY: _ClassVar[EffectEnum]
     EFFECT_ENUM__QUARKDRIVE: _ClassVar[EffectEnum]
+    EFFECT_ENUM__QUARKDRIVEATK: _ClassVar[EffectEnum]
+    EFFECT_ENUM__QUARKDRIVEDEF: _ClassVar[EffectEnum]
+    EFFECT_ENUM__QUARKDRIVESPA: _ClassVar[EffectEnum]
+    EFFECT_ENUM__QUARKDRIVESPD: _ClassVar[EffectEnum]
+    EFFECT_ENUM__QUARKDRIVESPE: _ClassVar[EffectEnum]
     EFFECT_ENUM__QUASH: _ClassVar[EffectEnum]
     EFFECT_ENUM__QUEENLYMAJESTY: _ClassVar[EffectEnum]
     EFFECT_ENUM__QUICKATTACK: _ClassVar[EffectEnum]
@@ -7167,7 +7202,8 @@ MOVES_ENUM___UNSPECIFIED: MovesEnum
 MOVES_ENUM___NULL: MovesEnum
 MOVES_ENUM___PAD: MovesEnum
 MOVES_ENUM___UNK: MovesEnum
-MOVES_ENUM___SWITCH: MovesEnum
+MOVES_ENUM___SWITCH_IN: MovesEnum
+MOVES_ENUM___SWITCH_OUT: MovesEnum
 MOVES_ENUM__10000000VOLTTHUNDERBOLT: MovesEnum
 MOVES_ENUM__ABSORB: MovesEnum
 MOVES_ENUM__ACCELEROCK: MovesEnum
@@ -8137,6 +8173,7 @@ ABILITIES_ENUM__ANTICIPATION: AbilitiesEnum
 ABILITIES_ENUM__ARENATRAP: AbilitiesEnum
 ABILITIES_ENUM__ARMORTAIL: AbilitiesEnum
 ABILITIES_ENUM__AROMAVEIL: AbilitiesEnum
+ABILITIES_ENUM__ASONE: AbilitiesEnum
 ABILITIES_ENUM__ASONEGLASTRIER: AbilitiesEnum
 ABILITIES_ENUM__ASONESPECTRIER: AbilitiesEnum
 ABILITIES_ENUM__AURABREAK: AbilitiesEnum
@@ -9003,6 +9040,7 @@ TYPECHART_ENUM__PSYCHIC: TypechartEnum
 TYPECHART_ENUM__ROCK: TypechartEnum
 TYPECHART_ENUM__STEEL: TypechartEnum
 TYPECHART_ENUM__STELLAR: TypechartEnum
+TYPECHART_ENUM__TYPELESS: TypechartEnum
 TYPECHART_ENUM__WATER: TypechartEnum
 PSEUDOWEATHER_ENUM___UNSPECIFIED: PseudoweatherEnum
 PSEUDOWEATHER_ENUM___NULL: PseudoweatherEnum
@@ -9069,6 +9107,7 @@ VOLATILESTATUS_ENUM__EMBARGO: VolatilestatusEnum
 VOLATILESTATUS_ENUM__ENCORE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__ENDURE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FAKEPARTIALLYTRAPPED: VolatilestatusEnum
+VOLATILESTATUS_ENUM__FALLEN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FIRESPIN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FLASHFIRE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__FLINCH: VolatilestatusEnum
@@ -9254,22 +9293,35 @@ BATTLEMAJORARGS_ENUM___NULL: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM___PAD: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM___UNK: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__CANT: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__CLEARPOKE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__CUSTOM: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__DETAILSCHANGE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__DONE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__DRAG: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__FAINT: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__GAMETYPE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__GEN: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__INACTIVE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__INACTIVEOFF: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__MESSAGE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__MOVE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__PLAYER: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__POKE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__RATED: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__REPLACE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__REQUEST: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__RULE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__SEED: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__SENTCHOICE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__START: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__SWAP: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__SWITCH: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__TEAMPREVIEW: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__TEAMSIZE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__TIE: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__TIER: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__TURN: BattlemajorargsEnum
+BATTLEMAJORARGS_ENUM__UPDATEPOKE: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__UPKEEP: BattlemajorargsEnum
 BATTLEMAJORARGS_ENUM__WIN: BattlemajorargsEnum
 BATTLEMINORARGS_ENUM___UNSPECIFIED: BattleminorargsEnum
@@ -9411,6 +9463,7 @@ CONDITION_ENUM__EMBARGO: ConditionEnum
 CONDITION_ENUM__ENCORE: ConditionEnum
 CONDITION_ENUM__ENDURE: ConditionEnum
 CONDITION_ENUM__FAKEPARTIALLYTRAPPED: ConditionEnum
+CONDITION_ENUM__FALLEN: ConditionEnum
 CONDITION_ENUM__FIRESPIN: ConditionEnum
 CONDITION_ENUM__FLASHFIRE: ConditionEnum
 CONDITION_ENUM__FLINCH: ConditionEnum
@@ -9441,9 +9494,6 @@ CONDITION_ENUM__IMPRISON: ConditionEnum
 CONDITION_ENUM__INFESTATION: ConditionEnum
 CONDITION_ENUM__INGRAIN: ConditionEnum
 CONDITION_ENUM__INVULNERABILITY: ConditionEnum
-CONDITION_ENUM__ITEMBERRY: ConditionEnum
-CONDITION_ENUM__ITEMGOLDBERRY: ConditionEnum
-CONDITION_ENUM__ITEMMYSTERYBERRY: ConditionEnum
 CONDITION_ENUM__ITEMREMOVED: ConditionEnum
 CONDITION_ENUM__KINGSSHIELD: ConditionEnum
 CONDITION_ENUM__LASERFOCUS: ConditionEnum
@@ -9463,6 +9513,7 @@ CONDITION_ENUM__MEFIRST: ConditionEnum
 CONDITION_ENUM__METRONOME: ConditionEnum
 CONDITION_ENUM__MICLEBERRY: ConditionEnum
 CONDITION_ENUM__MIMIC: ConditionEnum
+CONDITION_ENUM__MIMIKYUBUSTED: ConditionEnum
 CONDITION_ENUM__MINIMIZE: ConditionEnum
 CONDITION_ENUM__MIRACLEEYE: ConditionEnum
 CONDITION_ENUM__MIRRORCOAT: ConditionEnum
@@ -9482,8 +9533,18 @@ CONDITION_ENUM__POWERSHIFT: ConditionEnum
 CONDITION_ENUM__POWERTRICK: ConditionEnum
 CONDITION_ENUM__PROTECT: ConditionEnum
 CONDITION_ENUM__PROTOSYNTHESIS: ConditionEnum
+CONDITION_ENUM__PROTOSYNTHESISATK: ConditionEnum
+CONDITION_ENUM__PROTOSYNTHESISDEF: ConditionEnum
+CONDITION_ENUM__PROTOSYNTHESISSPA: ConditionEnum
+CONDITION_ENUM__PROTOSYNTHESISSPD: ConditionEnum
+CONDITION_ENUM__PROTOSYNTHESISSPE: ConditionEnum
 CONDITION_ENUM__PURSUIT: ConditionEnum
 CONDITION_ENUM__QUARKDRIVE: ConditionEnum
+CONDITION_ENUM__QUARKDRIVEATK: ConditionEnum
+CONDITION_ENUM__QUARKDRIVEDEF: ConditionEnum
+CONDITION_ENUM__QUARKDRIVESPA: ConditionEnum
+CONDITION_ENUM__QUARKDRIVESPD: ConditionEnum
+CONDITION_ENUM__QUARKDRIVESPE: ConditionEnum
 CONDITION_ENUM__QUICKGUARD: ConditionEnum
 CONDITION_ENUM__RAGE: ConditionEnum
 CONDITION_ENUM__RAGEPOWDER: ConditionEnum
@@ -10008,6 +10069,7 @@ EFFECT_ENUM__FAIRYWIND: EffectEnum
 EFFECT_ENUM__FAKEOUT: EffectEnum
 EFFECT_ENUM__FAKEPARTIALLYTRAPPED: EffectEnum
 EFFECT_ENUM__FAKETEARS: EffectEnum
+EFFECT_ENUM__FALLEN: EffectEnum
 EFFECT_ENUM__FALSESURRENDER: EffectEnum
 EFFECT_ENUM__FALSESWIPE: EffectEnum
 EFFECT_ENUM__FASTBALL: EffectEnum
@@ -10329,9 +10391,6 @@ EFFECT_ENUM__IRONFIST: EffectEnum
 EFFECT_ENUM__IRONHEAD: EffectEnum
 EFFECT_ENUM__IRONPLATE: EffectEnum
 EFFECT_ENUM__IRONTAIL: EffectEnum
-EFFECT_ENUM__ITEMBERRY: EffectEnum
-EFFECT_ENUM__ITEMGOLDBERRY: EffectEnum
-EFFECT_ENUM__ITEMMYSTERYBERRY: EffectEnum
 EFFECT_ENUM__ITEMREMOVED: EffectEnum
 EFFECT_ENUM__IVYCUDGEL: EffectEnum
 EFFECT_ENUM__JABOCABERRY: EffectEnum
@@ -10513,6 +10572,7 @@ EFFECT_ENUM__MILKDRINK: EffectEnum
 EFFECT_ENUM__MIMIC: EffectEnum
 EFFECT_ENUM__MIMICRY: EffectEnum
 EFFECT_ENUM__MIMIKIUMZ: EffectEnum
+EFFECT_ENUM__MIMIKYUBUSTED: EffectEnum
 EFFECT_ENUM__MINDBLOWN: EffectEnum
 EFFECT_ENUM__MINDPLATE: EffectEnum
 EFFECT_ENUM__MINDREADER: EffectEnum
@@ -10717,6 +10777,11 @@ EFFECT_ENUM__PROTECT: EffectEnum
 EFFECT_ENUM__PROTECTIVEPADS: EffectEnum
 EFFECT_ENUM__PROTECTOR: EffectEnum
 EFFECT_ENUM__PROTOSYNTHESIS: EffectEnum
+EFFECT_ENUM__PROTOSYNTHESISATK: EffectEnum
+EFFECT_ENUM__PROTOSYNTHESISDEF: EffectEnum
+EFFECT_ENUM__PROTOSYNTHESISSPA: EffectEnum
+EFFECT_ENUM__PROTOSYNTHESISSPD: EffectEnum
+EFFECT_ENUM__PROTOSYNTHESISSPE: EffectEnum
 EFFECT_ENUM__PRZCUREBERRY: EffectEnum
 EFFECT_ENUM__PSN: EffectEnum
 EFFECT_ENUM__PSNCUREBERRY: EffectEnum
@@ -10750,6 +10815,11 @@ EFFECT_ENUM__PURSUIT: EffectEnum
 EFFECT_ENUM__PYROBALL: EffectEnum
 EFFECT_ENUM__QUALOTBERRY: EffectEnum
 EFFECT_ENUM__QUARKDRIVE: EffectEnum
+EFFECT_ENUM__QUARKDRIVEATK: EffectEnum
+EFFECT_ENUM__QUARKDRIVEDEF: EffectEnum
+EFFECT_ENUM__QUARKDRIVESPA: EffectEnum
+EFFECT_ENUM__QUARKDRIVESPD: EffectEnum
+EFFECT_ENUM__QUARKDRIVESPE: EffectEnum
 EFFECT_ENUM__QUASH: EffectEnum
 EFFECT_ENUM__QUEENLYMAJESTY: EffectEnum
 EFFECT_ENUM__QUICKATTACK: EffectEnum

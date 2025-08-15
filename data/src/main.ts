@@ -12,7 +12,8 @@ const UNSPECIFIED_TOKEN = "_UNSPECIFIED";
 const PAD_TOKEN = "_PAD";
 const UNK_TOKEN = "_UNK";
 const NULL_TOKEN = "_NULL";
-const SWITCH_TOKEN = "_SWITCH";
+const SWITCH_IN_TOKEN = "_SWITCH_IN";
+const SWITCH_OUT_TOKEN = "_SWITCH_OUT";
 const EXTRA_TOKENS = [UNSPECIFIED_TOKEN, NULL_TOKEN, PAD_TOKEN, UNK_TOKEN];
 
 type CustomScrapingFunction = (content: string, file: string) => string[];
@@ -117,7 +118,13 @@ const customScrapingFunctions: {
             }
         }
 
-        return [...new Set(matchedVolatiles), "futuresight", "doomdesire"]; // Remove duplicates
+        return [
+            // Remove duplicates
+            ...new Set(matchedVolatiles),
+            "futuresight",
+            "doomdesire",
+            "fallen",
+        ];
     },
     genderName: (content: string, file: string): string[] => {
         const match = content.match(
@@ -212,6 +219,7 @@ const customScrapingFunctions: {
     battleMajorArgs: (content: string, file: string): string[] => {
         if (
             content.includes("interface BattleMajorArgs") ||
+            content.includes("interface BattleInitArgs") ||
             content.includes("interface BattleProgressArgs")
         ) {
             const majorArgsMatch = content.match(
@@ -219,6 +227,9 @@ const customScrapingFunctions: {
             );
             const progressArgsMatch = content.match(
                 /interface\s+BattleProgressArgs\s*{[\s\S]*?}/,
+            );
+            const initArgsMatch = content.match(
+                /interface\s+BattleInitArgs\s*{[\s\S]*?}/,
             );
 
             const extractArgs = (interfaceMatch: any[]) => {
@@ -239,8 +250,9 @@ const customScrapingFunctions: {
             const progressArgs = progressArgsMatch
                 ? extractArgs(progressArgsMatch)
                 : [];
+            const initArgs = initArgsMatch ? extractArgs(initArgsMatch) : [];
 
-            return ["turn", ...majorArgs, ...progressArgs];
+            return [...majorArgs, ...progressArgs, ...initArgs];
         }
         return [];
     },
@@ -458,10 +470,10 @@ function formatData(data: GenData) {
 
     return {
         species: data.species.map(getId),
-        moves: [SWITCH_TOKEN, ...moveIds, "recharge"],
-        abilities: data.abilities.map(getId),
+        moves: [SWITCH_IN_TOKEN, SWITCH_OUT_TOKEN, ...moveIds, "recharge"],
+        abilities: [...data.abilities.map(getId), "asone"],
         items: data.items.map(getId),
-        typechart: data.typechart.map(getId),
+        typechart: [...data.typechart.map(getId), "typeless"],
     };
 }
 
@@ -528,9 +540,12 @@ async function scrapeRepo() {
         ...keywords.volatileStatus,
         "recoil",
         "drain",
-        "itemberry",
-        "itemmysteryberry",
-        "itemgoldberry",
+        ...["atk", "def", "spa", "spd", "spe"].flatMap((stat) => [
+            "quarkdrive" + stat,
+            "protosynthesis" + stat,
+        ]),
+        "mimikyubusted",
+        "fallen",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
     data["Natures"] = standardize(

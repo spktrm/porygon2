@@ -68,13 +68,10 @@ class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_NODE_FEATURE__IV_SPD: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
     ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
-
-class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
-    ACTION_TYPE__MOVE: _ClassVar[ActionType]
-    ACTION_TYPE__SWITCH: _ClassVar[ActionType]
-    ACTION_TYPE__DEFAULT: _ClassVar[ActionType]
+    ENTITY_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__TERASTALLIZED: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__MEGA: _ClassVar[EntityNodeFeature]
+    ENTITY_NODE_FEATURE__PRIMAL: _ClassVar[EntityNodeFeature]
 
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -165,11 +162,20 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
 
+class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
+    ACTION_TYPE__MOVE: _ClassVar[ActionType]
+    ACTION_TYPE__SWITCH: _ClassVar[ActionType]
+    ACTION_TYPE__TEAMPREVIEW: _ClassVar[ActionType]
+    ACTION_TYPE__DEFAULT: _ClassVar[ActionType]
+
 class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_MASK_FEATURE___UNSPECIFIED: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_MOVE: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_SWITCH: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_TEAMPREVIEW: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_1: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_2: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__MOVE_SLOT_3: _ClassVar[ActionMaskFeature]
@@ -180,6 +186,11 @@ class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_MASK_FEATURE__SWITCH_SLOT_4: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_5: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__SWITCH_SLOT_6: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_NORMAL: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_MEGA: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_ZMOVE: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_MAX: _ClassVar[ActionMaskFeature]
+    ACTION_MASK_FEATURE__CAN_TERA: _ClassVar[ActionMaskFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -242,10 +253,10 @@ ENTITY_NODE_FEATURE__IV_SPA: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
 ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
 ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
-ACTION_TYPE___UNSPECIFIED: ActionType
-ACTION_TYPE__MOVE: ActionType
-ACTION_TYPE__SWITCH: ActionType
-ACTION_TYPE__DEFAULT: ActionType
+ENTITY_NODE_FEATURE__TERA_TYPE: EntityNodeFeature
+ENTITY_NODE_FEATURE__TERASTALLIZED: EntityNodeFeature
+ENTITY_NODE_FEATURE__MEGA: EntityNodeFeature
+ENTITY_NODE_FEATURE__PRIMAL: EntityNodeFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP
 MOVESET_HAS_PP__NO: MovesetHasPP
@@ -320,9 +331,15 @@ INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
+ACTION_TYPE___UNSPECIFIED: ActionType
+ACTION_TYPE__MOVE: ActionType
+ACTION_TYPE__SWITCH: ActionType
+ACTION_TYPE__TEAMPREVIEW: ActionType
+ACTION_TYPE__DEFAULT: ActionType
 ACTION_MASK_FEATURE___UNSPECIFIED: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_MOVE: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_SWITCH: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_TEAMPREVIEW: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_1: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_2: ActionMaskFeature
 ACTION_MASK_FEATURE__MOVE_SLOT_3: ActionMaskFeature
@@ -333,3 +350,8 @@ ACTION_MASK_FEATURE__SWITCH_SLOT_3: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_4: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_5: ActionMaskFeature
 ACTION_MASK_FEATURE__SWITCH_SLOT_6: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_NORMAL: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_MEGA: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_ZMOVE: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_MAX: ActionMaskFeature
+ACTION_MASK_FEATURE__CAN_TERA: ActionMaskFeature

@@ -18,6 +18,7 @@ from rl.environment.data import (
     MAX_RATIO_TOKEN,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
+    ONEHOT_ENCODERS,
 )
 from rl.environment.interfaces import PlayerEnvOutput, PlayerHistoryOutput
 from rl.environment.protos.enums_pb2 import (
@@ -38,7 +39,6 @@ from rl.environment.protos.features_pb2 import (
 from rl.model.modules import (
     FeedForwardResidual,
     MergeEmbeddings,
-    PretrainedEmbedding,
     RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
@@ -47,16 +47,6 @@ from rl.model.modules import (
     one_hot_concat_jax,
 )
 from rl.model.utils import BIAS_VALUE
-
-# Load pretrained embeddings for various features.
-SPECIES_ONEHOT = PretrainedEmbedding(
-    fpath="data/data/gen3/species.npy", dtype=jnp.bfloat16
-)
-ABILITY_ONEHOT = PretrainedEmbedding(
-    fpath="data/data/gen3/abilities.npy", dtype=jnp.bfloat16
-)
-ITEM_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/items.npy", dtype=jnp.bfloat16)
-MOVE_ONEHOT = PretrainedEmbedding(fpath="data/data/gen3/moves.npy", dtype=jnp.bfloat16)
 
 
 def _binary_scale_encoding(
@@ -175,7 +165,6 @@ class Encoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
 
@@ -207,6 +196,7 @@ class Encoder(nn.Module):
         self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
         self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
         self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
+        self.learnset_linear = nn.Dense(name="learnset_linear", **dense_kwargs)
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
@@ -226,6 +216,7 @@ class Encoder(nn.Module):
         )
 
         # Layer normalization for action embeddings.
+        self.timestep_ln = RMSNorm()
         self.entities_ln = RMSNorm()
         self.moves_ln = RMSNorm()
         self.switch_ln = RMSNorm()
@@ -274,7 +265,17 @@ class Encoder(nn.Module):
             | (token == SpeciesEnum.SPECIES_ENUM___PAD)
             | (token == SpeciesEnum.SPECIES_ENUM___NULL)
         )
-        return mask * self.species_linear(SPECIES_ONEHOT(token))
+        _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["species"]
+        return mask * self.species_linear(_ohe_encoder(token))
+
+    def _embed_learnset(self, token: jax.Array):
+        mask = ~(
+            (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
+            | (token == SpeciesEnum.SPECIES_ENUM___PAD)
+            | (token == SpeciesEnum.SPECIES_ENUM___NULL)
+        )
+        _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["learnset"]
+        return mask * self.learnset_linear(_ohe_encoder(token))
 
     def _embed_item(self, token: jax.Array):
         mask = ~(
@@ -282,7 +283,8 @@ class Encoder(nn.Module):
             | (token == ItemsEnum.ITEMS_ENUM___PAD)
             | (token == ItemsEnum.ITEMS_ENUM___NULL)
         )
-        return mask * self.items_linear(ITEM_ONEHOT(token))
+        _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["items"]
+        return mask * self.items_linear(_ohe_encoder(token))
 
     def _embed_ability(self, token: jax.Array):
         mask = ~(
@@ -290,7 +292,8 @@ class Encoder(nn.Module):
             | (token == AbilitiesEnum.ABILITIES_ENUM___PAD)
             | (token == AbilitiesEnum.ABILITIES_ENUM___NULL)
         )
-        return mask * self.abilities_linear(ABILITY_ONEHOT(token))
+        _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["abilities"]
+        return mask * self.abilities_linear(_ohe_encoder(token))
 
     def _embed_move(self, token: jax.Array):
         mask = ~(
@@ -298,7 +301,8 @@ class Encoder(nn.Module):
             | (token == MovesEnum.MOVES_ENUM___PAD)
             | (token == MovesEnum.MOVES_ENUM___NULL)
         )
-        return mask * self.moves_linear(MOVE_ONEHOT(token))
+        _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["moves"]
+        return mask * self.moves_linear(_ohe_encoder(token))
 
     def _embed_entity(self, entity: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.
@@ -439,6 +443,12 @@ class Encoder(nn.Module):
                 _encode_one_hot_entity(
                     entity, EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED
                 ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE
+                ),
+                _encode_one_hot_entity(
+                    entity, EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED
+                ),
             ]
         )
 
@@ -485,6 +495,7 @@ class Encoder(nn.Module):
             move_pp_onehot,
             stat_features,
             self._embed_species(species_token),
+            self._embed_learnset(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             move_encodings.sum(axis=0),
@@ -748,7 +759,10 @@ class Encoder(nn.Module):
         )
 
         timestep_embedding = (
-            node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
+            # More stable for summing over affected historical nodes
+            self.timestep_ln(
+                node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
+            )
             + field_embedding
         )
 
@@ -878,7 +892,7 @@ class Encoder(nn.Module):
             move_switch_mask = jnp.concatenate(
                 (
                     env_step.action_type_mask[0] * env_step.move_mask,
-                    env_step.action_type_mask[1] * env_step.switch_mask,
+                    env_step.action_type_mask[1:].any(axis=-1) * env_step.switch_mask,
                 ),
                 axis=-1,
             )

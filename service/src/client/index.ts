@@ -18,7 +18,7 @@ import { generateTeamFromIndices } from "../server/state";
 // const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
 const server = "wss://pokeagentshowdown.com/showdown/websocket";
-const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
+const MAX_BATTLES = 10; // Maximum number of battles to run in sequence
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -189,6 +189,7 @@ class Battle {
                 const action = new MultiDiscreteAction();
                 action.setActionType(stepResponse.action_type);
                 action.setMoveSlot(stepResponse.move_slot);
+                action.setWildcardSlot(stepResponse.wildcard_slot);
                 action.setSwitchSlot(stepResponse.switch_slot);
 
                 stepRequest.setAction(action);
@@ -319,9 +320,9 @@ class User {
                 });
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
-                    modelOutput.tokens,
                     format,
-                );
+                    modelOutput.tokens,
+                )!;
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
                 if (errors === null) {
@@ -338,7 +339,7 @@ class User {
         this.searchState = searchState;
         const { searching, games } = searchState;
         if (searching.length === 0 && games === null && !this.searchUpdated) {
-            this.search("gen3ou");
+            this.search("gen9ou");
             this.searchUpdated = true;
             return;
         }

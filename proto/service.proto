@@ -13,7 +13,7 @@ message Action {
   int32 action_type = 1;
   int32 move_slot = 2;
   int32 switch_slot = 3;
-
+  int32 wildcard_slot = 4;
 }
 
 message StepRequest {
@@ -25,6 +25,7 @@ message StepRequest {
 message ResetRequest {
   string username = 1;
   repeated int32 team_indices = 2;
+  string smogon_format = 3;
 }
 
 message EnvironmentState {
@@ -39,6 +40,10 @@ message EnvironmentState {
   bytes private_team = 9;
   bytes field = 10;
   int32 rqid = 11;
+}
+
+message EnvironmentTrajectory {
+  repeated EnvironmentState states = 1;
 }
 
 message EnvironmentResponse {
