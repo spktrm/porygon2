@@ -3,51 +3,28 @@ import { Teams, TeamValidator } from "@pkmn/sim";
 import * as fs from "fs";
 import * as path from "path";
 
-function processFile(unpackedSets: PokemonSet<string>[], format: string) {
-    const validator = new TeamValidator(format);
+const FORMATS = [
+    "ubers",
+    "ou",
+    "uu",
+    "uubl",
+    "ru",
+    "rubl",
+    "nu",
+    "nubl",
+    "pu",
+    "publ",
+    "zu",
+    "zubl",
+];
 
-    const uniqueSpecies = new Set<string>();
-    unpackedSets.forEach((set) => {
-        if (set.species && validator.validateTeam([set]) === null) {
-            uniqueSpecies.add(toID(set.species));
-        }
-    });
-
-    const validTeams = unpackedSets.filter((unpacked) => {
-        const species = validator.dex.species.get(unpacked.species);
-        if (species.nfe && unpacked.item.toLowerCase() !== "eviolite") {
-            const nextEvolutions = [...species.evos];
-            while (nextEvolutions.length > 0) {
-                const next = nextEvolutions.shift();
-                const nextTierEvos = validator.dex.species.get(next).evos;
-                nextEvolutions.push(...nextTierEvos);
-                if (uniqueSpecies.has(toID(next))) {
-                    console.warn(
-                        `Skipping ${unpacked.species} in ${format} because it has a next evolution: ${next}`,
-                    );
-                    return false;
-                }
-            }
-        }
-
-        const errors = validator.validateTeam([unpacked]);
-        if (errors !== null) {
-            console.error(
-                `Invalid team in ${format}: ${unpacked} — Errors: ${errors}`,
-            );
-        }
-        return errors === null;
-    });
-
-    console.log(`Valid teams for ${format}: ${validTeams.length}`);
-    const validatedPackedTeams = validTeams.map((unpacked) =>
-        Teams.pack([unpacked]),
-    );
-    validatedPackedTeams.sort();
-    fs.writeFileSync(
-        `../data/data/${format}_packed.json`,
-        JSON.stringify(validatedPackedTeams, null, 2),
-    );
+function processSet(packed: string, validator: TeamValidator) {
+    const unpacked = Teams.unpack([packed].join("]"));
+    if (unpacked === null || unpacked.length === 0) {
+        return false;
+    }
+    const errors = validator.validateTeam(unpacked);
+    return errors === null;
 }
 
 function main() {
@@ -61,28 +38,26 @@ function main() {
         return;
     }
 
-    for (let i = 1; i < 10; i++) {
-        const genIPackedFiles = packedFiles.filter((f) =>
-            f.startsWith(`gen${i}`),
+    for (const [idx, fpath] of packedFiles.entries()) {
+        const packedSets: string[] = JSON.parse(
+            fs.readFileSync(path.join(dataDir, fpath), "utf-8"),
         );
-        const formats = genIPackedFiles.map((f) =>
-            path.basename(f, "_packed.json"),
-        );
-        const genIPackedSets = genIPackedFiles
-            .map((f) => {
-                try {
-                    return JSON.parse(
-                        fs.readFileSync(path.join(dataDir, f), "utf-8"),
-                    );
-                } catch (error) {
-                    console.error(`Error reading ${f}: ${error}`);
-                    return [];
-                }
-            })
-            .flatMap((f) => f as string[]);
+
+        const validators: TeamValidator[] = [];
+        FORMATS.map((format) => {
+            const trueFormat = `gen${idx + 1}${format}`;
+            try {
+                validators.push(new TeamValidator(trueFormat));
+            } catch (error) {
+                console.log(
+                    `Error creating validator for ${trueFormat}:`,
+                    error,
+                );
+            }
+        });
 
         const unpackedSets = new Set<string>();
-        genIPackedSets.flatMap((packed) => {
+        packedSets.flatMap((packed) => {
             const unpackedTeam = Teams.unpack([packed].join("]"));
             if (unpackedTeam !== null && unpackedTeam.length > 0) {
                 const onlySet = unpackedTeam[0];
@@ -91,13 +66,24 @@ function main() {
             }
         });
 
-        for (const format of formats) {
-            console.log(`Processing ${format}...`);
-            processFile(
-                Array.from(unpackedSets).map((x) => JSON.parse(x)),
-                format,
-            );
+        const output = new Map<string, Record<string, boolean>>();
+        for (const packedSet of [...packedSets].sort()) {
+            const row = new Map<string, boolean>();
+            let anyValid = false;
+            for (const validator of validators) {
+                const valid = processSet(packedSet, validator);
+                anyValid ||= valid;
+                row.set(validator.format.id, valid);
+            }
+            if (anyValid) {
+                output.set(packedSet, Object.fromEntries(row));
+            }
         }
+
+        fs.writeFileSync(
+            path.join(dataDir, `validated_${fpath}`),
+            JSON.stringify(Object.fromEntries(output)),
+        );
     }
 }
 

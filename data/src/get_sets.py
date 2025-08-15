@@ -29,6 +29,7 @@ def stats_dict_to_list(d: Dict[str, int], default: int) -> List[int]:
         "spd": "spd",
         "spe": "spe",
         "speed": "spe",
+        "spc": "spa",
     }
 
     if isinstance(d, list):
@@ -102,7 +103,28 @@ def generate_packed_sets(source: Dict[str, Any], generation: str) -> List[str]:
             ] or [""]
 
             # EV/IV compression
-            evs_csv = stats_to_csv(stats_dict_to_list(setdata.get("evs", {}), 0), 0)
+            default_evs = {}
+            if generation == "gen1":
+                default_evs = {
+                    "hp": 252,
+                    "atk": 252,
+                    "def": 252,
+                    "spc": 252,
+                    "spe": 252,
+                }
+            elif generation == "gen2":
+                default_evs = {
+                    "hp": 252,
+                    "atk": 252,
+                    "def": 252,
+                    "spa": 252,
+                    "spd": 252,
+                    "spe": 252,
+                }
+
+            evs_csv = stats_to_csv(
+                stats_dict_to_list(setdata.get("evs", default_evs), 0), 0
+            )
             ivs_csv = stats_to_csv(stats_dict_to_list(setdata.get("ivs", {}), 31), 31)
 
             # Fields fixed/blank for Smogon dex exports (Gen1-9, no shiny/level/etc.)
@@ -157,7 +179,7 @@ def list_remote_jsons() -> List[str]:
         "zubl",
     ]
     return [
-        f"gen{generation}{tier}.json" for generation in range(1, 10) for tier in tiers
+        [f"gen{generation}{tier}.json" for tier in tiers] for generation in range(1, 10)
     ]
 
 
@@ -169,18 +191,22 @@ def main():
 
     print(f"Found {len(json_files)} tier files. Processing …\n")
 
-    for rel_path in json_files:
-        url = BASE_URL + rel_path
-        print(f"→ {rel_path} … ", end="", flush=True)
+    for generation, generation_sets in enumerate(json_files):
+        packed_rows = []
+        for rel_path in generation_sets:
+            url = BASE_URL + rel_path
+            print(f"→ {rel_path} … ", end="", flush=True)
 
-        try:
-            data = requests.get(url, timeout=60).json()
-        except requests.RequestException as e:
-            print(f"Error fetching {url}: {e}")
-            continue
+            try:
+                data = requests.get(url, timeout=60).json()
+            except requests.RequestException as e:
+                print(f"Error fetching {url}: {e}")
+                continue
 
-        packed_rows = generate_packed_sets(data, rel_path[:4])
-        out_file = DEST_DIR / f"{Path(rel_path).stem}_packed.json"
+            packed_rows += generate_packed_sets(data, rel_path[:4])
+
+        packed_rows = list(set(packed_rows))  # Remove duplicates
+        out_file = DEST_DIR / f"gen{generation+1}_packed.json"
         out_file.write_text(json.dumps(packed_rows, indent=2))
 
         print(f"{len(packed_rows):,} sets saved → {out_file}")

@@ -38,7 +38,6 @@ import {
     FieldFeature,
     ActionMaskFeature,
 } from "../../protos/features_pb";
-import { Teams, TeamValidator } from "@pkmn/sim";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -139,31 +138,21 @@ function transformJson(
 // Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
 
-function loadSets(format: string) {
-    const validator = new TeamValidator(format);
-    const setsToChoose: string[] = JSON.parse(
-        fs.readFileSync(`../data/data/${format}_packed.json`, "utf-8"),
-    );
-    const validSets = setsToChoose.filter((x) => {
-        const unpackedSet = Teams.unpack([x].join("]"));
-        const errors = validator.validateTeam(unpackedSet);
-        if (errors !== null) {
-            console.error(
-                `Invalid team for format ${format}: ${x} - Errors: ${errors}`,
-            );
+const sets: { [k: string]: string[] } = {};
+for (let i = 1; i <= 9; i++) {
+    for (const [set, formats] of JSON.parse(
+        fs.readFileSync(`../data/data/validated_gen${i}_packed.json`, "utf-8"),
+    )) {
+        for (const [format, isValid] of Object.entries(formats)) {
+            if (!sets[format]) {
+                sets[format] = [];
+            }
+            if (isValid) {
+                sets[format].push(set);
+            }
         }
-
-        return errors === null;
-    });
-    return validSets;
+    }
 }
-
-const sets: { [k: string]: string[] } = Object.fromEntries(
-    ["gen1ou", "gen2ou", "gen3ou", "gen4ou", "gen9ou"].map((smogonFormat) => [
-        smogonFormat,
-        loadSets(smogonFormat),
-    ]),
-);
 
 export function lookUpSets(smogonFormat: string): string[] {
     const maybeSets = sets[smogonFormat];
