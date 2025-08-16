@@ -1,5 +1,3 @@
-from typing import List, Optional, Sequence, Tuple
-
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -103,7 +101,7 @@ class Logits(nn.Module):
         return x
 
 
-def get_freqs(seq_len: int, dim: int, base: int = 10000) -> Tuple[jax.Array, jax.Array]:
+def get_freqs(seq_len: int, dim: int, base: int = 10000) -> tuple[jax.Array, jax.Array]:
     """
     Get frequency embeddings.
 
@@ -113,7 +111,7 @@ def get_freqs(seq_len: int, dim: int, base: int = 10000) -> Tuple[jax.Array, jax
         base (int, optional): Base value. Defaults to 10000.
 
     Returns:
-        Tuple[jax.Array, jax.Array]: Frequency embeddings.
+        tuple[jax.Array, jax.Array]: Frequency embeddings.
     """
     theta = 1 / (base ** (jnp.arange(0, dim, 2) / dim))
     t = jnp.arange(seq_len)
@@ -185,8 +183,8 @@ class MultiHeadAttention(nn.Module):
 
     num_heads: int
     qk_size: int
-    v_size: Optional[int] = None
-    model_size: Optional[int] = None
+    v_size: int | None = None
+    model_size: int | None = None
     qk_layer_norm: bool = False
     need_pos: bool = False
     use_bias: bool = True
@@ -212,8 +210,8 @@ class MultiHeadAttention(nn.Module):
         q: jax.Array,
         kv: jax.Array,
         mask: jax.Array,
-        q_positions: Optional[jax.Array] = None,
-        kv_positions: Optional[jax.Array] = None,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
     ) -> jax.Array:
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
@@ -256,8 +254,8 @@ class MultiHeadAttention(nn.Module):
 
 
 def create_attention_mask(
-    mask1: Optional[jax.Array] = None, mask2: Optional[jax.Array] = None
-) -> Optional[jax.Array]:
+    mask1: jax.Array | None = None, mask2: jax.Array | None = None
+) -> jax.Array | None:
     """
     Create a combined attention mask for cross-attention.
 
@@ -321,7 +319,7 @@ class TransformerEncoder(nn.Module):
     use_bias: bool = True
     need_pos: bool = False
     qk_layer_norm: bool = False
-    resblocks_hidden_size: Optional[int] = None
+    resblocks_hidden_size: int | None = None
     use_post_attn_norm: bool = True
     use_post_ffw_norm: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -331,7 +329,7 @@ class TransformerEncoder(nn.Module):
         qkv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
-        qkv_positions: Optional[jax.Array] = None,
+        qkv_positions: jax.Array | None = None,
     ):
         qkv_ln = layer_norm(qkv, self.dtype)
         mha = MultiHeadAttention(
@@ -364,8 +362,8 @@ class TransformerEncoder(nn.Module):
     def __call__(
         self,
         qkv: jax.Array,
-        attn_mask: Optional[jax.Array] = None,
-        qkv_positions: Optional[jax.Array] = None,
+        attn_mask: jax.Array | None = None,
+        qkv_positions: jax.Array | None = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -404,7 +402,7 @@ class TransformerDecoder(nn.Module):
     use_bias: bool = True
     need_pos: bool = False
     qk_layer_norm: bool = False
-    resblocks_hidden_size: Optional[int] = None
+    resblocks_hidden_size: int | None = None
     use_post_attn_norm: bool = True
     use_post_ffw_norm: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -415,8 +413,8 @@ class TransformerDecoder(nn.Module):
         kv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
-        q_positions: Optional[jax.Array] = None,
-        kv_positions: Optional[jax.Array] = None,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
     ):
         q_ln = layer_norm(q, self.dtype)
         kv_ln = layer_norm(kv, self.dtype)
@@ -451,9 +449,9 @@ class TransformerDecoder(nn.Module):
         self,
         q: jax.Array,
         kv: jax.Array,
-        attn_mask: Optional[jax.Array] = None,
-        q_positions: Optional[jax.Array] = None,
-        kv_positions: Optional[jax.Array] = None,
+        attn_mask: jax.Array | None = None,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -490,7 +488,7 @@ class TransformerDecoder(nn.Module):
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 
-    layer_sizes: int | Sequence[int]
+    layer_sizes: int | tuple[int] | list[int]
     use_layer_norm: bool = True
     activate_first: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -554,7 +552,7 @@ class SumEmbeddings(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, *embeddings: List[jax.Array]) -> jax.Array:
+    def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
         """Sum embeddings."""
         embedding = sum(
             [
@@ -579,7 +577,7 @@ class MergeEmbeddings(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, *embeddings: List[jax.Array]) -> jax.Array:
+    def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
         """
         Sum embeddings.
 
@@ -622,13 +620,13 @@ class MergeEmbeddings(nn.Module):
 
 
 def one_hot_concat_jax(
-    one_hot_encoded: List[Tuple[int, int]], dtype: jnp.dtype = jnp.float32
+    one_hot_encoded: list[tuple[int, int]], dtype: jnp.dtype = jnp.float32
 ) -> jax.Array:
     """
     Concatenate one-hot encoded arrays.
 
     Args:
-        one_hot_encoded (List[Tuple[int, int]]): List of tuples containing indices and offsets.
+        one_hot_encoded (list[tuple[int, int]]): List of tuples containing indices and offsets.
 
     Returns:
         jax.Array: Concatenated one-hot encoded array.
