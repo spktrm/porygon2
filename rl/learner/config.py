@@ -63,7 +63,7 @@ class Porygon2LearnerConfig:
     kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
 
 
 def get_learner_config():

@@ -147,13 +147,11 @@ for (let i = 1; i <= 9; i++) {
     for (const [set, formats] of Object.entries(
         JSON.parse(data) as Record<string, Record<string, boolean>>,
     )) {
-        for (const [format, isValid] of Object.entries(formats)) {
+        for (const format of Object.keys(formats)) {
             if (!sets[format]) {
                 sets[format] = [];
             }
-            if (isValid) {
-                sets[format].push(set);
-            }
+            sets[format].push(set);
         }
     }
 }
