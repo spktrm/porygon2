@@ -2,7 +2,6 @@ import functools
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.data import PACKED_SETS
@@ -67,10 +66,12 @@ class SinglePlayerSyncEnvironment:
 
 
 class TeamBuilderEnvironment:
-    def __init__(self, generation: int = 3):
-        self.data = PACKED_SETS[f"gen{generation}ou"]
-        self.num_sets = len(self.data["sets"])
+    def __init__(self, generation: int, smogon_tier: str = "ou"):
+        data = PACKED_SETS[f"gen{generation}"]
+
+        self.start_mask = jnp.asarray(data[f"gen{generation}{smogon_tier}"])
         self.state = BuilderEnvOutput()
+        self.masks = jnp.asarray(data["mask"])
 
     def reset(self) -> BuilderEnvOutput:
         self.pos = 0
@@ -86,13 +87,14 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self):
-        mask = jnp.ones(self.num_sets, dtype=bool)
-        tokens = jnp.ones(6, dtype=np.int32) * -1
-        return BuilderEnvOutput(mask=mask, tokens=tokens, done=jnp.array(False))
+        tokens = jnp.ones(6, dtype=jnp.int32) * -1
+        return BuilderEnvOutput(
+            mask=self.start_mask, tokens=tokens, done=jnp.array(False)
+        )
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(self, action: int, pos: int, state: BuilderEnvOutput):
-        new_mask = self.data["mask"][action]
+        new_mask = jnp.take(self.masks, action)
         token_mask = jax.nn.one_hot(pos, 6, dtype=jnp.bool)
         tokens = jnp.where(token_mask, action, state.tokens)
         mask = state.mask & ~new_mask

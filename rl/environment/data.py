@@ -1,7 +1,9 @@
 import json
 import os
+from enum import Enum, auto
 
 import jax.numpy as jnp
+import pandas as pd
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -155,19 +157,59 @@ with open("data/data/data.json", "r") as f:
     data = json.load(f)
 
 
-STOI = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
+class TokenColumns(Enum):
+    SPECIES = 0
+    ITEM = auto()
+    ABILITY = auto()
+    MOVE1 = auto()
+    MOVE2 = auto()
+    MOVE3 = auto()
+    MOVE4 = auto()
+    NATURE = auto()
+    GENDER = auto()
+    HP_EV = auto()
+    ATK_EV = auto()
+    DEF_EV = auto()
+    SPA_EV = auto()
+    SPD_EV = auto()
+    SPE_EV = auto()
+    HP_IV = auto()
+    ATK_IV = auto()
+    DEF_IV = auto()
+    SPA_IV = auto()
+    SPD_IV = auto()
+    SPE_IV = auto()
+    HIDDENPOWERTYPE = auto()
+    TERATYPE = auto()
+
+
+PACKED_SET_MAX_VALUES = {
+    TokenColumns.GENDER.value: NUM_GENDERS,
+    TokenColumns.NATURE.value: NUM_NATURES,
+    TokenColumns.HIDDENPOWERTYPE.value: NUM_TYPECHART,
+    TokenColumns.TERATYPE.value: NUM_TYPECHART,
+}
+
+
+NUM_TOKEN_COLUMNS = len(TokenColumns)
+
+
+ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
+STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 
 PACKED_SETS = {}
 for fpath in os.listdir("data/data/"):
-    if "packed" in fpath:
+    if "packed" in fpath and fpath.startswith("validated"):
         with open(os.path.join("data/data/", fpath), "r") as f:
             packed_data = json.load(f)
+
+        valid_formats = pd.DataFrame(packed_data)
 
         unique_species = {}
         unique_mask = []
 
-        for packed_set in packed_data:
+        for packed_set in packed_data.keys():
             species = packed_set.split("|")[0]
             if species not in unique_species:
                 unique_species[species] = len(unique_species)
@@ -175,10 +217,16 @@ for fpath in os.listdir("data/data/"):
             unique_mask.append(unique_species[species])
 
         unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
-        PACKED_SETS[fpath.split("_")[0]] = {
+
+        generation_string = fpath.split("_")[1]
+        PACKED_SETS[generation_string] = {
             "sets": packed_data,
             "mask": unique_mask[None] == unique_mask[..., None],
         }
+        for row_name in valid_formats.index:
+            PACKED_SETS[generation_string][row_name] = valid_formats.loc[
+                row_name
+            ].values
 
 
 ONEHOT_DTYPE = jnp.bfloat16
@@ -201,6 +249,9 @@ ONEHOT_ENCODERS = {
         "learnset": PretrainedEmbedding(
             fpath=f"data/data/gen{generation}/learnset.npy", dtype=ONEHOT_DTYPE
         ),
+        "sets": PretrainedEmbedding(
+            fpath=f"data/data/gen{generation}/packed_sets.npy", dtype=jnp.int32
+        ),
     }
-    for generation in [3, 9]
+    for generation in range(3, 10)
 }
