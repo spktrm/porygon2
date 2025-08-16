@@ -198,35 +198,42 @@ ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
 STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 
-PACKED_SETS = {}
-for fpath in os.listdir("data/data/"):
-    if "packed" in fpath and fpath.startswith("validated"):
-        with open(os.path.join("data/data/", fpath), "r") as f:
-            packed_data = json.load(f)
+def get_packed_sets():
+    packed_sets = {}
+    for fpath in os.listdir("data/data/"):
+        if "packed" in fpath and fpath.startswith("validated"):
+            with open(os.path.join("data/data/", fpath), "r") as f:
+                packed_data = json.load(f)
 
-        valid_formats = pd.DataFrame(packed_data)
+            valid_formats = pd.DataFrame(packed_data)
 
-        unique_species = {}
-        unique_mask = []
+            unique_species = {}
+            unique_mask = []
 
-        for packed_set in packed_data.keys():
-            species = packed_set.split("|")[0]
-            if species not in unique_species:
-                unique_species[species] = len(unique_species)
+            for packed_set in packed_data.keys():
+                species = packed_set.split("|")[0] or packed_set.split("|")[1]
 
-            unique_mask.append(unique_species[species])
+                if species not in unique_species:
+                    unique_species[species] = len(unique_species)
 
-        unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
+                unique_mask.append(unique_species[species])
 
-        generation_string = fpath.split("_")[1]
-        PACKED_SETS[generation_string] = {
-            "sets": packed_data,
-            "mask": unique_mask[None] == unique_mask[..., None],
-        }
-        for row_name in valid_formats.index:
-            PACKED_SETS[generation_string][row_name] = valid_formats.loc[
-                row_name
-            ].values
+            unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
+
+            generation_string = fpath.split("_")[1]
+            packed_sets[generation_string] = {
+                "sets": packed_data,
+                "mask": unique_mask[None] == unique_mask[..., None],
+            }
+            for row_name in valid_formats.index:
+                packed_sets[generation_string][row_name] = valid_formats.loc[
+                    row_name
+                ].values
+
+    return packed_sets
+
+
+PACKED_SETS = get_packed_sets()
 
 
 ONEHOT_DTYPE = jnp.bfloat16

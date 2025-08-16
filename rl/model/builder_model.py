@@ -23,6 +23,7 @@ from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
     BuilderTransition,
+    SamplingConfig,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -42,7 +43,12 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE, get_most_recent_file, get_num_params
+from rl.model.utils import (
+    BIAS_VALUE,
+    get_most_recent_file,
+    get_num_params,
+    legal_policy,
+)
 from rl.utils import init_jax_jit_cache
 
 
@@ -123,8 +129,7 @@ class Porygon2BuilderModel(nn.Module):
 
         logits = (query @ keys.T).reshape(-1) + self.policy_bias
 
-        masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
-        return masked_logits
+        return jnp.where(sample_mask, logits, BIAS_VALUE)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -231,13 +236,13 @@ class Porygon2BuilderModel(nn.Module):
         pred_embeddings = self.encoder(
             embeddings, create_attention_mask(attn_mask), position_indices
         )
-        mean_embedding = pred_embeddings.mean(axis=0, keepdims=True)
-        logits = self._forward_head(mean_embedding, input.mask)
         pooled = self.decoder(
-            mean_embedding,
+            pred_embeddings.mean(axis=0, keepdims=True),
             pred_embeddings,
             create_attention_mask(attn_mask.any(keepdims=True), attn_mask),
         )
+
+        logits = self._forward_head(pooled, input.mask)
         v = (2 / jnp.pi) * jnp.atan((jnp.pi / 2) * self.value_head(pooled)).squeeze()
 
         return BuilderActorOutput(logits=logits, v=v)
@@ -252,7 +257,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(generation: int = 3):
+def main(generation: int = 9):
     init_jax_jit_cache()
 
     model_config = get_builder_model_config(generation)
@@ -276,7 +281,7 @@ def main(generation: int = 3):
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
-        # builder_sampling_config=SamplingConfig(temp=1, min_p=0.01),
+        builder_sampling_config=SamplingConfig(temp=1, min_p=0.01),
     )
     sets_list = list(PACKED_SETS[f"gen{generation}"]["sets"])
     builder_env = TeamBuilderEnvironment(generation=generation)
@@ -311,6 +316,17 @@ def main(generation: int = 3):
         tokens_buffer = builder_env_output.tokens
         print("tokens:", tokens_buffer)
         print("value:", builder_trajectory.agent_output.actor_output.v)
+        print(
+            "probs:",
+            jnp.take_along_axis(
+                legal_policy(
+                    builder_trajectory.agent_output.actor_output.logits,
+                    builder_trajectory.env_output.mask,
+                ),
+                builder_trajectory.agent_output.action[..., None],
+                axis=-1,
+            ).squeeze(-1),
+        )
         print("\n".join(sets_list[t] for t in tokens_buffer.reshape(-1).tolist()))
 
 

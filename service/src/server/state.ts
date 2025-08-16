@@ -1462,18 +1462,8 @@ export class EventHandler implements Protocol.Handler {
                 this.identToIndex.set(parsedPokemonid, this.identToIndex.size);
             }
 
-            for (const side of this.player.publicBattle.sides) {
-                for (const pokemon of side.team.slice(0, side.totalPokemon)) {
-                    if (pokemon.originalIdent === parsedPokemonid) {
-                        return {
-                            pokemon,
-                            index: this.identToIndex.get(parsedPokemonid) ?? -1,
-                        };
-                    }
-                }
-            }
             return {
-                pokemon: null,
+                pokemon: this.player.publicBattle.getPokemon(pokemonid),
                 index: this.identToIndex.get(parsedPokemonid) ?? -1,
             };
         } else {
