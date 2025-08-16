@@ -69,6 +69,9 @@ class TeamBuilderEnvironment:
     def __init__(self, generation: int, smogon_tier: str = "ou"):
         data = PACKED_SETS[f"gen{generation}"]
 
+        self.generation = generation
+        self.smogon_tier = smogon_tier
+
         self.start_mask = jnp.asarray(data[f"gen{generation}{smogon_tier}"])
         self.state = BuilderEnvOutput()
         self.masks = jnp.asarray(data["mask"])
@@ -94,7 +97,7 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(self, action: int, pos: int, state: BuilderEnvOutput):
-        new_mask = jnp.take(self.masks, action)
+        new_mask = jnp.take(self.masks, action, axis=0)
         token_mask = jax.nn.one_hot(pos, 6, dtype=jnp.bool)
         tokens = jnp.where(token_mask, action, state.tokens)
         mask = state.mask & ~new_mask
