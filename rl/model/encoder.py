@@ -7,7 +7,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from ml_collections import Configdict
+from ml_collections import ConfigDict
 
 from rl.environment.data import (
     ACTION_MAX_VALUES,
@@ -161,7 +161,7 @@ class Encoder(nn.Module):
     Encoder model for processing environment steps and history to generate embeddings.
     """
 
-    cfg: Configdict
+    cfg: ConfigDict
 
     def setup(self):
         # Extract configuration parameters for embedding sizes.

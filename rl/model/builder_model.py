@@ -1,4 +1,5 @@
 import pickle
+import time
 from functools import partial
 from pprint import pprint
 
@@ -120,7 +121,7 @@ class Porygon2BuilderModel(nn.Module):
         keys = jax.vmap(self._encode_packed_set)(self.output_sets)
         keys = self.key_head(keys)
 
-        logits = query @ keys.T + self.policy_bias
+        logits = (query @ keys.T).reshape(-1) + self.policy_bias
 
         masked_logits = jnp.where(sample_mask, logits, BIAS_VALUE)
         return masked_logits
@@ -218,7 +219,6 @@ class Porygon2BuilderModel(nn.Module):
     def _forward(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
         masked = input.tokens == -1
-        not_masked_sum = (6 - masked.sum(axis=-1)).clip(0, 5)
         num_tokens = input.tokens.shape[-1]
 
         attn_mask = jnp.ones_like(input.tokens, dtype=jnp.bool)
@@ -252,7 +252,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(generation: int = 9):
+def main(generation: int = 3):
     init_jax_jit_cache()
 
     model_config = get_builder_model_config(generation)
@@ -280,6 +280,9 @@ def main(generation: int = 9):
     )
     sets_list = list(PACKED_SETS[f"gen{generation}"]["sets"])
     builder_env = TeamBuilderEnvironment(generation=generation)
+
+    print("Num sets:", len(sets_list))
+    time.sleep(2)
 
     while True:
 
