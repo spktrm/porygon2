@@ -50,7 +50,7 @@ class InferenceModel:
         self.precision = precision
 
         if not fpath:
-            fpath = get_most_recent_file("./ckpts")
+            fpath = get_most_recent_file("./ckpts/gen9")
         print(f"loading checkpoint from {fpath}")
         with open(fpath, "rb") as f:
             step = pickle.load(f)

@@ -281,7 +281,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
-        builder_sampling_config=SamplingConfig(temp=1, min_p=0.01),
+        builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
     )
     sets_list = list(PACKED_SETS[f"gen{generation}"]["sets"])
     builder_env = TeamBuilderEnvironment(generation=generation)
