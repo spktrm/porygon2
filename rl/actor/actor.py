@@ -57,6 +57,7 @@ class Actor:
             action_type=ACTION_TYPE_MAPPING[agent_output.action_type.item()],
             move_slot=agent_output.move_slot.item(),
             switch_slot=agent_output.switch_slot.item(),
+            wildcard_slot=agent_output.wildcard_slot.item(),
         )
 
     def unroll(
