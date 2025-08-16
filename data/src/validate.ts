@@ -3,20 +3,7 @@ import { Teams, TeamValidator } from "@pkmn/sim";
 import * as fs from "fs";
 import * as path from "path";
 
-const FORMATS = [
-    "ubers",
-    "ou",
-    "uu",
-    "uubl",
-    "ru",
-    "rubl",
-    "nu",
-    "nubl",
-    "pu",
-    "publ",
-    "zu",
-    "zubl",
-];
+const FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"];
 
 function processSet(packed: string, validator: TeamValidator) {
     const unpacked = Teams.unpack([packed].join("]"));
@@ -31,7 +18,12 @@ function main() {
     const dataDir = path.resolve(__dirname, "../data");
     const packedFiles = fs
         .readdirSync(dataDir)
-        .filter((f) => f.includes("packed") && f.endsWith(".json"));
+        .filter(
+            (f) =>
+                f.includes("packed") &&
+                f.endsWith(".json") &&
+                f.startsWith("gen"),
+        );
 
     if (packedFiles.length === 0) {
         console.warn("No packed JSON files found in ../data");
@@ -48,12 +40,7 @@ function main() {
             const trueFormat = `gen${idx + 1}${format}`;
             try {
                 validators.push(new TeamValidator(trueFormat));
-            } catch (error) {
-                console.log(
-                    `Error creating validator for ${trueFormat}:`,
-                    error,
-                );
-            }
+            } catch (error) {}
         });
 
         const unpackedSets = new Set<string>();
@@ -80,9 +67,11 @@ function main() {
             }
         }
 
+        const finalOutput = Object.fromEntries(output);
+        console.log(Object.keys(finalOutput).length, "valid sets in", fpath);
         fs.writeFileSync(
             path.join(dataDir, `validated_${fpath}`),
-            JSON.stringify(Object.fromEntries(output)),
+            JSON.stringify(finalOutput),
         );
     }
 }

@@ -1,14 +1,13 @@
 import functools
 import math
 from functools import partial
-from typing import Dict, Tuple
 
 import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from ml_collections import ConfigDict
+from ml_collections import Configdict
 
 from rl.environment.data import (
     ACTION_MAX_VALUES,
@@ -65,17 +64,17 @@ def _binary_scale_encoding(
 def _encode_one_hot(
     entity: jax.Array,
     feature_idx: int,
-    max_values: Dict[int, int],
+    max_values: dict[int, int],
     value_offset: int = 0,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
 
 
 def _encode_capped_one_hot(
-    entity: jax.Array, feature_idx: int, max_values: Dict[int, int]
-) -> Tuple[int, int]:
+    entity: jax.Array, feature_idx: int, max_values: dict[int, int]
+) -> tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -85,9 +84,9 @@ def _encode_capped_one_hot(
 def _encode_sqrt_one_hot(
     entity: jax.Array,
     feature_idx: int,
-    max_values: Dict[int, int],
+    max_values: dict[int, int],
     dtype: jnp.dtype = jnp.int32,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -98,8 +97,8 @@ def _encode_sqrt_one_hot(
 
 
 def _encode_divided_one_hot(
-    entity: jax.Array, feature_idx: int, divisor: int, max_values: Dict[int, int]
-) -> Tuple[int, int]:
+    entity: jax.Array, feature_idx: int, divisor: int, max_values: dict[int, int]
+) -> tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     max_value = max_values[feature_idx]
@@ -162,7 +161,7 @@ class Encoder(nn.Module):
     Encoder model for processing environment steps and history to generate embeddings.
     """
 
-    cfg: ConfigDict
+    cfg: Configdict
 
     def setup(self):
         # Extract configuration parameters for embedding sizes.
