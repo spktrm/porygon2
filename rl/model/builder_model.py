@@ -21,6 +21,7 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderAgentOutput,
     BuilderEnvOutput,
+    BuilderTransition,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -116,8 +117,7 @@ class Porygon2BuilderModel(nn.Module):
         """
         query = self.policy_head(embedding)
 
-        # keys = jax.vmap(self._encode_packed_set)(self.output_sets)
-        keys = jax.vmap(self._encode_packed_set)(jnp.eye(self.num_sets))
+        keys = jax.vmap(self._encode_packed_set)(self.output_sets)
         keys = self.key_head(keys)
 
         logits = query @ keys.T + self.policy_bias
@@ -161,8 +161,6 @@ class Porygon2BuilderModel(nn.Module):
         """
         Encodes the packed set tokens into embeddings.
         """
-        return self.set_linear(packed_set)
-
         move_indices = np.array(
             [
                 TokenColumns.MOVE1.value,
@@ -227,8 +225,7 @@ class Porygon2BuilderModel(nn.Module):
 
         position_indices = jnp.arange(num_tokens, dtype=jnp.int32)
 
-        # set_tokens = ONEHOT_ENCODERS[self.cfg.generation]["sets"](input.tokens)
-        set_tokens = jax.nn.one_hot(input.tokens, self.num_sets)
+        set_tokens = ONEHOT_ENCODERS[self.cfg.generation]["sets"](input.tokens)
         set_embeddings = jax.vmap(self._encode_packed_set)(set_tokens)
         embeddings = jnp.where(masked[..., None], self.mask_embedding, set_embeddings)
         pred_embeddings = self.encoder(
@@ -282,35 +279,35 @@ def main(generation: int = 9):
         # builder_sampling_config=SamplingConfig(temp=1, min_p=0.01),
     )
     sets_list = list(PACKED_SETS[f"gen{generation}"]["sets"])
+    builder_env = TeamBuilderEnvironment(generation=generation)
 
     while True:
 
         rng_key, key = jax.random.split(key)
         builder_subkeys = jax.random.split(rng_key, 7)
 
-        # build_traj = []
-        builder_env = TeamBuilderEnvironment(generation=generation)
+        build_traj = []
 
         builder_env_output = builder_env.reset()
         for i in range(7):
             builder_agent_output = agent.step_builder(
                 builder_subkeys[i], params, builder_env_output
             )
-            # builder_transition = BuilderTransition(
-            #     env_output=builder_env_output, agent_output=builder_agent_output
-            # )
-            # build_traj.append(builder_transition)
+            builder_transition = BuilderTransition(
+                env_output=builder_env_output, agent_output=builder_agent_output
+            )
+            build_traj.append(builder_transition)
             if builder_env_output.done.item():
                 break
             builder_env_output = builder_env.step(builder_agent_output.action.item())
 
-        # builder_trajectory: BuilderTransition = jax.tree.map(
-        #     lambda *xs: np.stack(xs), *build_traj
-        # )
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *build_traj
+        )
 
-        tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
+        tokens_buffer = builder_env_output.tokens
         print("tokens:", tokens_buffer)
-        # print("value:", builder_trajectory.agent_output.actor_output.v)
+        print("value:", builder_trajectory.agent_output.actor_output.v)
         print("\n".join(sets_list[t] for t in tokens_buffer.reshape(-1).tolist()))
 
 

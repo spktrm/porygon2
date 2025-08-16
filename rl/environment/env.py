@@ -2,7 +2,6 @@ import functools
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.data import PACKED_SETS
@@ -68,8 +67,9 @@ class SinglePlayerSyncEnvironment:
 
 class TeamBuilderEnvironment:
     def __init__(self, generation: int = 3, smogon_tier: str = "ou"):
-        self.data = PACKED_SETS[f"gen{generation}"]
-        self.start_mask = jnp.array(self.data[f"gen{generation}{smogon_tier}"])
+        data = PACKED_SETS[f"gen{generation}"]
+
+        self.start_mask = jnp.array(data[f"gen{generation}{smogon_tier}"])
         self.state = BuilderEnvOutput()
 
     def reset(self) -> BuilderEnvOutput:
@@ -86,7 +86,7 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self):
-        tokens = jnp.ones(6, dtype=np.int32) * -1
+        tokens = jnp.ones(6, dtype=jnp.int32) * -1
         return BuilderEnvOutput(
             mask=self.start_mask, tokens=tokens, done=jnp.array(False)
         )
