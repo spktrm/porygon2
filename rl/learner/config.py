@@ -47,11 +47,14 @@ class Porygon2LearnerConfig:
     clip_gradient: float = 2.0
     tau: float = 1e-3
 
-    # Vtrace params
+    # Discount params
     player_lambda_: float = 0.95
-    builder_lambda_: float = 0.85
     player_gamma: float = 1.0
-    builder_gamma: float = 0.85
+
+    builder_lambda_: float = 0.95
+    builder_gamma: float = 0.95
+
+    # Vtrace params
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3

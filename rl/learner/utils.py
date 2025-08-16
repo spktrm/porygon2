@@ -52,7 +52,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
-        wildcard_turn=wildcard_turn,
+        wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
     )
