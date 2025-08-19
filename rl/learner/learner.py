@@ -40,18 +40,19 @@ def calculate_player_log_prob(
     switch: jax.Array,
 ):
     action_type_log_prob = get_action_value(action_type_log_pi, action_type)
-    action_type_one_hot = jax.nn.one_hot(action_type, action_type_log_pi.shape[-1])
 
     move_log_prob = get_action_value(move_log_pi, move)
     switch_prob = get_action_value(switch_log_pi, switch)
-    sub_log_prob = jnp.stack((move_log_prob, switch_prob, switch_prob), axis=-1)
-
     wild_card_log_prob = get_action_value(wildcard_log_pi, wildcard)
+
+    # safe selectors (avoid 0 * -inf -> NaN)
+    is_move = action_type == 0
+    is_sw_or_preview = (action_type == 1) | (action_type == 2)
 
     return (
         action_type_log_prob
-        + (action_type_one_hot * sub_log_prob).sum(axis=-1)
-        + (action_type == 0) * wild_card_log_prob
+        + jnp.where(is_move, move_log_prob + wild_card_log_prob, 0.0)
+        + jnp.where(is_sw_or_preview, switch_prob, 0.0)
     )
 
 
