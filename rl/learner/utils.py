@@ -37,8 +37,11 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
     )
 
     wildcard_turn = jnp.where(
-        batch.player_transitions.agent_output.wildcard_slot
-        != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL,
+        (batch.player_transitions.agent_output.action_type == 0)
+        & (
+            batch.player_transitions.agent_output.wildcard_slot
+            != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+        ),
         jnp.arange(valid.shape[0], dtype=jnp.int32)[:, None],
         -BIAS_VALUE,
     ).min(axis=0)

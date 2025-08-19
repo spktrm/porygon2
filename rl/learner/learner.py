@@ -29,7 +29,7 @@ def get_action_value(arr: jax.Array, action: jax.Array):
     return jnp.take_along_axis(arr, action[..., None], axis=-1).squeeze(-1)
 
 
-def calculate_log_prob(
+def calculate_player_log_prob(
     action_type_log_pi: jax.Array,
     action_type: jax.Array,
     move_log_pi: jax.Array,
@@ -53,6 +53,18 @@ def calculate_log_prob(
         + (action_type_one_hot * sub_log_prob).sum(axis=-1)
         + (action_type == 0) * wild_card_log_prob
     )
+
+
+def calculate_builder_log_prob(
+    species_log_pi: jax.Array,
+    species: jax.Array,
+    packed_set_log_pi: jax.Array,
+    packed_set: jax.Array,
+    pos: jax.Array,
+):
+    species_log_prob = get_action_value(species_log_pi, species)
+    packed_set_log_prob = get_action_value(packed_set_log_pi, packed_set)
+    return jnp.where(pos < 6, species_log_prob, packed_set_log_prob)
 
 
 def policy_gradient_loss(
@@ -94,8 +106,17 @@ def player_entropy_loss(
     return average(total_entropy, valid)
 
 
-def builder_entropy_loss(pi: jax.Array, log_pi: jax.Array, valid: jax.Array):
-    loss = -jnp.sum(pi * log_pi, axis=-1)
+def builder_entropy_loss(
+    species_log_pi: jax.Array,
+    species_pi: jax.Array,
+    packed_set_log_pi: jax.Array,
+    packed_set_pi: jax.Array,
+    pos: jax.Array,
+    valid: jax.Array,
+):
+    species_entropy = -jnp.sum(species_pi * species_log_pi, axis=-1)
+    packed_set_entropy = -jnp.sum(packed_set_pi * packed_set_log_pi, axis=-1)
+    loss = jnp.where(pos < 6, species_entropy, packed_set_entropy)
     return average(loss, valid)
 
 
@@ -124,7 +145,7 @@ def train_step(
     )
 
     target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
-    actor_log_prob = calculate_log_prob(
+    actor_log_prob = calculate_player_log_prob(
         action_type_log_pi=legal_log_policy(
             batch.player_transitions.agent_output.actor_output.action_type_logits,
             batch.player_transitions.env_output.action_type_mask,
@@ -150,7 +171,7 @@ def train_step(
         ),
         switch=batch.player_transitions.agent_output.switch_slot,
     )
-    target_log_prob = calculate_log_prob(
+    target_log_prob = calculate_player_log_prob(
         action_type_log_pi=legal_log_policy(
             target_pred.action_type_logits,
             batch.player_transitions.env_output.action_type_mask,
@@ -244,7 +265,7 @@ def train_step(
             batch.player_transitions.env_output.switch_mask,
         )
 
-        learner_log_prob = calculate_log_prob(
+        learner_log_prob = calculate_player_log_prob(
             action_type_log_pi=pred_action_type_log_pi,
             action_type=batch.player_transitions.agent_output.action_type,
             move_log_pi=pred_move_log_pi,
@@ -323,19 +344,31 @@ def train_step(
         builder_state.target_params, batch.builder_transitions.env_output
     )
 
-    target_builder_log_prob = get_action_value(
+    target_builder_log_prob = calculate_builder_log_prob(
         legal_log_policy(
-            target_builder_output.logits,
-            batch.builder_transitions.env_output.mask,
+            target_builder_output.species_logits,
+            batch.builder_transitions.env_output.species_mask,
         ),
-        batch.builder_transitions.agent_output.action,
+        batch.builder_transitions.agent_output.species,
+        legal_log_policy(
+            target_builder_output.packed_set_logits,
+            batch.builder_transitions.env_output.packed_set_mask,
+        ),
+        batch.builder_transitions.agent_output.packed_set,
+        batch.builder_transitions.env_output.pos,
     )
-    actor_builder_log_prob = get_action_value(
+    actor_builder_log_prob = calculate_builder_log_prob(
         legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.logits,
-            batch.builder_transitions.env_output.mask,
+            batch.builder_transitions.agent_output.actor_output.species_logits,
+            batch.builder_transitions.env_output.species_mask,
         ),
-        batch.builder_transitions.agent_output.action,
+        batch.builder_transitions.agent_output.species,
+        legal_log_policy(
+            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
+            batch.builder_transitions.env_output.packed_set_mask,
+        ),
+        batch.builder_transitions.agent_output.packed_set,
+        batch.builder_transitions.env_output.pos,
     )
 
     actor_target_builder_log_ratio = actor_builder_log_prob - target_builder_log_prob
@@ -371,18 +404,29 @@ def train_step(
         learner_builder_output = builder_state.apply_fn(
             params, batch.builder_transitions.env_output
         )
-        leaner_builder_log_pi = legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.logits,
-            batch.builder_transitions.env_output.mask,
+        leaner_builder_species_log_pi = legal_log_policy(
+            batch.builder_transitions.agent_output.actor_output.species_logits,
+            batch.builder_transitions.env_output.species_mask,
         )
-        leaner_builder_pi = legal_policy(
-            batch.builder_transitions.agent_output.actor_output.logits,
-            batch.builder_transitions.env_output.mask,
+        leaner_builder_packed_set_log_pi = legal_log_policy(
+            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
+            batch.builder_transitions.env_output.packed_set_mask,
+        )
+        leaner_builder_species_pi = legal_policy(
+            batch.builder_transitions.agent_output.actor_output.species_logits,
+            batch.builder_transitions.env_output.species_mask,
+        )
+        leaner_builder_packed_set_pi = legal_policy(
+            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
+            batch.builder_transitions.env_output.packed_set_mask,
         )
 
-        learner_builder_log_prob = get_action_value(
-            leaner_builder_log_pi,
-            batch.builder_transitions.agent_output.action,
+        learner_builder_log_prob = calculate_builder_log_prob(
+            leaner_builder_species_log_pi,
+            batch.builder_transitions.agent_output.species,
+            leaner_builder_packed_set_log_pi,
+            batch.builder_transitions.agent_output.packed_set,
+            batch.builder_transitions.env_output.pos,
         )
 
         learner_actor_log_ratio = learner_builder_log_prob - actor_builder_log_prob
@@ -406,8 +450,11 @@ def train_step(
         )
 
         loss_entropy = builder_entropy_loss(
-            leaner_builder_pi,
-            leaner_builder_log_pi,
+            leaner_builder_species_log_pi,
+            leaner_builder_species_pi,
+            leaner_builder_packed_set_log_pi,
+            leaner_builder_packed_set_pi,
+            batch.builder_transitions.env_output.pos,
             builder_valid,
         )
 

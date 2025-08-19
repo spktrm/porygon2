@@ -16,28 +16,20 @@ function processSet(packed: string, validator: TeamValidator) {
 
 function main() {
     const dataDir = path.resolve(__dirname, "../data");
-    const packedFiles = fs
-        .readdirSync(dataDir)
-        .filter(
-            (f) =>
-                f.includes("packed") &&
-                f.endsWith(".json") &&
-                f.startsWith("gen"),
-        );
+    const mainJson = JSON.parse(
+        fs.readFileSync(path.join(dataDir, `data.json`), "utf-8"),
+    );
 
-    if (packedFiles.length === 0) {
-        console.warn("No packed JSON files found in ../data");
-        return;
-    }
+    for (let i = 1; i < 10; i++) {
+        const readPath = path.join(dataDir, `gen${i}/packed_sets.json`);
 
-    for (const [idx, fpath] of packedFiles.entries()) {
         const packedSets: string[] = JSON.parse(
-            fs.readFileSync(path.join(dataDir, fpath), "utf-8"),
+            fs.readFileSync(readPath, "utf-8"),
         );
 
         const validators: TeamValidator[] = [];
         FORMATS.map((format) => {
-            const trueFormat = `gen${idx + 1}${format}`;
+            const trueFormat = `gen${i}${format}`;
             try {
                 validators.push(new TeamValidator(trueFormat));
             } catch (error) {}
@@ -67,12 +59,41 @@ function main() {
             }
         }
 
-        const finalOutput = Object.fromEntries(output);
-        console.log(Object.keys(finalOutput).length, "valid sets in", fpath);
-        fs.writeFileSync(
-            path.join(dataDir, `validated_${fpath}`),
-            JSON.stringify(finalOutput),
-        );
+        for (const format of FORMATS) {
+            const mapping = new Map<string, string[]>();
+            const outputObj = Object.fromEntries(output);
+            const formatSets = Object.entries(outputObj).flatMap(
+                ([packedSet, formats]) => {
+                    const formatValid = formats[`gen${i}${format}`] ?? false;
+                    return formatValid ? [packedSet] : [];
+                },
+            );
+            for (const [species, index] of Object.entries(
+                mainJson["species"],
+            )) {
+                const sets = formatSets.filter((packedSet) => {
+                    const splits = packedSet.split("|", 3);
+                    return splits[0] === species || splits[1] === species;
+                });
+                mapping.set(species, sets);
+            }
+            const finalOutput = Object.fromEntries(mapping);
+
+            const writePath = path.join(
+                dataDir,
+                `gen${i}/validated_packed_${format}_sets.json`,
+            );
+            console.log(
+                Object.values(finalOutput)
+                    .map((sets) => {
+                        return sets.length;
+                    })
+                    .reduce((a, b) => a + b, 0),
+                "valid sets in",
+                writePath,
+            );
+            fs.writeFileSync(writePath, JSON.stringify(finalOutput));
+        }
     }
 }
 
