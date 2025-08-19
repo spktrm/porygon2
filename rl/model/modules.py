@@ -308,6 +308,34 @@ class FeedForwardResidual(nn.Module):
         return x + ffw
 
 
+class PointerLogits(nn.Module):
+    """Pointer network logits."""
+
+    key_size: int = None
+    num_layers_query: int = 1
+    num_layers_keys: int = 1
+    use_layer_norm: bool = True
+    dtype: jnp.dtype = jnp.bfloat16
+
+    @nn.compact
+    def __call__(
+        self, query: jax.Array, keys: jax.Array, mask: jax.Array | None = None
+    ) -> jax.Array:
+
+        query = MLP(
+            (self.key_size or keys.shape[-1],) * self.num_layers_query,
+            use_layer_norm=self.use_layer_norm,
+            dtype=self.dtype,
+        )(query)
+        keys = MLP(
+            (self.key_size or keys.shape[-1],) * self.num_layers_keys,
+            use_layer_norm=self.use_layer_norm,
+            dtype=self.dtype,
+        )(keys)
+
+        return jnp.einsum("ij,kj->ik", query, keys)
+
+
 class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 

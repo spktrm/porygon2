@@ -138,25 +138,18 @@ function transformJson(
 // Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
 
-const sets: { [k: string]: string[] } = {};
+const sets: { [k: string]: Record<string, string[]> } = {};
 for (let i = 1; i <= 9; i++) {
-    const data = fs.readFileSync(
-        `../data/data/validated_gen${i}_packed.json`,
-        "utf-8",
-    );
-    for (const [set, formats] of Object.entries(
-        JSON.parse(data) as Record<string, Record<string, boolean>>,
-    )) {
-        for (const format of Object.keys(formats)) {
-            if (!sets[format]) {
-                sets[format] = [];
-            }
-            sets[format].push(set);
-        }
+    for (const smogonFormat of ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]) {
+        const data = fs.readFileSync(
+            `../data/data/gen${i}/validated_packed_${smogonFormat}_sets.json`,
+            "utf-8",
+        );
+        sets[`gen${i}${smogonFormat}`] = JSON.parse(data);
     }
 }
 
-export function lookUpSets(smogonFormat: string): string[] {
+export function lookUpSets(smogonFormat: string): Record<string, string[]> {
     const maybeSets = sets[smogonFormat];
     if (maybeSets === undefined) {
         throw new Error(`No sets found for format: ${smogonFormat}`);

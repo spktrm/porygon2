@@ -70,15 +70,26 @@ type MinorArgNames = RemovePipes<BattleMinorArgName>;
 const MAX_RATIO_TOKEN = 16384;
 
 export function generateTeamFromFormat(format: string): string {
-    const setsToChoose = lookUpSets(format);
+    const species2Sets = lookUpSets(format);
     const validator = new TeamValidator(format);
-    const numSets = setsToChoose.length;
 
     while (true) {
         const packedSets: Set<string> = new Set();
+        const species2Choose = Object.keys(species2Sets).filter(
+            (species) => species2Sets[species].length > 0,
+        );
 
         while (packedSets.size < 6) {
-            packedSets.add(setsToChoose[Math.floor(Math.random() * numSets)]);
+            const species =
+                species2Choose[
+                    Math.floor(Math.random() * species2Choose.length)
+                ];
+            species2Choose.splice(species2Choose.indexOf(species), 1);
+            const speciesSets = species2Sets[species];
+            const packedSet =
+                speciesSets[Math.floor(Math.random() * speciesSets.length)];
+
+            packedSets.add(packedSet);
         }
 
         const packedTeam = Array.from(packedSets).join("]");
@@ -92,20 +103,28 @@ export function generateTeamFromFormat(format: string): string {
 
 export function generateTeamFromIndices(
     smogonFormat: string,
-    indices?: number[],
+    speciesIndices?: number[],
+    packedSetIndices?: number[],
 ): string | null {
-    if (indices !== undefined && !smogonFormat.endsWith("randombattle")) {
+    if (
+        speciesIndices !== undefined &&
+        packedSetIndices !== undefined &&
+        !smogonFormat.endsWith("randombattle")
+    ) {
         const packedSets = [];
         const setsToChoose = lookUpSets(smogonFormat);
-        for (const index of indices) {
-            if (index >= setsToChoose.length) {
+
+        const speciesKeys = Object.keys(setsToChoose);
+
+        for (const [memberIndex, speciesIndex] of speciesIndices.entries()) {
+            const speciesSets = setsToChoose[speciesKeys[speciesIndex]];
+            const packedSet = speciesSets[packedSetIndices[memberIndex]];
+            if (packedSet === undefined) {
                 throw new Error(
-                    `IndexError: Invalid index ${index}. Valid range is 0 to ${
-                        setsToChoose.length - 1
-                    }.`,
+                    `Invalid packed set for species ${speciesKeys[speciesIndex]} index: ${packedSetIndices[memberIndex]}`,
                 );
             }
-            packedSets.push(setsToChoose[index]);
+            packedSets.push(packedSet);
         }
 
         return packedSets.join("]");

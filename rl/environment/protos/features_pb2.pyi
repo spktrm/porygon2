@@ -191,6 +191,33 @@ class ActionMaskFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_MASK_FEATURE__CAN_ZMOVE: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_MAX: _ClassVar[ActionMaskFeature]
     ACTION_MASK_FEATURE__CAN_TERA: _ClassVar[ActionMaskFeature]
+
+class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PACKED_SET_FEATURE___UNSPECIFIED: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPECIES: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__ITEM: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__ABILITY: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__MOVE1: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__MOVE2: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__MOVE3: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__MOVE4: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__NATURE: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__GENDER: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__HP_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__ATK_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__DEF_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPA_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPD_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPE_EV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__HP_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__ATK_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__DEF_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPA_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPD_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__SPE_IV: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__HIDDENPOWERTYPE: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__TERATYPE: _ClassVar[PackedSetFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -355,3 +382,27 @@ ACTION_MASK_FEATURE__CAN_MEGA: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_ZMOVE: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_MAX: ActionMaskFeature
 ACTION_MASK_FEATURE__CAN_TERA: ActionMaskFeature
+PACKED_SET_FEATURE___UNSPECIFIED: PackedSetFeature
+PACKED_SET_FEATURE__SPECIES: PackedSetFeature
+PACKED_SET_FEATURE__ITEM: PackedSetFeature
+PACKED_SET_FEATURE__ABILITY: PackedSetFeature
+PACKED_SET_FEATURE__MOVE1: PackedSetFeature
+PACKED_SET_FEATURE__MOVE2: PackedSetFeature
+PACKED_SET_FEATURE__MOVE3: PackedSetFeature
+PACKED_SET_FEATURE__MOVE4: PackedSetFeature
+PACKED_SET_FEATURE__NATURE: PackedSetFeature
+PACKED_SET_FEATURE__GENDER: PackedSetFeature
+PACKED_SET_FEATURE__HP_EV: PackedSetFeature
+PACKED_SET_FEATURE__ATK_EV: PackedSetFeature
+PACKED_SET_FEATURE__DEF_EV: PackedSetFeature
+PACKED_SET_FEATURE__SPA_EV: PackedSetFeature
+PACKED_SET_FEATURE__SPD_EV: PackedSetFeature
+PACKED_SET_FEATURE__SPE_EV: PackedSetFeature
+PACKED_SET_FEATURE__HP_IV: PackedSetFeature
+PACKED_SET_FEATURE__ATK_IV: PackedSetFeature
+PACKED_SET_FEATURE__DEF_IV: PackedSetFeature
+PACKED_SET_FEATURE__SPA_IV: PackedSetFeature
+PACKED_SET_FEATURE__SPD_IV: PackedSetFeature
+PACKED_SET_FEATURE__SPE_IV: PackedSetFeature
+PACKED_SET_FEATURE__HIDDENPOWERTYPE: PackedSetFeature
+PACKED_SET_FEATURE__TERATYPE: PackedSetFeature

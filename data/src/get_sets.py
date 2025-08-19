@@ -138,31 +138,32 @@ def generate_packed_sets(source: Dict[str, Any], generation: str) -> List[str]:
 
                 # Fields fixed/blank for Smogon dex exports (Gen1-9, no shiny/level/etc.)
                 gender = shiny = level = happiness = ""
-                cluster_suffix = ""  # all cluster sub-fields blank => omit
 
-                for moves in product_lists(move_slots):
-                    moves_csv = ",".join(moves)
-                    for item in item_opts:
-                        for nat in nature_opts:
-                            for abil in ability_opts:
-                                rows.append(
-                                    "|".join(
-                                        [
-                                            nickname,
-                                            species_field,
-                                            item,
-                                            abil,
-                                            moves_csv,
-                                            nat,
-                                            evs_csv,
-                                            gender,
-                                            ivs_csv,
-                                            shiny,
-                                            level,
-                                            cluster_suffix,
-                                        ]
+                # NICKNAME|SPECIES|ITEM|ABILITY|MOVES|NATURE|EVS|GENDER|IVS|SHINY|LEVEL|HAPPINESS,POKEBALL,HIDDENPOWERTYPE,GIGANTAMAX,DYNAMAXLEVEL,TERATYPE
+                for teratype in expand_option(setdata.get("teratypes", "")):
+                    for moves in product_lists(move_slots):
+                        moves_csv = ",".join(moves)
+                        for item in item_opts:
+                            for nat in nature_opts:
+                                for abil in ability_opts:
+                                    rows.append(
+                                        "|".join(
+                                            [
+                                                nickname,
+                                                species_field,
+                                                item,
+                                                abil,
+                                                moves_csv,
+                                                nat,
+                                                evs_csv,
+                                                gender,
+                                                ivs_csv,
+                                                shiny,
+                                                level,
+                                                f"255,,,,,{teratype}",
+                                            ]
+                                        )
                                     )
-                                )
     return rows
 
 
@@ -174,9 +175,9 @@ DEST_DIR.mkdir(exist_ok=True)
 def main():
     print("Discovering available gens/tiers …")
 
-    for generation in range(1, 9):
+    for generation in range(9, 0, -1):
 
-        url = BASE_URL + f"gen{generation+1}.json"
+        url = BASE_URL + f"gen{generation}.json"
 
         try:
             data = requests.get(url, timeout=60).json()
@@ -184,10 +185,10 @@ def main():
             print(f"Error fetching {url}: {e}")
             continue
 
-        packed_rows = generate_packed_sets(data, f"gen{generation+1}")
+        packed_rows = generate_packed_sets(data, f"gen{generation}")
 
-        packed_rows = list(set(packed_rows))  # Remove duplicates
-        out_file = DEST_DIR / f"gen{generation+1}_packed.json"
+        packed_rows = list(sorted(set(packed_rows)))  # Remove duplicates
+        out_file = DEST_DIR / f"gen{generation}/packed_sets.json"
         out_file.write_text(json.dumps(packed_rows, indent=2))
 
         print(f"{len(packed_rows):,} sets saved → {out_file}")

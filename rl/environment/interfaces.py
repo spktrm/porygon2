@@ -1,6 +1,5 @@
 from typing import NamedTuple
 
-import jax
 from jaxtyping import ArrayLike
 
 
@@ -55,18 +54,24 @@ class PlayerTransition(NamedTuple):
 
 
 class BuilderEnvOutput(NamedTuple):
-    tokens: jax.Array = ()
-    mask: jax.Array = ()
-    done: jax.Array = ()
+    species_mask: ArrayLike = ()
+    species_tokens: ArrayLike = ()
+    packed_set_mask: ArrayLike = ()
+    packed_set_tokens: ArrayLike = ()
+    pos: ArrayLike = ()
+    done: ArrayLike = ()
 
 
 class BuilderActorOutput(NamedTuple):
-    logits: ArrayLike = ()
+    species_logits: ArrayLike = ()
+    packed_set_logits: ArrayLike = ()
     v: ArrayLike = ()
 
 
 class BuilderAgentOutput(NamedTuple):
-    action: ArrayLike = ()
+    species: ArrayLike = ()
+    packed_set: ArrayLike = ()
+
     actor_output: BuilderActorOutput = BuilderActorOutput()
 
 

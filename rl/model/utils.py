@@ -49,6 +49,8 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
 
 def get_most_recent_file(dir_path: str, pattern: str = None):
     # List all files in the directory
+    if not os.path.exists(dir_path):
+        return None
     files = [
         os.path.join(dir_path, f)
         for f in os.listdir(dir_path)

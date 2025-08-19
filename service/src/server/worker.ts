@@ -180,9 +180,14 @@ export class WorkerHandler {
     private resetPlayerFromUserName(
         userName: string,
         smogonFormat: string,
-        teamIndices?: number[],
+        speciesIndices?: number[],
+        packedSetIndices?: number[],
     ): Promise<TrainablePlayerAI> {
-        const teamString = generateTeamFromIndices(smogonFormat, teamIndices);
+        const teamString = generateTeamFromIndices(
+            smogonFormat,
+            speciesIndices,
+            packedSetIndices,
+        );
         if (isEvalUser(userName)) {
             return Promise.resolve(
                 this.resetPlayerFromEvalUserName(
@@ -205,13 +210,15 @@ export class WorkerHandler {
         resetRequest: ResetRequest,
     ): Promise<void> {
         const userName = resetRequest.getUsername();
-        const teamIndices = resetRequest.getTeamIndicesList();
+        const speciesIndices = resetRequest.getSpeciesIndicesList();
+        const packedSetIndices = resetRequest.getPackedSetIndicesList();
         const smogonFormat = resetRequest.getSmogonFormat();
 
         const player = await this.resetPlayerFromUserName(
             userName,
             smogonFormat,
-            teamIndices,
+            speciesIndices,
+            packedSetIndices,
         );
         const state = await player.receiveEnvironmentState();
 
