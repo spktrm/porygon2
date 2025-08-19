@@ -23,6 +23,7 @@ from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
     BuilderTransition,
+    SamplingConfig,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -305,7 +306,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
-        # builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
+        builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation)
