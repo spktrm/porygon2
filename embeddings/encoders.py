@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, Sequence, Tuple
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -56,7 +56,7 @@ def lambda_onehot_encode(series: pd.Series, fn: Callable[[Any], int]) -> pd.Data
 
 def tfidf_vectorize(
     series: pd.Series,
-    ngram_ranges: Sequence[Tuple[int, int]],
+    ngram_ranges: Sequence[tuple[int, int]],
     num_components: int = 512,
 ):
     matrices = []

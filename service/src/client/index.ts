@@ -15,9 +15,9 @@ import {
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
-// const server = "ws://localhost:8000/showdown/websocket";
+const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
-const server = "wss://pokeagentshowdown.com/showdown/websocket";
+// const server = "wss://pokeagentshowdown.com/showdown/websocket";
 const MAX_BATTLES = 50; // Maximum number of battles to run in sequence
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
@@ -321,7 +321,8 @@ class User {
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
                     format,
-                    modelOutput.tokens,
+                    modelOutput.species_indices,
+                    modelOutput.packed_set_indices,
                 )!;
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
@@ -329,6 +330,10 @@ class User {
                     this.teams.push(team);
                     this.send(`|/utm ${team}`);
                     break;
+                } else {
+                    console.log(
+                        `Team validation for ${team} failed: ${errors}`,
+                    );
                 }
             }
         }

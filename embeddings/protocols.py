@@ -250,6 +250,11 @@ ITEMS_PROTOCOLS: list[Protocol] = [
         "feature_type": FeatureType.CATEGORICAL,
     },
     {
+        "feature_fn": lambda x: x.startswith("mega"),
+        "func": onehot_encode,
+        "feature_type": FeatureType.CATEGORICAL,
+    },
+    {
         "feature_fn": lambda x: x.startswith("on"),
         "func": onehot_encode,
         "feature_type": FeatureType.CATEGORICAL,

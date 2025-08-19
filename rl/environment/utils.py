@@ -1,6 +1,7 @@
 from typing import Sequence, TypeVar
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
@@ -12,7 +13,8 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
-    PACKED_SETS,
+    NUM_SPECIES,
+    SET_TOKENS,
 )
 from rl.environment.interfaces import (
     BuilderEnvOutput,
@@ -20,6 +22,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerHistoryOutput,
 )
+from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
     FieldFeature,
@@ -200,10 +203,14 @@ def get_ex_player_step() -> PlayerActorInput:
     return PlayerActorInput(env=ex, history=hx)
 
 
-def get_ex_builder_step(generation: int = 3) -> BuilderEnvOutput:
-    data = PACKED_SETS[f"gen{generation}ou"]
-    num_sets = len(data["sets"])
+def get_ex_builder_step(generation: int, smogon_format: str = "ou") -> BuilderEnvOutput:
+    set_tokens = SET_TOKENS[generation][smogon_format]
     return BuilderEnvOutput(
-        tokens=np.ones((1, 1, 6), dtype=np.int32) * -1,
-        mask=np.ones((1, 1, num_sets), dtype=bool),
+        species_mask=jnp.ones((1, 1, NUM_SPECIES), dtype=jnp.bool),
+        species_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32)
+        * SpeciesEnum.SPECIES_ENUM___UNK,
+        packed_set_mask=jnp.ones((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
+        packed_set_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32) * -1,
+        pos=jnp.zeros((1, 1), dtype=jnp.int32),
+        done=jnp.ones((1, 1), dtype=jnp.bool),
     )

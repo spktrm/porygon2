@@ -2,6 +2,7 @@ import json
 import os
 
 import jax.numpy as jnp
+import numpy as np
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -32,14 +33,10 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     MovesetFeature,
     MovesetHasPP,
+    PackedSetFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentTrajectory
 from rl.model.modules import PretrainedEmbedding
-
-with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
-    EX_BUFFER = f.read()
-
-EX_TRAJECTORY = EnvironmentTrajectory.FromString(EX_BUFFER)
 
 NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())
@@ -155,33 +152,63 @@ with open("data/data/data.json", "r") as f:
     data = json.load(f)
 
 
-STOI = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
+PACKED_SET_MAX_VALUES = {
+    PackedSetFeature.PACKED_SET_FEATURE__GENDER: NUM_GENDERS,
+    PackedSetFeature.PACKED_SET_FEATURE__NATURE: NUM_NATURES,
+    PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE: NUM_TYPECHART,
+    PackedSetFeature.PACKED_SET_FEATURE__TERATYPE: NUM_TYPECHART,
+}
 
 
-PACKED_SETS = {}
-for fpath in os.listdir("data/data/"):
-    if "packed" in fpath:
-        with open(os.path.join("data/data/", fpath), "r") as f:
-            packed_data = json.load(f)
+NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 
-        unique_species = {}
-        unique_mask = []
 
-        for packed_set in packed_data:
-            species = packed_set.split("|")[0]
-            if species not in unique_species:
-                unique_species[species] = len(unique_species)
-
-            unique_mask.append(unique_species[species])
-
-        unique_mask = jnp.array(unique_mask, dtype=jnp.int32)
-        PACKED_SETS[fpath.split("_")[0]] = {
-            "sets": packed_data,
-            "mask": unique_mask[None] == unique_mask[..., None],
-        }
-
+ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
+STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 ONEHOT_DTYPE = jnp.bfloat16
+
+
+# MASKS = {
+#     generation: {
+#         "species": jnp.asarray(
+#             np.load(
+#                 f"data/data/gen{generation}/species_mask.npy",
+#             )
+#         ).astype(ONEHOT_DTYPE),
+#         "abilities": jnp.asarray(
+#             np.load(
+#                 f"data/data/gen{generation}/ability_mask.npy",
+#             )
+#         ).astype(ONEHOT_DTYPE),
+#         "items": jnp.asarray(
+#             np.load(
+#                 f"data/data/gen{generation}/item_mask.npy",
+#             )
+#         ).astype(ONEHOT_DTYPE),
+#         "learnset": jnp.asarray(
+#             np.load(
+#                 f"data/data/gen{generation}/learnset_mask.npy",
+#             )
+#         ).astype(ONEHOT_DTYPE),
+#     }
+#     for generation in range(3, 10)
+# }
+
+
+SET_TOKENS = {
+    generation: {
+        smogon_format: jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/validated_packed_{smogon_format}_sets.npy",
+            )
+        )
+        for smogon_format in ["ou"]
+    }
+    for generation in range(3, 10)
+}
+
+
 ONEHOT_ENCODERS = {
     generation: {
         "species": PretrainedEmbedding(
@@ -202,5 +229,11 @@ ONEHOT_ENCODERS = {
             fpath=f"data/data/gen{generation}/learnset.npy", dtype=ONEHOT_DTYPE
         ),
     }
-    for generation in [3, 9]
+    for generation in range(3, 10)
 }
+
+with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
+    EX_BUFFER = f.read()
+
+
+EX_TRAJECTORY = EnvironmentTrajectory.FromString(EX_BUFFER)

@@ -2,7 +2,9 @@ from pydantic import BaseModel
 
 
 class ResetResponse(BaseModel):
-    tokens: list[int]
+    species_indices: list[int]
+    packed_set_indices: list[int]
+
     v: float
 
 

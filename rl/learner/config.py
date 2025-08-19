@@ -34,6 +34,7 @@ class AdamConfig:
 class Porygon2LearnerConfig:
     num_steps = 10_000_000
     num_actors: int = 32
+    num_eval_actors: int = 5
     unroll_length: int = 128 * 2
     replay_buffer_capacity: int = 512
 
@@ -47,11 +48,14 @@ class Porygon2LearnerConfig:
     clip_gradient: float = 2.0
     tau: float = 1e-3
 
-    # Vtrace params
+    # Discount params
     player_lambda_: float = 0.95
-    builder_lambda_: float = 0.85
     player_gamma: float = 1.0
-    builder_gamma: float = 0.85
+
+    builder_lambda_: float = 0.95
+    builder_gamma: float = 1.0
+
+    # Vtrace params
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3
@@ -63,7 +67,7 @@ class Porygon2LearnerConfig:
     kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 3
+    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
 
 
 def get_learner_config():
@@ -104,7 +108,7 @@ def create_train_state(
     """Creates an initial `TrainState`."""
     ex_player_step = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     ex_builder_step = jax.tree.map(
-        lambda x: x[:, 0], get_ex_builder_step(config.generation)
+        lambda x: x[:, 0], get_ex_builder_step(generation=config.generation)
     )
 
     player_params = player_network.init(rng, ex_player_step)

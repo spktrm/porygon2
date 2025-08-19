@@ -104,10 +104,15 @@ export class ResetRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  clearTeamIndicesList(): void;
-  getTeamIndicesList(): Array<number>;
-  setTeamIndicesList(value: Array<number>): void;
-  addTeamIndices(value: number, index?: number): number;
+  clearSpeciesIndicesList(): void;
+  getSpeciesIndicesList(): Array<number>;
+  setSpeciesIndicesList(value: Array<number>): void;
+  addSpeciesIndices(value: number, index?: number): number;
+
+  clearPackedSetIndicesList(): void;
+  getPackedSetIndicesList(): Array<number>;
+  setPackedSetIndicesList(value: Array<number>): void;
+  addPackedSetIndices(value: number, index?: number): number;
 
   getSmogonFormat(): string;
   setSmogonFormat(value: string): void;
@@ -125,7 +130,8 @@ export class ResetRequest extends jspb.Message {
 export namespace ResetRequest {
   export type AsObject = {
     username: string,
-    teamIndicesList: Array<number>,
+    speciesIndicesList: Array<number>,
+    packedSetIndicesList: Array<number>,
     smogonFormat: string,
   }
 }

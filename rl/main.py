@@ -131,7 +131,6 @@ def main():
     stop_signal = [False]
     num_samples = [0]
 
-    num_eval_actors = 5
     trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
         maxsize=2 * learner_config.num_actors
     )
@@ -216,7 +215,7 @@ def main():
                 )
             )
 
-    for eval_id in range(num_eval_actors):
+    for eval_id in range(learner_config.num_eval_actors):
         actor = Actor(
             agent=agent,
             env=SinglePlayerSyncEnvironment(
