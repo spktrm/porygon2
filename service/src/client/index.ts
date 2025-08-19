@@ -321,7 +321,8 @@ class User {
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
                     format,
-                    modelOutput.tokens,
+                    modelOutput.species_indices,
+                    modelOutput.packed_set_indices,
                 )!;
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
@@ -329,6 +330,10 @@ class User {
                     this.teams.push(team);
                     this.send(`|/utm ${team}`);
                     break;
+                } else {
+                    console.log(
+                        `Team validation for ${team} failed: ${errors}`,
+                    );
                 }
             }
         }
