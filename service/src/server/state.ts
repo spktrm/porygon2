@@ -2900,7 +2900,8 @@ export class StateHandler {
                 );
 
                 const noOtherTeras = !pokemon.some(
-                    (x: { terastallized?: string }) => x?.terastallized !== "",
+                    (x: { terastallized?: string }) =>
+                        (x?.terastallized ?? "") !== "",
                 );
                 actionMask.set(
                     ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA,
