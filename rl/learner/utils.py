@@ -5,7 +5,8 @@ import jax
 import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.features_pb2 import ActionMaskFeature, FieldFeature
+from rl.model.utils import BIAS_VALUE
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -35,6 +36,16 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         batch.player_transitions.agent_output.action_type == 1, can_act
     )
 
+    wildcard_turn = jnp.where(
+        (batch.player_transitions.agent_output.action_type == 0)
+        & (
+            batch.player_transitions.agent_output.wildcard_slot
+            != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
+        ),
+        jnp.arange(valid.shape[0], dtype=jnp.int32)[:, None],
+        -BIAS_VALUE,
+    ).min(axis=0)
+
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
     return dict(
@@ -44,6 +55,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
+        wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
     )

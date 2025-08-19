@@ -43,12 +43,14 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     # because that has -inf for illegal actions, or
     #     legal_actions * (logits_masked - baseline)
     # because that leads to 0 * -inf == nan for illegal actions.
-    log_policy = jnp.multiply(legal_actions, (logits - max_legal_logit - baseline))
+    log_policy = legal_actions * (logits - max_legal_logit - baseline)
     return log_policy
 
 
 def get_most_recent_file(dir_path: str, pattern: str = None):
     # List all files in the directory
+    if not os.path.exists(dir_path):
+        return None
     files = [
         os.path.join(dir_path, f)
         for f in os.listdir(dir_path)

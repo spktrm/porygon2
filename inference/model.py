@@ -50,7 +50,7 @@ class InferenceModel:
         self.precision = precision
 
         if not fpath:
-            fpath = get_most_recent_file("./ckpts")
+            fpath = get_most_recent_file("./ckpts/gen9")
         print(f"loading checkpoint from {fpath}")
         with open(fpath, "rb") as f:
             step = pickle.load(f)
@@ -74,24 +74,28 @@ class InferenceModel:
         return subkey
 
     def reset(self):
-        rng_key = self.split_rng()
-        builder_subkeys = jax.random.split(rng_key, 7)
-
         builder_env = TeamBuilderEnvironment(self.learner_config.generation)
 
+        rng_key = self.split_rng()
+        builder_subkeys = jax.random.split(rng_key, builder_env.max_ts + 1)
+
         builder_env_output = builder_env.reset()
-        for subkey in builder_subkeys:
+        for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
-                subkey, self.builder_params, builder_env_output
+                builder_subkeys[builder_step_index],
+                self.builder_params,
+                builder_env_output,
             )
             if builder_env_output.done.item():
                 break
-            builder_env_output = builder_env.step(builder_agent_output.action.item())
+            builder_env_output = builder_env.step(builder_agent_output)
 
         # Send set tokens to the player environment.
-        tokens_buffer = np.asarray(builder_env_output.tokens, dtype=np.int16)
         return ResetResponse(
-            tokens=tokens_buffer,
+            species_indices=builder_env_output.species_tokens.reshape(-1).tolist(),
+            packed_set_indices=builder_env_output.packed_set_tokens.reshape(
+                -1
+            ).tolist(),
             v=builder_agent_output.actor_output.v.item(),
         )
 

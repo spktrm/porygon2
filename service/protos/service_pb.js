@@ -902,7 +902,7 @@ proto.servicev2.StepRequest.prototype.setRqid = function(value) {
  * @private {!Array<number>}
  * @const
  */
-proto.servicev2.ResetRequest.repeatedFields_ = [2];
+proto.servicev2.ResetRequest.repeatedFields_ = [2,3];
 
 
 
@@ -936,8 +936,9 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
     username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    teamIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
-    smogonFormat: jspb.Message.getFieldWithDefault(msg, 3, "")
+    speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
+    packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
+    smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, "")
   };
 
   if (includeInstance) {
@@ -981,10 +982,16 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
     case 2:
       var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
       for (var i = 0; i < values.length; i++) {
-        msg.addTeamIndices(values[i]);
+        msg.addSpeciesIndices(values[i]);
       }
       break;
     case 3:
+      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
+      for (var i = 0; i < values.length; i++) {
+        msg.addPackedSetIndices(values[i]);
+      }
+      break;
+    case 4:
       var value = /** @type {string} */ (reader.readString());
       msg.setSmogonFormat(value);
       break;
@@ -1024,17 +1031,24 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
-  f = message.getTeamIndicesList();
+  f = message.getSpeciesIndicesList();
   if (f.length > 0) {
     writer.writePackedInt32(
       2,
       f
     );
   }
+  f = message.getPackedSetIndicesList();
+  if (f.length > 0) {
+    writer.writePackedInt32(
+      3,
+      f
+    );
+  }
   f = message.getSmogonFormat();
   if (f.length > 0) {
     writer.writeString(
-      3,
+      4,
       f
     );
   }
@@ -1060,10 +1074,10 @@ proto.servicev2.ResetRequest.prototype.setUsername = function(value) {
 
 
 /**
- * repeated int32 team_indices = 2;
+ * repeated int32 species_indices = 2;
  * @return {!Array<number>}
  */
-proto.servicev2.ResetRequest.prototype.getTeamIndicesList = function() {
+proto.servicev2.ResetRequest.prototype.getSpeciesIndicesList = function() {
   return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 2));
 };
 
@@ -1072,7 +1086,7 @@ proto.servicev2.ResetRequest.prototype.getTeamIndicesList = function() {
  * @param {!Array<number>} value
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.setTeamIndicesList = function(value) {
+proto.servicev2.ResetRequest.prototype.setSpeciesIndicesList = function(value) {
   return jspb.Message.setField(this, 2, value || []);
 };
 
@@ -1082,7 +1096,7 @@ proto.servicev2.ResetRequest.prototype.setTeamIndicesList = function(value) {
  * @param {number=} opt_index
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.addTeamIndices = function(value, opt_index) {
+proto.servicev2.ResetRequest.prototype.addSpeciesIndices = function(value, opt_index) {
   return jspb.Message.addToRepeatedField(this, 2, value, opt_index);
 };
 
@@ -1091,17 +1105,54 @@ proto.servicev2.ResetRequest.prototype.addTeamIndices = function(value, opt_inde
  * Clears the list making it empty but non-null.
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.clearTeamIndicesList = function() {
-  return this.setTeamIndicesList([]);
+proto.servicev2.ResetRequest.prototype.clearSpeciesIndicesList = function() {
+  return this.setSpeciesIndicesList([]);
 };
 
 
 /**
- * optional string smogon_format = 3;
+ * repeated int32 packed_set_indices = 3;
+ * @return {!Array<number>}
+ */
+proto.servicev2.ResetRequest.prototype.getPackedSetIndicesList = function() {
+  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 3));
+};
+
+
+/**
+ * @param {!Array<number>} value
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.setPackedSetIndicesList = function(value) {
+  return jspb.Message.setField(this, 3, value || []);
+};
+
+
+/**
+ * @param {number} value
+ * @param {number=} opt_index
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.addPackedSetIndices = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 3, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.clearPackedSetIndicesList = function() {
+  return this.setPackedSetIndicesList([]);
+};
+
+
+/**
+ * optional string smogon_format = 4;
  * @return {string}
  */
 proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
 };
 
 
@@ -1110,7 +1161,7 @@ proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
  * @return {!proto.servicev2.ResetRequest} returns this
  */
 proto.servicev2.ResetRequest.prototype.setSmogonFormat = function(value) {
-  return jspb.Message.setProto3StringField(this, 3, value);
+  return jspb.Message.setProto3StringField(this, 4, value);
 };
 
 

@@ -23,6 +23,7 @@ goog.exportSymbol('proto.FieldFeature', null, global);
 goog.exportSymbol('proto.InfoFeature', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
 goog.exportSymbol('proto.MovesetHasPP', null, global);
+goog.exportSymbol('proto.PackedSetFeature', null, global);
 /**
  * @enum {number}
  */
@@ -233,6 +234,36 @@ proto.ActionMaskFeature = {
   ACTION_MASK_FEATURE__CAN_ZMOVE: 16,
   ACTION_MASK_FEATURE__CAN_MAX: 17,
   ACTION_MASK_FEATURE__CAN_TERA: 18
+};
+
+/**
+ * @enum {number}
+ */
+proto.PackedSetFeature = {
+  PACKED_SET_FEATURE___UNSPECIFIED: 0,
+  PACKED_SET_FEATURE__SPECIES: 1,
+  PACKED_SET_FEATURE__ITEM: 2,
+  PACKED_SET_FEATURE__ABILITY: 3,
+  PACKED_SET_FEATURE__MOVE1: 4,
+  PACKED_SET_FEATURE__MOVE2: 5,
+  PACKED_SET_FEATURE__MOVE3: 6,
+  PACKED_SET_FEATURE__MOVE4: 7,
+  PACKED_SET_FEATURE__NATURE: 8,
+  PACKED_SET_FEATURE__GENDER: 9,
+  PACKED_SET_FEATURE__HP_EV: 10,
+  PACKED_SET_FEATURE__ATK_EV: 11,
+  PACKED_SET_FEATURE__DEF_EV: 12,
+  PACKED_SET_FEATURE__SPA_EV: 13,
+  PACKED_SET_FEATURE__SPD_EV: 14,
+  PACKED_SET_FEATURE__SPE_EV: 15,
+  PACKED_SET_FEATURE__HP_IV: 16,
+  PACKED_SET_FEATURE__ATK_IV: 17,
+  PACKED_SET_FEATURE__DEF_IV: 18,
+  PACKED_SET_FEATURE__SPA_IV: 19,
+  PACKED_SET_FEATURE__SPD_IV: 20,
+  PACKED_SET_FEATURE__SPE_IV: 21,
+  PACKED_SET_FEATURE__HIDDENPOWERTYPE: 22,
+  PACKED_SET_FEATURE__TERATYPE: 23
 };
 
 goog.object.extend(exports, proto);

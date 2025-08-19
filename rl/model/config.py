@@ -204,7 +204,7 @@ def get_builder_model_config(generation: int = 3) -> ConfigDict:
     cfg.dtype = dtype
     cfg.temp = 1.0
 
-    num_layers = 1
+    num_layers = 2
     num_heads = num_heads
     hidden_size_scale = 1
     hidden_size = int(hidden_size_scale * entity_size)

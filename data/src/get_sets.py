@@ -29,6 +29,7 @@ def stats_dict_to_list(d: Dict[str, int], default: int) -> List[int]:
         "spd": "spd",
         "spe": "spe",
         "speed": "spe",
+        "spc": "spa",
     }
 
     if isinstance(d, list):
@@ -60,6 +61,9 @@ def product_lists(lists: List[List[str]]):
         yield list(prod)
 
 
+INCLUDE_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
+
+
 def generate_packed_sets(source: Dict[str, Any], generation: str) -> List[str]:
     rows: List[str] = []
 
@@ -69,109 +73,111 @@ def generate_packed_sets(source: Dict[str, Any], generation: str) -> List[str]:
 
     ability_cols = [c for c in species_df.columns if c.startswith("abilities")]
 
-    for species_name, setdict in source.items():
-        row = species_df.loc[species_df["id"] == toid(species_name)]
-        spid = toid(species_name)
-        nickname = spid  # identical => species field blank
-        species_field = ""
+    for species_name, setdicts in source.items():
+        for species_format, setdict in setdicts.items():
+            if species_format not in INCLUDE_FORMATS:
+                continue
 
-        for _set_name, setdata in setdict.items():
-            if len(ability_cols) > 0:
-                if setdata.get("ability") is None:
-                    setdata["ability"] = (
-                        row[ability_cols].dropna(axis=1).values.squeeze().tolist()
-                    )
+            row = species_df.loc[species_df["id"] == toid(species_name)]
+            spid = toid(species_name)
+            nickname = spid  # identical => species field blank
+            species_field = ""
 
-            # Move slots (each slot either a str or list[str])
-            move_slots: List[List[str]] = []
-            for slot in setdata.get("moves", []):
-                move_slots.append([toid(m) for m in expand_option(slot)])
-            if not move_slots:
-                move_slots = [[""]]
+            for _set_name, setdata in setdict.items():
+                if len(ability_cols) > 0:
+                    if setdata.get("ability") is None:
+                        setdata["ability"] = (
+                            row[ability_cols].dropna(axis=1).values.squeeze().tolist()
+                        )
 
-            # Combinatorial options: item, nature, ability
-            item_opts = [toid(i) for i in expand_option(setdata.get("item", ""))] or [
-                ""
-            ]
-            nature_opts = [
-                "" if toid(n) == "serious" else toid(n)
-                for n in expand_option(setdata.get("nature", ""))
-            ] or [""]
-            ability_opts = [
-                toid(a) for a in expand_option(setdata.get("ability", ""))
-            ] or [""]
+                # Move slots (each slot either a str or list[str])
+                move_slots: List[List[str]] = []
+                for slot in setdata.get("moves", []):
+                    move_slots.append([toid(m) for m in expand_option(slot)])
+                if not move_slots:
+                    move_slots = [[""]]
 
-            # EV/IV compression
-            evs_csv = stats_to_csv(stats_dict_to_list(setdata.get("evs", {}), 0), 0)
-            ivs_csv = stats_to_csv(stats_dict_to_list(setdata.get("ivs", {}), 31), 31)
+                # Combinatorial options: item, nature, ability
+                item_opts = [
+                    toid(i) for i in expand_option(setdata.get("item", ""))
+                ] or [""]
+                nature_opts = [
+                    "" if toid(n) == "serious" else toid(n)
+                    for n in expand_option(setdata.get("nature", ""))
+                ] or [""]
+                ability_opts = [
+                    toid(a) for a in expand_option(setdata.get("ability", ""))
+                ] or [""]
 
-            # Fields fixed/blank for Smogon dex exports (Gen1-9, no shiny/level/etc.)
-            gender = shiny = level = happiness = ""
-            cluster_suffix = ""  # all cluster sub-fields blank => omit
+                # EV/IV compression
+                default_evs = {}
+                if generation == "gen1":
+                    default_evs = {
+                        "hp": 252,
+                        "atk": 252,
+                        "def": 252,
+                        "spc": 252,
+                        "spe": 252,
+                    }
+                elif generation == "gen2":
+                    default_evs = {
+                        "hp": 252,
+                        "atk": 252,
+                        "def": 252,
+                        "spa": 252,
+                        "spd": 252,
+                        "spe": 252,
+                    }
 
-            for moves in product_lists(move_slots):
-                moves_csv = ",".join(moves)
-                for item in item_opts:
-                    for nat in nature_opts:
-                        for abil in ability_opts:
-                            rows.append(
-                                "|".join(
-                                    [
-                                        nickname,
-                                        species_field,
-                                        item,
-                                        abil,
-                                        moves_csv,
-                                        nat,
-                                        evs_csv,
-                                        gender,
-                                        ivs_csv,
-                                        shiny,
-                                        level,
-                                        cluster_suffix,
-                                    ]
-                                )
-                            )
+                evs_csv = stats_to_csv(
+                    stats_dict_to_list(setdata.get("evs", default_evs), 0), 0
+                )
+                ivs_csv = stats_to_csv(
+                    stats_dict_to_list(setdata.get("ivs", {}), 31), 31
+                )
+
+                # Fields fixed/blank for Smogon dex exports (Gen1-9, no shiny/level/etc.)
+                gender = shiny = level = happiness = ""
+
+                # NICKNAME|SPECIES|ITEM|ABILITY|MOVES|NATURE|EVS|GENDER|IVS|SHINY|LEVEL|HAPPINESS,POKEBALL,HIDDENPOWERTYPE,GIGANTAMAX,DYNAMAXLEVEL,TERATYPE
+                for teratype in expand_option(setdata.get("teratypes", "")):
+                    for moves in product_lists(move_slots):
+                        moves_csv = ",".join(moves)
+                        for item in item_opts:
+                            for nat in nature_opts:
+                                for abil in ability_opts:
+                                    rows.append(
+                                        "|".join(
+                                            [
+                                                nickname,
+                                                species_field,
+                                                item,
+                                                abil,
+                                                moves_csv,
+                                                nat,
+                                                evs_csv,
+                                                gender,
+                                                ivs_csv,
+                                                shiny,
+                                                level,
+                                                f"255,,,,,{teratype}",
+                                            ]
+                                        )
+                                    )
     return rows
 
 
-BASE_URL = "https://pkmn.github.io/smogon/data/sets/"
+BASE_URL = "https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/sets/"
 DEST_DIR = Path("data/data/")
 DEST_DIR.mkdir(exist_ok=True)
 
 
-def list_remote_jsons() -> List[str]:
-    """Scrape the directory listing to collect every *.json file path."""
-    tiers = [
-        "ubers",
-        "ou",
-        "uu",
-        "uubl",
-        "ru",
-        "rubl",
-        "nu",
-        "nubl",
-        "pu",
-        "publ",
-        "zu",
-        "zubl",
-    ]
-    return [
-        f"gen{generation}{tier}.json" for generation in range(1, 10) for tier in tiers
-    ]
-
-
 def main():
     print("Discovering available gens/tiers …")
-    json_files = list_remote_jsons()
-    if not json_files:
-        raise RuntimeError("No JSON sets found at " + BASE_URL)
 
-    print(f"Found {len(json_files)} tier files. Processing …\n")
+    for generation in range(9, 0, -1):
 
-    for rel_path in json_files:
-        url = BASE_URL + rel_path
-        print(f"→ {rel_path} … ", end="", flush=True)
+        url = BASE_URL + f"gen{generation}.json"
 
         try:
             data = requests.get(url, timeout=60).json()
@@ -179,8 +185,10 @@ def main():
             print(f"Error fetching {url}: {e}")
             continue
 
-        packed_rows = generate_packed_sets(data, rel_path[:4])
-        out_file = DEST_DIR / f"{Path(rel_path).stem}_packed.json"
+        packed_rows = generate_packed_sets(data, f"gen{generation}")
+
+        packed_rows = list(sorted(set(packed_rows)))  # Remove duplicates
+        out_file = DEST_DIR / f"gen{generation}/packed_sets.json"
         out_file.write_text(json.dumps(packed_rows, indent=2))
 
         print(f"{len(packed_rows):,} sets saved → {out_file}")
