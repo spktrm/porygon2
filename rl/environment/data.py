@@ -169,31 +169,36 @@ STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 ONEHOT_DTYPE = jnp.bfloat16
 
 
-# MASKS = {
-#     generation: {
-#         "species": jnp.asarray(
-#             np.load(
-#                 f"data/data/gen{generation}/species_mask.npy",
-#             )
-#         ).astype(ONEHOT_DTYPE),
-#         "abilities": jnp.asarray(
-#             np.load(
-#                 f"data/data/gen{generation}/ability_mask.npy",
-#             )
-#         ).astype(ONEHOT_DTYPE),
-#         "items": jnp.asarray(
-#             np.load(
-#                 f"data/data/gen{generation}/item_mask.npy",
-#             )
-#         ).astype(ONEHOT_DTYPE),
-#         "learnset": jnp.asarray(
-#             np.load(
-#                 f"data/data/gen{generation}/learnset_mask.npy",
-#             )
-#         ).astype(ONEHOT_DTYPE),
-#     }
-#     for generation in range(3, 10)
-# }
+MASKS = {
+    generation: {
+        "species": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/species_mask.npy",
+            )
+        ).astype(ONEHOT_DTYPE),
+        "abilities": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/ability_mask.npy",
+            )
+        ).astype(ONEHOT_DTYPE),
+        "items": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/item_mask.npy",
+            )
+        ).astype(ONEHOT_DTYPE),
+        "learnset": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/learnset_mask.npy",
+            )
+        ).astype(ONEHOT_DTYPE),
+        "duplicate": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/duplicate_mask.npy",
+            )
+        ),
+    }
+    for generation in range(3, 10)
+}
 
 
 SET_TOKENS = {

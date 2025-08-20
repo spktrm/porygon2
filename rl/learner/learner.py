@@ -632,6 +632,16 @@ class Learner:
                         self.builder_state,
                     )
 
+            except KeyboardInterrupt:
+                print("Training interrupted.")
+                save_train_state(
+                    self.wandb_run,
+                    self.learner_config,
+                    self.player_state,
+                    self.builder_state,
+                )
+                break
+
             except Exception as e:
                 traceback.print_exc()
                 if "RESOURCE_EXHAUSTED" in str(e):
@@ -652,3 +662,5 @@ class Learner:
                             f"No OOM for 60 minutes, doubling batch size to {batch_size}."
                         )
                     last_oom = time.time()
+
+        print("Training Finished.")

@@ -230,6 +230,13 @@ def get_builder_model_config(generation: int = 3) -> ConfigDict:
     cfg.transformer.need_pos = True
     cfg.dtype = dtype
 
+    cfg.pointer_logits = ConfigDict()
+    cfg.pointer_logits.key_size = entity_size // num_heads
+    cfg.pointer_logits.num_layers_query = 2
+    cfg.pointer_logits.num_layers_keys = 2
+    cfg.pointer_logits.use_layer_norm = True
+    cfg.pointer_logits.dtype = dtype
+
     return cfg
 
 

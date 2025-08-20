@@ -45,7 +45,13 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE, get_most_recent_file, get_num_params
+from rl.model.utils import (
+    BIAS_VALUE,
+    get_most_recent_file,
+    get_num_params,
+    legal_log_policy,
+    legal_policy,
+)
 from rl.utils import init_jax_jit_cache
 
 
@@ -89,8 +95,8 @@ class Porygon2BuilderModel(nn.Module):
         self.team_encoder = TransformerEncoder(**transformer_config)
         self.team_decoder = TransformerDecoder(**transformer_config)
 
-        self.species_head = MLP((entity_size, NUM_SPECIES), dtype=dtype)
-        self.packed_set_head = PointerLogits()
+        self.species_head = PointerLogits(**self.cfg.pointer_logits.to_dict())
+        self.packed_set_head = PointerLogits(**self.cfg.pointer_logits.to_dict())
         self.value_head = MLP((entity_size, 1), dtype=dtype)
 
     def _forward_head(
@@ -103,9 +109,9 @@ class Porygon2BuilderModel(nn.Module):
         """
         Samples a token from the embeddings using the policy head and returns the token, log probability, and entropy.
         """
-        species_logits = jnp.where(
-            species_mask, self.species_head(embedding), BIAS_VALUE
-        )
+        species_embeddings = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
+        species_logits = self.species_head(embedding[None], species_embeddings)
+        species_logits = jnp.where(species_mask, species_logits.reshape(-1), BIAS_VALUE)
 
         packed_sets = SET_TOKENS[self.cfg.generation]["ou"]
 
@@ -114,15 +120,11 @@ class Porygon2BuilderModel(nn.Module):
             species_token, np.arange(packed_sets.shape[1])
         )
 
-        col_mask = packed_set_mask[..., None]
-        col_mean = packed_set_embeddings.mean(where=col_mask, axis=0, keepdims=True)
-        col_std = packed_set_embeddings.std(where=col_mask, axis=0, keepdims=True)
-        packed_set_embeddings = (packed_set_embeddings - col_mean) / (col_std + 1e-8)
-        packed_set_logits = self.packed_set_head(embedding[None], packed_set_embeddings)
-
-        denom = np.sqrt(self.cfg.entity_size).astype(packed_set_logits.dtype)
+        packed_set_logits = self.packed_set_head(
+            embedding[None], packed_set_embeddings - embedding
+        )
         packed_set_logits = jnp.where(
-            packed_set_mask, packed_set_logits.squeeze(0) / denom, BIAS_VALUE
+            packed_set_mask, packed_set_logits.reshape(-1), BIAS_VALUE
         )
 
         return species_logits, packed_set_logits
@@ -346,6 +348,39 @@ def main(generation: int = 9):
         )
 
         print("value:", builder_trajectory.agent_output.actor_output.v)
+        print(
+            "species policy:",
+            jnp.take_along_axis(
+                legal_policy(
+                    builder_trajectory.agent_output.actor_output.species_logits
+                ),
+                builder_trajectory.agent_output.species[..., None],
+                axis=-1,
+            ).reshape(-1),
+        )
+        print(
+            "packed set policy:",
+            jnp.take_along_axis(
+                legal_policy(
+                    builder_trajectory.agent_output.actor_output.packed_set_logits
+                ),
+                builder_trajectory.agent_output.packed_set[..., None],
+                axis=-1,
+            ).reshape(-1),
+        )
+        print(
+            "entropy:",
+            (
+                legal_policy(
+                    builder_trajectory.agent_output.actor_output.packed_set_logits
+                )
+                * legal_log_policy(
+                    builder_trajectory.agent_output.actor_output.packed_set_logits
+                )
+            )
+            .sum(-1)
+            .reshape(-1),
+        )
         for st, pst in zip(
             builder_env_output.species_tokens, builder_env_output.packed_set_tokens
         ):
