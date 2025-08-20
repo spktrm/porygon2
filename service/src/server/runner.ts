@@ -358,6 +358,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
     }
 
+    serialize() {
+        return {
+            log: this.log,
+        };
+    }
+
     override async start() {
         for await (const chunk of this.stream) {
             if (chunk.includes("error|")) {

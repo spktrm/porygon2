@@ -42,7 +42,7 @@ def calculate_player_log_prob(
     action_type_log_prob = get_action_value(action_type_log_pi, action_type)
 
     move_log_prob = get_action_value(move_log_pi, move)
-    switch_prob = get_action_value(switch_log_pi, switch)
+    switch_log_prob = get_action_value(switch_log_pi, switch)
     wild_card_log_prob = get_action_value(wildcard_log_pi, wildcard)
 
     # safe selectors (avoid 0 * -inf -> NaN)
@@ -52,7 +52,7 @@ def calculate_player_log_prob(
     return (
         action_type_log_prob
         + jnp.where(is_move, move_log_prob + wild_card_log_prob, 0.0)
-        + jnp.where(is_sw_or_preview, switch_prob, 0.0)
+        + jnp.where(is_sw_or_preview, switch_log_prob, 0.0)
     )
 
 
@@ -83,6 +83,10 @@ def value_loss(pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     return 0.5 * average(mse_loss, valid)
 
 
+def entropy_loss(pi: jax.Array, log_pi: jax.Array) -> jax.Array:
+    return -jnp.sum(pi * log_pi, axis=-1)
+
+
 def player_entropy_loss(
     action_type_log_pi: jax.Array,  # T, B, 2
     action_type_pi: jax.Array,  # T, B, 2
@@ -94,13 +98,13 @@ def player_entropy_loss(
     switch_pi: jax.Array,  # T, B, 6
     valid: jax.Array,  # T, B
 ):
-    action_type_entropy = -jnp.sum(action_type_pi * action_type_log_pi, axis=-1)
+    action_type_entropy = entropy_loss(action_type_pi, action_type_log_pi)
 
-    wildcard_entropy = -jnp.sum(wildcard_pis * wildcard_log_pis, axis=-1)
-    move_entropy = -jnp.sum(move_pi * move_log_pi, axis=-1) + (
+    wildcard_entropy = entropy_loss(wildcard_pis, wildcard_log_pis)
+    move_entropy = entropy_loss(move_pi, move_log_pi) + (
         move_pi * wildcard_entropy
     ).sum(axis=-1)
-    switch_entropy = -jnp.sum(switch_pi * switch_log_pi, axis=-1)
+    switch_entropy = entropy_loss(switch_pi, switch_log_pi)
     sub_entropy = jnp.stack((move_entropy, switch_entropy, switch_entropy), axis=-1)
 
     total_entropy = action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
@@ -115,8 +119,8 @@ def builder_entropy_loss(
     pos: jax.Array,
     valid: jax.Array,
 ):
-    species_entropy = -jnp.sum(species_pi * species_log_pi, axis=-1)
-    packed_set_entropy = -jnp.sum(packed_set_pi * packed_set_log_pi, axis=-1)
+    species_entropy = entropy_loss(species_pi, species_log_pi)
+    packed_set_entropy = entropy_loss(packed_set_pi, packed_set_log_pi)
     loss = jnp.where(pos < 6, species_entropy, packed_set_entropy)
     return average(loss, valid)
 
@@ -314,10 +318,13 @@ def train_step(
         )
 
         loss = (
-            loss_pg
-            + config.value_loss_coef * loss_v
+            config.player_policy_loss_coef * loss_pg
+            + config.player_value_loss_coef * loss_v
             + ent_kl_coef_mult
-            * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
+            * (
+                config.player_kl_loss_coef * loss_kl
+                - config.player_entropy_loss_coef * loss_entropy
+            )
         )
         learner_actor_approx_kl = average(-learner_actor_log_ratio, player_valid)
         learner_target_approx_kl = average(-learner_target_log_ratio, player_valid)
@@ -464,10 +471,13 @@ def train_step(
         )
 
         builder_loss = (
-            loss_pg
-            + config.value_loss_coef * loss_v
+            config.builder_policy_loss_coef * loss_pg
+            + config.builder_value_loss_coef * loss_v
             + ent_kl_coef_mult
-            * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
+            * (
+                config.builder_kl_loss_coef * loss_kl
+                - config.builder_entropy_loss_coef * loss_entropy
+            )
         )
 
         return builder_loss, dict(

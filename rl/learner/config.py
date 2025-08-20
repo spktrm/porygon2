@@ -40,7 +40,7 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: int = 3
+    target_replay_ratio: float = 2.5
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
@@ -52,7 +52,7 @@ class Porygon2LearnerConfig:
     player_lambda_: float = 0.95
     player_gamma: float = 1.0
 
-    builder_lambda_: float = 0.95
+    builder_lambda_: float = 0.85
     builder_gamma: float = 1.0
 
     # Vtrace params
@@ -61,10 +61,15 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
 
     # Loss coefficients
-    value_loss_coef: float = 0.5
-    policy_loss_coef: float = 1.0
-    entropy_loss_coef: float = 0.05
-    kl_loss_coef: float = 0.05
+    player_value_loss_coef: float = 0.5
+    player_policy_loss_coef: float = 1.0
+    player_entropy_loss_coef: float = 0.05
+    player_kl_loss_coef: float = 0.05
+
+    builder_value_loss_coef: float = 0.5
+    builder_policy_loss_coef: float = 1.0
+    builder_entropy_loss_coef: float = 0.005
+    builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
@@ -219,6 +224,7 @@ def load_train_state(
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
     latest_ckpt = get_most_recent_file(save_path)
     if not latest_ckpt:
         return player_state, builder_state
