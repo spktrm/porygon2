@@ -209,7 +209,7 @@ def get_ex_builder_step(generation: int, smogon_format: str = "ou") -> BuilderEn
         species_mask=jnp.ones((1, 1, NUM_SPECIES), dtype=jnp.bool),
         species_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32)
         * SpeciesEnum.SPECIES_ENUM___UNK,
-        packed_set_mask=jnp.ones((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
+        packed_set_mask=jnp.zeros((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
         packed_set_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32) * -1,
         pos=jnp.zeros((1, 1), dtype=jnp.int32),
         done=jnp.ones((1, 1), dtype=jnp.bool),

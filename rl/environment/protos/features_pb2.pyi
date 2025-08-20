@@ -218,6 +218,8 @@ class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PACKED_SET_FEATURE__SPE_IV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__HIDDENPOWERTYPE: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__TERATYPE: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__LEVEL: _ClassVar[PackedSetFeature]
+    PACKED_SET_FEATURE__HAPPINESS: _ClassVar[PackedSetFeature]
 ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
 ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
 ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
@@ -406,3 +408,5 @@ PACKED_SET_FEATURE__SPD_IV: PackedSetFeature
 PACKED_SET_FEATURE__SPE_IV: PackedSetFeature
 PACKED_SET_FEATURE__HIDDENPOWERTYPE: PackedSetFeature
 PACKED_SET_FEATURE__TERATYPE: PackedSetFeature
+PACKED_SET_FEATURE__LEVEL: PackedSetFeature
+PACKED_SET_FEATURE__HAPPINESS: PackedSetFeature

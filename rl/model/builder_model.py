@@ -113,10 +113,16 @@ class Porygon2BuilderModel(nn.Module):
         packed_set_embeddings = _encode_sets(
             species_token, np.arange(packed_sets.shape[1])
         )
+
+        col_mask = packed_set_mask[..., None]
+        col_mean = packed_set_embeddings.mean(where=col_mask, axis=0, keepdims=True)
+        col_std = packed_set_embeddings.std(where=col_mask, axis=0, keepdims=True)
+        packed_set_embeddings = (packed_set_embeddings - col_mean) / (col_std + 1e-8)
         packed_set_logits = self.packed_set_head(embedding[None], packed_set_embeddings)
 
+        denom = np.sqrt(self.cfg.entity_size).astype(packed_set_logits.dtype)
         packed_set_logits = jnp.where(
-            packed_set_mask, packed_set_logits.squeeze(0), BIAS_VALUE
+            packed_set_mask, packed_set_logits.squeeze(0) / denom, BIAS_VALUE
         )
 
         return species_logits, packed_set_logits
