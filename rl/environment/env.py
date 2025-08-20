@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import NUM_SPECIES, SET_TOKENS
+from rl.environment.data import MASKS, SET_TOKENS
 from rl.environment.interfaces import BuilderAgentOutput, BuilderEnvOutput
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import PackedSetFeature
@@ -81,13 +81,14 @@ class TeamBuilderEnvironment:
         self.num_team_members = num_team_members
         self.max_ts = max_ts
 
-        self.masks = (
+        self.duplicate_masks = ~MASKS[generation]["duplicate"]
+        self.packed_set_masks = (
             SET_TOKENS[generation][smogon_format][
                 ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
             ]
             != SpeciesEnum.SPECIES_ENUM___NULL
         )
-        self.start_mask = self.masks.any(axis=-1)
+        self.start_mask = self.packed_set_masks.any(axis=-1)
 
         self.ex = get_ex_builder_step(
             generation=generation, smogon_format=smogon_format
@@ -123,7 +124,7 @@ class TeamBuilderEnvironment:
     def _step(
         self,
         species_token: jax.Array,
-        set_token: jax.Array,
+        packed_set_token: jax.Array,
         state: BuilderEnvOutput,
     ):
         next_set_mask = jax.nn.one_hot(
@@ -133,19 +134,22 @@ class TeamBuilderEnvironment:
             (state.pos < 6) & next_set_mask, species_token, state.species_tokens
         )
         next_packed_sets = jnp.where(
-            (state.pos >= 6) & next_set_mask, set_token, state.packed_set_tokens
+            (state.pos >= 6) & next_set_mask, packed_set_token, state.packed_set_tokens
         )
-        species_mask = state.species_mask & ~jax.nn.one_hot(
-            species_token, NUM_SPECIES, dtype=jnp.bool
+        next_pos = jnp.array(state.pos + 1)
+
+        species_mask = state.species_mask & self.duplicate_masks[species_token]
+        packed_set_mask = self.packed_set_masks[
+            next_species_tokens[next_pos % self.num_team_members]
+        ]
+        packed_set_mask = jnp.where(
+            (~packed_set_mask).all(keepdims=True), True, packed_set_mask
         )
 
-        next_pos = jnp.array(state.pos + 1)
         return BuilderEnvOutput(
             species_mask=species_mask,
             species_tokens=next_species_tokens,
-            packed_set_mask=self.masks[
-                next_species_tokens[next_pos % self.num_team_members]
-            ],
+            packed_set_mask=packed_set_mask,
             packed_set_tokens=next_packed_sets,
             pos=next_pos,
             done=jnp.array(next_pos >= self.max_ts),
