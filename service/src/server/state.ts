@@ -71,7 +71,7 @@ const MAX_RATIO_TOKEN = 16384;
 
 export function generateTeamFromFormat(format: string): string {
     const species2Sets = lookUpSets(format);
-    const validator = new TeamValidator(format);
+    const validator = new TeamValidator(format.replace("all_ou", "ou"));
 
     while (true) {
         const packedSets: Set<string> = new Set();
@@ -1121,7 +1121,8 @@ function getVolatileStatusToken(id: string): number {
                     );
                     haveAdded = true;
                 } else {
-                    throw err;
+                    console.log(id, err);
+                    return VolatilestatusEnum.VOLATILESTATUS_ENUM___UNK;
                 }
             }
         }

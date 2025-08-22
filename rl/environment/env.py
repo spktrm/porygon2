@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import MASKS, SET_TOKENS
+from rl.environment.data import DEFAULT_SMOGON_FORMAT, MASKS, SET_TOKENS
 from rl.environment.interfaces import BuilderAgentOutput, BuilderEnvOutput
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import PackedSetFeature
@@ -47,7 +47,7 @@ class SinglePlayerSyncEnvironment:
                 username=self.username,
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
-                smogon_format=f"gen{self.generation}ou",
+                smogon_format=f"gen{self.generation}{DEFAULT_SMOGON_FORMAT}",
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -72,11 +72,12 @@ class TeamBuilderEnvironment:
     def __init__(
         self,
         generation: int,
-        smogon_format: str = "ou",
+        smogon_format: str = DEFAULT_SMOGON_FORMAT,
         num_team_members: int = 6,
         max_ts: int = 12,
     ):
 
+        self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
         self.max_ts = max_ts

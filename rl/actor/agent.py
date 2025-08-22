@@ -15,7 +15,7 @@ from rl.environment.interfaces import (
     PlayerAgentOutput,
     SamplingConfig,
 )
-from rl.model.utils import BIAS_VALUE, Params
+from rl.model.utils import LARGE_NEGATIVE_BIAS, Params
 
 
 def sample_action(
@@ -32,7 +32,9 @@ def sample_action(
     policy = jax.nn.softmax(logits, axis=-1)
     if sampling_config.min_p is not None:
         logits = jnp.where(
-            policy >= (policy.max() * sampling_config.min_p), logits, BIAS_VALUE
+            policy >= (policy.max() * sampling_config.min_p),
+            logits,
+            LARGE_NEGATIVE_BIAS,
         )
     return jax.random.choice(
         rng_key,

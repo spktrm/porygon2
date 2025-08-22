@@ -52,7 +52,7 @@ class Porygon2LearnerConfig:
     player_lambda_: float = 0.95
     player_gamma: float = 1.0
 
-    builder_lambda_: float = 0.85
+    builder_lambda_: float = 0.90
     builder_gamma: float = 1.0
 
     # Vtrace params
@@ -68,7 +68,7 @@ class Porygon2LearnerConfig:
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.005
+    builder_entropy_loss_coef: float = 0.05
     builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation

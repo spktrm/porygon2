@@ -140,7 +140,16 @@ export const jsonDatum = transformJson(JSON.parse(fileContent));
 
 const sets: { [k: string]: Record<string, string[]> } = {};
 for (let i = 1; i <= 9; i++) {
-    for (const smogonFormat of ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]) {
+    for (const smogonFormat of [
+        "ubers",
+        "ou",
+        "all_ou",
+        "uu",
+        "ru",
+        "nu",
+        "pu",
+        "zu",
+    ]) {
         const data = fs.readFileSync(
             `../data/data/gen${i}/validated_packed_${smogonFormat}_sets.json`,
             "utf-8",

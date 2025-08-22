@@ -9,15 +9,16 @@ import jax.numpy as jnp
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
 
-BIAS_VALUE = -1e30
+
+LARGE_NEGATIVE_BIAS = -1e30
 
 
 def legal_policy(
-    logits: jax.Array, legal_actions: jax.Array | None = None
+    *, logits: jax.Array, legal_actions: jax.Array | None = None
 ) -> jax.Array:
     """A soft-max policy that respects legal_actions."""
     if legal_actions is None:
-        legal_actions = logits > BIAS_VALUE
+        legal_actions = logits > LARGE_NEGATIVE_BIAS
     chex.assert_equal_shape((logits, legal_actions), dims=(0, 1, -1))
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
     l_min = logits.min(axis=-1, keepdims=True)
@@ -32,11 +33,11 @@ def legal_policy(
 
 
 def legal_log_policy(
-    logits: jax.Array, legal_actions: jax.Array | None = None
+    *, logits: jax.Array, legal_actions: jax.Array | None = None
 ) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     if legal_actions is None:
-        legal_actions = logits > BIAS_VALUE
+        legal_actions = logits > LARGE_NEGATIVE_BIAS
     chex.assert_equal_shape((logits, legal_actions), dims=(0, 1, -1))
     # logits_masked has illegal actions set to -inf.
     logits_masked = logits + jnp.log(legal_actions)

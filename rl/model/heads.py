@@ -10,7 +10,7 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 class MoveHead(nn.Module):
@@ -46,11 +46,11 @@ class MoveHead(nn.Module):
         )
 
         move_logits = self.final_mlp(query_embeddings).reshape(-1)
-        masked_move_logits = jnp.where(query_mask, move_logits, BIAS_VALUE)
+        masked_move_logits = jnp.where(query_mask, move_logits, LARGE_NEGATIVE_BIAS)
 
         wildcard_logits = self.wildcard_head(query_embeddings)
         wildcard_masked_logits = jnp.where(
-            wildcard_mask[None], wildcard_logits, BIAS_VALUE
+            wildcard_mask[None], wildcard_logits, LARGE_NEGATIVE_BIAS
         )
 
         return masked_move_logits, wildcard_masked_logits
@@ -84,7 +84,7 @@ class PolicyHead(nn.Module):
         logits = self.final_mlp(query_embeddings)
         logits = logits.reshape(-1)
 
-        masked_logits = jnp.where(query_mask, logits, BIAS_VALUE)
+        masked_logits = jnp.where(query_mask, logits, LARGE_NEGATIVE_BIAS)
 
         return masked_logits
 

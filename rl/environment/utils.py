@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
+    DEFAULT_SMOGON_FORMAT,
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ACTION_MASK_FEATURES,
@@ -203,12 +204,14 @@ def get_ex_player_step() -> PlayerActorInput:
     return PlayerActorInput(env=ex, history=hx)
 
 
-def get_ex_builder_step(generation: int, smogon_format: str = "ou") -> BuilderEnvOutput:
+def get_ex_builder_step(
+    generation: int, smogon_format: str = DEFAULT_SMOGON_FORMAT
+) -> BuilderEnvOutput:
     set_tokens = SET_TOKENS[generation][smogon_format]
     return BuilderEnvOutput(
         species_mask=jnp.ones((1, 1, NUM_SPECIES), dtype=jnp.bool),
         species_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32)
-        * SpeciesEnum.SPECIES_ENUM___UNK,
+        * SpeciesEnum.SPECIES_ENUM___NULL,
         packed_set_mask=jnp.ones((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
         packed_set_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32) * -1,
         pos=jnp.zeros((1, 1), dtype=jnp.int32),
