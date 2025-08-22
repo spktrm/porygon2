@@ -76,12 +76,12 @@ async function runBattle() {
     const format = "gen9ou";
     const battleOptions = {
         p1Name: "Bot1",
-        p2Name: `Bot2`,
+        p2Name: `baseline-4`,
         // p1team: null,
         // p2team: null,
         // smogonFormat: "gen9randombattle",
         p1team: generateTeamFromFormat(format),
-        p2team: generateTeamFromFormat(format),
+        p2team: generateTeamFromFormat("gen9all_ou"),
         smogonFormat: format,
     };
     const { p1, p2 } = createBattle(battleOptions, false);

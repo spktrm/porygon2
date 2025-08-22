@@ -14,7 +14,7 @@ from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
-from rl.model.utils import BIAS_VALUE, get_most_recent_file
+from rl.model.utils import LARGE_NEGATIVE_BIAS, get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -22,7 +22,7 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 def restrict_values(arr: np.ndarray):
     if arr.dtype.name == "bfloat16":
-        return np.clip(arr, a_min=BIAS_VALUE, a_max=-BIAS_VALUE)
+        return np.clip(arr, a_min=LARGE_NEGATIVE_BIAS, a_max=-LARGE_NEGATIVE_BIAS)
     else:
         return np.nan_to_num(arr)
 

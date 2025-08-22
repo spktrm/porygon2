@@ -4,9 +4,10 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import ActionMaskFeature, FieldFeature
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -43,7 +44,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
             != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
         ),
         jnp.arange(valid.shape[0], dtype=jnp.int32)[:, None],
-        -BIAS_VALUE,
+        -LARGE_NEGATIVE_BIAS,
     ).min(axis=0)
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
@@ -58,6 +59,10 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
+        usage_counts=jnp.bincount(
+            batch.builder_transitions.agent_output.species[-1].reshape(-1),
+            length=NUM_SPECIES,
+        ),
     )
 
 

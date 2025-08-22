@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -238,7 +238,7 @@ class MultiHeadAttention(nn.Module):
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        attn_logits = jnp.where(mask, attn_logits, BIAS_VALUE)
+        attn_logits = jnp.where(mask, attn_logits, LARGE_NEGATIVE_BIAS)
         attn_weights = nn.softmax(attn_logits)
         attn_weights = jnp.where(mask, attn_weights, 0)
 
@@ -284,13 +284,13 @@ class FeedForward(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        ff_gate = nn.Dense(self.hidden_dim, use_bias=False, dtype=self.dtype)(x)
+        ff_gate = nn.Dense(self.hidden_dim, dtype=self.dtype)(x)
         gate_value = nn.gelu(ff_gate)
 
-        ff1 = nn.Dense(self.hidden_dim, use_bias=False, dtype=self.dtype)(x)
+        ff1 = nn.Dense(self.hidden_dim, dtype=self.dtype)(x)
         activations = gate_value * ff1
 
-        outputs = nn.Dense(x.shape[-1], use_bias=False, dtype=self.dtype)(activations)
+        outputs = nn.Dense(x.shape[-1], dtype=self.dtype)(activations)
         return outputs
 
 
@@ -306,34 +306,6 @@ class FeedForwardResidual(nn.Module):
         if self.post_ffw_norm:
             ffw = layer_norm(ffw, self.dtype)
         return x + ffw
-
-
-class PointerLogits(nn.Module):
-    """Pointer network logits."""
-
-    key_size: int = None
-    num_layers_query: int = 1
-    num_layers_keys: int = 1
-    use_layer_norm: bool = True
-    dtype: jnp.dtype = jnp.bfloat16
-
-    @nn.compact
-    def __call__(
-        self, query: jax.Array, keys: jax.Array, mask: jax.Array | None = None
-    ) -> jax.Array:
-
-        query = MLP(
-            (self.key_size or keys.shape[-1],) * self.num_layers_query,
-            use_layer_norm=self.use_layer_norm,
-            dtype=self.dtype,
-        )(query)
-        keys = MLP(
-            (self.key_size or keys.shape[-1],) * self.num_layers_keys,
-            use_layer_norm=self.use_layer_norm,
-            dtype=self.dtype,
-        )(keys)
-
-        return jnp.einsum("ij,kj->ik", query, keys)
 
 
 class TransformerEncoder(nn.Module):
@@ -518,7 +490,6 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int]
     use_layer_norm: bool = True
-    activate_first: bool = True
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -537,15 +508,11 @@ class MLP(nn.Module):
         else:
             layer_sizes = self.layer_sizes
 
-        for layer_index, size in enumerate(layer_sizes):
-            if layer_index == 0 and not self.activate_first:
-                # Skip layer normalization and activation for the first layer
-                x = nn.Dense(size, dtype=self.dtype)(x)
-            else:
-                if self.use_layer_norm:
-                    x = layer_norm(x, self.dtype)
-                x = activation_fn(x)
-                x = nn.Dense(size, dtype=self.dtype)(x)
+        for size in layer_sizes:
+            if self.use_layer_norm:
+                x = layer_norm(x, self.dtype)
+            x = activation_fn(x)
+            x = nn.Dense(size, dtype=self.dtype)(x)
         return x
 
 

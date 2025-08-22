@@ -201,6 +201,7 @@ MASKS = {
 }
 
 
+DEFAULT_SMOGON_FORMAT = "all_ou"
 SET_TOKENS = {
     generation: {
         smogon_format: jnp.asarray(
@@ -208,7 +209,7 @@ SET_TOKENS = {
                 f"data/data/gen{generation}/validated_packed_{smogon_format}_sets.npy",
             )
         )
-        for smogon_format in ["ou"]
+        for smogon_format in [DEFAULT_SMOGON_FORMAT]
     }
     for generation in range(3, 10)
 }
