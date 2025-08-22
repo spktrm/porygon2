@@ -86,12 +86,12 @@ class Porygon2BuilderModel(nn.Module):
 
         self.proj_species_linear = nn.Dense(
             name="proj_species",
-            kernel_init=nn.initializers.normal(5e-3),
+            kernel_init=nn.initializers.normal(2e-3),
             **dense_kwargs,
         )
         self.proj_packed_set_linear = nn.Dense(
             name="proj_packed_set",
-            kernel_init=nn.initializers.normal(5e-3),
+            kernel_init=nn.initializers.normal(2e-3),
             **dense_kwargs,
         )
 
@@ -447,6 +447,7 @@ def main(generation: int = 9):
             builder_env_output.packed_set_tokens.reshape(-1).tolist(),
         ):
             print(packed_sets[all_species[st]][pst])
+
         print()
 
 
