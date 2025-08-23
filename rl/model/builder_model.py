@@ -24,6 +24,7 @@ from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
     BuilderTransition,
+    SamplingConfig,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -41,6 +42,7 @@ from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
+    activation_fn,
     create_attention_mask,
     one_hot_concat_jax,
 )
@@ -79,27 +81,27 @@ class Porygon2BuilderModel(nn.Module):
 
         dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
-        self.species_linear = nn.Dense(name="species_linear", **dense_kwargs)
-        self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
-        self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
-        self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
+        self.species_linear = nn.Dense(
+            name="species_linear", use_bias=False, **dense_kwargs
+        )
+        self.items_linear = nn.Dense(
+            name="items_linear", use_bias=False, **dense_kwargs
+        )
+        self.abilities_linear = nn.Dense(
+            name="abilities_linear", use_bias=False, **dense_kwargs
+        )
+        self.moves_linear = nn.Dense(
+            name="moves_linear", use_bias=False, **dense_kwargs
+        )
 
-        self.proj_species_linear = nn.Dense(
-            name="proj_species",
-            kernel_init=nn.initializers.normal(2e-3),
-            **dense_kwargs,
-        )
-        self.proj_packed_set_linear = nn.Dense(
-            name="proj_packed_set",
-            kernel_init=nn.initializers.normal(2e-3),
-            **dense_kwargs,
-        )
+        self.proj_species_linear = nn.Dense(name="proj_species", **dense_kwargs)
+        self.proj_packed_set_linear = nn.Dense(name="proj_packed_set", **dense_kwargs)
 
         self.packed_set_sum = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_ff = FeedForwardResidual(entity_size, dtype=dtype)
 
-        self.species_ln = RMSNorm(dtype=dtype)
-        self.packed_set_ln = RMSNorm(dtype=dtype)
+        self.proj_species_ln = RMSNorm(dtype=dtype)
+        self.proj_packed_set_ln = RMSNorm(dtype=dtype)
         self.final_species_ln = RMSNorm(dtype=dtype)
         self.final_packed_set_ln = RMSNorm(dtype=dtype)
 
@@ -227,24 +229,26 @@ class Porygon2BuilderModel(nn.Module):
             move_encodings.sum(axis=0),
             jnp.concatenate((evs, ivs), axis=-1),
         )
-        embedding = self.packed_set_ff(embedding)
-
-        return self.packed_set_ln(embedding)
+        return self.packed_set_ff(embedding)
 
     def _decode_species(self, species_token: jax.Array):
-        return self.proj_species_linear(
-            self.species_ln(self._embed_species(species_token))
-        )
+        embedding = self._embed_species(species_token)
+        embedding = self.proj_species_ln(embedding)
+        embedding = activation_fn(embedding)
+        return self.proj_species_linear(embedding)
 
     def _decode_packed_set(self, species_token: jax.Array, packed_set_token: jax.Array):
-        return self.proj_packed_set_linear(
-            self._embed_packed_set(species_token, packed_set_token)
-        )
+        embedding = self._embed_packed_set(species_token, packed_set_token)
+        embedding = self.proj_packed_set_ln(embedding)
+        embedding = activation_fn(embedding)
+        return self.proj_packed_set_linear(embedding)
 
     def _forward_species_head(self, query: jax.Array, species_mask: jax.Array):
         keys = jax.vmap(self._decode_species)(np.arange(NUM_SPECIES))
         query = self.final_species_ln(query)
-        species_logits = jnp.einsum("i,ki->k", query, keys)
+        species_logits = jnp.einsum("i,ki->k", query, keys) / (
+            np.sqrt(self.cfg.entity_size).astype(self.cfg.dtype)
+        )
         return jnp.where(species_mask, species_logits, LARGE_NEGATIVE_BIAS)
 
     def _forward_packed_set_head(
@@ -255,12 +259,10 @@ class Porygon2BuilderModel(nn.Module):
             species_token, np.arange(packed_sets.shape[1])
         )
         query = self.final_packed_set_ln(query)
-        packed_set_logits = jnp.einsum("i,ki->k", query, keys)
-        packed_set_logits = jnp.where(
-            packed_set_mask, packed_set_logits, LARGE_NEGATIVE_BIAS
+        packed_set_logits = jnp.einsum("i,ki->k", query, keys) / (
+            np.sqrt(self.cfg.entity_size).astype(self.cfg.dtype)
         )
-
-        return packed_set_logits
+        return jnp.where(packed_set_mask, packed_set_logits, LARGE_NEGATIVE_BIAS)
 
     def _forward(self, env_input: BuilderEnvOutput) -> BuilderAgentOutput:
         """Autoregressively generates a team and returns (tokens, log_pi)."""
@@ -278,12 +280,12 @@ class Porygon2BuilderModel(nn.Module):
         set_embeddings = jax.vmap(self._embed_packed_set)(species, packed_sets)
 
         pred_species_embeddings = self.species_encoder(
-            self.species_ln(species_embeddings),
+            self.proj_species_ln(species_embeddings),
             create_attention_mask(species_attn_mask),
             position_indices,
         )
         pred_packed_set_embeddings = self.team_encoder(
-            set_embeddings,
+            self.proj_packed_set_ln(set_embeddings),
             create_attention_mask(packed_set_attn_mask),
             position_indices,
         )
@@ -357,7 +359,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
-        # builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
+        builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation)
@@ -407,20 +409,22 @@ def main(generation: int = 9):
             log_pi = legal_log_policy(logits=logits)
             return jnp.sum(pi * log_pi, axis=axis).reshape(-1)
 
-        print("value:", builder_trajectory.agent_output.actor_output.v)
+        print(
+            "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
+        )
         print(
             "species policy:",
             _get_values_along_axis(
                 logits=builder_trajectory.agent_output.actor_output.species_logits,
                 actions=builder_trajectory.agent_output.species,
-            )[:6],
+            )[:6].astype(jnp.float32),
         )
         print(
             "packed set policy:",
             _get_values_along_axis(
                 logits=builder_trajectory.agent_output.actor_output.packed_set_logits,
                 actions=builder_trajectory.agent_output.packed_set,
-            )[6:-1],
+            )[6:-1].astype(jnp.float32),
         )
 
         species_entropy = _get_entropy(
@@ -437,9 +441,13 @@ def main(generation: int = 9):
             builder_trajectory.env_output.packed_set_mask.sum(-1)
         )
 
-        print("species entropy:", (species_entropy / max_species_entropy)[:6])
         print(
-            "packed set entropy:", (packed_set_entropy / max_packed_set_entropy)[6:-1]
+            "species entropy:",
+            (species_entropy / max_species_entropy)[:6].astype(jnp.float32),
+        )
+        print(
+            "packed set entropy:",
+            (packed_set_entropy / max_packed_set_entropy)[6:-1].astype(jnp.float32),
         )
 
         for st, pst in zip(

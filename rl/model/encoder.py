@@ -191,11 +191,21 @@ class Encoder(nn.Module):
         )
 
         # Initialize linear layers for encoding various entity features.
-        self.species_linear = nn.Dense(name="species_linear", **dense_kwargs)
-        self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
-        self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
-        self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
-        self.learnset_linear = nn.Dense(name="learnset_linear", **dense_kwargs)
+        self.species_linear = nn.Dense(
+            name="species_linear", use_bias=False, **dense_kwargs
+        )
+        self.items_linear = nn.Dense(
+            name="items_linear", use_bias=False, **dense_kwargs
+        )
+        self.abilities_linear = nn.Dense(
+            name="abilities_linear", use_bias=False, **dense_kwargs
+        )
+        self.moves_linear = nn.Dense(
+            name="moves_linear", use_bias=False, **dense_kwargs
+        )
+        self.learnset_linear = nn.Dense(
+            name="learnset_linear", use_bias=False, **dense_kwargs
+        )
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
