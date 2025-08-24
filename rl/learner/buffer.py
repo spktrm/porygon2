@@ -68,7 +68,7 @@ class ReplayBuffer:
             ),
         )
 
-        return jax.device_put(clipped_trajectory)
+        return clipped_trajectory
 
 
 class ReplayRatioController:

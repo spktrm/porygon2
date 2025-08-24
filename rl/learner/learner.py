@@ -1,4 +1,5 @@
 import functools
+import queue
 import threading
 import time
 import traceback
@@ -609,6 +610,8 @@ class Learner:
         self.wandb_run = wandb_run
         self.gpu_lock = gpu_lock
         self.num_samples = num_samples
+        self.done = False
+        self.device_q = queue.Queue(maxsize=1)
 
         self.wandb_run.log_code("inference/")
         self.wandb_run.log_code(
@@ -627,17 +630,31 @@ class Learner:
             jax.device_get(self.builder_state.params),
         )
 
+    def host_to_device_worker(self):
+        """Elementary data pipeline."""
+
+        while not self.done:
+            # Try to get a batch. Skip the iteration if we couldn't.
+            batch = self.replay_buffer.sample(self.learner_config.batch_size)
+            self.device_q.put(jax.device_put(batch))
+
     def train(self):
         consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         train_progress = tqdm(desc="batches", smoothing=0.1)
         batch_size = self.learner_config.batch_size
         last_oom = time.time()
 
+        self.controller.learner_wait()
+
+        transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        transfer_thread.start()
+
         for _ in range(self.learner_config.num_steps):
             try:
                 self.controller.learner_wait()
 
-                batch = self.replay_buffer.sample(batch_size)
+                batch = self.device_q.get()
+
                 with self.gpu_lock:
                     self.player_state, self.builder_state, logs = train_step(
                         self.player_state,
@@ -711,4 +728,6 @@ class Learner:
                         )
                     last_oom = time.time()
 
+        self.done = True
+        transfer_thread.join()
         print("Training Finished.")
