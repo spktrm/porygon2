@@ -259,7 +259,16 @@ function generateSets(args: {
         }
 
         const speciesPackedSets = new Set<string>();
-        for (const [setsFormat, namedSets] of Object.entries(speciesSets)) {
+        for (const setsFormat of [
+            "ubers",
+            "ou",
+            "uu",
+            "ru",
+            "nu",
+            "pu",
+            "monotype",
+        ]) {
+            const namedSets = speciesSets[setsFormat] ?? {};
             if (!filterFormat || filterFormat === setsFormat) {
                 for (const [
                     setName,

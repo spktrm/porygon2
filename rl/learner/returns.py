@@ -159,14 +159,14 @@ def compute_returns(
     clip_rho_threshold,
     clip_pg_rho_threshold,
 ) -> VTraceOutput:
-    with jax.default_device(jax.devices("cpu")[0]):
-        return jax.vmap(
-            functools.partial(
-                vtrace_td_error_and_advantage,
-                lambda_=lambda_,
-                clip_rho_threshold=clip_rho_threshold,
-                clip_pg_rho_threshold=clip_pg_rho_threshold,
-            ),
-            in_axes=1,
-            out_axes=1,
-        )(v_tm1, v_t, rewards, discount_t, rho_tm1)
+    # with jax.default_device(jax.devices("cpu")[0]):
+    return jax.vmap(
+        functools.partial(
+            vtrace_td_error_and_advantage,
+            lambda_=lambda_,
+            clip_rho_threshold=clip_rho_threshold,
+            clip_pg_rho_threshold=clip_pg_rho_threshold,
+        ),
+        in_axes=1,
+        out_axes=1,
+    )(v_tm1, v_t, rewards, discount_t, rho_tm1)

@@ -510,6 +510,10 @@ class Encoder(nn.Module):
             move_encodings.sum(axis=0),
         )
 
+        embedding = embedding / (
+            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
+        )
+
         # Apply mask to filter out invalid entities.
         mask = get_entity_mask(entity)
         embedding = mask * embedding
@@ -620,6 +624,10 @@ class Encoder(nn.Module):
             effect_from_source_embedding,
         )
 
+        embedding = embedding / (
+            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
+        )
+
         mask = (
             edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
             != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
@@ -720,6 +728,10 @@ class Encoder(nn.Module):
                 to_encode=edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE],
                 world_dim=32,
             ),
+        )
+
+        embedding = embedding / (
+            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
         )
 
         # Apply mask to filter out invalid edges.
@@ -827,6 +839,10 @@ class Encoder(nn.Module):
             boolean_code,
             entity_embedding,
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
+        )
+
+        embedding = embedding / (
+            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
         )
 
         return embedding

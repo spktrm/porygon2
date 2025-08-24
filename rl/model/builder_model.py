@@ -20,11 +20,9 @@ from rl.environment.data import (
 )
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
+    BuilderActorInput,
     BuilderActorOutput,
-    BuilderAgentOutput,
-    BuilderEnvOutput,
     BuilderTransition,
-    SamplingConfig,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -48,6 +46,7 @@ from rl.model.modules import (
 )
 from rl.model.utils import (
     LARGE_NEGATIVE_BIAS,
+    get_most_recent_file,
     get_num_params,
     legal_log_policy,
     legal_policy,
@@ -94,14 +93,9 @@ class Porygon2BuilderModel(nn.Module):
             name="moves_linear", use_bias=False, **dense_kwargs
         )
 
-        self.proj_species_linear = nn.Dense(name="proj_species", **dense_kwargs)
-        self.proj_packed_set_linear = nn.Dense(name="proj_packed_set", **dense_kwargs)
-
         self.packed_set_sum = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_ff = FeedForwardResidual(entity_size, dtype=dtype)
 
-        self.proj_species_ln = RMSNorm(dtype=dtype)
-        self.proj_packed_set_ln = RMSNorm(dtype=dtype)
         self.final_species_ln = RMSNorm(dtype=dtype)
         self.final_packed_set_ln = RMSNorm(dtype=dtype)
 
@@ -170,6 +164,11 @@ class Porygon2BuilderModel(nn.Module):
         )
         move_encodings = jax.vmap(self._embed_move)(move_tokens)
 
+        species_token = jnp.where(
+            is_mask,
+            SpeciesEnum.SPECIES_ENUM___UNK,
+            packed_set[PackedSetFeature.PACKED_SET_FEATURE__SPECIES],
+        )
         ability_token = jnp.where(
             is_mask,
             AbilitiesEnum.ABILITIES_ENUM___UNK,
@@ -243,90 +242,99 @@ class Porygon2BuilderModel(nn.Module):
         embedding = activation_fn(embedding)
         return self.proj_packed_set_linear(embedding)
 
-    def _forward_species_head(self, query: jax.Array, species_mask: jax.Array):
-        keys = jax.vmap(self._decode_species)(np.arange(NUM_SPECIES))
-        query = self.final_species_ln(query)
-        species_logits = jnp.einsum("i,ki->k", query, keys) / (
-            np.sqrt(self.cfg.entity_size).astype(self.cfg.dtype)
-        )
+    def _forward_species_head(
+        self, queries: jax.Array, keys: jax.Array, species_mask: jax.Array
+    ):
+        queries = self.final_species_ln(queries)
+        keys = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-6)
+
+        species_logits = jnp.einsum("ij,kj->ik", queries, keys)
+
         return jnp.where(species_mask, species_logits, LARGE_NEGATIVE_BIAS)
 
     def _forward_packed_set_head(
-        self, species_token: jax.Array, query: jax.Array, packed_set_mask: jax.Array
+        self, queries: jax.Array, species_token: jax.Array, packed_set_mask: jax.Array
     ):
         packed_sets = SET_TOKENS[self.cfg.generation][DEFAULT_SMOGON_FORMAT]
-        keys = jax.vmap(self._decode_packed_set, in_axes=(None, 0))(
-            species_token, np.arange(packed_sets.shape[1])
-        )
-        query = self.final_packed_set_ln(query)
-        packed_set_logits = jnp.einsum("i,ki->k", query, keys) / (
-            np.sqrt(self.cfg.entity_size).astype(self.cfg.dtype)
-        )
+        keys = jax.vmap(
+            jax.vmap(self._embed_packed_set, in_axes=(None, 0)), in_axes=(0, None)
+        )(species_token, np.arange(packed_sets.shape[1]))
+        keys = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-6)
+        queries = self.final_packed_set_ln(queries)
+
+        packed_set_logits = jnp.einsum("ij,ikj->ik", queries, keys)
+
         return jnp.where(packed_set_mask, packed_set_logits, LARGE_NEGATIVE_BIAS)
 
-    def _forward(self, env_input: BuilderEnvOutput) -> BuilderAgentOutput:
-        """Autoregressively generates a team and returns (tokens, log_pi)."""
-        num_tokens = env_input.species_tokens.shape[-1]
-        position_indices = jnp.arange(num_tokens, dtype=jnp.int32)
+    def __call__(self, actor_input: BuilderActorInput) -> BuilderActorOutput:
 
-        species = env_input.species_tokens
-        packed_sets = env_input.packed_set_tokens
+        num_tokens = actor_input.history.species_tokens.shape[-1]
 
-        species_attn_mask = packed_set_attn_mask = jnp.ones_like(
-            position_indices, dtype=jnp.bool
+        species = actor_input.history.species_tokens
+        packed_sets = actor_input.history.packed_set_tokens
+
+        lower_tri_mask = jnp.expand_dims(
+            jnp.tril(jnp.ones((num_tokens, num_tokens), dtype=jnp.bool)), axis=0
         )
+        species_attn_mask = jnp.ones_like(species, dtype=jnp.bool)
+        packed_set_attn_mask = jnp.ones_like(packed_sets, dtype=jnp.bool)
 
         species_embeddings = jax.vmap(self._embed_species)(species)
+        species_embeddings = species_embeddings / (
+            jnp.linalg.norm(species_embeddings, axis=-1, keepdims=True) + 1e-6
+        )
+
         set_embeddings = jax.vmap(self._embed_packed_set)(species, packed_sets)
+        set_embeddings = set_embeddings / (
+            jnp.linalg.norm(set_embeddings, axis=-1, keepdims=True) + 1e-6
+        )
 
         pred_species_embeddings = self.species_encoder(
-            self.proj_species_ln(species_embeddings),
-            create_attention_mask(species_attn_mask),
-            position_indices,
+            species_embeddings,
+            lower_tri_mask & create_attention_mask(species_attn_mask),
         )
         pred_packed_set_embeddings = self.team_encoder(
-            self.proj_packed_set_ln(set_embeddings),
-            create_attention_mask(packed_set_attn_mask),
-            position_indices,
+            set_embeddings,
+            lower_tri_mask & create_attention_mask(packed_set_attn_mask),
         )
 
         pred_species_embeddings = self.species_decoder(
             pred_species_embeddings,
             pred_packed_set_embeddings,
-            create_attention_mask(species_attn_mask, packed_set_attn_mask),
+            lower_tri_mask
+            & create_attention_mask(species_attn_mask, packed_set_attn_mask),
         )
         pred_packed_set_embeddings = self.team_decoder(
             pred_packed_set_embeddings,
             pred_species_embeddings,
-            create_attention_mask(packed_set_attn_mask, species_attn_mask),
+            lower_tri_mask
+            & create_attention_mask(packed_set_attn_mask, species_attn_mask),
         )
 
-        pos = env_input.pos % 6
+        position = actor_input.env.pos % num_tokens
+        pred_embedding = (
+            jnp.take(pred_species_embeddings, position, axis=0)
+            + jnp.take(pred_packed_set_embeddings, position, axis=0)
+        ).reshape(-1, self.cfg.entity_size)
+
+        species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
 
         species_logits = self._forward_species_head(
-            jnp.take(pred_species_embeddings, pos, axis=0),
-            env_input.species_mask,
-        )
-        packed_set_logits = self._forward_packed_set_head(
-            species[pos],
-            jnp.take(pred_packed_set_embeddings, pos, axis=0),
-            env_input.packed_set_mask,
+            pred_embedding, species_keys, actor_input.env.species_mask
         )
 
-        pooled_species = pred_species_embeddings.mean(
-            where=species_attn_mask[..., None], axis=0
+        current_species = jnp.take(species, position, axis=0)
+        packed_set_logits = self._forward_packed_set_head(
+            pred_embedding,
+            current_species,
+            actor_input.env.packed_set_mask,
         )
-        pooled_packed_sets = pred_packed_set_embeddings.mean(
-            where=packed_set_attn_mask[..., None], axis=0
-        )
-        value = jnp.tanh(self.value_head(pooled_species + pooled_packed_sets)).squeeze()
+
+        value = jnp.tanh(self.value_head(pred_embedding)).squeeze(-1)
 
         return BuilderActorOutput(
             species_logits=species_logits, packed_set_logits=packed_set_logits, v=value
         )
-
-    def __call__(self, input: BuilderEnvOutput) -> BuilderAgentOutput:
-        return jax.vmap(self._forward)(input)
 
 
 def get_builder_model(config: ConfigDict = None) -> nn.Module:
@@ -346,7 +354,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
@@ -359,7 +367,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
-        builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
+        # builder_sampling_config=SamplingConfig(temp=1, min_p=0.05),
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation)
@@ -378,18 +386,19 @@ def main(generation: int = 9):
 
         build_traj = []
 
-        builder_env_output = builder_env.reset()
+        builder_actor_input = builder_env.reset()
         for i in range(builder_subkeys.shape[0]):
             builder_agent_output = agent.step_builder(
-                builder_subkeys[i], params, builder_env_output
+                builder_subkeys[i], params, builder_actor_input
             )
             builder_transition = BuilderTransition(
-                env_output=builder_env_output, agent_output=builder_agent_output
+                env_output=builder_actor_input.env,
+                agent_output=builder_agent_output,
             )
             build_traj.append(builder_transition)
-            if builder_env_output.done.item():
+            if builder_actor_input.env.done.item():
                 break
-            builder_env_output = builder_env.step(builder_agent_output)
+            builder_actor_input = builder_env.step(builder_agent_output)
 
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.stack(xs), *build_traj
@@ -407,7 +416,7 @@ def main(generation: int = 9):
         def _get_entropy(logits: jax.Array, axis: int = -1):
             pi = legal_policy(logits=logits)
             log_pi = legal_log_policy(logits=logits)
-            return jnp.sum(pi * log_pi, axis=axis).reshape(-1)
+            return jnp.sum(pi * log_pi, axis=axis)
 
         print(
             "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
@@ -430,16 +439,18 @@ def main(generation: int = 9):
         species_entropy = _get_entropy(
             logits=builder_trajectory.agent_output.actor_output.species_logits
         )
-        max_species_entropy = jnp.log(
-            builder_trajectory.env_output.species_mask.sum(-1)
-        )
+        species_mask_sum = builder_trajectory.env_output.species_mask.sum(-1)
+        max_species_entropy = jnp.log(species_mask_sum) + (
+            species_mask_sum <= 0
+        ).astype(jnp.float32)
 
         packed_set_entropy = _get_entropy(
             logits=builder_trajectory.agent_output.actor_output.packed_set_logits
         )
-        max_packed_set_entropy = jnp.log(
-            builder_trajectory.env_output.packed_set_mask.sum(-1)
-        )
+        packed_set_mask_sum = builder_trajectory.env_output.packed_set_mask.sum(-1)
+        max_packed_set_entropy = jnp.log(packed_set_mask_sum) + (
+            packed_set_mask_sum <= 1
+        ).astype(jnp.float32)
 
         print(
             "species entropy:",
@@ -451,8 +462,8 @@ def main(generation: int = 9):
         )
 
         for st, pst in zip(
-            builder_env_output.species_tokens.reshape(-1).tolist(),
-            builder_env_output.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
         ):
             print(packed_sets[all_species[st]][pst])
 

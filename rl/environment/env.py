@@ -5,7 +5,12 @@ import jax.numpy as jnp
 from websockets.sync.client import connect
 
 from rl.environment.data import DEFAULT_SMOGON_FORMAT, MASKS, SET_TOKENS
-from rl.environment.interfaces import BuilderAgentOutput, BuilderEnvOutput
+from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderAgentOutput,
+    BuilderEnvOutput,
+    BuilderHistoryOutput,
+)
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import (
@@ -95,15 +100,15 @@ class TeamBuilderEnvironment:
             generation=generation, smogon_format=smogon_format
         )
 
-        self.state: BuilderEnvOutput
+        self.state: BuilderActorInput
         self.reset()
 
-    def reset(self) -> BuilderEnvOutput:
+    def reset(self) -> BuilderActorInput:
         self.state = self._reset()
         return self.state
 
-    def step(self, agent_output: BuilderAgentOutput) -> BuilderEnvOutput:
-        if self.state.done.item():
+    def step(self, agent_output: BuilderAgentOutput) -> BuilderActorInput:
+        if self.state.env.done.item():
             return self.state
         self.state = self._step(
             agent_output.species, agent_output.packed_set, self.state
@@ -112,13 +117,16 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self):
-        return BuilderEnvOutput(
-            species_mask=self.start_mask,
-            species_tokens=jnp.squeeze(self.ex.species_tokens),
-            packed_set_mask=jnp.squeeze(self.ex.packed_set_mask),
-            packed_set_tokens=jnp.squeeze(self.ex.packed_set_tokens),
-            pos=jnp.array(0),
-            done=jnp.array(False),
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=self.start_mask,
+                packed_set_mask=jnp.ones(
+                    self.packed_set_masks.shape[1], dtype=jnp.bool
+                ),
+                pos=jnp.array(0, dtype=jnp.int32),
+                done=jnp.array(0, dtype=jnp.bool),
+            ),
+            history=jax.tree.map(lambda x: jnp.squeeze(x, axis=1), self.ex.history),
         )
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -126,20 +134,28 @@ class TeamBuilderEnvironment:
         self,
         species_token: jax.Array,
         packed_set_token: jax.Array,
-        state: BuilderEnvOutput,
+        state: BuilderActorInput,
     ):
-        next_set_mask = jax.nn.one_hot(
-            state.pos % self.num_team_members, self.num_team_members, dtype=jnp.bool
+        pos = state.env.pos
+
+        pos_one_hot = jax.nn.one_hot(
+            pos % self.num_team_members, self.num_team_members, dtype=jnp.bool
         )
+        pos_one_hot = jnp.where(state.env.done, 0, pos_one_hot)
+
+        env = state.env
+        history = state.history
+
         next_species_tokens = jnp.where(
-            (state.pos < 6) & next_set_mask, species_token, state.species_tokens
+            (pos < 6) & pos_one_hot, species_token, history.species_tokens
         )
         next_packed_sets = jnp.where(
-            (state.pos >= 6) & next_set_mask, packed_set_token, state.packed_set_tokens
+            (pos >= 6) & pos_one_hot, packed_set_token, history.packed_set_tokens
         )
-        next_pos = jnp.array(state.pos + 1)
 
-        species_mask = state.species_mask & self.duplicate_masks[species_token]
+        next_pos = pos + 1
+        species_mask = env.species_mask & self.duplicate_masks[species_token]
+
         packed_set_mask = self.packed_set_masks[
             next_species_tokens[next_pos % self.num_team_members]
         ]
@@ -147,11 +163,15 @@ class TeamBuilderEnvironment:
             (~packed_set_mask).all(keepdims=True), True, packed_set_mask
         )
 
-        return BuilderEnvOutput(
-            species_mask=species_mask,
-            species_tokens=next_species_tokens,
-            packed_set_mask=packed_set_mask,
-            packed_set_tokens=next_packed_sets,
-            pos=next_pos,
-            done=jnp.array(next_pos >= self.max_ts),
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=species_mask,
+                packed_set_mask=packed_set_mask,
+                pos=next_pos,
+                done=next_pos >= self.max_ts,
+            ),
+            history=BuilderHistoryOutput(
+                species_tokens=next_species_tokens,
+                packed_set_tokens=next_packed_sets,
+            ),
         )

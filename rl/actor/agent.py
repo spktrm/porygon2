@@ -7,6 +7,7 @@ import jax.numpy as jnp
 
 from rl.concurrency.lock import NoOpLock
 from rl.environment.interfaces import (
+    BuilderActorInput,
     BuilderActorOutput,
     BuilderAgentOutput,
     BuilderEnvOutput,
@@ -96,11 +97,12 @@ class Agent:
     ) -> BuilderAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_builder(
-        self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
+        self, rng_key: jax.Array, params: Params, actor_input: BuilderActorInput
     ) -> BuilderAgentOutput:
 
-        actor_input: BuilderEnvOutput = jax.tree.map(
-            lambda x: x[None, None, ...], actor_input
+        actor_input: BuilderActorInput = BuilderActorInput(
+            env=jax.tree.map(lambda x: x[None, None, ...], actor_input.env),
+            history=jax.tree.map(lambda x: x[:, None, ...], actor_input.history),
         )
 
         actor_output = self._builder_apply_fn(params, actor_input)

@@ -371,8 +371,12 @@ def train_step(
             ),
         )
 
+    builder_actor_input = PlayerActorInput(
+        env=batch.builder_transitions.env_output, history=batch.builder_history
+    )
+
     target_builder_output = builder_state.apply_fn(
-        builder_state.target_params, batch.builder_transitions.env_output
+        builder_state.target_params, builder_actor_input
     )
 
     target_builder_log_prob = calculate_builder_log_prob(
@@ -432,9 +436,7 @@ def train_step(
 
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        learner_builder_output = builder_state.apply_fn(
-            params, batch.builder_transitions.env_output
-        )
+        learner_builder_output = builder_state.apply_fn(params, builder_actor_input)
         learner_builder_species_log_pi = legal_log_policy(
             logits=batch.builder_transitions.agent_output.actor_output.species_logits,
             legal_actions=batch.builder_transitions.env_output.species_mask,

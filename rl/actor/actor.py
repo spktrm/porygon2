@@ -75,28 +75,29 @@ class Actor:
         build_traj = []
 
         # Reset the builder environment.
-        builder_env_output = self._builder_env.reset()
+        builder_actor_input = self._builder_env.reset()
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
                 builder_params,
-                builder_env_output,
+                builder_actor_input,
             )
             builder_transition = BuilderTransition(
-                env_output=builder_env_output, agent_output=builder_agent_output
+                env_output=builder_actor_input.env,
+                agent_output=builder_agent_output,
             )
             build_traj.append(builder_transition)
-            if builder_env_output.done.item():
+            if builder_actor_input.env.done.item():
                 break
-            builder_env_output = self._builder_env.step(builder_agent_output)
+            builder_actor_input = self._builder_env.step(builder_agent_output)
 
         player_traj = []
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_env_output.species_tokens.reshape(-1).tolist(),
-            builder_env_output.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
         )
 
         # Rollout the player environment.
@@ -137,6 +138,7 @@ class Actor:
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
             player_transitions=player_trajectory,
+            builder_history=builder_actor_input.history,
             player_history=player_actor_input.history,
         )
 
