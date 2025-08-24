@@ -55,11 +55,19 @@ class PlayerTransition(NamedTuple):
 
 class BuilderEnvOutput(NamedTuple):
     species_mask: ArrayLike = ()
-    species_tokens: ArrayLike = ()
     packed_set_mask: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
     pos: ArrayLike = ()
     done: ArrayLike = ()
+
+
+class BuilderHistoryOutput(NamedTuple):
+    species_tokens: ArrayLike = ()
+    packed_set_tokens: ArrayLike = ()
+
+
+class BuilderActorInput(NamedTuple):
+    env: BuilderEnvOutput = BuilderEnvOutput()
+    history: BuilderHistoryOutput = BuilderHistoryOutput()
 
 
 class BuilderActorOutput(NamedTuple):
@@ -82,6 +90,8 @@ class BuilderTransition(NamedTuple):
 
 class Trajectory(NamedTuple):
     builder_transitions: BuilderTransition = BuilderTransition()
+    builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+
     player_transitions: PlayerTransition = PlayerTransition()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
 

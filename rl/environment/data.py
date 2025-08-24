@@ -1,5 +1,6 @@
 import json
 import os
+import traceback
 
 import jax.numpy as jnp
 import numpy as np
@@ -167,53 +168,53 @@ ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
 STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 ONEHOT_DTYPE = jnp.bfloat16
-
-
-MASKS = {
-    generation: {
-        "species": jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/species_mask.npy",
-            )
-        ).astype(ONEHOT_DTYPE),
-        "abilities": jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/ability_mask.npy",
-            )
-        ).astype(ONEHOT_DTYPE),
-        "items": jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/item_mask.npy",
-            )
-        ).astype(ONEHOT_DTYPE),
-        "learnset": jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/learnset_mask.npy",
-            )
-        ).astype(ONEHOT_DTYPE),
-        "duplicate": jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/duplicate_mask.npy",
-            )
-        ),
-    }
-    for generation in range(3, 10)
-}
-
-
 DEFAULT_SMOGON_FORMAT = "all_ou"
-SET_TOKENS = {
-    generation: {
-        smogon_format: jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/validated_packed_{smogon_format}_sets.npy",
-            )
-        )
-        for smogon_format in [DEFAULT_SMOGON_FORMAT]
-    }
-    for generation in range(3, 10)
-}
 
+try:
+    MASKS = {
+        generation: {
+            "species": jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/species_mask.npy",
+                )
+            ).astype(ONEHOT_DTYPE),
+            "abilities": jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/ability_mask.npy",
+                )
+            ).astype(ONEHOT_DTYPE),
+            "items": jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/item_mask.npy",
+                )
+            ).astype(ONEHOT_DTYPE),
+            "learnset": jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/learnset_mask.npy",
+                )
+            ).astype(ONEHOT_DTYPE),
+            "duplicate": jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/duplicate_mask.npy",
+                )
+            ),
+        }
+        for generation in range(3, 10)
+    }
+
+    SET_TOKENS = {
+        generation: {
+            smogon_format: jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets.npy",
+                )
+            )
+            for smogon_format in [DEFAULT_SMOGON_FORMAT]
+        }
+        for generation in range(3, 10)
+    }
+except:
+    traceback.print_exc()
 
 ONEHOT_ENCODERS = {
     generation: {

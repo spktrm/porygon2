@@ -81,7 +81,7 @@ def encode_packed_set(generation: int, packed_set: str):
 
 
 def main():
-    for generation in range(1, 10):
+    for generation in range(9, 0, -1):
         packed_set_fpaths = [
             f
             for f in os.listdir(f"data/data/gen{generation}")
@@ -96,7 +96,16 @@ def main():
             with open(read_path, "r") as f:
                 data = json.load(f)
 
-            max_sets = max(len(v) for v in data.values())
+            set_lengths = np.array([len(v) for v in data.values()])
+            valid_mask = (set_lengths > 0) + (set_lengths == 0).all(keepdims=True)
+
+            sets_mu = set_lengths.mean(where=valid_mask)
+            sets_std = set_lengths.std(where=valid_mask)
+
+            # print(sets_mu, sets_std)
+
+            max_sets = int(np.ceil(sets_mu + 2 * sets_std).item())
+
             arr = np.zeros(
                 (NUM_SPECIES, max_sets, NUM_PACKED_SET_FEATURES), dtype=np.int32
             )
@@ -105,7 +114,7 @@ def main():
                 SpeciesEnum.SPECIES_ENUM___NULL
             )
             for i, (species, sets) in enumerate(data.items()):
-                for j, packed_set in enumerate(sets):
+                for j, packed_set in enumerate(sets[:max_sets]):
                     arr[i, j] = encode_packed_set(generation, packed_set)
 
             print(

@@ -1,7 +1,6 @@
 from typing import Sequence, TypeVar
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
@@ -18,7 +17,9 @@ from rl.environment.data import (
     SET_TOKENS,
 )
 from rl.environment.interfaces import (
+    BuilderActorInput,
     BuilderEnvOutput,
+    BuilderHistoryOutput,
     PlayerActorInput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
@@ -206,14 +207,23 @@ def get_ex_player_step() -> PlayerActorInput:
 
 def get_ex_builder_step(
     generation: int, smogon_format: str = DEFAULT_SMOGON_FORMAT
-) -> BuilderEnvOutput:
+) -> BuilderActorInput:
     set_tokens = SET_TOKENS[generation][smogon_format]
-    return BuilderEnvOutput(
-        species_mask=jnp.ones((1, 1, NUM_SPECIES), dtype=jnp.bool),
-        species_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32)
-        * SpeciesEnum.SPECIES_ENUM___NULL,
-        packed_set_mask=jnp.ones((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
-        packed_set_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32) * -1,
-        pos=jnp.zeros((1, 1), dtype=jnp.int32),
-        done=jnp.ones((1, 1), dtype=jnp.bool),
+    trajectory_length = 13
+    done = np.zeros((trajectory_length, 1), dtype=np.bool_)
+    done[-1] = True
+    return BuilderActorInput(
+        env=BuilderEnvOutput(
+            species_mask=np.ones((trajectory_length, 1, NUM_SPECIES), dtype=np.bool_),
+            packed_set_mask=np.ones(
+                (trajectory_length, 1, set_tokens.shape[1]), dtype=np.bool_
+            ),
+            pos=np.arange(trajectory_length, dtype=np.int32)[:, None],
+            done=done,
+        ),
+        history=BuilderHistoryOutput(
+            species_tokens=np.ones((6, 1), dtype=np.int32)
+            * SpeciesEnum.SPECIES_ENUM___NULL,
+            packed_set_tokens=np.ones((6, 1), dtype=np.int32) * -1,
+        ),
     )
