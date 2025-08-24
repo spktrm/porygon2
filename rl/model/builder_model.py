@@ -40,8 +40,8 @@ from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
-    activation_fn,
     create_attention_mask,
+    l2_norm,
     one_hot_concat_jax,
 )
 from rl.model.utils import (
@@ -230,23 +230,11 @@ class Porygon2BuilderModel(nn.Module):
         )
         return self.packed_set_ff(embedding)
 
-    def _decode_species(self, species_token: jax.Array):
-        embedding = self._embed_species(species_token)
-        embedding = self.proj_species_ln(embedding)
-        embedding = activation_fn(embedding)
-        return self.proj_species_linear(embedding)
-
-    def _decode_packed_set(self, species_token: jax.Array, packed_set_token: jax.Array):
-        embedding = self._embed_packed_set(species_token, packed_set_token)
-        embedding = self.proj_packed_set_ln(embedding)
-        embedding = activation_fn(embedding)
-        return self.proj_packed_set_linear(embedding)
-
     def _forward_species_head(
         self, queries: jax.Array, keys: jax.Array, species_mask: jax.Array
     ):
         queries = self.final_species_ln(queries)
-        keys = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-6)
+        keys = l2_norm(keys)
 
         species_logits = jnp.einsum("ij,kj->ik", queries, keys)
 
@@ -259,7 +247,7 @@ class Porygon2BuilderModel(nn.Module):
         keys = jax.vmap(
             jax.vmap(self._embed_packed_set, in_axes=(None, 0)), in_axes=(0, None)
         )(species_token, np.arange(packed_sets.shape[1]))
-        keys = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-6)
+        keys = l2_norm(keys)
         queries = self.final_packed_set_ln(queries)
 
         packed_set_logits = jnp.einsum("ij,ikj->ik", queries, keys)
@@ -280,14 +268,10 @@ class Porygon2BuilderModel(nn.Module):
         packed_set_attn_mask = jnp.ones_like(packed_sets, dtype=jnp.bool)
 
         species_embeddings = jax.vmap(self._embed_species)(species)
-        species_embeddings = species_embeddings / (
-            jnp.linalg.norm(species_embeddings, axis=-1, keepdims=True) + 1e-6
-        )
+        species_embeddings = l2_norm(species_embeddings)
 
         set_embeddings = jax.vmap(self._embed_packed_set)(species, packed_sets)
-        set_embeddings = set_embeddings / (
-            jnp.linalg.norm(set_embeddings, axis=-1, keepdims=True) + 1e-6
-        )
+        set_embeddings = l2_norm(set_embeddings)
 
         pred_species_embeddings = self.species_encoder(
             species_embeddings,

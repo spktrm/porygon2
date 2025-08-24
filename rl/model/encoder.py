@@ -43,6 +43,7 @@ from rl.model.modules import (
     TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
+    l2_norm,
     one_hot_concat_jax,
 )
 from rl.model.utils import LARGE_NEGATIVE_BIAS
@@ -510,9 +511,7 @@ class Encoder(nn.Module):
             move_encodings.sum(axis=0),
         )
 
-        embedding = embedding / (
-            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
-        )
+        embedding = l2_norm(embedding)
 
         # Apply mask to filter out invalid entities.
         mask = get_entity_mask(entity)
@@ -624,9 +623,7 @@ class Encoder(nn.Module):
             effect_from_source_embedding,
         )
 
-        embedding = embedding / (
-            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
-        )
+        embedding = l2_norm(embedding)
 
         mask = (
             edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
@@ -730,9 +727,7 @@ class Encoder(nn.Module):
             ),
         )
 
-        embedding = embedding / (
-            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
-        )
+        embedding = l2_norm(embedding)
 
         # Apply mask to filter out invalid edges.
         mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
@@ -841,9 +836,7 @@ class Encoder(nn.Module):
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
-        embedding = embedding / (
-            jnp.linalg.norm(embedding, axis=-1, keepdims=True) + 1e-6
-        )
+        embedding = l2_norm(embedding)
 
         return embedding
 

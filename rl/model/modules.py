@@ -33,6 +33,19 @@ class RMSNorm(nn.Module):
         return normed_inputs
 
 
+def l2_norm(array: jax.Array, axis: int = -1, eps: float = 1e-6) -> jax.Array:
+    """
+    Apply L2 normalization.
+
+    Args:
+        array (jax.Array): Input array.
+
+    Returns:
+        jax.Array: Output array.
+    """
+    return array / (jnp.linalg.norm(array, axis=axis, keepdims=True) + eps)
+
+
 def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.
