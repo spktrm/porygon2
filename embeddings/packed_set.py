@@ -75,7 +75,7 @@ def encode_packed_set(generation: int, packed_set: str):
             toid(hiddenpowertype) or "_NULL"
         ]
     if len(extras) > 0:
-        arr[PackedSetFeature.PACKED_SET_FEATURE__LEVEL] = extras[0] or 255
+        arr[PackedSetFeature.PACKED_SET_FEATURE__HAPPINESS] = extras[0] or 255
 
     return arr
 
