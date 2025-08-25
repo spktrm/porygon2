@@ -12,6 +12,10 @@ from rl.environment.utils import clip_history
 from rl.learner.config import Porygon2LearnerConfig
 
 
+class NotEnoughSamplesError(ValueError):
+    pass
+
+
 class ReplayBuffer:
     """A simple, thread-safe FIFO experience replay buffer."""
 
@@ -42,7 +46,7 @@ class ReplayBuffer:
     def sample(self, batch_size: int) -> Trajectory:
         with self._lock:
             if len(self._buffer) < batch_size:
-                raise ValueError(
+                raise NotEnoughSamplesError(
                     f"Not enough transitions in buffer to sample batch of size {batch_size}."
                     f" Buffer size: {len(self._buffer)}"
                 )
