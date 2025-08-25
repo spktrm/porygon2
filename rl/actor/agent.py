@@ -16,7 +16,7 @@ from rl.environment.interfaces import (
     PlayerAgentOutput,
     SamplingConfig,
 )
-from rl.model.utils import LARGE_NEGATIVE_BIAS, Params
+from rl.model.utils import Params
 
 
 def sample_action(
@@ -31,12 +31,10 @@ def sample_action(
     # Must use float32 here since bfloat16 does some weird things.
     logits = logits.astype(jnp.float32) / sampling_config.temp
     policy = jax.nn.softmax(logits, axis=-1)
-    if sampling_config.min_p is not None:
-        logits = jnp.where(
-            policy >= (policy.max() * sampling_config.min_p),
-            logits,
-            LARGE_NEGATIVE_BIAS,
-        )
+    if sampling_config.min_p > 0:
+        policy = jnp.where(policy >= (policy.max() * sampling_config.min_p), policy, 0)
+        policy = policy / policy.sum(axis=-1, keepdims=True)
+
     return jax.random.choice(
         rng_key,
         policy.shape[-1],
@@ -69,8 +67,9 @@ class Agent:
 
         self._lock = gpu_lock if gpu_lock is not None else NoOpLock()
 
-        player_sampling_config = player_sampling_config or SamplingConfig()
-        builder_sampling_config = builder_sampling_config or SamplingConfig()
+        _default_sampling_config = SamplingConfig(temp=1, min_p=0.0)
+        player_sampling_config = player_sampling_config or _default_sampling_config
+        builder_sampling_config = builder_sampling_config or _default_sampling_config
 
         self._player_sample_fn = functools.partial(
             sample_action, sampling_config=player_sampling_config

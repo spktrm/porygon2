@@ -98,4 +98,4 @@ class Trajectory(NamedTuple):
 
 class SamplingConfig(NamedTuple):
     temp: float = 1.0
-    min_p: float | None = 0.05
+    min_p: float = 0.0
