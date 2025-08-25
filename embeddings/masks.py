@@ -88,6 +88,24 @@ class Pokedex:
             mask[numbered_species.get(species_id)] = True
         return mask
 
+    def get_duplicate_mask(self):
+        numbered_species = self.data["species"]
+        num_species = len(numbered_species)
+        mask = np.zeros((num_species, num_species), dtype=bool)
+
+        one_hot = np.eye(num_species, num_species, dtype=bool)
+
+        for species_id, base_species_id in self.species[
+            ["id", "baseSpecies"]
+        ].values.tolist():
+            species_index = numbered_species.get(species_id)
+            row_indices = self.species.id[
+                self.species["baseSpecies"] == base_species_id
+            ].map(lambda x: numbered_species[x])
+            row_mask = one_hot[row_indices].any(axis=0)
+            mask[species_index] = row_mask
+        return mask
+
     def get_item_mask(self):
         numbered_species = self.data["species"]
         numbered_items = self.data["items"]
@@ -200,6 +218,7 @@ def save_gen_three():
         pokedex = Pokedex(generation=generation)
 
         for name, mask_arr in [
+            ("duplicate", pokedex.get_duplicate_mask()),
             ("ability", pokedex.get_ability_mask()),
             ("item", pokedex.get_item_mask()),
             ("learnset", pokedex.get_learnset_mask()),

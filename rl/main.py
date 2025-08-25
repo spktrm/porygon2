@@ -14,6 +14,8 @@ import traceback
 from pprint import pprint
 
 import jax
+
+# jax.config.update("jax_debug_nans", True)
 import numpy as np
 import wandb.wandb_run
 
@@ -22,7 +24,7 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import SamplingConfig, Trajectory
+from rl.environment.interfaces import Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
@@ -144,14 +146,8 @@ def main():
         player_state.apply_fn,
         builder_state.apply_fn,
         gpu_lock,
-        player_sampling_config=SamplingConfig(
-            temp=1.0,
-            # min_p=0.025,
-        ),
-        builder_sampling_config=SamplingConfig(
-            temp=1.0,
-            # min_p=0.025,
-        ),
+        # player_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
+        # builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
     )
 
     replay_buffer = ReplayBuffer(

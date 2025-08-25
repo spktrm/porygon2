@@ -232,6 +232,8 @@ export interface PackedSetFeatureMap {
   PACKED_SET_FEATURE__SPE_IV: 21;
   PACKED_SET_FEATURE__HIDDENPOWERTYPE: 22;
   PACKED_SET_FEATURE__TERATYPE: 23;
+  PACKED_SET_FEATURE__LEVEL: 24;
+  PACKED_SET_FEATURE__HAPPINESS: 25;
 }
 
 export const PackedSetFeature: PackedSetFeatureMap;

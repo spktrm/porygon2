@@ -43,9 +43,10 @@ from rl.model.modules import (
     TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
+    l2_norm,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def _binary_scale_encoding(
@@ -191,11 +192,21 @@ class Encoder(nn.Module):
         )
 
         # Initialize linear layers for encoding various entity features.
-        self.species_linear = nn.Dense(name="species_linear", **dense_kwargs)
-        self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
-        self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
-        self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
-        self.learnset_linear = nn.Dense(name="learnset_linear", **dense_kwargs)
+        self.species_linear = nn.Dense(
+            name="species_linear", use_bias=False, **dense_kwargs
+        )
+        self.items_linear = nn.Dense(
+            name="items_linear", use_bias=False, **dense_kwargs
+        )
+        self.abilities_linear = nn.Dense(
+            name="abilities_linear", use_bias=False, **dense_kwargs
+        )
+        self.moves_linear = nn.Dense(
+            name="moves_linear", use_bias=False, **dense_kwargs
+        )
+        self.learnset_linear = nn.Dense(
+            name="learnset_linear", use_bias=False, **dense_kwargs
+        )
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
@@ -500,6 +511,8 @@ class Encoder(nn.Module):
             move_encodings.sum(axis=0),
         )
 
+        embedding = l2_norm(embedding)
+
         # Apply mask to filter out invalid entities.
         mask = get_entity_mask(entity)
         embedding = mask * embedding
@@ -610,6 +623,8 @@ class Encoder(nn.Module):
             effect_from_source_embedding,
         )
 
+        embedding = l2_norm(embedding)
+
         mask = (
             edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
             != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
@@ -711,6 +726,8 @@ class Encoder(nn.Module):
                 world_dim=32,
             ),
         )
+
+        embedding = l2_norm(embedding)
 
         # Apply mask to filter out invalid edges.
         mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
@@ -819,6 +836,8 @@ class Encoder(nn.Module):
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
+        embedding = l2_norm(embedding)
+
         return embedding
 
     def _embed_moves(
@@ -850,7 +869,7 @@ class Encoder(nn.Module):
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         # For padded timesteps, request count is 0, so we use a large bias value.
         timestep_mask = request_count[..., None] >= jnp.where(
-            history_valid_mask, history_request_count, -BIAS_VALUE
+            history_valid_mask, history_request_count, -LARGE_NEGATIVE_BIAS
         )
 
         def _batched_forward(
