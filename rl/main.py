@@ -14,6 +14,8 @@ import traceback
 from pprint import pprint
 
 import jax
+
+# jax.config.update("jax_debug_nans", True)
 import numpy as np
 import wandb.wandb_run
 

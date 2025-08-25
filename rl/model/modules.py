@@ -33,41 +33,25 @@ class RMSNorm(nn.Module):
         return normed_inputs
 
 
-def l2_norm(array: jax.Array, axis: int = -1, eps: float = 1e-6) -> jax.Array:
+def l2_norm(array: jax.Array, axis: int = -1, eps: float = 1e-5) -> jax.Array:
     """
     Apply L2 normalization.
-
-    Args:
-        array (jax.Array): Input array.
-
-    Returns:
-        jax.Array: Output array.
+    Copied from https://github.com/google/flax/blob/a1451a0e55dfc55b4bc9ca42f88bf28744357d8c/flax/linen/normalization.py#L242
     """
-    return array / (jnp.linalg.norm(array, axis=axis, keepdims=True) + eps)
+    scale = jax.lax.rsqrt((array * array).sum(axis=axis, keepdims=True) + eps)
+    return array * scale
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.
-
-    Args:
-        array (jax.Array): Input array.
-
-    Returns:
-        jax.Array: Activated array.
     """
     return nn.gelu(array)
 
 
 def layer_norm(array: jax.Array, dtype: jnp.dtype) -> jax.Array:
     """
-    Apply layer normalization.
-
-    Args:
-        array (jax.Array): Input array.
-
-    Returns:
-        jax.Array: Normalized array.
+    Apply layer normalization with RMS Norm.
     """
     return RMSNorm(dtype=dtype)(array)
 
@@ -75,13 +59,6 @@ def layer_norm(array: jax.Array, dtype: jnp.dtype) -> jax.Array:
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
     """
     Apply softcap function.
-
-    Args:
-        array (jax.Array): Input array.
-        max_value (int, optional): Maximum value. Defaults to 50.
-
-    Returns:
-        jax.Array: Softcapped array.
     """
     return max_value * nn.tanh(array / max_value)
 

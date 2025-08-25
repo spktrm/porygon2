@@ -343,11 +343,11 @@ def main(generation: int = 9):
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
-        params = step["builder_state"]["params"]
+        builder_params = step["builder_state"]["params"]
     else:
-        params = network.init(key, ex)
+        builder_params = network.init(key, ex)
 
-    pprint(get_num_params(params))
+    pprint(get_num_params(builder_params))
 
     agent = Agent(
         builder_apply_fn=jax.vmap(network.apply, in_axes=(None, 1), out_axes=1),
@@ -371,9 +371,9 @@ def main(generation: int = 9):
         build_traj = []
 
         builder_actor_input = builder_env.reset()
-        for i in range(builder_subkeys.shape[0]):
+        for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = agent.step_builder(
-                builder_subkeys[i], params, builder_actor_input
+                builder_subkeys[builder_step_index], builder_params, builder_actor_input
             )
             builder_transition = BuilderTransition(
                 env_output=builder_actor_input.env,

@@ -79,9 +79,7 @@ class Actor:
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
-                builder_subkeys[builder_step_index],
-                builder_params,
-                builder_actor_input,
+                builder_subkeys[builder_step_index], builder_params, builder_actor_input
             )
             builder_transition = BuilderTransition(
                 env_output=builder_actor_input.env,
@@ -91,6 +89,15 @@ class Actor:
             if builder_actor_input.env.done.item():
                 break
             builder_actor_input = self._builder_env.step(builder_agent_output)
+
+        # Pack the trajectory and reset parent state.
+        builder_trajectory = jax.device_get(build_traj)
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *builder_trajectory
+        )
+
+        if (builder_actor_input.history.species_tokens == 0).all().item():
+            raise ValueError("Builder actor input history species tokens are all zero.")
 
         player_traj = []
 
@@ -125,11 +132,6 @@ class Actor:
             )
 
         # Pack the trajectory and reset parent state.
-        builder_trajectory = jax.device_get(build_traj)
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: np.stack(xs), *builder_trajectory
-        )
-
         player_trajectory = jax.device_get(player_traj)
         player_trajectory: PlayerTransition = jax.tree.map(
             lambda *xs: np.stack(xs), *player_trajectory
@@ -165,4 +167,5 @@ class Actor:
             self._queue.put(act_out)
 
     def pull_params(self):
-        return self._learner.params_for_actor
+        with self._learner.param_lock:
+            return self._learner.params_for_actor
