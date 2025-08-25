@@ -1,6 +1,7 @@
 import functools
 import queue
 import threading
+import time
 
 import chex
 import jax
@@ -13,7 +14,7 @@ from tqdm import tqdm
 import wandb
 from rl.environment.data import NUM_SPECIES, STOI
 from rl.environment.interfaces import PlayerActorInput, Trajectory
-from rl.learner.buffer import ReplayBuffer, ReplayRatioController
+from rl.learner.buffer import NotEnoughSamplesError, ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -658,9 +659,13 @@ class Learner:
         """Elementary data pipeline."""
 
         while not self.done:
-            # Try to get a batch. Skip the iteration if we couldn't.
-            batch = self.replay_buffer.sample(self.learner_config.batch_size)
-            self.device_q.put(jax.device_put(batch))
+            try:
+                # Try to get a batch. Skip the iteration if we couldn't.
+                batch = self.replay_buffer.sample(self.learner_config.batch_size)
+                self.device_q.put(jax.device_put(batch))
+            except NotEnoughSamplesError:
+                time.sleep(1)
+                continue
 
     def train(self):
         consumer_progress = tqdm(desc="consumer", smoothing=0.1)
