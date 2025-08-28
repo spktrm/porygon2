@@ -266,6 +266,7 @@ function generateSets(args: {
             "ru",
             "nu",
             "pu",
+            "zu",
             "monotype",
         ]) {
             const namedSets = speciesSets[setsFormat] ?? {};
@@ -311,12 +312,29 @@ async function main() {
             path.join(dataDir, `gen${i}/validated_packed_ou_sets.json`),
             JSON.stringify(Object.fromEntries(allSets)),
         );
+        fs.writeFileSync(
+            path.join(dataDir, `gen${i}/validated_packed_ou_sets_list.json`),
+            JSON.stringify(
+                Object.values(Object.fromEntries(allSets)).flatMap((x) => x),
+            ),
+        );
         console.log(`Generated validated packed sets for gen${i}`);
 
         const allFormatSets = generateSets({ sets, validator });
         fs.writeFileSync(
             path.join(dataDir, `gen${i}/validated_packed_all_ou_sets.json`),
             JSON.stringify(Object.fromEntries(allFormatSets)),
+        );
+        fs.writeFileSync(
+            path.join(
+                dataDir,
+                `gen${i}/validated_packed_all_ou_sets_list.json`,
+            ),
+            JSON.stringify(
+                Object.values(Object.fromEntries(allFormatSets)).flatMap(
+                    (x) => x,
+                ),
+            ),
         );
         console.log(`Generated validated packed sets for gen${i}`);
     }

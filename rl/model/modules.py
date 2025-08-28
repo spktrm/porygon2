@@ -33,15 +33,6 @@ class RMSNorm(nn.Module):
         return normed_inputs
 
 
-def l2_norm(array: jax.Array, axis: int = -1, eps: float = 1e-5) -> jax.Array:
-    """
-    Apply L2 normalization.
-    Copied from https://github.com/google/flax/blob/a1451a0e55dfc55b4bc9ca42f88bf28744357d8c/flax/linen/normalization.py#L242
-    """
-    scale = jax.lax.rsqrt((array * array).sum(axis=axis, keepdims=True) + eps)
-    return array * scale
-
-
 def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.

@@ -91,37 +91,37 @@ def main():
         ]
         for packed_set_fpath in packed_set_fpaths:
             read_path = f"data/data/gen{generation}/{packed_set_fpath}"
-            write_path = read_path.replace(".json", ".npy")
 
             with open(read_path, "r") as f:
                 data = json.load(f)
 
             set_lengths = np.array([len(v) for v in data.values()])
-            valid_mask = (set_lengths > 0) + (set_lengths == 0).all(keepdims=True)
+            num_sets = set_lengths.sum()
 
-            sets_mu = set_lengths.mean(where=valid_mask)
-            sets_std = set_lengths.std(where=valid_mask)
-
-            # print(sets_mu, sets_std)
-
-            max_sets = int(np.ceil(sets_mu + 2 * sets_std).item())
-
-            arr = np.zeros(
-                (NUM_SPECIES, max_sets, NUM_PACKED_SET_FEATURES), dtype=np.int32
+            packed_set_mask = np.zeros((NUM_SPECIES, num_sets), dtype=np.bool_)
+            packed_set_features = np.zeros(
+                (num_sets, NUM_PACKED_SET_FEATURES), dtype=np.int32
             )
 
-            arr[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES] = (
+            packed_set_features[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES] = (
                 SpeciesEnum.SPECIES_ENUM___NULL
             )
+
+            set_idx = 0
             for i, (species, sets) in enumerate(data.items()):
-                for j, packed_set in enumerate(sets[:max_sets]):
-                    arr[i, j] = encode_packed_set(generation, packed_set)
+                for j, packed_set in enumerate(sets):
+                    packed_set_features[set_idx] = encode_packed_set(
+                        generation, packed_set
+                    )
+                    packed_set_mask[i, set_idx] = True
+                    set_idx += 1
 
             print(
-                f"Processed gen{generation}/{packed_set_fpath} with shape {arr.shape}"
+                f"Processed gen{generation}/{packed_set_fpath} with shape {packed_set_features.shape}"
             )
 
-            np.save(write_path, arr)
+            np.save(read_path.replace(".json", "_mask.npy"), packed_set_mask)
+            np.save(read_path.replace(".json", "_features.npy"), packed_set_features)
 
     return
 
