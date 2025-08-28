@@ -51,12 +51,11 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
         setattr(config_dict, key, value)
 
 
-def get_player_model_config(generation: int = 3) -> ConfigDict:
+def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
     cfg = ConfigDict()
 
     num_heads = 3
     scale = 1
-    temp = 1.0
 
     entity_size = int(scale * 64 * num_heads)
     dtype = jnp.bfloat16
@@ -64,7 +63,6 @@ def get_player_model_config(generation: int = 3) -> ConfigDict:
     cfg.generation = generation
     cfg.entity_size = entity_size
     cfg.dtype = dtype
-    cfg.temp = temp
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -164,21 +162,23 @@ def get_player_model_config(generation: int = 3) -> ConfigDict:
     cfg.action_type_head.transformer = ConfigDict()
     set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
     cfg.action_type_head.dtype = dtype
-    cfg.action_type_head.temp = temp
 
     cfg.move_head = ConfigDict()
     cfg.move_head.generation = generation
     cfg.move_head.transformer = ConfigDict()
     set_attributes(cfg.move_head.transformer, **transformer_encoder_kwargs)
     cfg.move_head.dtype = dtype
-    cfg.move_head.temp = temp
 
     cfg.switch_head = ConfigDict()
     cfg.switch_head.generation = generation
     cfg.switch_head.transformer = ConfigDict()
     set_attributes(cfg.switch_head.transformer, **transformer_encoder_kwargs)
     cfg.switch_head.dtype = dtype
-    cfg.switch_head.temp = temp
+
+    if head_params is not None:
+        for head in [cfg.action_type_head, cfg.move_head, cfg.switch_head]:
+            for param_name, param_value in head_params.items():
+                setattr(head, param_name, param_value)
 
     # Value Head Configuration
     cfg.value_head = ConfigDict()
@@ -190,7 +190,7 @@ def get_player_model_config(generation: int = 3) -> ConfigDict:
     return cfg
 
 
-def get_builder_model_config(generation: int = 3) -> ConfigDict:
+def get_builder_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
     cfg = ConfigDict()
 
     num_heads = 3
@@ -229,6 +229,9 @@ def get_builder_model_config(generation: int = 3) -> ConfigDict:
     set_attributes(cfg.transformer, **transformer_kwargs)
     cfg.transformer.need_pos = True
     cfg.dtype = dtype
+
+    for param_name, param_value in head_params.items():
+        setattr(cfg, param_name, param_value)
 
     return cfg
 

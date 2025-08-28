@@ -45,7 +45,7 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def _binary_scale_encoding(
@@ -191,11 +191,21 @@ class Encoder(nn.Module):
         )
 
         # Initialize linear layers for encoding various entity features.
-        self.species_linear = nn.Dense(name="species_linear", **dense_kwargs)
-        self.items_linear = nn.Dense(name="items_linear", **dense_kwargs)
-        self.abilities_linear = nn.Dense(name="abilities_linear", **dense_kwargs)
-        self.moves_linear = nn.Dense(name="moves_linear", **dense_kwargs)
-        self.learnset_linear = nn.Dense(name="learnset_linear", **dense_kwargs)
+        self.species_linear = nn.Dense(
+            name="species_linear", use_bias=False, **dense_kwargs
+        )
+        self.items_linear = nn.Dense(
+            name="items_linear", use_bias=False, **dense_kwargs
+        )
+        self.abilities_linear = nn.Dense(
+            name="abilities_linear", use_bias=False, **dense_kwargs
+        )
+        self.moves_linear = nn.Dense(
+            name="moves_linear", use_bias=False, **dense_kwargs
+        )
+        self.learnset_linear = nn.Dense(
+            name="learnset_linear", use_bias=False, **dense_kwargs
+        )
 
         # Initialize aggregation modules for combining feature embeddings.
         self.entity_sum = SumEmbeddings(
@@ -215,8 +225,13 @@ class Encoder(nn.Module):
         )
 
         # Layer normalization for action embeddings.
-        self.timestep_ln = RMSNorm()
-        self.entities_ln = RMSNorm()
+        self.entity_ln = RMSNorm()
+        self.edge_ln = RMSNorm()
+        self.field_ln = RMSNorm()
+        self.action_ln = RMSNorm()
+        self.timestep_ln1 = RMSNorm()
+        self.timestep_ln2 = RMSNorm()
+        self.entity_timestep_ln = RMSNorm()
         self.moves_ln = RMSNorm()
         self.switch_ln = RMSNorm()
 
@@ -500,6 +515,8 @@ class Encoder(nn.Module):
             move_encodings.sum(axis=0),
         )
 
+        embedding = self.entity_ln(embedding)
+
         # Apply mask to filter out invalid entities.
         mask = get_entity_mask(entity)
         embedding = mask * embedding
@@ -610,10 +627,13 @@ class Encoder(nn.Module):
             effect_from_source_embedding,
         )
 
+        embedding = self.edge_ln(embedding)
+
         mask = (
             edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
             != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
         ) | (minor_args_indices.sum(axis=-1) > 0)
+        embedding = mask * embedding
 
         return embedding, mask
 
@@ -712,8 +732,11 @@ class Encoder(nn.Module):
             ),
         )
 
+        embedding = self.field_ln(embedding)
+
         # Apply mask to filter out invalid edges.
         mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
+        embedding = mask * embedding
 
         return embedding, mask, request_count
 
@@ -750,6 +773,7 @@ class Encoder(nn.Module):
         contextual_history_nodes = self.per_timestep_node_encoder(
             history_node_embedding, create_attention_mask(node_mask)
         )
+        contextual_history_nodes = self.timestep_ln1(contextual_history_nodes)
 
         node_edge_mask = node_mask & edge_mask
         contextual_history_nodes = self.per_timestep_node_edge_encoder(
@@ -757,13 +781,10 @@ class Encoder(nn.Module):
             create_attention_mask(node_edge_mask),
         )
 
-        timestep_embedding = (
-            # More stable for summing over affected historical nodes
-            self.timestep_ln(
-                node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
-            )
-            + field_embedding
+        contextual_history_nodes = self.timestep_ln2(
+            node_edge_mask.astype(self.cfg.dtype) @ contextual_history_nodes
         )
+        timestep_embedding = contextual_history_nodes + field_embedding
 
         return (
             timestep_embedding,
@@ -819,6 +840,8 @@ class Encoder(nn.Module):
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
+        embedding = self.action_ln(embedding)
+
         return embedding
 
     def _embed_moves(
@@ -850,7 +873,7 @@ class Encoder(nn.Module):
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         # For padded timesteps, request count is 0, so we use a large bias value.
         timestep_mask = request_count[..., None] >= jnp.where(
-            history_valid_mask, history_request_count, -BIAS_VALUE
+            history_valid_mask, history_request_count, -LARGE_NEGATIVE_BIAS
         )
 
         def _batched_forward(
@@ -868,7 +891,7 @@ class Encoder(nn.Module):
                 q_positions=current_position,
                 kv_positions=history_request_count,
             )
-            entity_embeddings = self.entities_ln(entity_embeddings)
+            entity_embeddings = self.entity_timestep_ln(entity_embeddings)
 
             entity_idx = env_step.moveset[
                 ..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX

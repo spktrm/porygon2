@@ -4,10 +4,12 @@ import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import NUM_SPECIES, SET_TOKENS
-from rl.environment.interfaces import BuilderAgentOutput, BuilderEnvOutput
-from rl.environment.protos.enums_pb2 import SpeciesEnum
-from rl.environment.protos.features_pb2 import PackedSetFeature
+from rl.environment.data import DEFAULT_SMOGON_FORMAT, MASKS, SET_MASK
+from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderAgentOutput,
+    BuilderEnvOutput,
+)
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
@@ -47,7 +49,7 @@ class SinglePlayerSyncEnvironment:
                 username=self.username,
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
-                smogon_format=f"gen{self.generation}ou",
+                smogon_format=f"gen{self.generation}{DEFAULT_SMOGON_FORMAT}",
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -72,81 +74,132 @@ class TeamBuilderEnvironment:
     def __init__(
         self,
         generation: int,
-        smogon_format: str = "ou",
+        smogon_format: str = DEFAULT_SMOGON_FORMAT,
         num_team_members: int = 6,
-        max_ts: int = 12,
+        max_ts: int = 32,
     ):
 
+        self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
         self.max_ts = max_ts
+        self.rng_key = jax.random.key(42)
 
-        self.masks = (
-            SET_TOKENS[generation][smogon_format][
-                ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
-            ]
-            != SpeciesEnum.SPECIES_ENUM___NULL
-        )
-        self.start_mask = self.masks.any(axis=-1)
+        self.duplicate_masks = ~MASKS[generation]["duplicate"]
 
-        self.ex = get_ex_builder_step(
-            generation=generation, smogon_format=smogon_format
-        )
+        self.start_mask = SET_MASK[generation][smogon_format].any(axis=-1)
 
-        self.state: BuilderEnvOutput
+        self.ex = get_ex_builder_step()
+
+        self.state: BuilderActorInput
         self.reset()
 
-    def reset(self) -> BuilderEnvOutput:
-        self.state = self._reset()
+    def split_rng(self):
+        subkey, self.rng_key = jax.random.split(self.rng_key)
+        return subkey
+
+    def reset(self) -> BuilderActorInput:
+        key = self.split_rng()
+        self.state = self._reset(key)
         return self.state
 
-    def step(self, agent_output: BuilderAgentOutput) -> BuilderEnvOutput:
-        if self.state.done.item():
+    def step(self, agent_output: BuilderAgentOutput) -> BuilderActorInput:
+        if self.state.env.done.item():
             return self.state
         self.state = self._step(
-            agent_output.species, agent_output.packed_set, self.state
+            agent_output.actor_output.continue_head.action_index,
+            agent_output.actor_output.selection_head.action_index,
+            agent_output.actor_output.species_head.action_index,
+            agent_output.actor_output.packed_set_head.action_index,
+            self.state,
         )
         return self.state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self):
-        return BuilderEnvOutput(
-            species_mask=self.start_mask,
-            species_tokens=jnp.squeeze(self.ex.species_tokens),
-            packed_set_mask=jnp.squeeze(self.ex.packed_set_mask),
-            packed_set_tokens=jnp.squeeze(self.ex.packed_set_tokens),
-            pos=jnp.array(0),
-            done=jnp.array(False),
+    def _reset(self, rng_key: jax.Array):
+        species_mask = self.start_mask
+
+        species_subkeys = jax.random.split(rng_key, self.num_team_members)
+        packed_set_subkeys = jax.random.split(rng_key, self.num_team_members)
+
+        species_tokens = []
+        packed_set_tokens = []
+
+        for i in range(self.num_team_members):
+            species_policy = species_mask / species_mask.sum()
+
+            species_token_i = jax.random.choice(
+                species_subkeys[i], species_mask.shape[-1], (1,), p=species_policy
+            ).squeeze()
+            species_mask = species_mask & self.duplicate_masks[species_token_i]
+            species_tokens.append(species_token_i)
+
+            packed_set_mask = SET_MASK[self.generation][self.smogon_format][
+                species_token_i
+            ]
+            packed_set_policy = packed_set_mask / packed_set_mask.sum()
+            packed_set_token_i = jax.random.choice(
+                packed_set_subkeys[i],
+                packed_set_mask.shape[-1],
+                (1,),
+                p=packed_set_policy,
+            ).squeeze()
+            packed_set_tokens.append(packed_set_token_i)
+
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=species_mask,
+                species_tokens=jnp.array(species_tokens),
+                packed_set_tokens=jnp.array(packed_set_tokens),
+                done=jnp.array(0, dtype=jnp.bool),
+                ts=jnp.array(0, dtype=jnp.int32),
+            )
         )
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
         self,
+        continue_token: jax.Array,
+        selection_token: jax.Array,
         species_token: jax.Array,
-        set_token: jax.Array,
-        state: BuilderEnvOutput,
+        packed_set_token: jax.Array,
+        state: BuilderActorInput,
     ):
-        next_set_mask = jax.nn.one_hot(
-            state.pos % self.num_team_members, self.num_team_members, dtype=jnp.bool
-        )
-        next_species_tokens = jnp.where(
-            (state.pos < 6) & next_set_mask, species_token, state.species_tokens
-        )
-        next_packed_sets = jnp.where(
-            (state.pos >= 6) & next_set_mask, set_token, state.packed_set_tokens
-        )
-        species_mask = state.species_mask & ~jax.nn.one_hot(
-            species_token, NUM_SPECIES, dtype=jnp.bool
+        ts = state.env.ts
+        next_ts = ts + 1
+
+        cont_edits = continue_token == 0
+        stop_edits = continue_token == 1
+        traj_over = next_ts >= self.max_ts
+
+        done = state.env.done | traj_over | stop_edits
+
+        selection_oh = (
+            cont_edits
+            & ~state.env.done
+            & jax.nn.one_hot(selection_token, self.num_team_members, dtype=jnp.bool)
         )
 
-        next_pos = jnp.array(state.pos + 1)
-        return BuilderEnvOutput(
-            species_mask=species_mask,
-            species_tokens=next_species_tokens,
-            packed_set_mask=self.masks[
-                next_species_tokens[next_pos % self.num_team_members]
-            ],
-            packed_set_tokens=next_packed_sets,
-            pos=next_pos,
-            done=jnp.array(next_pos >= self.max_ts),
+        old_species_token = state.env.species_tokens[selection_token]
+        old_species_mask = self.duplicate_masks[old_species_token]
+        new_species_mask = self.duplicate_masks[species_token]
+
+        species_mask = jnp.where(old_species_mask, state.env.species_mask, True)
+        species_mask = jnp.where(new_species_mask, species_mask, False)
+
+        species_tokens = jnp.where(
+            selection_oh, species_token, state.env.species_tokens
+        )
+        packed_set_tokens = jnp.where(
+            selection_oh, packed_set_token, state.env.packed_set_tokens
+        )
+
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=species_mask,
+                species_tokens=species_tokens,
+                packed_set_tokens=packed_set_tokens,
+                done=done,
+                ts=next_ts,
+            ),
         )

@@ -8,13 +8,13 @@ from inference.interfaces import ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
-from rl.environment.interfaces import PlayerActorInput, SamplingConfig
+from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
 from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
-from rl.model.utils import BIAS_VALUE, get_most_recent_file
+from rl.model.utils import LARGE_NEGATIVE_BIAS, get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -22,29 +22,34 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 def restrict_values(arr: np.ndarray):
     if arr.dtype.name == "bfloat16":
-        return np.clip(arr, a_min=BIAS_VALUE, a_max=-BIAS_VALUE)
+        return np.clip(arr, a_min=LARGE_NEGATIVE_BIAS, a_max=-LARGE_NEGATIVE_BIAS)
     else:
         return np.nan_to_num(arr)
 
 
 class InferenceModel:
-    def __init__(self, fpath: str = None, seed: int = 42, precision: int = 2):
+    def __init__(
+        self,
+        fpath: str = None,
+        seed: int = 42,
+        precision: int = 2,
+        temp: float = 0.8,
+        min_p: float = 0.05,
+    ):
         self.learner_config = get_learner_config()
         self.player_model_config = get_player_model_config(
-            self.learner_config.generation
+            self.learner_config.generation, train=False, temp=temp, min_p=min_p
         )
         self.builder_model_config = get_builder_model_config(
-            self.learner_config.generation
+            self.learner_config.generation, train=False, temp=temp, min_p=min_p
         )
 
         self.player_network = get_player_model(self.player_model_config)
         self.builder_network = get_builder_model(self.builder_model_config)
 
         self._agent = Agent(
-            player_apply_fn=jax.vmap(self.player_network.apply, in_axes=(None, 1)),
-            builder_apply_fn=jax.vmap(self.builder_network.apply, in_axes=(None, 1)),
-            player_sampling_config=SamplingConfig(temp=1.0, min_p=0.05),
-            builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.05),
+            player_apply_fn=self.player_network.apply,
+            builder_apply_fn=self.builder_network.apply,
         )
         self.rng_key = jax.random.key(seed)
         self.precision = precision
@@ -61,10 +66,11 @@ class InferenceModel:
         print("initializing...")
         self.reset()  # warm up the model
 
-        ts: PlayerActorInput = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+        ex_actor_input, _ = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
         self.step(
             PlayerActorInput(
-                env=jax.tree.map(lambda x: x[0], ts.env), history=ts.history
+                env=jax.tree.map(lambda x: x[0], ex_actor_input.env),
+                history=ex_actor_input.history,
             )
         )  # warm up the model
         print("model initialized!")
@@ -74,26 +80,37 @@ class InferenceModel:
         return subkey
 
     def reset(self):
-        builder_env = TeamBuilderEnvironment(self.learner_config.generation)
+        builder_env = TeamBuilderEnvironment(self.learner_config.generation, max_ts=64)
 
         rng_key = self.split_rng()
         builder_subkeys = jax.random.split(rng_key, builder_env.max_ts + 1)
 
-        builder_env_output = builder_env.reset()
+        build_traj = []
+
+        builder_actor_input = builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
                 self.builder_params,
-                builder_env_output,
+                builder_actor_input,
             )
-            if builder_env_output.done.item():
+            builder_transition = BuilderTransition(
+                env_output=builder_actor_input.env,
+                agent_output=builder_agent_output,
+            )
+            build_traj.append(builder_transition)
+            if builder_actor_input.env.done.item():
                 break
-            builder_env_output = builder_env.step(builder_agent_output)
+            builder_actor_input = builder_env.step(builder_agent_output)
+
+        builder_trajectory: BuilderTransition = jax.tree.map(
+            lambda *xs: jnp.stack(xs), *build_traj
+        )
 
         # Send set tokens to the player environment.
         return ResetResponse(
-            species_indices=builder_env_output.species_tokens.reshape(-1).tolist(),
-            packed_set_indices=builder_env_output.packed_set_tokens.reshape(
+            species_indices=builder_actor_input.env.species_tokens.reshape(-1).tolist(),
+            packed_set_indices=builder_actor_input.env.packed_set_tokens.reshape(
                 -1
             ).tolist(),
             v=builder_agent_output.actor_output.v.item(),
@@ -101,16 +118,14 @@ class InferenceModel:
 
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
-        actor_step = self._agent.step_player(rng_key, self.player_params, timestep)
-        model_output = actor_step.actor_output
+        agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
+        actor_output = agent_output.actor_output
         return StepResponse(
-            action_type_logits=restrict_values(model_output.action_type_logits),
-            move_logits=restrict_values(model_output.move_logits),
-            wildcard_logits=restrict_values(model_output.wildcard_logits),
-            switch_logits=restrict_values(model_output.switch_logits),
-            v=model_output.v.item(),
-            action_type=ACTION_TYPE_MAPPING[actor_step.action_type.item()],
-            move_slot=actor_step.move_slot.item(),
-            switch_slot=actor_step.switch_slot.item(),
-            wildcard_slot=actor_step.wildcard_slot.item(),
+            v=actor_output.v.item(),
+            action_type=ACTION_TYPE_MAPPING[
+                agent_output.actor_output.action_type_head.action_index.item()
+            ],
+            move_slot=agent_output.actor_output.move_head.action_index.item(),
+            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
+            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
         )

@@ -1,17 +1,20 @@
 import functools
+import queue
 import threading
 import time
-import traceback
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
+import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
-import wandb
+from rl.concurrency.lock import FairLock
+from rl.environment.data import NUM_SPECIES, STOI
 from rl.environment.interfaces import PlayerActorInput, Trajectory
-from rl.learner.buffer import ReplayBuffer, ReplayRatioController
+from rl.learner.buffer import NotEnoughSamplesError, ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -20,56 +23,47 @@ from rl.learner.config import (
 )
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.utils import Params, legal_log_policy, legal_policy
+from rl.model.utils import Params
 from rl.utils import average
 
 
-def get_action_value(arr: jax.Array, action: jax.Array):
-    """Get the value of an action from an array."""
-    return jnp.take_along_axis(arr, action[..., None], axis=-1).squeeze(-1)
-
-
 def calculate_player_log_prob(
-    action_type_log_pi: jax.Array,
-    action_type: jax.Array,
-    move_log_pi: jax.Array,
-    move: jax.Array,
-    wildcard_log_pi: jax.Array,
-    wildcard: jax.Array,
-    switch_log_pi: jax.Array,
-    switch: jax.Array,
+    *,
+    action_type_log_prob: jax.Array,
+    action_type_index: jax.Array,
+    move_log_prob: jax.Array,
+    wildcard_log_prob: jax.Array,
+    switch_log_prob: jax.Array,
 ):
-    action_type_log_prob = get_action_value(action_type_log_pi, action_type)
-
-    move_log_prob = get_action_value(move_log_pi, move)
-    switch_prob = get_action_value(switch_log_pi, switch)
-    wild_card_log_prob = get_action_value(wildcard_log_pi, wildcard)
-
-    # safe selectors (avoid 0 * -inf -> NaN)
-    is_move = action_type == 0
-    is_sw_or_preview = (action_type == 1) | (action_type == 2)
+    is_move = action_type_index == 0
+    is_sw_or_preview = (action_type_index == 1) | (action_type_index == 2)
 
     return (
         action_type_log_prob
-        + jnp.where(is_move, move_log_prob + wild_card_log_prob, 0.0)
-        + jnp.where(is_sw_or_preview, switch_prob, 0.0)
+        + jnp.where(is_move, move_log_prob + wildcard_log_prob, 0.0)
+        + jnp.where(is_sw_or_preview, switch_log_prob, 0.0)
     )
 
 
 def calculate_builder_log_prob(
-    species_log_pi: jax.Array,
-    species: jax.Array,
-    packed_set_log_pi: jax.Array,
-    packed_set: jax.Array,
-    pos: jax.Array,
+    *,
+    continue_log_prob: jax.Array,
+    continue_index: jax.Array,
+    selection_log_prob: jax.Array,
+    species_log_prob: jax.Array,
+    packed_set_log_prob: jax.Array,
 ):
-    species_log_prob = get_action_value(species_log_pi, species)
-    packed_set_log_prob = get_action_value(packed_set_log_pi, packed_set)
-    return jnp.where(pos < 6, species_log_prob, packed_set_log_prob)
+    return continue_log_prob + (continue_index == 0) * (
+        selection_log_prob + species_log_prob + packed_set_log_prob
+    )
 
 
 def policy_gradient_loss(
-    policy_ratios: jax.Array, advantages: jax.Array, valid: jax.Array, clip_ppo: float
+    *,
+    policy_ratios: jax.Array,
+    advantages: jax.Array,
+    valid: jax.Array,
+    clip_ppo: float,
 ):
     """Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025"""
     pg_loss = policy_ratios * advantages - (
@@ -78,51 +72,51 @@ def policy_gradient_loss(
     return -average(pg_loss, valid)
 
 
-def value_loss(pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
+def value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     mse_loss = jnp.square(pred_v - target_v)
     return 0.5 * average(mse_loss, valid)
 
 
 def player_entropy_loss(
-    action_type_log_pi: jax.Array,  # T, B, 2
-    action_type_pi: jax.Array,  # T, B, 2
-    move_log_pi: jax.Array,  # T, B, 4
-    move_pi: jax.Array,  # T, B, 4
-    wildcard_log_pis: jax.Array,  # T, B, 4, 5
-    wildcard_pis: jax.Array,  # T, B, 4, 5
-    switch_log_pi: jax.Array,  # T, B, 6
-    switch_pi: jax.Array,  # T, B, 6
-    valid: jax.Array,  # T, B
+    *,
+    action_type_entropy: jax.Array,
+    action_type_valid: jax.Array,
+    move_entropy: jax.Array,
+    move_valid: jax.Array,
+    wildcard_entropy: jax.Array,
+    wildcard_valid: jax.Array,
+    switch_entropy: jax.Array,
+    switch_valid: jax.Array,
 ):
-    action_type_entropy = -jnp.sum(action_type_pi * action_type_log_pi, axis=-1)
-
-    wildcard_entropy = -jnp.sum(wildcard_pis * wildcard_log_pis, axis=-1)
-    move_entropy = -jnp.sum(move_pi * move_log_pi, axis=-1) + (
-        move_pi * wildcard_entropy
-    ).sum(axis=-1)
-    switch_entropy = -jnp.sum(switch_pi * switch_log_pi, axis=-1)
-    sub_entropy = jnp.stack((move_entropy, switch_entropy, switch_entropy), axis=-1)
-
-    total_entropy = action_type_entropy + (action_type_pi * sub_entropy).sum(axis=-1)
-    return average(total_entropy, valid)
+    return (
+        average(action_type_entropy, action_type_valid)
+        + average(move_entropy, move_valid)
+        + average(wildcard_entropy, wildcard_valid)
+        + average(switch_entropy, switch_valid)
+    )
 
 
 def builder_entropy_loss(
-    species_log_pi: jax.Array,
-    species_pi: jax.Array,
-    packed_set_log_pi: jax.Array,
-    packed_set_pi: jax.Array,
-    pos: jax.Array,
-    valid: jax.Array,
+    *,
+    continue_entropy: jax.Array,
+    continue_valid: jax.Array,
+    selection_entropy: jax.Array,
+    selection_valid: jax.Array,
+    species_entropy: jax.Array,
+    species_valid: jax.Array,
+    packed_set_entropy: jax.Array,
+    packed_set_valid: jax.Array,
 ):
-    species_entropy = -jnp.sum(species_pi * species_log_pi, axis=-1)
-    packed_set_entropy = -jnp.sum(packed_set_pi * packed_set_log_pi, axis=-1)
-    loss = jnp.where(pos < 6, species_entropy, packed_set_entropy)
-    return average(loss, valid)
+    return (
+        average(continue_entropy, continue_valid)
+        + average(selection_entropy, selection_valid)
+        + average(species_entropy, species_valid)
+        + average(packed_set_entropy, packed_set_valid)
+    )
 
 
 def backward_kl_loss(
-    policy_ratio: jax.Array, log_policy_ratio: jax.Array, valid: jax.Array
+    *, policy_ratio: jax.Array, log_policy_ratio: jax.Array, valid: jax.Array
 ):
     """
     Calculate the Backward KL loss.
@@ -144,71 +138,57 @@ def train_step(
     player_actor_input = PlayerActorInput(
         env=batch.player_transitions.env_output, history=batch.player_history
     )
+    player_target_pred = player_state.apply_fn(
+        player_state.target_params,
+        player_actor_input,
+        batch.player_transitions.agent_output.actor_output,
+    )
 
-    target_pred = player_state.apply_fn(player_state.target_params, player_actor_input)
+    actor_action_type_head = (
+        batch.player_transitions.agent_output.actor_output.action_type_head
+    )
+    actor_move_head = batch.player_transitions.agent_output.actor_output.move_head
+    actor_wildcard_head = (
+        batch.player_transitions.agent_output.actor_output.wildcard_head
+    )
+    actor_switch_head = batch.player_transitions.agent_output.actor_output.switch_head
+
+    target_action_type_head = player_target_pred.action_type_head
+    target_move_head = player_target_pred.move_head
+    target_wildcard_head = player_target_pred.wildcard_head
+    target_switch_head = player_target_pred.switch_head
+
     actor_log_prob = calculate_player_log_prob(
-        action_type_log_pi=legal_log_policy(
-            batch.player_transitions.agent_output.actor_output.action_type_logits,
-            batch.player_transitions.env_output.action_type_mask,
-        ),
-        action_type=batch.player_transitions.agent_output.action_type,
-        move_log_pi=legal_log_policy(
-            batch.player_transitions.agent_output.actor_output.move_logits,
-            batch.player_transitions.env_output.move_mask,
-        ),
-        move=batch.player_transitions.agent_output.move_slot,
-        wildcard_log_pi=legal_log_policy(
-            jnp.take_along_axis(
-                batch.player_transitions.agent_output.actor_output.wildcard_logits,
-                batch.player_transitions.agent_output.move_slot[..., None, None],
-                axis=-2,
-            ).squeeze(-2),
-            batch.player_transitions.env_output.wildcard_mask,
-        ),
-        wildcard=batch.player_transitions.agent_output.wildcard_slot,
-        switch_log_pi=legal_log_policy(
-            batch.player_transitions.agent_output.actor_output.switch_logits,
-            batch.player_transitions.env_output.switch_mask,
-        ),
-        switch=batch.player_transitions.agent_output.switch_slot,
+        action_type_log_prob=actor_action_type_head.log_prob,
+        action_type_index=actor_action_type_head.action_index,
+        move_log_prob=actor_move_head.log_prob,
+        wildcard_log_prob=actor_wildcard_head.log_prob,
+        switch_log_prob=actor_switch_head.log_prob,
     )
     target_log_prob = calculate_player_log_prob(
-        action_type_log_pi=legal_log_policy(
-            target_pred.action_type_logits,
-            batch.player_transitions.env_output.action_type_mask,
-        ),
-        action_type=batch.player_transitions.agent_output.action_type,
-        move_log_pi=legal_log_policy(
-            target_pred.move_logits,
-            batch.player_transitions.env_output.move_mask,
-        ),
-        move=batch.player_transitions.agent_output.move_slot,
-        wildcard_log_pi=legal_log_policy(
-            jnp.take_along_axis(
-                target_pred.wildcard_logits,
-                batch.player_transitions.agent_output.move_slot[..., None, None],
-                axis=-2,
-            ).squeeze(-2),
-            batch.player_transitions.env_output.wildcard_mask,
-        ),
-        wildcard=batch.player_transitions.agent_output.wildcard_slot,
-        switch_log_pi=legal_log_policy(
-            target_pred.switch_logits,
-            batch.player_transitions.env_output.switch_mask,
-        ),
-        switch=batch.player_transitions.agent_output.switch_slot,
+        action_type_log_prob=target_action_type_head.log_prob,
+        action_type_index=target_action_type_head.action_index,
+        move_log_prob=target_move_head.log_prob,
+        wildcard_log_prob=target_wildcard_head.log_prob,
+        switch_log_prob=target_switch_head.log_prob,
     )
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    move_valid = player_valid & (actor_action_type_head.action_index == 0)
+    switch_valid = player_valid & (actor_action_type_head.action_index == 1)
+    wildcard_valid = move_valid & (
+        batch.player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
+    )
+
     rewards = batch.player_transitions.env_output.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-    vtrace = compute_returns(
-        target_pred.v,
-        jnp.concatenate((target_pred.v[1:], target_pred.v[-1:])),
+    player_vtrace = compute_returns(
+        player_target_pred.v,
+        jnp.concatenate((player_target_pred.v[1:], player_target_pred.v[-1:])),
         jnp.concatenate((rewards[1:], rewards[-1:])),
         jnp.concatenate((player_valid[1:], jnp.zeros_like(player_valid[-1:])))
         * config.player_gamma,
@@ -217,13 +197,13 @@ def train_step(
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
     )
-    player_adv_mean = average(vtrace.pg_advantage, player_valid)
-    player_adv_std = vtrace.pg_advantage.std(where=player_valid)
+    player_adv_mean = average(player_vtrace.pg_advantage, player_valid)
+    player_adv_std = player_vtrace.pg_advantage.std(where=player_valid)
 
     # Normalize by the ema mean and std of the advantages.
-    player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
-        player_state.target_adv_std + 1e-8
-    )
+    player_norm_advantages = (
+        player_vtrace.pg_advantage - player_state.target_adv_mean
+    ) / (player_state.target_adv_std + 1e-8)
 
     player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
@@ -232,53 +212,23 @@ def train_step(
 
     def player_loss_fn(params: Params):
 
-        pred = player_state.apply_fn(params, player_actor_input)
-        pred_action_type_log_pi = legal_log_policy(
-            pred.action_type_logits,
-            batch.player_transitions.env_output.action_type_mask,
-        )
-        pred_move_log_pi = legal_log_policy(
-            pred.move_logits,
-            batch.player_transitions.env_output.move_mask,
-        )
-        pred_wildcard_log_pi = legal_log_policy(
-            pred.wildcard_logits,
-            batch.player_transitions.env_output.wildcard_mask[..., None, :],
-        )
-        pred_switch_log_pi = legal_log_policy(
-            pred.switch_logits,
-            batch.player_transitions.env_output.switch_mask,
-        )
-        pred_action_type_pi = legal_policy(
-            pred.action_type_logits,
-            batch.player_transitions.env_output.action_type_mask,
-        )
-        pred_move_pi = legal_policy(
-            pred.move_logits,
-            batch.player_transitions.env_output.move_mask,
-        )
-        pred_wildcard_pi = legal_policy(
-            pred.wildcard_logits,
-            batch.player_transitions.env_output.wildcard_mask[..., None, :],
-        )
-        pred_switch_pi = legal_policy(
-            pred.switch_logits,
-            batch.player_transitions.env_output.switch_mask,
+        player_pred = player_state.apply_fn(
+            params,
+            player_actor_input,
+            batch.player_transitions.agent_output.actor_output,
         )
 
+        pred_action_type_head = player_pred.action_type_head
+        pred_move_head = player_pred.move_head
+        pred_wildcard_head = player_pred.wildcard_head
+        pred_switch_head = player_pred.switch_head
+
         learner_log_prob = calculate_player_log_prob(
-            action_type_log_pi=pred_action_type_log_pi,
-            action_type=batch.player_transitions.agent_output.action_type,
-            move_log_pi=pred_move_log_pi,
-            move=batch.player_transitions.agent_output.move_slot,
-            wildcard_log_pi=jnp.take_along_axis(
-                pred_wildcard_log_pi,
-                batch.player_transitions.agent_output.move_slot[..., None, None],
-                axis=-2,
-            ).squeeze(-2),
-            wildcard=batch.player_transitions.agent_output.wildcard_slot,
-            switch_log_pi=pred_switch_log_pi,
-            switch=batch.player_transitions.agent_output.switch_slot,
+            action_type_log_prob=pred_action_type_head.log_prob,
+            action_type_index=pred_action_type_head.action_index,
+            move_log_prob=pred_move_head.log_prob,
+            wildcard_log_prob=pred_wildcard_head.log_prob,
+            switch_log_prob=pred_switch_head.log_prob,
         )
 
         # Calculate the log ratios.
@@ -292,84 +242,106 @@ def train_step(
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
-            ratio, player_norm_advantages, player_valid, config.clip_ppo
+            policy_ratios=ratio,
+            advantages=player_norm_advantages,
+            valid=player_valid,
+            clip_ppo=config.clip_ppo,
         )
 
-        loss_v = value_loss(pred.v, vtrace.returns, player_valid)
+        loss_v = value_loss(
+            pred_v=player_pred.v,
+            target_v=player_vtrace.returns,
+            valid=player_valid,
+        )
 
         loss_entropy = player_entropy_loss(
-            pred_action_type_log_pi,
-            pred_action_type_pi,
-            pred_move_log_pi,
-            pred_move_pi,
-            pred_wildcard_log_pi,
-            pred_wildcard_pi,
-            pred_switch_log_pi,
-            pred_switch_pi,
-            player_valid,
+            action_type_entropy=player_pred.action_type_head.entropy,
+            action_type_valid=player_valid,
+            move_entropy=player_pred.move_head.entropy,
+            move_valid=move_valid,
+            wildcard_entropy=player_pred.wildcard_head.entropy,
+            wildcard_valid=wildcard_valid,
+            switch_entropy=player_pred.switch_head.entropy,
+            switch_valid=switch_valid,
         )
 
         loss_kl = backward_kl_loss(
-            learner_target_ratio, learner_target_log_ratio, player_valid
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=player_valid,
         )
 
         loss = (
-            loss_pg
-            + config.value_loss_coef * loss_v
+            config.player_policy_loss_coef * loss_pg
+            + config.player_value_loss_coef * loss_v
             + ent_kl_coef_mult
-            * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
+            * (
+                config.player_kl_loss_coef * loss_kl
+                - config.player_entropy_loss_coef * loss_entropy
+            )
         )
         learner_actor_approx_kl = average(-learner_actor_log_ratio, player_valid)
         learner_target_approx_kl = average(-learner_target_log_ratio, player_valid)
 
         return loss, dict(
             # Loss values
-            loss_pg=loss_pg,
-            loss_v=loss_v,
-            loss_entropy=loss_entropy,
-            loss_kl=loss_kl,
+            player_loss_pg=loss_pg,
+            player_loss_v=loss_v,
+            player_loss_entropy=loss_entropy,
+            player_loss_kl=loss_kl,
             # Ratios
-            learner_actor_ratio=average(learner_actor_ratio, player_valid),
-            learner_target_ratio=average(learner_target_ratio, player_valid),
+            player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
+            player_learner_target_ratio=average(learner_target_ratio, player_valid),
             # Approx KL values
-            learner_actor_approx_kl=learner_actor_approx_kl,
-            learner_target_approx_kl=learner_target_approx_kl,
+            player_learner_actor_approx_kl=learner_actor_approx_kl,
+            player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             ent_kl_coef_mult=ent_kl_coef_mult,
-            value_function_r2=calculate_r2(
-                value_prediction=pred.v, value_target=vtrace.returns, mask=player_valid
+            player_value_function_r2=calculate_r2(
+                value_prediction=player_pred.v,
+                value_target=player_vtrace.returns,
+                mask=player_valid,
             ),
         )
 
-    target_builder_output = builder_state.apply_fn(
-        builder_state.target_params, batch.builder_transitions.env_output
+    builder_actor_input = PlayerActorInput(env=batch.builder_transitions.env_output)
+    builder_target_pred = builder_state.apply_fn(
+        builder_state.target_params,
+        builder_actor_input,
+        batch.builder_transitions.agent_output.actor_output,
     )
 
-    target_builder_log_prob = calculate_builder_log_prob(
-        legal_log_policy(
-            target_builder_output.species_logits,
-            batch.builder_transitions.env_output.species_mask,
-        ),
-        batch.builder_transitions.agent_output.species,
-        legal_log_policy(
-            target_builder_output.packed_set_logits,
-            batch.builder_transitions.env_output.packed_set_mask,
-        ),
-        batch.builder_transitions.agent_output.packed_set,
-        batch.builder_transitions.env_output.pos,
+    actor_continue_head = (
+        batch.builder_transitions.agent_output.actor_output.continue_head
     )
+    actor_selection_head = (
+        batch.builder_transitions.agent_output.actor_output.selection_head
+    )
+    actor_species_head = (
+        batch.builder_transitions.agent_output.actor_output.species_head
+    )
+    actor_packed_set_head = (
+        batch.builder_transitions.agent_output.actor_output.packed_set_head
+    )
+
+    target_continue_head = builder_target_pred.continue_head
+    target_selection_head = builder_target_pred.selection_head
+    target_species_head = builder_target_pred.species_head
+    target_packed_set_head = builder_target_pred.packed_set_head
+
     actor_builder_log_prob = calculate_builder_log_prob(
-        legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.species_logits,
-            batch.builder_transitions.env_output.species_mask,
-        ),
-        batch.builder_transitions.agent_output.species,
-        legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
-            batch.builder_transitions.env_output.packed_set_mask,
-        ),
-        batch.builder_transitions.agent_output.packed_set,
-        batch.builder_transitions.env_output.pos,
+        continue_log_prob=actor_continue_head.log_prob,
+        continue_index=actor_continue_head.action_index,
+        selection_log_prob=actor_selection_head.log_prob,
+        species_log_prob=actor_species_head.log_prob,
+        packed_set_log_prob=actor_packed_set_head.log_prob,
+    )
+    target_builder_log_prob = calculate_builder_log_prob(
+        continue_log_prob=target_continue_head.log_prob,
+        continue_index=target_continue_head.action_index,
+        selection_log_prob=target_selection_head.log_prob,
+        species_log_prob=target_species_head.log_prob,
+        packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
     actor_target_builder_log_ratio = actor_builder_log_prob - target_builder_log_prob
@@ -378,13 +350,14 @@ def train_step(
     builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
 
     final_reward = rewards[-1]
-    builder_rewards = jnp.concatenate(
-        (jnp.zeros_like(builder_is_ratio[:-1]), final_reward[None])
-    )
     builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
+    builder_rewards = (
+        jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
+        * final_reward[None]
+    )
     builder_vtrace = compute_returns(
-        target_builder_output.v,
-        jnp.concatenate((target_builder_output.v[1:], target_builder_output.v[-1:])),
+        builder_target_pred.v,
+        jnp.concatenate((builder_target_pred.v[1:], builder_target_pred.v[-1:])),
         jnp.concatenate((builder_rewards[1:], builder_rewards[-1:])),
         jnp.concatenate((builder_valid[1:], jnp.zeros_like(builder_valid[-1:])))
         * config.builder_gamma,
@@ -402,32 +375,23 @@ def train_step(
 
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        learner_builder_output = builder_state.apply_fn(
-            params, batch.builder_transitions.env_output
-        )
-        leaner_builder_species_log_pi = legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.species_logits,
-            batch.builder_transitions.env_output.species_mask,
-        )
-        leaner_builder_packed_set_log_pi = legal_log_policy(
-            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
-            batch.builder_transitions.env_output.packed_set_mask,
-        )
-        leaner_builder_species_pi = legal_policy(
-            batch.builder_transitions.agent_output.actor_output.species_logits,
-            batch.builder_transitions.env_output.species_mask,
-        )
-        leaner_builder_packed_set_pi = legal_policy(
-            batch.builder_transitions.agent_output.actor_output.packed_set_logits,
-            batch.builder_transitions.env_output.packed_set_mask,
+        builder_pred = builder_state.apply_fn(
+            params,
+            builder_actor_input,
+            batch.builder_transitions.agent_output.actor_output,
         )
 
+        learner_continue_head = builder_pred.continue_head
+        learner_selection_head = builder_pred.selection_head
+        learner_species_head = builder_pred.species_head
+        learner_packed_set_head = builder_pred.packed_set_head
+
         learner_builder_log_prob = calculate_builder_log_prob(
-            leaner_builder_species_log_pi,
-            batch.builder_transitions.agent_output.species,
-            leaner_builder_packed_set_log_pi,
-            batch.builder_transitions.agent_output.packed_set,
-            batch.builder_transitions.env_output.pos,
+            continue_log_prob=learner_continue_head.log_prob,
+            continue_index=learner_continue_head.action_index,
+            selection_log_prob=learner_selection_head.log_prob,
+            species_log_prob=learner_species_head.log_prob,
+            packed_set_log_prob=learner_packed_set_head.log_prob,
         )
 
         learner_actor_log_ratio = learner_builder_log_prob - actor_builder_log_prob
@@ -440,43 +404,61 @@ def train_step(
 
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
-            ratio, builder_norm_advantages, builder_valid, config.clip_ppo
+            policy_ratios=ratio,
+            advantages=builder_norm_advantages,
+            valid=builder_valid,
+            clip_ppo=config.clip_ppo,
         )
 
         loss_v = value_loss(
-            learner_builder_output.v,
-            builder_vtrace.returns,
-            # Do this so we learn the value of final teams
-            jnp.ones_like(builder_valid),
+            pred_v=builder_pred.v,
+            target_v=builder_vtrace.returns,
+            valid=builder_valid,
         )
 
         loss_entropy = builder_entropy_loss(
-            leaner_builder_species_log_pi,
-            leaner_builder_species_pi,
-            leaner_builder_packed_set_log_pi,
-            leaner_builder_packed_set_pi,
-            batch.builder_transitions.env_output.pos,
-            builder_valid,
+            continue_entropy=learner_continue_head.entropy,
+            continue_valid=builder_valid,
+            selection_entropy=learner_selection_head.entropy,
+            selection_valid=builder_valid,
+            species_entropy=learner_species_head.entropy,
+            species_valid=builder_valid,
+            packed_set_entropy=learner_packed_set_head.entropy,
+            packed_set_valid=builder_valid,
         )
 
         loss_kl = backward_kl_loss(
-            learner_target_ratio, learner_target_log_ratio, builder_valid
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=builder_valid,
         )
 
-        builder_loss = (
-            loss_pg
-            + config.value_loss_coef * loss_v
+        loss = (
+            config.builder_policy_loss_coef * loss_pg
+            + config.builder_value_loss_coef * loss_v
             + ent_kl_coef_mult
-            * (config.kl_loss_coef * loss_kl - config.entropy_loss_coef * loss_entropy)
+            * (
+                config.builder_kl_loss_coef * loss_kl
+                - config.builder_entropy_loss_coef * loss_entropy
+            )
         )
+        learner_actor_approx_kl = average(-learner_actor_log_ratio, builder_valid)
+        learner_target_approx_kl = average(-learner_target_log_ratio, builder_valid)
 
-        return builder_loss, dict(
+        return loss, dict(
             builder_loss_pg=loss_pg,
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
+            # Ratios
+            builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
+            builder_learner_target_ratio=average(learner_target_ratio, builder_valid),
+            # Approx KL values
+            builder_learner_actor_approx_kl=learner_actor_approx_kl,
+            builder_learner_target_approx_kl=learner_target_approx_kl,
+            # Extra stats
             builder_value_function_r2=calculate_r2(
-                value_prediction=learner_builder_output.v,
+                value_prediction=builder_pred.v,
                 value_target=builder_vtrace.returns,
                 mask=builder_valid,
             ),
@@ -487,17 +469,16 @@ def train_step(
 
     player_logs.update(
         dict(
-            loss=player_loss_val,
-            param_norm=optax.global_norm(player_state.params),
-            gradient_norm=optax.global_norm(player_grads),
-            adv_mean=player_adv_mean,
-            adv_std=player_adv_std,
-            is_ratio=average(player_is_ratio, player_valid),
-            norm_adv_mean=average(player_norm_advantages, player_valid),
-            norm_adv_std=player_norm_advantages.std(where=player_valid),
-            value_target_mean=average(vtrace.returns, player_valid),
-            value_target_std=vtrace.returns.std(where=player_valid),
-            Step=player_state.num_steps,
+            player_loss=player_loss_val,
+            player_param_norm=optax.global_norm(player_state.params),
+            player_gradient_norm=optax.global_norm(player_grads),
+            player_adv_mean=player_adv_mean,
+            player_adv_std=player_adv_std,
+            player_is_ratio=average(player_is_ratio, player_valid),
+            player_norm_adv_mean=average(player_norm_advantages, player_valid),
+            player_norm_adv_std=player_norm_advantages.std(where=player_valid),
+            player_value_target_mean=average(player_vtrace.returns, player_valid),
+            player_value_target_std=player_vtrace.returns.std(where=player_valid),
         )
     )
 
@@ -517,20 +498,28 @@ def train_step(
         actor_steps=player_state.actor_steps + player_valid.sum(),
     )
 
-    player_logs.update(dict(actor_steps=player_state.actor_steps))
-    player_logs.update(collect_batch_telemetry_data(batch))
+    training_logs = dict(
+        actor_steps=player_state.actor_steps,
+        Step=player_state.num_steps,
+    )
 
     builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
     (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
         builder_state.params
     )
 
-    player_logs.update(builder_logs)
-    player_logs.update(
+    builder_logs.update(
         dict(
-            builder_loss_val=builder_loss_val,
+            builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
+            builder_adv_mean=builder_adv_mean,
+            builder_adv_std=builder_adv_std,
+            builder_is_ratio=average(builder_is_ratio, builder_valid),
+            builder_norm_adv_mean=average(builder_norm_advantages, builder_valid),
+            builder_norm_adv_std=builder_norm_advantages.std(where=builder_valid),
+            builder_value_target_mean=average(builder_vtrace.returns, builder_valid),
+            builder_value_target_std=builder_vtrace.returns.std(where=builder_valid),
         )
     )
 
@@ -546,7 +535,11 @@ def train_step(
         + builder_adv_std * config.tau,
     )
 
-    return player_state, builder_state, player_logs
+    training_logs.update(collect_batch_telemetry_data(batch))
+    training_logs.update(player_logs)
+    training_logs.update(builder_logs)
+
+    return player_state, builder_state, training_logs
 
 
 class Learner:
@@ -569,33 +562,56 @@ class Learner:
         self.wandb_run = wandb_run
         self.gpu_lock = gpu_lock
         self.num_samples = num_samples
+        self.done = False
+        self.device_q = queue.Queue(maxsize=1)
+        self.param_lock = FairLock()
 
         self.wandb_run.log_code("inference/")
         self.wandb_run.log_code(
             "service/src/client/", include_fn=lambda x: x.endswith(".ts")
         )
 
+        self.species_counts = np.zeros(NUM_SPECIES, dtype=np.int32)
+
         self.update_params_for_actor()
 
     def update_params_for_actor(self):
         """Updates the parameters for the actor."""
-        self.params_for_actor = (
-            int(self.player_state.num_steps),
-            jax.device_get(self.player_state.params),
-            jax.device_get(self.builder_state.params),
-        )
+        with self.param_lock:
+            self.params_for_actor = (
+                jax.device_get(self.player_state.num_steps),
+                jax.device_get(self.player_state.params),
+                jax.device_get(self.builder_state.params),
+            )
+
+    def host_to_device_worker(self):
+        """Elementary data pipeline."""
+
+        while not self.done:
+            try:
+                # Try to get a batch. Skip the iteration if we couldn't.
+                batch = self.replay_buffer.sample(self.learner_config.batch_size)
+                self.device_q.put(jax.device_put(batch))
+            except NotEnoughSamplesError:
+                time.sleep(1)
+                continue
 
     def train(self):
         consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         train_progress = tqdm(desc="batches", smoothing=0.1)
         batch_size = self.learner_config.batch_size
-        last_oom = time.time()
+
+        self.controller.learner_wait()
+
+        transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        transfer_thread.start()
 
         for _ in range(self.learner_config.num_steps):
             try:
                 self.controller.learner_wait()
 
-                batch = self.replay_buffer.sample(batch_size)
+                batch = self.device_q.get()
+
                 with self.gpu_lock:
                     self.player_state, self.builder_state, logs = train_step(
                         self.player_state,
@@ -605,6 +621,20 @@ class Learner:
                     )
 
                 self.update_params_for_actor()
+
+                self.species_counts = (
+                    (1 - self.learner_config.tau) * self.species_counts
+                ) + (self.learner_config.tau * np.array(logs.pop("usage_counts")))
+                if self.player_state.num_steps % 200 == 0:
+                    names = list(STOI["species"])
+                    counts = self.species_counts / self.species_counts.sum()
+
+                    table = wandb.Table(columns=["species", "usage"])
+                    for name, count in zip(names, counts):
+                        table.add_data(name, count)
+
+                    self.wandb_run.log({"species_usage": table})
+
                 self.wandb_run.log(logs)
 
                 # Update the tqdm progress bars.
@@ -622,23 +652,16 @@ class Learner:
                         self.builder_state,
                     )
 
-            except Exception as e:
-                traceback.print_exc()
-                if "RESOURCE_EXHAUSTED" in str(e):
-                    batch_size = max(2, batch_size // 2)
-                    print(
-                        f"Resource exhausted, reducing batch size to {batch_size} and retrying."
-                    )
-                    last_oom = time.time()
-                else:
-                    raise e
-            else:
-                # If no OOM for 60 minutes, double the batch size
-                if time.time() - last_oom > 60 * 60:
-                    new_batch_size = min(self.learner_config.batch_size, 2 * batch_size)
-                    if new_batch_size != batch_size:
-                        batch_size = new_batch_size
-                        print(
-                            f"No OOM for 60 minutes, doubling batch size to {batch_size}."
-                        )
-                    last_oom = time.time()
+            except KeyboardInterrupt:
+                print("Training interrupted.")
+                save_train_state(
+                    self.wandb_run,
+                    self.learner_config,
+                    self.player_state,
+                    self.builder_state,
+                )
+                break
+
+        self.done = True
+        transfer_thread.join()
+        print("Training Finished.")

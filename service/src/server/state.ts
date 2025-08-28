@@ -33,6 +33,7 @@ import {
     NUM_HISTORY,
     jsonDatum,
     lookUpSets,
+    lookUpSetsList,
     numActionMaskFeatures,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
@@ -71,7 +72,7 @@ const MAX_RATIO_TOKEN = 16384;
 
 export function generateTeamFromFormat(format: string): string {
     const species2Sets = lookUpSets(format);
-    const validator = new TeamValidator(format);
+    const validator = new TeamValidator(format.replace("all_ou", "ou"));
 
     while (true) {
         const packedSets: Set<string> = new Set();
@@ -112,18 +113,13 @@ export function generateTeamFromIndices(
         !smogonFormat.endsWith("randombattle")
     ) {
         const packedSets = [];
-        const setsToChoose = lookUpSets(smogonFormat);
+        const setsListToChoose = lookUpSetsList(smogonFormat);
 
-        const speciesKeys = Object.keys(setsToChoose);
-
-        for (const [memberIndex, speciesIndex] of speciesIndices.entries()) {
-            const speciesSets = setsToChoose[speciesKeys[speciesIndex]];
-            const packedSet = speciesSets[packedSetIndices[memberIndex]];
-            if (packedSet === undefined) {
-                throw new Error(
-                    `Invalid packed set for species ${speciesKeys[speciesIndex]} index: ${packedSetIndices[memberIndex]}`,
-                );
-            }
+        for (const [
+            memberIndex,
+            packedSetIndex,
+        ] of packedSetIndices.entries()) {
+            const packedSet = setsListToChoose[packedSetIndex];
             packedSets.push(packedSet);
         }
 
@@ -1121,7 +1117,8 @@ function getVolatileStatusToken(id: string): number {
                     );
                     haveAdded = true;
                 } else {
-                    throw err;
+                    console.log(id, err);
+                    return VolatilestatusEnum.VOLATILESTATUS_ENUM___UNK;
                 }
             }
         }

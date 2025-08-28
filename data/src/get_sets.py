@@ -61,7 +61,11 @@ def product_lists(lists: List[List[str]]):
         yield list(prod)
 
 
-INCLUDE_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
+INCLUDE_FORMATS = list(
+    requests.get(
+        "https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/formats/index.json"
+    ).json()
+)
 
 
 def generate_packed_sets(source: Dict[str, Any], generation: str) -> List[str]:
