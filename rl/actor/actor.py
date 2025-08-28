@@ -43,7 +43,7 @@ class Actor:
         self._unroll_length = unroll_length
         self._queue = queue
         self._learner = learner
-        self._rng_key = jax.random.PRNGKey(rng_seed)
+        self._rng_key = jax.random.key(rng_seed)
 
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
@@ -54,10 +54,12 @@ class Actor:
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(
-            action_type=ACTION_TYPE_MAPPING[agent_output.action_type.item()],
-            move_slot=agent_output.move_slot.item(),
-            switch_slot=agent_output.switch_slot.item(),
-            wildcard_slot=agent_output.wildcard_slot.item(),
+            action_type=ACTION_TYPE_MAPPING[
+                agent_output.actor_output.action_type_head.action_index.item()
+            ],
+            move_slot=agent_output.actor_output.move_head.action_index.item(),
+            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
+            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
         )
 
     def unroll(
@@ -69,7 +71,9 @@ class Actor:
     ):
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = jax.random.split(rng_key)
-        builder_subkeys = jax.random.split(builder_key, self._builder_env.max_ts + 1)
+        builder_unroll_length = self._builder_env.max_ts + 1
+
+        builder_subkeys = jax.random.split(builder_key, builder_unroll_length)
         player_subkeys = jax.random.split(player_key, self._unroll_length)
 
         build_traj = []
@@ -90,21 +94,23 @@ class Actor:
                 break
             builder_actor_input = self._builder_env.step(builder_agent_output)
 
+        if len(build_traj) < builder_unroll_length:
+            build_traj += [builder_transition] * (
+                builder_unroll_length - len(build_traj)
+            )
+
         # Pack the trajectory and reset parent state.
         builder_trajectory = jax.device_get(build_traj)
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.stack(xs), *builder_trajectory
         )
 
-        if (builder_actor_input.history.species_tokens == 0).all().item():
-            raise ValueError("Builder actor input history species tokens are all zero.")
-
         player_traj = []
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.env.species_tokens.reshape(-1).tolist(),
+            builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
         )
 
         # Rollout the player environment.
@@ -140,7 +146,7 @@ class Actor:
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
             player_transitions=player_trajectory,
-            builder_history=builder_actor_input.history,
+            # builder_history=builder_actor_input.history,
             player_history=player_actor_input.history,
         )
 
@@ -168,4 +174,5 @@ class Actor:
 
     def pull_params(self):
         with self._learner.param_lock:
-            return self._learner.params_for_actor
+            step_count, player_params, builder_params = self._learner.params_for_actor
+            return int(step_count), player_params, builder_params

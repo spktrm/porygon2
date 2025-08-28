@@ -33,6 +33,7 @@ import {
     NUM_HISTORY,
     jsonDatum,
     lookUpSets,
+    lookUpSetsList,
     numActionMaskFeatures,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
@@ -112,18 +113,13 @@ export function generateTeamFromIndices(
         !smogonFormat.endsWith("randombattle")
     ) {
         const packedSets = [];
-        const setsToChoose = lookUpSets(smogonFormat);
+        const setsListToChoose = lookUpSetsList(smogonFormat);
 
-        const speciesKeys = Object.keys(setsToChoose);
-
-        for (const [memberIndex, speciesIndex] of speciesIndices.entries()) {
-            const speciesSets = setsToChoose[speciesKeys[speciesIndex]];
-            const packedSet = speciesSets[packedSetIndices[memberIndex]];
-            if (packedSet === undefined) {
-                throw new Error(
-                    `Invalid packed set for species ${speciesKeys[speciesIndex]} index: ${packedSetIndices[memberIndex]}`,
-                );
-            }
+        for (const [
+            memberIndex,
+            packedSetIndex,
+        ] of packedSetIndices.entries()) {
+            const packedSet = setsListToChoose[packedSetIndex];
             packedSets.push(packedSet);
         }
 

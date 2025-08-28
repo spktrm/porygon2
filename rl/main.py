@@ -1,8 +1,5 @@
 import os
 
-os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc"
-# Can cause memory issues if set to True
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # gemm_any=True is ~10% speed up in this setup
 os.environ["XLA_FLAGS"] = (
     "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
@@ -17,9 +14,9 @@ import jax
 
 # jax.config.update("jax_debug_nans", True)
 import numpy as np
+import wandb
 import wandb.wandb_run
 
-import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.concurrency.lock import FairLock
@@ -123,11 +120,21 @@ def main():
     learner_config = get_learner_config()
     pprint(learner_config)
 
-    player_model_config = get_player_model_config(learner_config.generation)
-    builder_model_config = get_builder_model_config(learner_config.generation)
+    player_model_config = get_player_model_config(
+        learner_config.generation, dict(train=True)
+    )
+    builder_model_config = get_builder_model_config(
+        learner_config.generation, dict(train=True)
+    )
 
-    player_network = get_player_model(player_model_config)
-    builder_network = get_builder_model(builder_model_config)
+    learner_player_network = get_player_model(player_model_config)
+    learner_builder_network = get_builder_model(builder_model_config)
+    actor_player_network = get_player_model(
+        get_player_model_config(learner_config.generation, dict(train=False))
+    )
+    actor_builder_network = get_builder_model(
+        get_builder_model_config(learner_config.generation, dict(train=False))
+    )
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
@@ -138,17 +145,14 @@ def main():
     )
 
     player_state, builder_state = create_train_state(
-        player_network, builder_network, jax.random.key(42), learner_config
+        learner_player_network,
+        learner_builder_network,
+        jax.random.key(42),
+        learner_config,
     )
 
     gpu_lock = FairLock()
-    agent = Agent(
-        player_state.apply_fn,
-        builder_state.apply_fn,
-        gpu_lock,
-        # player_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
-        # builder_sampling_config=SamplingConfig(temp=1.0, min_p=0.025),
-    )
+    agent = Agent(actor_player_network.apply, actor_builder_network.apply, gpu_lock)
 
     replay_buffer = ReplayBuffer(
         capacity=max(
@@ -167,7 +171,8 @@ def main():
     wandb_run = wandb.init(
         project="pokemon-rl",
         config={
-            "num_params": get_num_params(player_state.params),
+            "num_player_params": get_num_params(player_state.params),
+            "num_builder_params": get_num_params(builder_state.params),
             "learner_config": learner_config,
             "player_model_config": json.loads(
                 player_model_config.to_json_best_effort()

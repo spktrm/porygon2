@@ -206,7 +206,18 @@ try:
         generation: {
             smogon_format: jnp.asarray(
                 np.load(
-                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets.npy",
+                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_features.npy",
+                )
+            )
+            for smogon_format in [DEFAULT_SMOGON_FORMAT]
+        }
+        for generation in range(3, 10)
+    }
+    SET_MASK = {
+        generation: {
+            smogon_format: jnp.asarray(
+                np.load(
+                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_mask.npy",
                 )
             )
             for smogon_format in [DEFAULT_SMOGON_FORMAT]

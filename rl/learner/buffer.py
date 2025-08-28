@@ -66,7 +66,7 @@ class ReplayBuffer:
             player_transitions=jax.tree.map(
                 lambda x: x[:num_valid], stacked_trajectory.player_transitions
             ),
-            builder_history=stacked_trajectory.builder_history,
+            # builder_history=stacked_trajectory.builder_history,
             player_history=clip_history(
                 stacked_trajectory.player_history, resolution=resolution
             ),

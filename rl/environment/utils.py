@@ -4,7 +4,6 @@ import jax
 import numpy as np
 
 from rl.environment.data import (
-    DEFAULT_SMOGON_FORMAT,
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ACTION_MASK_FEATURES,
@@ -14,17 +13,17 @@ from rl.environment.data import (
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
     NUM_SPECIES,
-    SET_TOKENS,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
+    BuilderActorOutput,
     BuilderEnvOutput,
-    BuilderHistoryOutput,
+    HeadOutput,
     PlayerActorInput,
+    PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
 )
-from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
     FieldFeature,
@@ -198,32 +197,45 @@ def get_ex_trajectory() -> PlayerActorInput:
     )
 
 
-def get_ex_player_step() -> PlayerActorInput:
+def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
-    ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
-    hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-    return PlayerActorInput(env=ex, history=hx)
+    ex: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
+    hx: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
+    return (
+        PlayerActorInput(env=ex, history=hx),
+        PlayerActorOutput(
+            v=np.zeros_like(ex.info[..., 0], dtype=np.float32),
+            action_type_head=HeadOutput(action_index=ex.action_type_mask.argmax(-1)),
+            move_head=HeadOutput(action_index=ex.move_mask.argmax(-1)),
+            wildcard_head=HeadOutput(action_index=ex.wildcard_mask.argmax(-1)),
+            switch_head=HeadOutput(action_index=ex.switch_mask.argmax(-1)),
+        ),
+    )
 
 
-def get_ex_builder_step(
-    generation: int, smogon_format: str = DEFAULT_SMOGON_FORMAT
-) -> BuilderActorInput:
-    set_tokens = SET_TOKENS[generation][smogon_format]
-    trajectory_length = 13
+def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
+    trajectory_length = 33
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
-    return BuilderActorInput(
-        env=BuilderEnvOutput(
-            species_mask=np.ones((trajectory_length, 1, NUM_SPECIES), dtype=np.bool_),
-            packed_set_mask=np.ones(
-                (trajectory_length, 1, set_tokens.shape[1]), dtype=np.bool_
-            ),
-            pos=np.arange(trajectory_length, dtype=np.int32)[:, None],
-            done=done,
+    return (
+        BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=np.ones(
+                    (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
+                ),
+                species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
+                packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
+                ts=np.arange(trajectory_length, dtype=np.int32)[:, None],
+                done=done,
+            )
         ),
-        history=BuilderHistoryOutput(
-            species_tokens=np.ones((6, 1), dtype=np.int32)
-            * SpeciesEnum.SPECIES_ENUM___NULL,
-            packed_set_tokens=np.ones((6, 1), dtype=np.int32) * -1,
+        BuilderActorOutput(
+            v=np.zeros_like(done, dtype=np.float32),
+            continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            packed_set_head=HeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
         ),
     )
