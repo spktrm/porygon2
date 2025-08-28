@@ -12,8 +12,8 @@ from flax import core, struct
 from flax.training import train_state
 
 from rl.environment.interfaces import (
+    BuilderActorInput,
     BuilderActorOutput,
-    BuilderEnvOutput,
     PlayerActorInput,
     PlayerActorOutput,
 )
@@ -40,7 +40,7 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: int = 3
+    target_replay_ratio: float = 2.5
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
@@ -52,7 +52,7 @@ class Porygon2LearnerConfig:
     player_lambda_: float = 0.95
     player_gamma: float = 1.0
 
-    builder_lambda_: float = 0.95
+    builder_lambda_: float = 0.90
     builder_gamma: float = 1.0
 
     # Vtrace params
@@ -61,10 +61,15 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
 
     # Loss coefficients
-    value_loss_coef: float = 0.5
-    policy_loss_coef: float = 1.0
-    entropy_loss_coef: float = 0.05
-    kl_loss_coef: float = 0.05
+    player_value_loss_coef: float = 0.5
+    player_policy_loss_coef: float = 1.0
+    player_entropy_loss_coef: float = 0.05
+    player_kl_loss_coef: float = 0.05
+
+    builder_value_loss_coef: float = 0.5
+    builder_policy_loss_coef: float = 1.0
+    builder_entropy_loss_coef: float = 0.05
+    builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
@@ -75,9 +80,9 @@ def get_learner_config():
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput] = struct.field(
-        pytree_node=False
-    )
+    apply_fn: Callable[
+        [Params, PlayerActorInput, PlayerActorOutput], PlayerActorOutput
+    ] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
@@ -90,9 +95,9 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
-    apply_fn: Callable[[Params, BuilderEnvOutput], BuilderActorOutput] = struct.field(
-        pytree_node=False
-    )
+    apply_fn: Callable[
+        [Params, BuilderActorInput, BuilderActorOutput], BuilderActorOutput
+    ] = struct.field(pytree_node=False)
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     target_adv_mean: float = 0
@@ -106,16 +111,20 @@ def create_train_state(
     config: Porygon2LearnerConfig,
 ):
     """Creates an initial `TrainState`."""
-    ex_player_step = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    ex_builder_step = jax.tree.map(
-        lambda x: x[:, 0], get_ex_builder_step(generation=config.generation)
+    ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
+        lambda x: x[:, 0], get_ex_player_step()
+    )
+    ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
+        lambda x: x[:, 0], get_ex_builder_step()
     )
 
-    player_params = player_network.init(rng, ex_player_step)
-    builder_params = builder_network.init(rng, ex_builder_step)
+    player_params = player_network.init(rng, ex_player_actor_inp, ex_player_actor_out)
+    builder_params = builder_network.init(
+        rng, ex_builder_actor_inp, ex_builder_actor_out
+    )
 
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1), out_axes=1),
+        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1), out_axes=1),
         params=player_params,
         target_params=player_params,
         tx=optax.chain(
@@ -137,7 +146,7 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1), out_axes=1),
+        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(
@@ -219,6 +228,7 @@ def load_train_state(
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
     latest_ckpt = get_most_recent_file(save_path)
     if not latest_ckpt:
         return player_state, builder_state

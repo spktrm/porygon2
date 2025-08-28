@@ -358,6 +358,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
     }
 
+    serialize() {
+        return {
+            log: this.log,
+        };
+    }
+
     override async start() {
         for await (const chunk of this.stream) {
             if (chunk.includes("error|")) {
@@ -419,8 +425,9 @@ export function createBattle(
     },
     debug: boolean = false,
 ) {
-    const { p1Name, p2Name, p1team, p2team, smogonFormat } = options;
+    const { p1Name, p2Name, p1team, p2team } = options;
     const maxRequestCount = options.maxRequestCount ?? 200;
+    const smogonFormat = options.smogonFormat.replace("all_ou", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
         new BattleStreams.BattleStream(),

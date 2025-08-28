@@ -1,7 +1,6 @@
 from typing import Sequence, TypeVar
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
@@ -14,15 +13,17 @@ from rl.environment.data import (
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
     NUM_SPECIES,
-    SET_TOKENS,
 )
 from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderActorOutput,
     BuilderEnvOutput,
+    HeadOutput,
     PlayerActorInput,
+    PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
 )
-from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
     FieldFeature,
@@ -196,21 +197,45 @@ def get_ex_trajectory() -> PlayerActorInput:
     )
 
 
-def get_ex_player_step() -> PlayerActorInput:
+def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
-    ex = jax.tree.map(lambda x: x[:, None, ...], ts.env)
-    hx = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-    return PlayerActorInput(env=ex, history=hx)
+    ex: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
+    hx: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
+    return (
+        PlayerActorInput(env=ex, history=hx),
+        PlayerActorOutput(
+            v=np.zeros_like(ex.info[..., 0], dtype=np.float32),
+            action_type_head=HeadOutput(action_index=ex.action_type_mask.argmax(-1)),
+            move_head=HeadOutput(action_index=ex.move_mask.argmax(-1)),
+            wildcard_head=HeadOutput(action_index=ex.wildcard_mask.argmax(-1)),
+            switch_head=HeadOutput(action_index=ex.switch_mask.argmax(-1)),
+        ),
+    )
 
 
-def get_ex_builder_step(generation: int, smogon_format: str = "ou") -> BuilderEnvOutput:
-    set_tokens = SET_TOKENS[generation][smogon_format]
-    return BuilderEnvOutput(
-        species_mask=jnp.ones((1, 1, NUM_SPECIES), dtype=jnp.bool),
-        species_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32)
-        * SpeciesEnum.SPECIES_ENUM___UNK,
-        packed_set_mask=jnp.ones((1, 1, set_tokens.shape[1]), dtype=jnp.bool),
-        packed_set_tokens=jnp.ones((1, 1, 6), dtype=jnp.int32) * -1,
-        pos=jnp.zeros((1, 1), dtype=jnp.int32),
-        done=jnp.ones((1, 1), dtype=jnp.bool),
+def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
+    trajectory_length = 33
+    done = np.zeros((trajectory_length, 1), dtype=np.bool_)
+    done[-1] = True
+    return (
+        BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=np.ones(
+                    (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
+                ),
+                species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
+                packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
+                ts=np.arange(trajectory_length, dtype=np.int32)[:, None],
+                done=done,
+            )
+        ),
+        BuilderActorOutput(
+            v=np.zeros_like(done, dtype=np.float32),
+            continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            packed_set_head=HeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+        ),
     )

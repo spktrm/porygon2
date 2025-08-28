@@ -101,9 +101,11 @@ export class WorkerHandler {
         }
         const { p1: player1 } = createBattle({
             p1Name: userName,
-            p2Name: `baseline-${userName}`,
             p1team: teamString,
-            p2team: generateTeamFromFormat(smogonFormat),
+            p2Name: `baseline-${userName}`,
+            p2team: generateTeamFromFormat(
+                smogonFormat.replace("all_ou", "ou"),
+            ),
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
@@ -111,11 +113,9 @@ export class WorkerHandler {
     }
 
     private async handleMessage(data: Buffer): Promise<void> {
+        const workerRequest = WorkerRequest.deserializeBinary(data);
+        const taskId = workerRequest.getTaskId();
         try {
-            const workerRequest: WorkerRequest =
-                WorkerRequest.deserializeBinary(data); // keep this if using protobufjs or similar
-            const taskId = workerRequest.getTaskId();
-
             switch (workerRequest.getRequestCase()) {
                 case WorkerRequest.RequestCase.STEP_REQUEST: {
                     const stepRequest = workerRequest.getStepRequest();
@@ -145,7 +145,11 @@ export class WorkerHandler {
                     );
             }
         } catch (error) {
-            console.error("Error handling message in worker:", error);
+            console.error(
+                "Error handling message in worker:",
+                workerRequest.toObject(),
+                error,
+            );
         }
     }
 

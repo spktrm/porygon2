@@ -32,19 +32,22 @@ class PlayerActorInput(NamedTuple):
     history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
+class HeadOutput(NamedTuple):
+    action_index: ArrayLike = ()
+    log_prob: ArrayLike = ()
+    entropy: ArrayLike = ()
+
+
 class PlayerActorOutput(NamedTuple):
     v: ArrayLike = ()
-    action_type_logits: ArrayLike = ()
-    move_logits: ArrayLike = ()
-    switch_logits: ArrayLike = ()
-    wildcard_logits: ArrayLike = ()
+
+    action_type_head: HeadOutput = HeadOutput()
+    move_head: HeadOutput = HeadOutput()
+    switch_head: HeadOutput = HeadOutput()
+    wildcard_head: HeadOutput = HeadOutput()
 
 
 class PlayerAgentOutput(NamedTuple):
-    action_type: ArrayLike = ()
-    move_slot: ArrayLike = ()
-    switch_slot: ArrayLike = ()
-    wildcard_slot: ArrayLike = ()
     actor_output: PlayerActorOutput = PlayerActorOutput()
 
 
@@ -55,23 +58,33 @@ class PlayerTransition(NamedTuple):
 
 class BuilderEnvOutput(NamedTuple):
     species_mask: ArrayLike = ()
+
     species_tokens: ArrayLike = ()
-    packed_set_mask: ArrayLike = ()
     packed_set_tokens: ArrayLike = ()
-    pos: ArrayLike = ()
+
+    ts: ArrayLike = ()
     done: ArrayLike = ()
 
 
+class BuilderHistoryOutput(NamedTuple):
+    placeholder: ArrayLike = ()
+
+
+class BuilderActorInput(NamedTuple):
+    env: BuilderEnvOutput = BuilderEnvOutput()
+    # history: BuilderHistoryOutput = BuilderHistoryOutput()
+
+
 class BuilderActorOutput(NamedTuple):
-    species_logits: ArrayLike = ()
-    packed_set_logits: ArrayLike = ()
     v: ArrayLike = ()
+
+    continue_head: HeadOutput = HeadOutput()
+    selection_head: HeadOutput = HeadOutput()
+    species_head: HeadOutput = HeadOutput()
+    packed_set_head: HeadOutput = HeadOutput()
 
 
 class BuilderAgentOutput(NamedTuple):
-    species: ArrayLike = ()
-    packed_set: ArrayLike = ()
-
     actor_output: BuilderActorOutput = BuilderActorOutput()
 
 
@@ -82,10 +95,12 @@ class BuilderTransition(NamedTuple):
 
 class Trajectory(NamedTuple):
     builder_transitions: BuilderTransition = BuilderTransition()
+    # builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+
     player_transitions: PlayerTransition = PlayerTransition()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
 class SamplingConfig(NamedTuple):
     temp: float = 1.0
-    min_p: float | None = 0.05
+    min_p: float = 0.0

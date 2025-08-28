@@ -40,6 +40,7 @@ class Porygon2PlayerModel(nn.Module):
         action_embeddings: jax.Array,
         entity_mask: jax.Array,
         env_step: PlayerEnvOutput,
+        actor_output: PlayerActorOutput,
     ):
 
         move_embeddings = action_embeddings[:4]
@@ -59,34 +60,42 @@ class Porygon2PlayerModel(nn.Module):
         value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
 
         # Get the moves and wild cards
-        move_logits, wildcard_logits = self.move_head(
+        move_head, wildcard_head = self.move_head(
             move_embeddings,
             entity_embeddings,
             env_step.move_mask,
             entity_mask,
             env_step.wildcard_mask,
+            actor_output.move_head,
+            actor_output.wildcard_head,
         )
 
         # Return the model output
         return PlayerActorOutput(
-            action_type_logits=self.action_type_head(
+            action_type_head=self.action_type_head(
                 action_embeddings,
                 entity_embeddings,
                 env_step.action_type_mask,
                 entity_mask,
+                actor_output.action_type_head,
             ),
-            move_logits=move_logits,
-            wildcard_logits=wildcard_logits,
-            switch_logits=self.switch_head(
+            move_head=move_head,
+            wildcard_head=wildcard_head,
+            switch_head=self.switch_head(
                 switch_embeddings,
                 entity_embeddings,
                 env_step.switch_mask,
                 entity_mask,
+                actor_output.switch_head,
             ),
             v=value,
         )
 
-    def __call__(self, actor_input: PlayerActorInput):
+    def __call__(
+        self,
+        actor_input: PlayerActorInput,
+        actor_output: PlayerActorOutput = PlayerActorOutput(),
+    ):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -96,7 +105,11 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         return jax.vmap(self.get_head_outputs)(
-            entity_embeddings, action_embeddings, entity_mask, actor_input.env
+            entity_embeddings,
+            action_embeddings,
+            entity_mask,
+            actor_input.env,
+            actor_output,
         )
 
 
@@ -109,10 +122,16 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
 def main(generation: int = 9):
     init_jax_jit_cache()
 
-    model_config = get_player_model_config(generation)
-    network = get_player_model(model_config)
+    actor_network = get_player_model(
+        get_player_model_config(generation, dict(train=False))
+    )
+    learner_network = get_player_model(
+        get_player_model_config(generation, dict(train=True))
+    )
 
-    ts = jax.device_put(jax.tree.map(lambda x: x[:, 0], get_ex_player_step()))
+    ex_actor_input, ex_actor_output = jax.device_put(
+        jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+    )
 
     latest_ckpt = get_most_recent_file("./ckpts")
     if latest_ckpt:
@@ -122,10 +141,12 @@ def main(generation: int = 9):
         params = step["player_state"]["params"]
     else:
         key = jax.random.key(42)
-        params = network.init(key, ts)
+        params = learner_network.init(key, ex_actor_input, ex_actor_output)
 
-    network.apply(params, ts)
+    actor_output = actor_network.apply(params, ex_actor_input, rngs={"sampling": key})
+    learner_network.apply(params, ex_actor_input, actor_output)
     pprint(get_num_params(params))
+    pprint(actor_output)
 
 
 if __name__ == "__main__":

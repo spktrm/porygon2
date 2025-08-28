@@ -20,7 +20,7 @@ function main() {
         fs.readFileSync(path.join(dataDir, `data.json`), "utf-8"),
     );
 
-    for (let i = 1; i < 10; i++) {
+    for (let i = 9; i > 0; i--) {
         const readPath = path.join(dataDir, `gen${i}/packed_sets.json`);
 
         const packedSets: string[] = JSON.parse(

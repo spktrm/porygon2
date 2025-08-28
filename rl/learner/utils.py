@@ -4,9 +4,10 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import ActionMaskFeature, FieldFeature
-from rl.model.utils import BIAS_VALUE
+from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -18,8 +19,11 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
-    valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
-    lengths = valid.sum(0)
+    builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
+    builder_lengths = builder_valid.sum(0)
+
+    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    player_lengths = player_valid.sum(0)
 
     history_lengths = batch.player_history.field[
         ..., FieldFeature.FIELD_FEATURE__VALID
@@ -27,37 +31,43 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
 
     can_move = batch.player_transitions.env_output.action_type_mask[..., 0]
     can_switch = batch.player_transitions.env_output.action_type_mask[..., 1]
-    can_act = can_move & can_switch & valid
+    can_act = can_move & can_switch & player_valid
 
-    move_ratio = renormalize(
-        batch.player_transitions.agent_output.action_type == 0, can_act
+    action_type_index = (
+        batch.player_transitions.agent_output.actor_output.action_type_head.action_index
     )
-    switch_ratio = renormalize(
-        batch.player_transitions.agent_output.action_type == 1, can_act
+    wildcard_index = (
+        batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
     )
+    move_ratio = renormalize(action_type_index == 0, can_act)
+    switch_ratio = renormalize(action_type_index == 1, can_act)
 
     wildcard_turn = jnp.where(
-        (batch.player_transitions.agent_output.action_type == 0)
-        & (
-            batch.player_transitions.agent_output.wildcard_slot
-            != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
-        ),
-        jnp.arange(valid.shape[0], dtype=jnp.int32)[:, None],
-        -BIAS_VALUE,
+        (action_type_index == 0)
+        & (wildcard_index != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL),
+        jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
+        -LARGE_NEGATIVE_BIAS,
     ).min(axis=0)
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
     return dict(
-        trajectory_length_mean=lengths.mean(),
-        trajectory_length_min=lengths.min(),
-        trajectory_length_max=lengths.max(),
+        player_trajectory_length_mean=player_lengths.mean(),
+        player_trajectory_length_min=player_lengths.min(),
+        player_trajectory_length_max=player_lengths.max(),
+        builder_trajectory_length_mean=builder_lengths.mean(),
+        builder_trajectory_length_min=builder_lengths.min(),
+        builder_trajectory_length_max=builder_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
+        usage_counts=jnp.bincount(
+            batch.builder_transitions.env_output.species_tokens[-1].reshape(-1),
+            length=NUM_SPECIES,
+        ),
     )
 
 
