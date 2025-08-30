@@ -7,10 +7,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
+import wandb
 from rl.concurrency.lock import FairLock
 from rl.environment.data import NUM_SPECIES, STOI
 from rl.environment.interfaces import PlayerActorInput, Trajectory
