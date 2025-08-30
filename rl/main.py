@@ -14,9 +14,9 @@ import jax
 
 # jax.config.update("jax_debug_nans", True)
 import numpy as np
-import wandb
 import wandb.wandb_run
 
+import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.concurrency.lock import FairLock
@@ -120,20 +120,18 @@ def main():
     learner_config = get_learner_config()
     pprint(learner_config)
 
-    player_model_config = get_player_model_config(
-        learner_config.generation, dict(train=True)
-    )
+    player_model_config = get_player_model_config(learner_config.generation, train=True)
     builder_model_config = get_builder_model_config(
-        learner_config.generation, dict(train=True)
+        learner_config.generation, train=True
     )
 
     learner_player_network = get_player_model(player_model_config)
     learner_builder_network = get_builder_model(builder_model_config)
     actor_player_network = get_player_model(
-        get_player_model_config(learner_config.generation, dict(train=False))
+        get_player_model_config(learner_config.generation, train=False)
     )
     actor_builder_network = get_builder_model(
-        get_builder_model_config(learner_config.generation, dict(train=False))
+        get_builder_model_config(learner_config.generation, train=False)
     )
 
     actor_threads: list[threading.Thread] = []

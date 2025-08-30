@@ -41,7 +41,8 @@ class InferenceModel:
             self.learner_config.generation, train=False, temp=temp, min_p=min_p
         )
         self.builder_model_config = get_builder_model_config(
-            self.learner_config.generation, train=False, temp=temp, min_p=min_p
+            self.learner_config.generation,
+            train=False,  # temp=temp, min_p=min_p
         )
 
         self.player_network = get_player_model(self.player_model_config)
