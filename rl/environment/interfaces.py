@@ -59,7 +59,6 @@ class PlayerTransition(NamedTuple):
 class BuilderEnvOutput(NamedTuple):
     species_mask: ArrayLike = ()
 
-    species_tokens: ArrayLike = ()
     packed_set_tokens: ArrayLike = ()
 
     ts: ArrayLike = ()
@@ -81,7 +80,12 @@ class BuilderActorOutput(NamedTuple):
     continue_head: HeadOutput = HeadOutput()
     selection_head: HeadOutput = HeadOutput()
     species_head: HeadOutput = HeadOutput()
-    packed_set_head: HeadOutput = HeadOutput()
+    item_head: HeadOutput = HeadOutput()
+    ability_head: HeadOutput = HeadOutput()
+    moveset_head: HeadOutput = HeadOutput()
+    teratype_head: HeadOutput = HeadOutput()
+    nature_head: HeadOutput = HeadOutput()
+    ev_head: HeadOutput = HeadOutput()
 
 
 class BuilderAgentOutput(NamedTuple):

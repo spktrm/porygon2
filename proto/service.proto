@@ -24,9 +24,8 @@ message StepRequest {
 
 message ResetRequest {
   string username = 1;
-  repeated int32 species_indices = 2;
-  repeated int32 packed_set_indices = 3;
-  string smogon_format = 4;
+  repeated int32 packed_set_indices = 2;
+  string smogon_format = 3;
 }
 
 message EnvironmentState {

@@ -1,4 +1,3 @@
-import json
 import math
 import pickle
 from functools import partial
@@ -13,13 +12,15 @@ from ml_collections import ConfigDict
 
 from rl.actor.agent import Agent
 from rl.environment.data import (
-    DEFAULT_SMOGON_FORMAT,
-    ITOS,
+    MASKS,
+    NUM_ABILITIES,
+    NUM_ITEMS,
+    NUM_MOVES,
+    NUM_NATURES,
     NUM_SPECIES,
+    NUM_TYPECHART,
     ONEHOT_ENCODERS,
     PACKED_SET_MAX_VALUES,
-    SET_MASK,
-    SET_TOKENS,
 )
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
@@ -49,7 +50,6 @@ from rl.model.modules import (
 )
 from rl.model.utils import (
     LARGE_NEGATIVE_BIAS,
-    get_most_recent_file,
     get_num_params,
     legal_log_policy,
     legal_policy,
@@ -98,16 +98,20 @@ class Porygon2BuilderModel(nn.Module):
 
         self.packed_set_sum = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_ff = FeedForwardResidual(entity_size, dtype=dtype)
-
-        self.species_query_ln = RMSNorm(dtype=dtype)
-        self.species_key_ln = RMSNorm(dtype=dtype)
-        self.packed_set_query_ln = RMSNorm(dtype=dtype)
-        self.packed_set_key_ln = RMSNorm(dtype=dtype)
+        self.packed_set_ln = RMSNorm(dtype=dtype)
 
         transformer_config = self.cfg.transformer.to_dict()
 
         self.encoder = TransformerEncoder(**transformer_config)
         self.decoder = TransformerDecoder(**transformer_config)
+
+        self.species_selection_sum = SumEmbeddings(entity_size, dtype=dtype)
+        self.recurrent_moveset_sum = SumEmbeddings(entity_size, dtype=dtype)
+        self.species_moveset_sum = SumEmbeddings(entity_size, dtype=dtype)
+
+        self.nature_mlp = MLP((entity_size, NUM_NATURES), dtype=dtype)
+        self.ev_mlp = MLP((entity_size, 6), dtype=dtype)
+        self.teratype_mlp = MLP((entity_size, NUM_TYPECHART), dtype=dtype)
 
         self.continue_head = MLP((entity_size, 2), dtype=dtype)
         self.selection_head = MLP((entity_size, 1), dtype=dtype)
@@ -213,7 +217,7 @@ class Porygon2BuilderModel(nn.Module):
             jnp.concatenate((evs, ivs), axis=-1),
         )
         embedding = self.packed_set_ff(embedding)
-        return self.packed_set_key_ln(embedding)
+        return self.packed_set_ln(embedding)
 
     def _forward_continue_head(self, embedding: jax.Array, continue_head: HeadOutput):
         train = self.cfg.get("train", False)
@@ -275,7 +279,6 @@ class Porygon2BuilderModel(nn.Module):
         species_head: HeadOutput,
     ):
         temp = self.cfg.get("temp", 1.0)
-        query = self.species_query_ln(query)
         logits = jnp.einsum("j,kj->k", query, keys) / (
             temp * np.sqrt(self.cfg.entity_size).astype(query.dtype)
         )
@@ -303,33 +306,91 @@ class Porygon2BuilderModel(nn.Module):
         log_prob = jnp.take(log_policy, action_index, axis=-1)
         return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
 
-    def _forward_packed_set_head(
+    def _forward_move_head(
         self,
         query: jax.Array,
         keys: jax.Array,
-        packed_set_mask: jax.Array,
-        packed_set_head: HeadOutput,
+        mask: jax.Array,
+        move_head: HeadOutput,
     ):
         temp = self.cfg.get("temp", 1.0)
-        query = self.packed_set_query_ln(query)
+        current_moveset_oh = jnp.zeros((NUM_MOVES,), dtype=query.dtype)
+
+        log_prob_accum = 0
+        entropy_accum = 0
+        action_indices = []
+
+        for i in range(4):
+            current_moveset_embedding = current_moveset_oh @ keys
+            contextual_query = self.recurrent_moveset_sum(
+                query, current_moveset_embedding
+            )
+            logits = jnp.einsum("j,kj->k", contextual_query, keys) / (
+                temp * np.sqrt(self.cfg.entity_size).astype(query.dtype)
+            )
+            log_policy = legal_log_policy(logits, mask)
+
+            entropy = 0
+            train = self.cfg.get("train", False)
+            if train:
+                action_index = move_head.action_index[i]
+                policy = legal_policy(logits, mask)
+                entropy = -jnp.sum(policy * log_policy, axis=-1)
+            else:
+                masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
+                min_p = self.cfg.get("min_p", 0.0)
+                if 0.0 < min_p < 1.0:
+                    max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
+                        keepdims=True, axis=-1
+                    )
+                    keep = log_policy >= (max_logp + math.log(min_p))
+                    masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
+                action_index = jax.random.categorical(
+                    self.make_rng("sampling"), masked_logits.astype(jnp.float32)
+                )
+
+            selected_move_oh = jax.nn.one_hot(action_index, num_classes=NUM_MOVES)
+            current_moveset_oh = current_moveset_oh + selected_move_oh
+            mask = mask & ~(selected_move_oh.astype(jnp.bool))
+
+            log_prob = jnp.take(log_policy, action_index, axis=-1)
+
+            log_prob_accum = log_prob_accum + log_prob
+            entropy_accum = entropy_accum + entropy
+            action_indices.append(action_index)
+
+        return HeadOutput(
+            action_index=jnp.stack(action_indices).reshape(-1),
+            log_prob=log_prob_accum,
+            entropy=entropy_accum,
+        )
+
+    def _forward_sub_head(
+        self,
+        query: jax.Array,
+        keys: jax.Array,
+        mask: jax.Array,
+        head: HeadOutput,
+    ):
+        temp = self.cfg.get("temp", 1.0)
         logits = jnp.einsum("j,kj->k", query, keys) / (
             temp * np.sqrt(self.cfg.entity_size).astype(query.dtype)
         )
-        log_policy = legal_log_policy(logits, packed_set_mask)
+        log_policy = legal_log_policy(logits, mask)
 
         entropy = ()
         train = self.cfg.get("train", False)
         if train:
-            action_index = packed_set_head.action_index
-            policy = legal_policy(logits, packed_set_mask)
+            action_index = head.action_index
+            policy = legal_policy(logits, mask)
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
-            masked_logits = jnp.where(packed_set_mask, logits, LARGE_NEGATIVE_BIAS)
+            masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(
-                    packed_set_mask, log_policy, LARGE_NEGATIVE_BIAS
-                ).max(keepdims=True, axis=-1)
+                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
+                    keepdims=True, axis=-1
+                )
                 keep = log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
@@ -339,19 +400,91 @@ class Porygon2BuilderModel(nn.Module):
         log_prob = jnp.take(log_policy, action_index, axis=-1)
         return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
 
+    def _forward_mlp_head(
+        self,
+        logits: jax.Array,
+        mask: jax.Array,
+        head: HeadOutput,
+    ):
+        temp = self.cfg.get("temp", 1.0)
+        logits = logits / temp
+        log_policy = legal_log_policy(logits, mask)
+
+        entropy = ()
+        train = self.cfg.get("train", False)
+        if train:
+            action_index = head.action_index
+            policy = legal_policy(logits, mask)
+            entropy = -jnp.sum(policy * log_policy, axis=-1)
+        else:
+            masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
+            min_p = self.cfg.get("min_p", 0.0)
+            if 0.0 < min_p < 1.0:
+                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
+                    keepdims=True, axis=-1
+                )
+                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
+            action_index = jax.random.categorical(
+                self.make_rng("sampling"), masked_logits.astype(jnp.float32)
+            )
+
+        log_prob = jnp.take(log_policy, action_index, axis=-1)
+        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+
+    def _forward_ev_head(
+        self,
+        logits: jax.Array,
+        head: HeadOutput,
+    ):
+        logits = nn.softplus(logits)
+        log_norm_const = jnp.sum(jax.lax.lgamma(logits), axis=-1) - jax.lax.lgamma(
+            jnp.sum(logits, axis=-1)
+        )
+
+        entropy = ()
+        train = self.cfg.get("train", False)
+        if train:
+            value = head.action_index
+
+            sum_concentration = jnp.sum(logits, axis=-1)
+            entropy = (
+                log_norm_const
+                + (
+                    (sum_concentration - logits.shape[-1])
+                    * jax.lax.digamma(sum_concentration)
+                )
+                - jnp.sum((logits - 1.0) * jax.lax.digamma(logits), axis=-1)
+            )
+        else:
+            value = jax.random.dirichlet(
+                self.make_rng("sampling"), logits.astype(jnp.float32), (1,)
+            )
+
+        log_prob = jnp.sum((logits - 1.0) * jnp.log(value), axis=-1) - log_norm_const
+
+        return HeadOutput(
+            action_index=value.reshape(-1), log_prob=log_prob, entropy=entropy
+        )
+
     def _forward(
         self,
         actor_input: BuilderActorInput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
-        packed_set_keys: jax.Array,
+        ability_keys: jax.Array,
+        item_keys: jax.Array,
+        move_keys: jax.Array,
     ) -> BuilderActorOutput:
 
         packed_set_tokens = actor_input.env.packed_set_tokens
 
-        packed_set_attn_mask = jnp.ones_like(packed_set_tokens, dtype=jnp.bool)
+        packed_set_attn_mask = jnp.ones_like(
+            packed_set_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES],
+            dtype=jnp.bool,
+        )
 
-        set_embeddings = jnp.take(packed_set_keys, packed_set_tokens, axis=0)
+        set_embeddings = jax.vmap(self._embed_packed_set)(packed_set_tokens)
 
         contextual_embeddings = self.encoder(
             set_embeddings,
@@ -383,16 +516,71 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.species_head,
         )
 
-        packed_set_mask = jnp.take(
-            SET_MASK[self.cfg.generation][DEFAULT_SMOGON_FORMAT],
-            species_head.action_index,
-            axis=0,
+        learnset_mask = jnp.take(
+            MASKS[self.cfg.generation]["learnset"], species_head.action_index, axis=0
         )
-        packed_set_head = self._forward_packed_set_head(
-            selected_embedding,
-            packed_set_keys,
-            packed_set_mask + (packed_set_mask.sum() == 0),
-            actor_output.packed_set_head,
+        item_mask = jnp.take(
+            MASKS[self.cfg.generation]["items"], species_head.action_index, axis=0
+        )
+        ability_mask = jnp.take(
+            MASKS[self.cfg.generation]["abilities"], species_head.action_index, axis=0
+        )
+
+        contextualised_selection = (
+            self.species_selection_sum(
+                selected_embedding,
+                jnp.take(species_keys, species_head.action_index, axis=0),
+            )
+            + selected_embedding
+        )
+        moveset_head = self._forward_move_head(
+            contextualised_selection,
+            move_keys,
+            learnset_mask,
+            actor_output.moveset_head,
+        )
+
+        contextualised_selection = (
+            self.species_moveset_sum(
+                contextualised_selection,
+                jnp.take(move_keys, moveset_head.action_index, axis=0).sum(0),
+            )
+            + contextualised_selection
+        )
+        item_head = self._forward_sub_head(
+            contextualised_selection,
+            item_keys,
+            item_mask,
+            actor_output.item_head,
+        )
+        ability_head = self._forward_sub_head(
+            contextualised_selection,
+            ability_keys,
+            ability_mask,
+            actor_output.ability_head,
+        )
+
+        contextualised_selection = (
+            self.species_moveset_sum(
+                contextualised_selection,
+                jnp.take(item_keys, item_head.action_index, axis=0),
+                jnp.take(ability_keys, ability_head.action_index, axis=0),
+            )
+            + contextualised_selection
+        )
+        nature_head = self._forward_mlp_head(
+            self.nature_mlp(contextualised_selection),
+            np.ones((NUM_NATURES), dtype=np.bool_),
+            actor_output.nature_head,
+        )
+        ev_head = self._forward_ev_head(
+            self.ev_mlp(contextualised_selection),
+            actor_output.ev_head,
+        )
+        teratype_head = self._forward_mlp_head(
+            self.teratype_mlp(contextualised_selection),
+            np.ones((NUM_TYPECHART), dtype=np.bool_),
+            actor_output.teratype_head,
         )
 
         value = jnp.tanh(self.value_head(contextual_embedding)).squeeze(-1)
@@ -401,7 +589,12 @@ class Porygon2BuilderModel(nn.Module):
             continue_head=continue_head,
             selection_head=selection_head,
             species_head=species_head,
-            packed_set_head=packed_set_head,
+            moveset_head=moveset_head,
+            item_head=item_head,
+            ability_head=ability_head,
+            ev_head=ev_head,
+            nature_head=nature_head,
+            teratype_head=teratype_head,
             v=value,
         )
 
@@ -411,13 +604,12 @@ class Porygon2BuilderModel(nn.Module):
         actor_output: BuilderActorOutput = BuilderActorOutput(),
     ) -> BuilderActorOutput:
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
-        species_keys = self.species_key_ln(species_keys)
+        ability_keys = jax.vmap(self._embed_ability)(np.arange(NUM_ABILITIES))
+        item_keys = jax.vmap(self._embed_item)(np.arange(NUM_ITEMS))
+        move_keys = jax.vmap(self._embed_move)(np.arange(NUM_MOVES))
 
-        packed_sets = SET_TOKENS[self.cfg.generation][DEFAULT_SMOGON_FORMAT]
-        packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
-
-        return jax.vmap(self._forward, in_axes=(0, 0, None, None))(
-            actor_input, actor_output, species_keys, packed_set_keys
+        return jax.vmap(self._forward, in_axes=(0, 0, None, None, None, None))(
+            actor_input, actor_output, species_keys, ability_keys, item_keys, move_keys
         )
 
 
@@ -427,7 +619,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = False, generation: int = 9):
+def main(debug: bool = True, generation: int = 9):
     init_jax_jit_cache()
 
     actor_network = get_builder_model(
@@ -442,7 +634,7 @@ def main(debug: bool = False, generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
@@ -457,12 +649,6 @@ def main(debug: bool = False, generation: int = 9):
 
     builder_env = TeamBuilderEnvironment(generation=generation, max_ts=64)
 
-    with open(
-        f"data/data/gen{generation}/validated_packed_{builder_env.smogon_format}_sets_list.json",
-        "r",
-    ) as f:
-        packed_sets = json.load(f)
-
     while True:
 
         rng_key, key = jax.random.split(key)
@@ -470,7 +656,8 @@ def main(debug: bool = False, generation: int = 9):
 
         build_traj = []
 
-        builder_actor_input = builder_env.reset()
+        with jax.disable_jit(debug):
+            builder_actor_input = builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             with jax.disable_jit(debug):
                 builder_agent_output = agent.step_builder(
@@ -485,7 +672,8 @@ def main(debug: bool = False, generation: int = 9):
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = builder_env.step(builder_agent_output)
+            with jax.disable_jit(debug):
+                builder_actor_input = builder_env.step(builder_agent_output)
 
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
@@ -500,15 +688,6 @@ def main(debug: bool = False, generation: int = 9):
         print(
             "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
         )
-
-        for st, pst in zip(
-            builder_actor_input.env.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
-        ):
-            species = ITOS["species"][st]
-            packed_set = packed_sets[pst]
-
-            print(species, packed_set)
 
         print()
 

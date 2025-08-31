@@ -37,6 +37,7 @@ import {
     EntityEdgeFeature,
     FieldFeature,
     ActionMaskFeature,
+    PackedSetFeature,
 } from "../../protos/features_pb";
 
 export type EnumMappings =
@@ -98,9 +99,8 @@ export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
 export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
+export const numPackedSetFeatures = Object.keys(PackedSetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
-
-export const NUM_HISTORY = 384;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
@@ -138,53 +138,4 @@ function transformJson(
 // Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
 
-const sets: { [k: string]: Record<string, string[]> } = {};
-const setsList: { [k: string]: Record<string, string[]> } = {};
-
-for (let i = 1; i <= 9; i++) {
-    for (const smogonFormat of [
-        "ubers",
-        "ou",
-        "all_ou",
-        "uu",
-        "ru",
-        "nu",
-        "pu",
-        "zu",
-    ]) {
-        try {
-            const data = fs.readFileSync(
-                `../data/data/gen${i}/validated_packed_${smogonFormat}_sets.json`,
-                "utf-8",
-            );
-            sets[`gen${i}${smogonFormat}`] = JSON.parse(data);
-        } catch (err) {
-            continue;
-        }
-        try {
-            const data = fs.readFileSync(
-                `../data/data/gen${i}/validated_packed_${smogonFormat}_sets_list.json`,
-                "utf-8",
-            );
-            setsList[`gen${i}${smogonFormat}`] = JSON.parse(data);
-        } catch (err) {
-            continue;
-        }
-    }
-}
-
-export function lookUpSets(smogonFormat: string): Record<string, string[]> {
-    const maybeSets = sets[smogonFormat];
-    if (maybeSets === undefined) {
-        throw new Error(`No sets found for format: ${smogonFormat}`);
-    }
-    return maybeSets;
-}
-
-export function lookUpSetsList(smogonFormat: string): Record<string, string[]> {
-    const maybeSets = setsList[smogonFormat];
-    if (maybeSets === undefined) {
-        throw new Error(`No sets list found for format: ${smogonFormat}`);
-    }
-    return maybeSets;
-}
+export const NUM_HISTORY = 384;

@@ -1,4 +1,4 @@
-import { AnyObject, Teams, TeamValidator } from "@pkmn/sim";
+import { AnyObject } from "@pkmn/sim";
 import {
     Args,
     BattleInitArgName,
@@ -32,14 +32,13 @@ import {
     MoveIndex,
     NUM_HISTORY,
     jsonDatum,
-    lookUpSets,
-    lookUpSetsList,
     numActionMaskFeatures,
     numEntityEdgeFeatures,
     numEntityNodeFeatures,
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    numPackedSetFeatures,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -57,6 +56,7 @@ import {
     InfoFeature,
     MovesetFeature,
     MovesetHasPP,
+    PackedSetFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState } from "../../protos/service_pb";
@@ -70,56 +70,39 @@ type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const MAX_RATIO_TOKEN = 16384;
 
-export function generateTeamFromFormat(format: string): string {
-    const species2Sets = lookUpSets(format);
-    const validator = new TeamValidator(format.replace("all_ou", "ou"));
-
-    while (true) {
-        const packedSets: Set<string> = new Set();
-        const species2Choose = Object.keys(species2Sets).filter(
-            (species) => species2Sets[species].length > 0,
-        );
-
-        while (packedSets.size < 6) {
-            const species =
-                species2Choose[
-                    Math.floor(Math.random() * species2Choose.length)
-                ];
-            species2Choose.splice(species2Choose.indexOf(species), 1);
-            const speciesSets = species2Sets[species];
-            const packedSet =
-                speciesSets[Math.floor(Math.random() * speciesSets.length)];
-
-            packedSets.add(packedSet);
-        }
-
-        const packedTeam = Array.from(packedSets).join("]");
-        const errors = validator.validateTeam(Teams.unpack(packedTeam));
-
-        if (errors === null) {
-            return packedTeam;
-        }
-    }
+function computePackedSetFromIndices(packedSetIndices: number[]) {
+    const species =
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPECIES];
+    const item = packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ITEM];
+    const ability =
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ABILITY];
+    const moves = [
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE1],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE2],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE3],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE4],
+    ]
+        .map((moveIndex) => jsonDatum.moves[moveIndex])
+        .join(",");
+    return `|${species}|${item}|${ability}|${moves}`; //|${nature}|${evs}|${gender}|${ivs}|${shiny}|${level}|${happiness}|${pokeball}|${hiddenpowertype}|${gigantamax}|${dynamaxlevel}|${teratype}`;
 }
 
 export function generateTeamFromIndices(
     smogonFormat: string,
-    speciesIndices?: number[],
     packedSetIndices?: number[],
 ): string | null {
     if (
-        speciesIndices !== undefined &&
         packedSetIndices !== undefined &&
         !smogonFormat.endsWith("randombattle")
     ) {
-        const packedSets = [];
-        const setsListToChoose = lookUpSetsList(smogonFormat);
+        const packedSets: string[] = [];
 
-        for (const [
-            memberIndex,
-            packedSetIndex,
-        ] of packedSetIndices.entries()) {
-            const packedSet = setsListToChoose[packedSetIndex];
+        for (let i = 0; i < 6; i++) {
+            const packedSetSlice = packedSetIndices.slice(
+                i * numPackedSetFeatures,
+                (i + 1) * numPackedSetFeatures,
+            );
+            const packedSet = computePackedSetFromIndices(packedSetSlice);
             packedSets.push(packedSet);
         }
 

@@ -1,9 +1,9 @@
 import json
 import os
-import traceback
 
 import jax.numpy as jnp
 import numpy as np
+import requests
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -168,64 +168,65 @@ ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
 STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 ONEHOT_DTYPE = jnp.bfloat16
-DEFAULT_SMOGON_FORMAT = "all_ou"
+DEFAULT_SMOGON_FORMAT = "ou"
 
-try:
-    MASKS = {
-        generation: {
-            "species": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/species_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "abilities": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/ability_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "items": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/item_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "learnset": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/learnset_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "duplicate": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/duplicate_mask.npy",
-                )
-            ),
-        }
-        for generation in range(3, 10)
-    }
 
-    SET_TOKENS = {
-        generation: {
-            smogon_format: jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_features.npy",
-                )
+def toid(string: str) -> str:
+    return "".join(c for c in string if c.isalnum()).lower()
+
+
+def get_format_species_mask(
+    generation: int, smogon_format: str = DEFAULT_SMOGON_FORMAT
+):
+    ordered_formats = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
+    valid_species = set()
+    for allowed_format in ordered_formats[ordered_formats.index(smogon_format) :]:
+        try:
+            format_data = requests.get(
+                f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{allowed_format}.json"
+            ).json()
+        except:
+            continue
+        valid_species.update(list(format_data["pokemon"]))
+    species_mask = np.zeros((NUM_SPECIES,), dtype=np.bool_)
+    for species in valid_species:
+        species_index = STOI["species"].get(toid(species))
+        if species_index is not None:
+            species_mask[species_index] = True
+    return species_mask
+
+
+MASKS = {
+    generation: {
+        "species": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/species_mask.npy",
             )
-            for smogon_format in [DEFAULT_SMOGON_FORMAT]
-        }
-        for generation in range(3, 10)
-    }
-    SET_MASK = {
-        generation: {
-            smogon_format: jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_mask.npy",
-                )
+        ),
+        "abilities": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/ability_mask.npy",
             )
-            for smogon_format in [DEFAULT_SMOGON_FORMAT]
-        }
-        for generation in range(3, 10)
+        ),
+        "items": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/item_mask.npy",
+            )
+        ),
+        "learnset": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/learnset_mask.npy",
+            )
+        ),
+        "duplicate": jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/duplicate_mask.npy",
+            )
+        ),
     }
-except:
-    traceback.print_exc()
+    for generation in range(3, 10)
+}
+
 
 ONEHOT_ENCODERS = {
     generation: {
