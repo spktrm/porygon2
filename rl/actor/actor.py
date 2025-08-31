@@ -109,7 +109,6 @@ class Actor:
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_actor_input.env.species_tokens.reshape(-1).tolist(),
             builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
         )
 

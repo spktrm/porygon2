@@ -3,11 +3,11 @@ import { InfoFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
 import {
     EdgeBuffer,
-    generateTeamFromFormat,
+    generateTeamFromIndices,
     StateHandler,
 } from "../server/state";
 import { OneDBoolean } from "../server/utils";
-import { numActionMaskFeatures } from "../server/data";
+import { numActionMaskFeatures, numPackedSetFeatures } from "../server/data";
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { actionMaskToRandomAction } from "../server/baselines/random";
@@ -70,6 +70,15 @@ async function playerController(player: TrainablePlayerAI) {
     }
 }
 
+const fakeTeam = [
+    ...Array(numPackedSetFeatures).fill(0),
+    ...Array(numPackedSetFeatures).fill(0),
+    ...Array(numPackedSetFeatures).fill(0),
+    ...Array(numPackedSetFeatures).fill(0),
+    ...Array(numPackedSetFeatures).fill(0),
+    ...Array(numPackedSetFeatures).fill(0),
+];
+
 async function runBattle() {
     console.log("Creating battle...");
 
@@ -80,8 +89,8 @@ async function runBattle() {
         // p1team: null,
         // p2team: null,
         // smogonFormat: "gen9randombattle",
-        p1team: generateTeamFromFormat(format),
-        p2team: generateTeamFromFormat("gen9all_ou"),
+        p1team: generateTeamFromIndices(format, fakeTeam),
+        p2team: generateTeamFromIndices(format, fakeTeam),
         smogonFormat: format,
     };
     const { p1, p2 } = createBattle(battleOptions, false);

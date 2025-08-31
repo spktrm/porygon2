@@ -12,6 +12,7 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
+    NUM_PACKED_SET_FEATURES,
     NUM_SPECIES,
 )
 from rl.environment.interfaces import (
@@ -223,8 +224,9 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
                 ),
-                species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
-                packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
+                packed_set_tokens=np.zeros(
+                    (trajectory_length, 1, 6, NUM_PACKED_SET_FEATURES), dtype=np.int32
+                ),
                 ts=np.arange(trajectory_length, dtype=np.int32)[:, None],
                 done=done,
             )
@@ -234,8 +236,15 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            packed_set_head=HeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
+            item_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            ability_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            moveset_head=HeadOutput(
+                action_index=np.zeros((trajectory_length, 1, 4), dtype=np.int32)
+            ),
+            nature_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            teratype_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            ev_head=HeadOutput(
+                action_index=np.ones((trajectory_length, 1, 6), dtype=np.float32) / 6
             ),
         ),
     )

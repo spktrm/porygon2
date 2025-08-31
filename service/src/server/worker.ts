@@ -9,7 +9,7 @@ import {
 } from "../../protos/service_pb";
 import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
-import { generateTeamFromFormat, generateTeamFromIndices } from "./state";
+import { generateTeamFromIndices } from "./state";
 
 interface WaitingPlayer {
     userName: string;
@@ -103,9 +103,7 @@ export class WorkerHandler {
             p1Name: userName,
             p1team: teamString,
             p2Name: `baseline-${userName}`,
-            p2team: generateTeamFromFormat(
-                smogonFormat.replace("all_ou", "ou"),
-            ),
+            p2team: teamString,
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
@@ -184,12 +182,10 @@ export class WorkerHandler {
     private resetPlayerFromUserName(
         userName: string,
         smogonFormat: string,
-        speciesIndices?: number[],
         packedSetIndices?: number[],
     ): Promise<TrainablePlayerAI> {
         const teamString = generateTeamFromIndices(
             smogonFormat,
-            speciesIndices,
             packedSetIndices,
         );
         if (isEvalUser(userName)) {
@@ -214,14 +210,12 @@ export class WorkerHandler {
         resetRequest: ResetRequest,
     ): Promise<void> {
         const userName = resetRequest.getUsername();
-        const speciesIndices = resetRequest.getSpeciesIndicesList();
         const packedSetIndices = resetRequest.getPackedSetIndicesList();
         const smogonFormat = resetRequest.getSmogonFormat();
 
         const player = await this.resetPlayerFromUserName(
             userName,
             smogonFormat,
-            speciesIndices,
             packedSetIndices,
         );
         const state = await player.receiveEnvironmentState();

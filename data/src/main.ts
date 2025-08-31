@@ -575,6 +575,10 @@ async function scrapeRepo() {
         EXTRA_TOKENS,
     );
 
+    if (!fs.existsSync(PARENT_DATA_DIR)) {
+        fs.mkdirSync(PARENT_DATA_DIR, { recursive: true });
+    }
+
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,
         JSON.stringify(data, null, 2),

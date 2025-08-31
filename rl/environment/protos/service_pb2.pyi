@@ -36,16 +36,14 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username", "species_indices", "packed_set_indices", "smogon_format")
+    __slots__ = ("username", "packed_set_indices", "smogon_format")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
-    SPECIES_INDICES_FIELD_NUMBER: _ClassVar[int]
     PACKED_SET_INDICES_FIELD_NUMBER: _ClassVar[int]
     SMOGON_FORMAT_FIELD_NUMBER: _ClassVar[int]
     username: str
-    species_indices: _containers.RepeatedScalarFieldContainer[int]
     packed_set_indices: _containers.RepeatedScalarFieldContainer[int]
     smogon_format: str
-    def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ...) -> None: ...
+    def __init__(self, username: _Optional[str] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "private_team", "field", "rqid")

@@ -320,8 +320,7 @@ class User {
                 });
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
-                    format.replace("ou", "all_ou"),
-                    modelOutput.species_indices,
+                    format,
                     modelOutput.packed_set_indices,
                 )!;
                 const validator = new TeamValidator(format);

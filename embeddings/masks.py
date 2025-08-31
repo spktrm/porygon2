@@ -213,7 +213,7 @@ class Pokedex:
         return mask
 
 
-def save_gen_three():
+def save_gens():
     for generation in range(9, 2, -1):
         pokedex = Pokedex(generation=generation)
 
@@ -233,7 +233,7 @@ def save_gen_three():
 
 
 def main():
-    save_gen_three()
+    save_gens()
 
 
 if __name__ == "__main__":
