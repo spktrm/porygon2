@@ -70,21 +70,73 @@ type MinorArgNames = RemovePipes<BattleMinorArgName>;
 
 const MAX_RATIO_TOKEN = 16384;
 
-function computePackedSetFromIndices(packedSetIndices: number[]) {
+const Capitalize = (value: string) => {
+    return value[0].toUpperCase() + value.slice(1);
+};
+
+function computePackedSetFromIndices(
+    smogonFormat: string,
+    packedSetIndices: number[],
+) {
     const species =
-        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPECIES];
-    const item = packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ITEM];
+        jsonDatum.species[
+            packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPECIES]
+        ];
+    const item =
+        jsonDatum.items[
+            packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ITEM]
+        ];
     const ability =
-        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ABILITY];
+        jsonDatum.abilities[
+            packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ABILITY]
+        ];
     const moves = [
         packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE1],
         packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE2],
         packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE3],
         packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__MOVE4],
     ]
-        .map((moveIndex) => jsonDatum.moves[moveIndex])
+        .map((moveIndex) => {
+            if (moveIndex >= MovesEnum.MOVES_ENUM__10000000VOLTTHUNDERBOLT) {
+                return jsonDatum.moves[moveIndex];
+            } else {
+                return "";
+            }
+        })
         .join(",");
-    return `|${species}|${item}|${ability}|${moves}`; //|${nature}|${evs}|${gender}|${ivs}|${shiny}|${level}|${happiness}|${pokeball}|${hiddenpowertype}|${gigantamax}|${dynamaxlevel}|${teratype}`;
+    const nature =
+        jsonDatum.Natures[
+            packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__NATURE]
+        ];
+    const evs = [
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__HP_EV],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__ATK_EV],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__DEF_EV],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPA_EV],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPD_EV],
+        packedSetIndices[PackedSetFeature.PACKED_SET_FEATURE__SPE_EV],
+    ].join(",");
+    const ivs = "31,31,31,31,31,31";
+    const shiny = Math.random() < 1 / 4096 ? "S" : "";
+    const level = "";
+    const happiness = "";
+    const pokeball = "";
+    const hiddenpowertype = "";
+    const gigantamax = "";
+    const dynamaxlevel = "";
+    const gender = "";
+    const teratype = smogonFormat.startsWith("gen9")
+        ? Capitalize(
+              jsonDatum.typechart[
+                  packedSetIndices[
+                      PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
+                  ]
+              ],
+          )
+        : "";
+    return `${Capitalize(
+        species,
+    )}|${species}|${item}|${ability}|${moves}|${nature}|${evs}|${gender}|${ivs}|${shiny}|${level}|${happiness},${pokeball},${hiddenpowertype},${gigantamax},${dynamaxlevel},${teratype}`;
 }
 
 export function generateTeamFromIndices(
@@ -102,7 +154,10 @@ export function generateTeamFromIndices(
                 i * numPackedSetFeatures,
                 (i + 1) * numPackedSetFeatures,
             );
-            const packedSet = computePackedSetFromIndices(packedSetSlice);
+            const packedSet = computePackedSetFromIndices(
+                smogonFormat,
+                packedSetSlice,
+            );
             packedSets.push(packedSet);
         }
 
@@ -203,6 +258,9 @@ const entityNodeArrayToObject = (array: Int16Array) => {
         ),
         active: array[EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE],
         side: array[EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE],
+        nature: jsonDatum["Natures"][
+            array[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE]
+        ],
         status: jsonDatum["status"][
             array[EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS]
         ],
@@ -562,18 +620,21 @@ function getArrayFromPokemon(
 
     // Set Nature
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
-        pokemon.nature === undefined
+        pokemon?.set?.nature === undefined
             ? NaturesEnum.NATURES_ENUM___UNK
-            : IndexValueFromEnum(NaturesEnum, pokemon.nature);
+            : IndexValueFromEnum(NaturesEnum, pokemon?.set?.nature);
 
     // Terastallized
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = +(
         pokemon.terastallized ?? false
     );
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
-        pokemon.teraType === undefined
+        pokemon?.set?.teraType === undefined
             ? TypechartEnum.TYPECHART_ENUM___UNK
-            : IndexValueFromEnum(TypechartEnum, pokemon.teraType.toString());
+            : IndexValueFromEnum(
+                  TypechartEnum,
+                  pokemon?.set?.teraType.toString(),
+              );
 
     const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;

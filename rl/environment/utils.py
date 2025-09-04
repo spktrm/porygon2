@@ -12,6 +12,7 @@ from rl.environment.data import (
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
+    NUM_MOVES,
     NUM_PACKED_SET_FEATURES,
     NUM_SPECIES,
 )
@@ -239,7 +240,9 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             item_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             ability_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             moveset_head=HeadOutput(
-                action_index=np.zeros((trajectory_length, 1, 4), dtype=np.int32)
+                action_index=np.random.randint(
+                    4, NUM_MOVES - 1, size=(trajectory_length, 1, 4), dtype=np.int32
+                )
             ),
             nature_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             teratype_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),

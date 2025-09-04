@@ -71,7 +71,24 @@ class Pokedex:
         return self._load_data("items.json", do_filter=do_filter)
 
     def _load_learnset_data(self, do_filter: bool = True):
-        return self._load_data("learnsets.json", do_filter=do_filter)
+        with open(f"data/data/gen{self.generation}/learnsets.json", "r") as f:
+            json_data = json.load(f)
+
+        columns = set()
+        for key, value in json_data.items():
+            columns.update(list(value.get("learnset", {})))
+
+        columns = list(sorted(columns))
+
+        df = pd.DataFrame(index=json_data.keys(), columns=columns, dtype=bool)
+        for key, value in json_data.items():
+            learnset = value.get("learnset", {})
+            df.loc[key] = False
+            for move, learned_at in learnset.items():
+                if any(s.startswith(f"{self.generation}") for s in learned_at):
+                    df.at[key, move] = True
+
+        return df
 
     def get_species_mask(self):
         numbered_species = self.data["species"]
@@ -149,6 +166,7 @@ class Pokedex:
                 mask[row_index] = competitive_mask
 
         num_extra_tokens = sum([k.startswith("_") for k in numbered_items.keys()])
+        mask[:, :num_extra_tokens] = False
         mask[numbered_species.get("_UNK"), num_extra_tokens:] = True
 
         return mask
@@ -169,6 +187,7 @@ class Pokedex:
                 mask[row_index, col_index] = True
 
         num_extra_tokens = sum([k.startswith("_") for k in numbered_abilities.keys()])
+        mask[:, :num_extra_tokens] = False
         mask[numbered_species.get("_UNK"), num_extra_tokens:] = True
 
         return mask
@@ -178,28 +197,17 @@ class Pokedex:
         numbered_moves = self.data["moves"]
 
         mask = np.zeros((len(numbered_species), len(numbered_moves)), dtype=bool)
-        move_columns = [i for i in self.learnset.columns if i.startswith("learnset")]
+        [i for i in self.learnset.columns if i.startswith("learnset")]
 
-        for (_, species_row), (_, learnset_row) in zip(
-            self.species.iterrows(), self.learnset.iterrows()
-        ):
-            row_index = numbered_species.get(toid(species_row["id"]))
+        for _, species_row in self.species.iterrows():
+            species_id = toid(species_row["id"])
 
-            for learned_at, move in zip(
-                learnset_row[move_columns].tolist(), move_columns
-            ):
-                if isinstance(learned_at, float):
-                    continue
+            row_index = numbered_species.get(species_id)
+            learnset_row = self.learnset.loc[species_id]
 
-                value = True
-                if isinstance(learned_at, list):
-                    value = any(
-                        possibilities.startswith(f"{self.generation}")
-                        for possibilities in learned_at
-                    )
-
+            for move, value in zip(learnset_row.index, learnset_row.tolist()):
                 if value:
-                    col_index = numbered_moves.get(toid(move[len("learnset.") :]))
+                    col_index = numbered_moves.get(toid(move))
 
                     if row_index is None or col_index is None:
                         raise ValueError(
@@ -207,7 +215,20 @@ class Pokedex:
                         )
                     mask[row_index, col_index] = value
 
+        for _, species_row in self.species.iterrows():
+            species_id = toid(species_row["id"])
+            base_species_id = (
+                toid(species_row["changesFrom"])
+                if isinstance(species_row["changesFrom"], str)
+                else species_id
+            )
+            if species_id != base_species_id:
+                mask[numbered_species.get(species_id)] |= mask[
+                    numbered_species.get(base_species_id)
+                ]
+
         num_extra_tokens = sum([k.startswith("_") for k in numbered_moves.keys()])
+        mask[:, :num_extra_tokens] = False
         mask[numbered_species.get("_UNK"), num_extra_tokens:] = True
 
         return mask
@@ -228,7 +249,9 @@ def save_gens():
                 f"Saving {name} mask for generation {generation}, shape {mask_arr.shape}, valid {mask_arr.any(axis=-1).sum()}"
             )
 
+            mask_arr[mask_arr.sum(axis=-1) == 0] = True
             with open(f"data/data/gen{generation}/{name}_mask.npy", "wb") as f:
+
                 np.save(f, mask_arr)
 
 

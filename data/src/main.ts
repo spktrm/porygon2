@@ -124,6 +124,8 @@ const customScrapingFunctions: {
             "futuresight",
             "doomdesire",
             "fallen",
+            "wideguard",
+            "quickguard",
         ];
     },
     genderName: (content: string, file: string): string[] => {
@@ -443,6 +445,7 @@ async function getGenData(dex: ModdedDex): Promise<GenData> {
     );
     const abilities = dex.abilities.all();
     const learnsets = await Promise.all(promises);
+    const learnsetEntries = species.map((s, i) => [s.id, learnsets[i]]);
     const moves = dex.moves.all();
     const items = dex.items.all();
     const typechart = dex.types
@@ -455,7 +458,7 @@ async function getGenData(dex: ModdedDex): Promise<GenData> {
         abilities,
         items,
         typechart,
-        learnsets,
+        learnsets: Object.fromEntries(learnsetEntries),
     };
 
     return data as unknown as GenData;
@@ -546,6 +549,9 @@ async function scrapeRepo() {
         ]),
         "mimikyubusted",
         "fallen",
+        "stealeat",
+        "gem",
+        "incinerate",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
     data["Natures"] = standardize(

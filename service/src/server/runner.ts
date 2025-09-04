@@ -386,7 +386,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                     if (cmd === "tie" || cmd === "win") {
                         this.done = true;
                     }
-                    this.addLine(cmd, line);
+
+                    try {
+                        this.addLine(cmd, line);
+                    } catch (err) {
+                        console.log(cmd, line);
+                        console.log(err);
+                    }
 
                     if (cmd === "request" && this.isActionRequired()) {
                         this.rqid = this.getRequest().rqid;
