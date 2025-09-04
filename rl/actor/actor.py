@@ -108,9 +108,8 @@ class Actor:
         player_traj = []
 
         # Reset the player environment.
-        player_actor_input = self._player_env.reset(
-            builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
-        )
+        set_tokens = builder_actor_input.env.packed_set_tokens.reshape(-1).tolist()
+        player_actor_input = self._player_env.reset(set_tokens)
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):

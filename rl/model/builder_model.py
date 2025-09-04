@@ -12,6 +12,7 @@ from ml_collections import ConfigDict
 
 from rl.actor.agent import Agent
 from rl.environment.data import (
+    ITOS,
     MASKS,
     NUM_ABILITIES,
     NUM_ITEMS,
@@ -22,7 +23,11 @@ from rl.environment.data import (
     ONEHOT_ENCODERS,
     PACKED_SET_MAX_VALUES,
 )
-from rl.environment.env import TeamBuilderEnvironment
+from rl.environment.env import (
+    TeamBuilderEnvironment,
+    get_nature_mask,
+    get_teratype_mask,
+)
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
@@ -62,7 +67,7 @@ def _encode_one_hot(
     feature_idx: int,
     max_values: dict[int, int],
     value_offset: int = 0,
-) -> tuple[int, int]:
+) -> tuple[jax.Array, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
     return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
@@ -234,8 +239,9 @@ class Porygon2BuilderModel(nn.Module):
         else:
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = log_policy.max(keepdims=True, axis=-1)
-                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 logits = jnp.where(keep, logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), logits.astype(jnp.float32)
@@ -261,8 +267,9 @@ class Porygon2BuilderModel(nn.Module):
         else:
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = log_policy.max(keepdims=True, axis=-1)
-                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 logits = jnp.where(keep, logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), logits.astype(jnp.float32)
@@ -294,10 +301,11 @@ class Porygon2BuilderModel(nn.Module):
             masked_logits = jnp.where(species_mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(species_mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
+                masked_log_policy = jnp.where(
+                    species_mask, log_policy, LARGE_NEGATIVE_BIAS
                 )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)
@@ -340,18 +348,22 @@ class Porygon2BuilderModel(nn.Module):
                 masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
                 min_p = self.cfg.get("min_p", 0.0)
                 if 0.0 < min_p < 1.0:
-                    max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                        keepdims=True, axis=-1
-                    )
-                    keep = log_policy >= (max_logp + math.log(min_p))
+                    masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                    max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                    keep = masked_log_policy >= (max_logp + math.log(min_p))
                     masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
                 action_index = jax.random.categorical(
                     self.make_rng("sampling"), masked_logits.astype(jnp.float32)
                 )
 
             selected_move_oh = jax.nn.one_hot(action_index, num_classes=NUM_MOVES)
-            current_moveset_oh = current_moveset_oh + selected_move_oh
+            current_moveset_oh = (current_moveset_oh + selected_move_oh).clip(max=1)
             mask = mask & ~(selected_move_oh.astype(jnp.bool))
+            mask = jnp.where(
+                mask.any(axis=-1, keepdims=True),
+                mask,
+                jax.nn.one_hot(MovesEnum.MOVES_ENUM___NULL, NUM_MOVES, dtype=jnp.bool),
+            )
 
             log_prob = jnp.take(log_policy, action_index, axis=-1)
 
@@ -388,10 +400,9 @@ class Porygon2BuilderModel(nn.Module):
             masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)
@@ -420,10 +431,9 @@ class Porygon2BuilderModel(nn.Module):
             masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)
@@ -459,12 +469,14 @@ class Porygon2BuilderModel(nn.Module):
         else:
             value = jax.random.dirichlet(
                 self.make_rng("sampling"), logits.astype(jnp.float32), (1,)
-            )
+            ).astype(logits.dtype)
 
         log_prob = jnp.sum((logits - 1.0) * jnp.log(value), axis=-1) - log_norm_const
 
         return HeadOutput(
-            action_index=value.reshape(-1), log_prob=log_prob, entropy=entropy
+            action_index=value.reshape(-1),
+            log_prob=log_prob.reshape(logits.shape[:-1]),
+            entropy=entropy,
         )
 
     def _forward(
@@ -570,7 +582,7 @@ class Porygon2BuilderModel(nn.Module):
         )
         nature_head = self._forward_mlp_head(
             self.nature_mlp(contextualised_selection),
-            np.ones((NUM_NATURES), dtype=np.bool_),
+            get_nature_mask(),
             actor_output.nature_head,
         )
         ev_head = self._forward_ev_head(
@@ -579,7 +591,7 @@ class Porygon2BuilderModel(nn.Module):
         )
         teratype_head = self._forward_mlp_head(
             self.teratype_mlp(contextualised_selection),
-            np.ones((NUM_TYPECHART), dtype=np.bool_),
+            get_teratype_mask(),
             actor_output.teratype_head,
         )
 
@@ -678,6 +690,39 @@ def main(debug: bool = True, generation: int = 9):
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
         )
+
+        for row in builder_actor_input.env.packed_set_tokens.tolist():
+            print(
+                ITOS["species"][row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES]]
+                + "|"
+                + ITOS["abilities"][row[PackedSetFeature.PACKED_SET_FEATURE__ABILITY]]
+                + "|"
+                + ITOS["items"][row[PackedSetFeature.PACKED_SET_FEATURE__ITEM]]
+                + "|"
+                + ITOS["moves"][row[PackedSetFeature.PACKED_SET_FEATURE__MOVE1]]
+                + ","
+                + ITOS["moves"][row[PackedSetFeature.PACKED_SET_FEATURE__MOVE2]]
+                + ","
+                + ITOS["moves"][row[PackedSetFeature.PACKED_SET_FEATURE__MOVE3]]
+                + ","
+                + ITOS["moves"][row[PackedSetFeature.PACKED_SET_FEATURE__MOVE4]]
+                + "|"
+                + ",".join(
+                    str(v)
+                    for v in [
+                        row[PackedSetFeature.PACKED_SET_FEATURE__HP_EV],
+                        row[PackedSetFeature.PACKED_SET_FEATURE__ATK_EV],
+                        row[PackedSetFeature.PACKED_SET_FEATURE__DEF_EV],
+                        row[PackedSetFeature.PACKED_SET_FEATURE__SPA_EV],
+                        row[PackedSetFeature.PACKED_SET_FEATURE__SPD_EV],
+                        row[PackedSetFeature.PACKED_SET_FEATURE__SPE_EV],
+                    ]
+                )
+                + "|"
+                + ITOS["natures"][row[PackedSetFeature.PACKED_SET_FEATURE__NATURE]]
+                + "|"
+                + ITOS["typechart"][row[PackedSetFeature.PACKED_SET_FEATURE__TERATYPE]]
+            )
 
         # learner_output = learner_network.apply(
         #     builder_params,

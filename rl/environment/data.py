@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 
@@ -175,6 +176,7 @@ def toid(string: str) -> str:
     return "".join(c for c in string if c.isalnum()).lower()
 
 
+@functools.lru_cache(maxsize=None)
 def get_format_species_mask(
     generation: int, smogon_format: str = DEFAULT_SMOGON_FORMAT
 ):

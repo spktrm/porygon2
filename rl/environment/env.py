@@ -2,6 +2,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.data import (
@@ -17,6 +18,7 @@ from rl.environment.interfaces import (
     BuilderAgentOutput,
     BuilderEnvOutput,
 )
+from rl.environment.protos.enums_pb2 import NaturesEnum, TypechartEnum
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import (
     Action,
@@ -109,12 +111,31 @@ def construct_packed_set(
     new_packed_set = new_packed_set.at[
         PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
         + 1
-    ].set(jnp.round(512 * ev_spread, 0).astype(jnp.int32))
+    ].set(4 * jnp.round(127 * ev_spread, 0).astype(jnp.int32))
     new_packed_set = new_packed_set.at[
         PackedSetFeature.PACKED_SET_FEATURE__HP_IV : PackedSetFeature.PACKED_SET_FEATURE__SPE_IV
         + 1
     ].set(31)
     return new_packed_set
+
+
+def get_nature_mask():
+    mask = np.ones((NUM_NATURES), dtype=np.bool_)
+    mask[NaturesEnum.NATURES_ENUM___NULL] = False
+    mask[NaturesEnum.NATURES_ENUM___UNSPECIFIED] = False
+    mask[NaturesEnum.NATURES_ENUM___PAD] = False
+    mask[NaturesEnum.NATURES_ENUM___UNK] = False
+    return mask
+
+
+def get_teratype_mask():
+    mask = np.ones((NUM_TYPECHART), dtype=np.bool_)
+    mask[TypechartEnum.TYPECHART_ENUM___NULL] = False
+    mask[TypechartEnum.TYPECHART_ENUM___UNSPECIFIED] = False
+    mask[TypechartEnum.TYPECHART_ENUM___PAD] = False
+    mask[TypechartEnum.TYPECHART_ENUM___UNK] = False
+    mask[TypechartEnum.TYPECHART_ENUM__TYPELESS] = False
+    return mask
 
 
 class TeamBuilderEnvironment:
@@ -215,12 +236,18 @@ class TeamBuilderEnvironment:
                 ability_subkeys[i], ability_mask.shape[-1], (1,), p=ability_policy
             ).squeeze()
 
-            nature_token = jax.random.randint(
-                nature_subkeys[i], (1,), 0, NUM_NATURES
+            nature_mask = get_nature_mask()
+            nature_policy = nature_mask / nature_mask.sum()
+            nature_token = jax.random.choice(
+                nature_subkeys[i], nature_mask.shape[-1], (1,), p=nature_policy
             ).squeeze()
-            teratype_token = jax.random.randint(
-                teratype_subkeys[i], (1,), 0, NUM_TYPECHART
+
+            type_mask = get_teratype_mask()
+            teratype_policy = type_mask / type_mask.sum()
+            teratype_token = jax.random.choice(
+                teratype_subkeys[i], type_mask.shape[-1], (1,), p=teratype_policy
             ).squeeze()
+
             ev_spread = jax.random.uniform(ev_spread_subkeys[i], (6,)).squeeze()
 
             packed_set_tokens.append(
@@ -231,7 +258,7 @@ class TeamBuilderEnvironment:
                     moveset_tokens,
                     nature_token,
                     teratype_token,
-                    ev_spread,
+                    ev_spread / ev_spread.sum(),
                 )
             )
 
