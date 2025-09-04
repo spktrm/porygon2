@@ -63,10 +63,11 @@ class MoveHead(nn.Module):
             masked_logits = jnp.where(query_mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(query_mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
+                masked_log_policy = jnp.where(
+                    query_mask, log_policy, LARGE_NEGATIVE_BIAS
                 )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)
@@ -99,10 +100,9 @@ class MoveHead(nn.Module):
             masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                masked_log_policy = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS)
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)
@@ -178,10 +178,11 @@ class PolicyHead(nn.Module):
             masked_logits = jnp.where(query_mask, logits, LARGE_NEGATIVE_BIAS)
             min_p = self.cfg.get("min_p", 0.0)
             if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(query_mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
+                masked_log_policy = jnp.where(
+                    query_mask, log_policy, LARGE_NEGATIVE_BIAS
                 )
-                keep = log_policy >= (max_logp + math.log(min_p))
+                max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+                keep = masked_log_policy >= (max_logp + math.log(min_p))
                 masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
             action_index = jax.random.categorical(
                 self.make_rng("sampling"), masked_logits.astype(jnp.float32)

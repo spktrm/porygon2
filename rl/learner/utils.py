@@ -4,9 +4,13 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import NUM_SPECIES
+from rl.environment.data import NUM_ABILITIES, NUM_ITEMS, NUM_MOVES, NUM_SPECIES
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import ActionMaskFeature, FieldFeature
+from rl.environment.protos.features_pb2 import (
+    ActionMaskFeature,
+    FieldFeature,
+    PackedSetFeature,
+)
 from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
@@ -51,6 +55,24 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
+    species_counts = batch.builder_transitions.env_output.packed_set_tokens[
+        ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+    ]
+    species_counts = batch.builder_transitions.env_output.packed_set_tokens[
+        ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+    ]
+    item_counts = batch.builder_transitions.env_output.packed_set_tokens[
+        ..., PackedSetFeature.PACKED_SET_FEATURE__ITEM
+    ]
+    ability_counts = batch.builder_transitions.env_output.packed_set_tokens[
+        ..., PackedSetFeature.PACKED_SET_FEATURE__ABILITY
+    ]
+    move_counts = batch.builder_transitions.env_output.packed_set_tokens[
+        ...,
+        PackedSetFeature.PACKED_SET_FEATURE__MOVE1 : PackedSetFeature.PACKED_SET_FEATURE__MOVE4
+        + 1,
+    ]
+
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
@@ -64,10 +86,14 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
-        usage_counts=jnp.bincount(
-            batch.builder_transitions.env_output.species_tokens[-1].reshape(-1),
-            length=NUM_SPECIES,
+        species_usage_counts=jnp.bincount(
+            species_counts[-1].reshape(-1), length=NUM_SPECIES
         ),
+        items_usage_counts=jnp.bincount(item_counts[-1].reshape(-1), length=NUM_ITEMS),
+        abilities_usage_counts=jnp.bincount(
+            ability_counts[-1].reshape(-1), length=NUM_ABILITIES
+        ),
+        moves_usage_counts=jnp.bincount(move_counts[-1].reshape(-1), length=NUM_MOVES),
     )
 
 

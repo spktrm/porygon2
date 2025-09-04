@@ -43,7 +43,7 @@ class ReplayBuffer:
             self._pbar.update(1)
             self._total_added += 1
 
-    def sample(self, batch_size: int) -> Trajectory:
+    def sample(self, batch_size: int, resolution: int = 32 * 3) -> Trajectory:
         with self._lock:
             if len(self._buffer) < batch_size:
                 raise NotEnoughSamplesError(
@@ -56,7 +56,6 @@ class ReplayBuffer:
             lambda *xs: np.stack(xs, axis=1), *batch
         )
 
-        resolution = 64
         valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
         num_valid = valid.sum(0).max().item() + 1
         num_valid = int(np.ceil(num_valid / resolution) * resolution)

@@ -104,11 +104,6 @@ export class ResetRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  clearSpeciesIndicesList(): void;
-  getSpeciesIndicesList(): Array<number>;
-  setSpeciesIndicesList(value: Array<number>): void;
-  addSpeciesIndices(value: number, index?: number): number;
-
   clearPackedSetIndicesList(): void;
   getPackedSetIndicesList(): Array<number>;
   setPackedSetIndicesList(value: Array<number>): void;
@@ -130,7 +125,6 @@ export class ResetRequest extends jspb.Message {
 export namespace ResetRequest {
   export type AsObject = {
     username: string,
-    speciesIndicesList: Array<number>,
     packedSetIndicesList: Array<number>,
     smogonFormat: string,
   }

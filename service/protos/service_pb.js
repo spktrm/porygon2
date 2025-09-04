@@ -13,7 +13,13 @@
 
 var jspb = require('google-protobuf');
 var goog = jspb;
-var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
+var global =
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof window !== 'undefined' && window) ||
+    (typeof global !== 'undefined' && global) ||
+    (typeof self !== 'undefined' && self) ||
+    (function () { return this; }).call(null) ||
+    Function('return this')();
 
 goog.exportSymbol('proto.servicev2.Action', null, global);
 goog.exportSymbol('proto.servicev2.ClientRequest', null, global);
@@ -295,8 +301,8 @@ proto.servicev2.ClientRequest.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.ClientRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    step: (f = msg.getStep()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
-    reset: (f = msg.getReset()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
+step: (f = msg.getStep()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
+reset: (f = msg.getReset()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -497,10 +503,10 @@ proto.servicev2.Action.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.Action.toObject = function(includeInstance, msg) {
   var f, obj = {
-    actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
-    switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
-    wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
+actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
+moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
+switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
+wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
 
   if (includeInstance) {
@@ -717,9 +723,9 @@ proto.servicev2.StepRequest.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.StepRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    action: (f = msg.getAction()) && proto.servicev2.Action.toObject(includeInstance, f),
-    rqid: jspb.Message.getFieldWithDefault(msg, 3, 0)
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+action: (f = msg.getAction()) && proto.servicev2.Action.toObject(includeInstance, f),
+rqid: jspb.Message.getFieldWithDefault(msg, 3, 0)
   };
 
   if (includeInstance) {
@@ -902,7 +908,7 @@ proto.servicev2.StepRequest.prototype.setRqid = function(value) {
  * @private {!Array<number>}
  * @const
  */
-proto.servicev2.ResetRequest.repeatedFields_ = [2,3];
+proto.servicev2.ResetRequest.repeatedFields_ = [2];
 
 
 
@@ -935,10 +941,9 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
  */
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
-    packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
-    smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, "")
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
+smogonFormat: jspb.Message.getFieldWithDefault(msg, 3, "")
   };
 
   if (includeInstance) {
@@ -982,16 +987,10 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
     case 2:
       var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
       for (var i = 0; i < values.length; i++) {
-        msg.addSpeciesIndices(values[i]);
-      }
-      break;
-    case 3:
-      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
-      for (var i = 0; i < values.length; i++) {
         msg.addPackedSetIndices(values[i]);
       }
       break;
-    case 4:
+    case 3:
       var value = /** @type {string} */ (reader.readString());
       msg.setSmogonFormat(value);
       break;
@@ -1031,24 +1030,17 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
-  f = message.getSpeciesIndicesList();
+  f = message.getPackedSetIndicesList();
   if (f.length > 0) {
     writer.writePackedInt32(
       2,
       f
     );
   }
-  f = message.getPackedSetIndicesList();
-  if (f.length > 0) {
-    writer.writePackedInt32(
-      3,
-      f
-    );
-  }
   f = message.getSmogonFormat();
   if (f.length > 0) {
     writer.writeString(
-      4,
+      3,
       f
     );
   }
@@ -1074,10 +1066,10 @@ proto.servicev2.ResetRequest.prototype.setUsername = function(value) {
 
 
 /**
- * repeated int32 species_indices = 2;
+ * repeated int32 packed_set_indices = 2;
  * @return {!Array<number>}
  */
-proto.servicev2.ResetRequest.prototype.getSpeciesIndicesList = function() {
+proto.servicev2.ResetRequest.prototype.getPackedSetIndicesList = function() {
   return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 2));
 };
 
@@ -1086,7 +1078,7 @@ proto.servicev2.ResetRequest.prototype.getSpeciesIndicesList = function() {
  * @param {!Array<number>} value
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.setSpeciesIndicesList = function(value) {
+proto.servicev2.ResetRequest.prototype.setPackedSetIndicesList = function(value) {
   return jspb.Message.setField(this, 2, value || []);
 };
 
@@ -1096,45 +1088,8 @@ proto.servicev2.ResetRequest.prototype.setSpeciesIndicesList = function(value) {
  * @param {number=} opt_index
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.addSpeciesIndices = function(value, opt_index) {
-  return jspb.Message.addToRepeatedField(this, 2, value, opt_index);
-};
-
-
-/**
- * Clears the list making it empty but non-null.
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.clearSpeciesIndicesList = function() {
-  return this.setSpeciesIndicesList([]);
-};
-
-
-/**
- * repeated int32 packed_set_indices = 3;
- * @return {!Array<number>}
- */
-proto.servicev2.ResetRequest.prototype.getPackedSetIndicesList = function() {
-  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 3));
-};
-
-
-/**
- * @param {!Array<number>} value
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.setPackedSetIndicesList = function(value) {
-  return jspb.Message.setField(this, 3, value || []);
-};
-
-
-/**
- * @param {number} value
- * @param {number=} opt_index
- * @return {!proto.servicev2.ResetRequest} returns this
- */
 proto.servicev2.ResetRequest.prototype.addPackedSetIndices = function(value, opt_index) {
-  return jspb.Message.addToRepeatedField(this, 3, value, opt_index);
+  return jspb.Message.addToRepeatedField(this, 2, value, opt_index);
 };
 
 
@@ -1148,11 +1103,11 @@ proto.servicev2.ResetRequest.prototype.clearPackedSetIndicesList = function() {
 
 
 /**
- * optional string smogon_format = 4;
+ * optional string smogon_format = 3;
  * @return {string}
  */
 proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
 };
 
 
@@ -1161,7 +1116,7 @@ proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
  * @return {!proto.servicev2.ResetRequest} returns this
  */
 proto.servicev2.ResetRequest.prototype.setSmogonFormat = function(value) {
-  return jspb.Message.setProto3StringField(this, 4, value);
+  return jspb.Message.setProto3StringField(this, 3, value);
 };
 
 
@@ -1197,17 +1152,17 @@ proto.servicev2.EnvironmentState.prototype.toObject = function(opt_includeInstan
  */
 proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
-    info: msg.getInfo_asB64(),
-    actionMask: msg.getActionMask_asB64(),
-    historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
-    historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
-    historyField: msg.getHistoryField_asB64(),
-    historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
-    moveset: msg.getMoveset_asB64(),
-    publicTeam: msg.getPublicTeam_asB64(),
-    privateTeam: msg.getPrivateTeam_asB64(),
-    field: msg.getField_asB64(),
-    rqid: jspb.Message.getFieldWithDefault(msg, 11, 0)
+info: msg.getInfo_asB64(),
+actionMask: msg.getActionMask_asB64(),
+historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
+historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
+historyField: msg.getHistoryField_asB64(),
+historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
+moveset: msg.getMoveset_asB64(),
+publicTeam: msg.getPublicTeam_asB64(),
+privateTeam: msg.getPrivateTeam_asB64(),
+field: msg.getField_asB64(),
+rqid: jspb.Message.getFieldWithDefault(msg, 11, 0)
   };
 
   if (includeInstance) {
@@ -1850,7 +1805,7 @@ proto.servicev2.EnvironmentTrajectory.prototype.toObject = function(opt_includeI
  */
 proto.servicev2.EnvironmentTrajectory.toObject = function(includeInstance, msg) {
   var f, obj = {
-    statesList: jspb.Message.toObjectList(msg.getStatesList(),
+statesList: jspb.Message.toObjectList(msg.getStatesList(),
     proto.servicev2.EnvironmentState.toObject, includeInstance)
   };
 
@@ -2003,8 +1958,8 @@ proto.servicev2.EnvironmentResponse.prototype.toObject = function(opt_includeIns
  */
 proto.servicev2.EnvironmentResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    state: (f = msg.getState()) && proto.servicev2.EnvironmentState.toObject(includeInstance, f)
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+state: (f = msg.getState()) && proto.servicev2.EnvironmentState.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -2184,7 +2139,7 @@ proto.servicev2.ErrorResponse.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.ErrorResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    trace: jspb.Message.getFieldWithDefault(msg, 1, "")
+trace: jspb.Message.getFieldWithDefault(msg, 1, "")
   };
 
   if (includeInstance) {
@@ -2340,9 +2295,9 @@ proto.servicev2.WorkerRequest.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.WorkerRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    stepRequest: (f = msg.getStepRequest()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
-    resetRequest: (f = msg.getResetRequest()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
+taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
+stepRequest: (f = msg.getStepRequest()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
+resetRequest: (f = msg.getResetRequest()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -2572,9 +2527,9 @@ proto.servicev2.WorkerResponse.prototype.toObject = function(opt_includeInstance
  */
 proto.servicev2.WorkerResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    environmentResponse: (f = msg.getEnvironmentResponse()) && proto.servicev2.EnvironmentResponse.toObject(includeInstance, f),
-    errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f)
+taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
+environmentResponse: (f = msg.getEnvironmentResponse()) && proto.servicev2.EnvironmentResponse.toObject(includeInstance, f),
+errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
