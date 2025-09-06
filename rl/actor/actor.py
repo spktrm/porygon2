@@ -39,7 +39,7 @@ class Actor:
     ):
         self._agent = agent
         self._player_env = env
-        self._builder_env = TeamBuilderEnvironment(env.generation)
+        self._builder_env = TeamBuilderEnvironment(env.generation, "ou_all_formats")
         self._unroll_length = unroll_length
         self._queue = queue
         self._learner = learner

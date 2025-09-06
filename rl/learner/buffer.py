@@ -7,6 +7,7 @@ import jax
 import numpy as np
 from tqdm import tqdm
 
+from rl.concurrency.lock import FairLock
 from rl.environment.interfaces import Trajectory
 from rl.environment.utils import clip_history
 from rl.learner.config import Porygon2LearnerConfig
@@ -22,7 +23,7 @@ class ReplayBuffer:
     def __init__(self, capacity: int):
         self._capacity = capacity
         self._buffer = collections.deque[Trajectory](maxlen=capacity)
-        self._lock = threading.Lock()
+        self._lock = FairLock()
         self._pbar = tqdm(desc="producer", smoothing=0)
         self._total_added = 0
 
@@ -43,23 +44,30 @@ class ReplayBuffer:
             self._pbar.update(1)
             self._total_added += 1
 
-    def sample(self, batch_size: int) -> Trajectory:
-        with self._lock:
-            if len(self._buffer) < batch_size:
-                raise NotEnoughSamplesError(
-                    f"Not enough transitions in buffer to sample batch of size {batch_size}."
-                    f" Buffer size: {len(self._buffer)}"
-                )
-            batch = random.sample(self._buffer, batch_size)
+    def sample(
+        self,
+        batch_size: int,
+        player_transition_resolution: int = 64,
+        player_history_resolution: int = 128,
+    ) -> Trajectory:
+        if len(self._buffer) < batch_size:
+            raise NotEnoughSamplesError(
+                f"Not enough transitions in buffer to sample batch of size {batch_size}."
+                f" Buffer size: {len(self._buffer)}"
+            )
+        batch = random.sample(self._buffer, batch_size)
 
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
         )
 
-        resolution = 64
         valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
-        num_valid = valid.sum(0).max().item() + 1
-        num_valid = int(np.ceil(num_valid / resolution) * resolution)
+        valid_sum = valid.sum(0).max().item()
+
+        num_valid = int(
+            np.ceil(valid_sum / player_transition_resolution)
+            * player_transition_resolution
+        )
 
         clipped_trajectory = Trajectory(
             builder_transitions=stacked_trajectory.builder_transitions,
@@ -68,7 +76,7 @@ class ReplayBuffer:
             ),
             # builder_history=stacked_trajectory.builder_history,
             player_history=clip_history(
-                stacked_trajectory.player_history, resolution=resolution
+                stacked_trajectory.player_history, resolution=player_history_resolution
             ),
         )
 
@@ -95,6 +103,7 @@ class ReplayRatioController:
 
         # A condition to make the LEARNER wait
         self._learner_can_proceed = threading.Condition()
+
         # A separate condition to make the ACTORS wait
         self._actor_can_proceed = threading.Condition()
 

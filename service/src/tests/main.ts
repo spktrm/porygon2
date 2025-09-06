@@ -4,6 +4,7 @@ import { StepRequest } from "../../protos/service_pb";
 import {
     EdgeBuffer,
     generateTeamFromFormat,
+    generateTeamFromIndices,
     StateHandler,
 } from "../server/state";
 import { OneDBoolean } from "../server/utils";
@@ -73,6 +74,12 @@ async function playerController(player: TrainablePlayerAI) {
 async function runBattle() {
     console.log("Creating battle...");
 
+    const team = generateTeamFromIndices(
+        "gen9_ou_all_formats",
+        [652, 1411, 975, 650, 441, 371],
+        [193, 667, 72, 879, 630, 546],
+    );
+
     const format = "gen9ou";
     const battleOptions = {
         p1Name: "Bot1",
@@ -80,8 +87,8 @@ async function runBattle() {
         // p1team: null,
         // p2team: null,
         // smogonFormat: "gen9randombattle",
-        p1team: generateTeamFromFormat(format),
-        p2team: generateTeamFromFormat("gen9all_ou"),
+        p1team: generateTeamFromFormat("gen9_ou_only_format"),
+        p2team: generateTeamFromFormat("gen9_ou_all_formats"),
         smogonFormat: format,
     };
     const { p1, p2 } = createBattle(battleOptions, false);

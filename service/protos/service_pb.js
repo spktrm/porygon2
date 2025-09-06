@@ -13,7 +13,13 @@
 
 var jspb = require('google-protobuf');
 var goog = jspb;
-var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
+var global =
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof window !== 'undefined' && window) ||
+    (typeof global !== 'undefined' && global) ||
+    (typeof self !== 'undefined' && self) ||
+    (function () { return this; }).call(null) ||
+    Function('return this')();
 
 goog.exportSymbol('proto.servicev2.Action', null, global);
 goog.exportSymbol('proto.servicev2.ClientRequest', null, global);
@@ -295,8 +301,8 @@ proto.servicev2.ClientRequest.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.ClientRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    step: (f = msg.getStep()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
-    reset: (f = msg.getReset()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
+step: (f = msg.getStep()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
+reset: (f = msg.getReset()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -497,10 +503,10 @@ proto.servicev2.Action.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.Action.toObject = function(includeInstance, msg) {
   var f, obj = {
-    actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
-    switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
-    wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
+actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
+moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
+switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
+wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
   };
 
   if (includeInstance) {
@@ -717,9 +723,9 @@ proto.servicev2.StepRequest.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.StepRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    action: (f = msg.getAction()) && proto.servicev2.Action.toObject(includeInstance, f),
-    rqid: jspb.Message.getFieldWithDefault(msg, 3, 0)
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+action: (f = msg.getAction()) && proto.servicev2.Action.toObject(includeInstance, f),
+rqid: jspb.Message.getFieldWithDefault(msg, 3, 0)
   };
 
   if (includeInstance) {
@@ -935,10 +941,10 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
  */
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
-    packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
-    smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, "")
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
+packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
+smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, "")
   };
 
   if (includeInstance) {
@@ -1197,17 +1203,17 @@ proto.servicev2.EnvironmentState.prototype.toObject = function(opt_includeInstan
  */
 proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
-    info: msg.getInfo_asB64(),
-    actionMask: msg.getActionMask_asB64(),
-    historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
-    historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
-    historyField: msg.getHistoryField_asB64(),
-    historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
-    moveset: msg.getMoveset_asB64(),
-    publicTeam: msg.getPublicTeam_asB64(),
-    privateTeam: msg.getPrivateTeam_asB64(),
-    field: msg.getField_asB64(),
-    rqid: jspb.Message.getFieldWithDefault(msg, 11, 0)
+info: msg.getInfo_asB64(),
+actionMask: msg.getActionMask_asB64(),
+historyEntityNodes: msg.getHistoryEntityNodes_asB64(),
+historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
+historyField: msg.getHistoryField_asB64(),
+historyLength: jspb.Message.getFieldWithDefault(msg, 6, 0),
+moveset: msg.getMoveset_asB64(),
+publicTeam: msg.getPublicTeam_asB64(),
+privateTeam: msg.getPrivateTeam_asB64(),
+field: msg.getField_asB64(),
+rqid: jspb.Message.getFieldWithDefault(msg, 11, 0)
   };
 
   if (includeInstance) {
@@ -1850,7 +1856,7 @@ proto.servicev2.EnvironmentTrajectory.prototype.toObject = function(opt_includeI
  */
 proto.servicev2.EnvironmentTrajectory.toObject = function(includeInstance, msg) {
   var f, obj = {
-    statesList: jspb.Message.toObjectList(msg.getStatesList(),
+statesList: jspb.Message.toObjectList(msg.getStatesList(),
     proto.servicev2.EnvironmentState.toObject, includeInstance)
   };
 
@@ -2003,8 +2009,8 @@ proto.servicev2.EnvironmentResponse.prototype.toObject = function(opt_includeIns
  */
 proto.servicev2.EnvironmentResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    state: (f = msg.getState()) && proto.servicev2.EnvironmentState.toObject(includeInstance, f)
+username: jspb.Message.getFieldWithDefault(msg, 1, ""),
+state: (f = msg.getState()) && proto.servicev2.EnvironmentState.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -2184,7 +2190,7 @@ proto.servicev2.ErrorResponse.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.ErrorResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    trace: jspb.Message.getFieldWithDefault(msg, 1, "")
+trace: jspb.Message.getFieldWithDefault(msg, 1, "")
   };
 
   if (includeInstance) {
@@ -2340,9 +2346,9 @@ proto.servicev2.WorkerRequest.prototype.toObject = function(opt_includeInstance)
  */
 proto.servicev2.WorkerRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    stepRequest: (f = msg.getStepRequest()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
-    resetRequest: (f = msg.getResetRequest()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
+taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
+stepRequest: (f = msg.getStepRequest()) && proto.servicev2.StepRequest.toObject(includeInstance, f),
+resetRequest: (f = msg.getResetRequest()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -2572,9 +2578,9 @@ proto.servicev2.WorkerResponse.prototype.toObject = function(opt_includeInstance
  */
 proto.servicev2.WorkerResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
-    taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    environmentResponse: (f = msg.getEnvironmentResponse()) && proto.servicev2.EnvironmentResponse.toObject(includeInstance, f),
-    errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f)
+taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
+environmentResponse: (f = msg.getEnvironmentResponse()) && proto.servicev2.EnvironmentResponse.toObject(includeInstance, f),
+errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f)
   };
 
   if (includeInstance) {

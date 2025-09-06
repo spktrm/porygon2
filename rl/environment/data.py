@@ -168,7 +168,6 @@ ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
 STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 ONEHOT_DTYPE = jnp.bfloat16
-DEFAULT_SMOGON_FORMAT = "all_ou"
 
 try:
     MASKS = {
@@ -204,25 +203,27 @@ try:
 
     SET_TOKENS = {
         generation: {
-            smogon_format: jnp.asarray(
+            f"{smogon_format}_{suffix}": jnp.asarray(
                 np.load(
-                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_features.npy",
+                    f"data/data/gen{generation}/{smogon_format}_{suffix}_features.npy",
                 )
             )
-            for smogon_format in [DEFAULT_SMOGON_FORMAT]
+            for smogon_format in ["ou"]
+            for suffix in ["all_formats", "only_format"]
         }
-        for generation in range(3, 10)
+        for generation in range(9, 10)
     }
     SET_MASK = {
         generation: {
-            smogon_format: jnp.asarray(
+            f"{smogon_format}_{suffix}": jnp.asarray(
                 np.load(
-                    f"data/data/gen{generation}/validated_packed_{smogon_format}_sets_mask.npy",
+                    f"data/data/gen{generation}/{smogon_format}_{suffix}_mask.npy",
                 )
             )
-            for smogon_format in [DEFAULT_SMOGON_FORMAT]
+            for smogon_format in ["ou"]
+            for suffix in ["all_formats", "only_format"]
         }
-        for generation in range(3, 10)
+        for generation in range(9, 10)
     }
 except:
     traceback.print_exc()

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import DEFAULT_SMOGON_FORMAT, MASKS, SET_MASK
+from rl.environment.data import MASKS, SET_MASK
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderAgentOutput,
@@ -49,7 +49,7 @@ class SinglePlayerSyncEnvironment:
                 username=self.username,
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
-                smogon_format=f"gen{self.generation}{DEFAULT_SMOGON_FORMAT}",
+                smogon_format=f"gen{self.generation}_ou_all_formats",
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -74,7 +74,7 @@ class TeamBuilderEnvironment:
     def __init__(
         self,
         generation: int,
-        smogon_format: str = DEFAULT_SMOGON_FORMAT,
+        smogon_format: str,
         num_team_members: int = 6,
         max_ts: int = 32,
     ):
@@ -185,7 +185,9 @@ class TeamBuilderEnvironment:
         new_species_mask = self.duplicate_masks[species_token]
 
         species_mask = jnp.where(old_species_mask, state.env.species_mask, True)
-        species_mask = jnp.where(new_species_mask, species_mask, False)
+        species_mask = jnp.where(
+            new_species_mask, self.start_mask & species_mask, False
+        )
 
         species_tokens = jnp.where(
             selection_oh, species_token, state.env.species_tokens
