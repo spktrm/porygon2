@@ -32,7 +32,6 @@ import {
     MoveIndex,
     NUM_HISTORY,
     jsonDatum,
-    lookUpSets,
     lookUpSetsList,
     numActionMaskFeatures,
     numEntityEdgeFeatures,
@@ -40,6 +39,7 @@ import {
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    sets,
 } from "./data";
 import { NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
@@ -71,8 +71,12 @@ type MinorArgNames = RemovePipes<BattleMinorArgName>;
 const MAX_RATIO_TOKEN = 16384;
 
 export function generateTeamFromFormat(format: string): string {
-    const species2Sets = lookUpSets(format);
-    const validator = new TeamValidator(format.replace("all_ou", "ou"));
+    const species2Sets = sets[format];
+    const validator = new TeamValidator(
+        format
+            .replace("_ou_all_formats", "ou")
+            .replace("_ou_only_format", "ou"),
+    );
 
     while (true) {
         const packedSets: Set<string> = new Set();
@@ -113,14 +117,28 @@ export function generateTeamFromIndices(
         !smogonFormat.endsWith("randombattle")
     ) {
         const packedSets = [];
-        const setsListToChoose = lookUpSetsList(smogonFormat);
+
+        const speciesKeys = Object.values(jsonDatum.species);
 
         for (const [
             memberIndex,
             packedSetIndex,
         ] of packedSetIndices.entries()) {
-            const packedSet = setsListToChoose[packedSetIndex];
-            packedSets.push(packedSet);
+            const species = speciesKeys[speciesIndices[memberIndex]];
+
+            const speciesPackedSets = lookUpSetsList(smogonFormat, species);
+            if (speciesPackedSets.length === 0) {
+                throw new Error(`No sets found for species: ${species}`);
+            }
+
+            const speciesPackedSet = speciesPackedSets[packedSetIndex];
+            if (!speciesPackedSet) {
+                throw new Error(
+                    `No packed set found for species: ${species} @ ${packedSetIndex}`,
+                );
+            }
+
+            packedSets.push(speciesPackedSet);
         }
 
         return packedSets.join("]");
@@ -579,18 +597,21 @@ function getArrayFromPokemon(
 
     // Set Nature
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
-        pokemon.nature === undefined
+        pokemon?.set?.nature === undefined
             ? NaturesEnum.NATURES_ENUM___UNK
-            : IndexValueFromEnum(NaturesEnum, pokemon.nature);
+            : IndexValueFromEnum(NaturesEnum, pokemon?.set?.nature);
 
     // Terastallized
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = +(
         pokemon.terastallized ?? false
     );
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
-        pokemon.teraType === undefined
+        pokemon?.set?.teraType === undefined
             ? TypechartEnum.TYPECHART_ENUM___UNK
-            : IndexValueFromEnum(TypechartEnum, pokemon.teraType.toString());
+            : IndexValueFromEnum(
+                  TypechartEnum,
+                  pokemon?.set?.teraType.toString(),
+              );
 
     const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;

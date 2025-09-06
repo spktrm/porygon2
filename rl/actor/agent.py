@@ -1,4 +1,5 @@
 import functools
+from socketserver import ThreadingUnixDatagramServer
 import threading
 from typing import Callable, overload
 
@@ -40,18 +41,18 @@ class Agent:
         self._player_apply_fn = player_apply_fn
         self._builder_apply_fn = builder_apply_fn
 
-        self._lock = gpu_lock if gpu_lock is not None else NoOpLock()
+        self._gpu_lock = NoOpLock() if gpu_lock is None else gpu_lock
 
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
     ) -> BuilderAgentOutput:
-        with self._lock:
+        with self._gpu_lock:
             return self._step_builder(rng_key, params, actor_input)
 
     def step_player(
         self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
     ) -> PlayerAgentOutput:
-        with self._lock:
+        with self._gpu_lock:
             return self._step_player(rng_key, params, actor_input)
 
     @overload

@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 
@@ -9,6 +10,7 @@ from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import PackedSetFeature
 
 
+@functools.lru_cache(maxsize=None)
 def encode_packed_set(generation: int, packed_set: str):
     """
     NICKNAME|SPECIES|ITEM|ABILITY|MOVES|NATURE|EVS|GENDER|IVS|SHINY|LEVEL|HAPPINESS,POKEBALL,HIDDENPOWERTYPE,GIGANTAMAX,DYNAMAXLEVEL,TERATYPE
@@ -40,7 +42,7 @@ def encode_packed_set(generation: int, packed_set: str):
         ability or "_NULL"
     ]
     arr[PackedSetFeature.PACKED_SET_FEATURE__NATURE] = STOI["natures"][
-        nature or "_NULL"
+        nature.lower() or "_NULL"
     ]
     arr[PackedSetFeature.PACKED_SET_FEATURE__GENDER] = STOI["gendername"][
         gender or "_NULL"
@@ -85,9 +87,7 @@ def main():
         packed_set_fpaths = [
             f
             for f in os.listdir(f"data/data/gen{generation}")
-            if f.startswith("validated_packed")
-            and f.endswith("sets.json")
-            and f != "validated_packed_sets.json"
+            if f.endswith("all_formats.json") or f.endswith("only_format.json")
         ]
         for packed_set_fpath in packed_set_fpaths:
             read_path = f"data/data/gen{generation}/{packed_set_fpath}"
@@ -95,26 +95,21 @@ def main():
             with open(read_path, "r") as f:
                 data = json.load(f)
 
-            set_lengths = np.array([len(v) for v in data.values()])
-            num_sets = set_lengths.sum()
-
-            packed_set_mask = np.zeros((NUM_SPECIES, num_sets), dtype=np.bool_)
+            packed_set_mask = np.zeros((NUM_SPECIES, 1024), dtype=np.bool_)
             packed_set_features = np.zeros(
-                (num_sets, NUM_PACKED_SET_FEATURES), dtype=np.int32
+                (NUM_SPECIES, 1024, NUM_PACKED_SET_FEATURES), dtype=np.int32
             )
 
             packed_set_features[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES] = (
                 SpeciesEnum.SPECIES_ENUM___NULL
             )
 
-            set_idx = 0
             for i, (species, sets) in enumerate(data.items()):
                 for j, packed_set in enumerate(sets):
-                    packed_set_features[set_idx] = encode_packed_set(
+                    packed_set_features[i, j] = encode_packed_set(
                         generation, packed_set
                     )
-                    packed_set_mask[i, set_idx] = True
-                    set_idx += 1
+                    packed_set_mask[i, j] = True
 
             print(
                 f"Processed gen{generation}/{packed_set_fpath} with shape {packed_set_features.shape}"

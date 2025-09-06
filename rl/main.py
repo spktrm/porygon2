@@ -1,9 +1,10 @@
-import os
+from dotenv import load_dotenv
 
-# gemm_any=True is ~10% speed up in this setup
-os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_triton_gemm_any=True " "--xla_gpu_enable_latency_hiding_scheduler=true "
-)
+from rl.concurrency.atom import AtomicCounter
+from rl.concurrency.lock import FairLock
+
+load_dotenv()
+
 import json
 import queue
 import threading
@@ -11,15 +12,12 @@ import traceback
 from pprint import pprint
 
 import jax
-
-# jax.config.update("jax_debug_nans", True)
 import numpy as np
 import wandb.wandb_run
 
 import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
-from rl.concurrency.lock import FairLock
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import Trajectory
 from rl.learner.buffer import ReplayBuffer, ReplayRatioController
@@ -28,7 +26,6 @@ from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
-from rl.utils import init_jax_jit_cache
 
 
 def run_training_actor(
@@ -37,13 +34,14 @@ def run_training_actor(
     """Runs an actor to produce trajectories, checking the ratio each time."""
 
     while not stop_signal[0]:
+        controller.actor_wait()
         try:
-            controller.actor_wait()
             step_count, player_params, builder_params = actor.pull_params()
             actor.unroll_and_push(step_count, player_params, builder_params)
         except Exception as e:
             traceback.print_exc()
             raise e
+        controller.signal_learner()
 
 
 def run_eval_actor(
@@ -110,12 +108,9 @@ def host_to_device_worker(
 
         replay_buffer.add(trajectory)
 
-        controller.signal_learner()
-
 
 def main():
     """Main function to run the RL learner."""
-    init_jax_jit_cache()
 
     learner_config = get_learner_config()
     pprint(learner_config)
@@ -136,7 +131,7 @@ def main():
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
-    num_samples = [0]
+    num_samples_counter = AtomicCounter(0)
 
     trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
         maxsize=2 * learner_config.num_actors
@@ -163,7 +158,7 @@ def main():
     )
 
     controller = ReplayRatioController(
-        replay_buffer, lambda: num_samples[0], learner_config
+        replay_buffer, lambda: num_samples_counter.value(), learner_config
     )
 
     wandb_run = wandb.init(
@@ -188,8 +183,8 @@ def main():
         replay_buffer=replay_buffer,
         controller=controller,
         wandb_run=wandb_run,
+        num_samples=num_samples_counter,
         gpu_lock=gpu_lock,
-        num_samples=num_samples,
     )
 
     for game_id in range(learner_config.num_actors // 2):

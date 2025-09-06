@@ -2,6 +2,7 @@ import functools
 import queue
 import threading
 import time
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -11,9 +12,16 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl.concurrency.atom import AtomicCounter
 from rl.concurrency.lock import FairLock
 from rl.environment.data import NUM_SPECIES, STOI
-from rl.environment.interfaces import PlayerActorInput, Trajectory
+from rl.environment.interfaces import (
+    BuilderTransition,
+    PlayerActorInput,
+    PlayerHistoryOutput,
+    PlayerTransition,
+    Trajectory,
+)
 from rl.learner.buffer import NotEnoughSamplesError, ReplayBuffer, ReplayRatioController
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -128,30 +136,28 @@ def backward_kl_loss(
 
 
 @functools.partial(jax.jit, static_argnames=["config"])
-def train_step(
+def player_train_step(
     player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    batch: Trajectory,
+    player_transitions: PlayerTransition,
+    player_history: PlayerHistoryOutput,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
     player_actor_input = PlayerActorInput(
-        env=batch.player_transitions.env_output, history=batch.player_history
+        env=player_transitions.env_output, history=player_history
     )
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
         player_actor_input,
-        batch.player_transitions.agent_output.actor_output,
+        player_transitions.agent_output.actor_output,
     )
 
     actor_action_type_head = (
-        batch.player_transitions.agent_output.actor_output.action_type_head
+        player_transitions.agent_output.actor_output.action_type_head
     )
-    actor_move_head = batch.player_transitions.agent_output.actor_output.move_head
-    actor_wildcard_head = (
-        batch.player_transitions.agent_output.actor_output.wildcard_head
-    )
-    actor_switch_head = batch.player_transitions.agent_output.actor_output.switch_head
+    actor_move_head = player_transitions.agent_output.actor_output.move_head
+    actor_wildcard_head = player_transitions.agent_output.actor_output.wildcard_head
+    actor_switch_head = player_transitions.agent_output.actor_output.switch_head
 
     target_action_type_head = player_target_pred.action_type_head
     target_move_head = player_target_pred.move_head
@@ -176,14 +182,14 @@ def train_step(
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
 
-    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
     move_valid = player_valid & (actor_action_type_head.action_index == 0)
     switch_valid = player_valid & (actor_action_type_head.action_index == 1)
     wildcard_valid = move_valid & (
-        batch.player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
+        player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    rewards = batch.player_transitions.env_output.win_reward
+    rewards = player_transitions.env_output.win_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     player_vtrace = compute_returns(
@@ -215,7 +221,7 @@ def train_step(
         player_pred = player_state.apply_fn(
             params,
             player_actor_input,
-            batch.player_transitions.agent_output.actor_output,
+            player_transitions.agent_output.actor_output,
         )
 
         pred_action_type_head = player_pred.action_type_head
@@ -304,24 +310,71 @@ def train_step(
             ),
         )
 
-    builder_actor_input = PlayerActorInput(env=batch.builder_transitions.env_output)
+    player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
+    (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
+
+    player_logs.update(
+        dict(
+            player_loss=player_loss_val,
+            player_param_norm=optax.global_norm(player_state.params),
+            player_gradient_norm=optax.global_norm(player_grads),
+            player_adv_mean=player_adv_mean,
+            player_adv_std=player_adv_std,
+            player_is_ratio=average(player_is_ratio, player_valid),
+            player_norm_adv_mean=average(player_norm_advantages, player_valid),
+            player_norm_adv_std=player_norm_advantages.std(where=player_valid),
+            player_value_target_mean=average(player_vtrace.returns, player_valid),
+            player_value_target_std=player_vtrace.returns.std(where=player_valid),
+        )
+    )
+
+    player_state = player_state.apply_gradients(grads=player_grads)
+    player_state = player_state.replace(
+        # Update target params and adv mean/std.
+        target_params=optax.incremental_update(
+            player_state.params, player_state.target_params, config.tau
+        ),
+        target_adv_mean=player_state.target_adv_mean * (1 - config.tau)
+        + player_adv_mean * config.tau,
+        target_adv_std=player_state.target_adv_std * (1 - config.tau)
+        + player_adv_std * config.tau,
+        # Update num steps sampled.
+        num_steps=player_state.num_steps + 1,
+        # Add 1 for the final step in each trajectory
+        actor_steps=player_state.actor_steps + player_valid.sum(),
+    )
+
+    training_logs = dict(
+        actor_steps=player_state.actor_steps,
+        Step=player_state.num_steps,
+    )
+
+    training_logs.update(player_logs)
+
+    return player_state, training_logs
+
+
+@functools.partial(jax.jit, static_argnames=["config"])
+def builder_train_step(
+    builder_state: Porygon2BuilderTrainState,
+    builder_transitions: BuilderTransition,
+    final_reward: jax.Array,
+    config: Porygon2LearnerConfig,
+):
+    """Train for a single step."""
+
+    builder_actor_input = PlayerActorInput(env=builder_transitions.env_output)
     builder_target_pred = builder_state.apply_fn(
         builder_state.target_params,
         builder_actor_input,
-        batch.builder_transitions.agent_output.actor_output,
+        builder_transitions.agent_output.actor_output,
     )
 
-    actor_continue_head = (
-        batch.builder_transitions.agent_output.actor_output.continue_head
-    )
-    actor_selection_head = (
-        batch.builder_transitions.agent_output.actor_output.selection_head
-    )
-    actor_species_head = (
-        batch.builder_transitions.agent_output.actor_output.species_head
-    )
+    actor_continue_head = builder_transitions.agent_output.actor_output.continue_head
+    actor_selection_head = builder_transitions.agent_output.actor_output.selection_head
+    actor_species_head = builder_transitions.agent_output.actor_output.species_head
     actor_packed_set_head = (
-        batch.builder_transitions.agent_output.actor_output.packed_set_head
+        builder_transitions.agent_output.actor_output.packed_set_head
     )
 
     target_continue_head = builder_target_pred.continue_head
@@ -349,8 +402,7 @@ def train_step(
 
     builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
 
-    final_reward = rewards[-1]
-    builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
+    builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
     builder_rewards = (
         jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
         * final_reward[None]
@@ -378,7 +430,7 @@ def train_step(
         builder_pred = builder_state.apply_fn(
             params,
             builder_actor_input,
-            batch.builder_transitions.agent_output.actor_output,
+            builder_transitions.agent_output.actor_output,
         )
 
         learner_continue_head = builder_pred.continue_head
@@ -436,7 +488,7 @@ def train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + ent_kl_coef_mult
+            + 0.5
             * (
                 config.builder_kl_loss_coef * loss_kl
                 - config.builder_entropy_loss_coef * loss_entropy
@@ -464,51 +516,12 @@ def train_step(
             ),
         )
 
-    player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
-    (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
-
-    player_logs.update(
-        dict(
-            player_loss=player_loss_val,
-            player_param_norm=optax.global_norm(player_state.params),
-            player_gradient_norm=optax.global_norm(player_grads),
-            player_adv_mean=player_adv_mean,
-            player_adv_std=player_adv_std,
-            player_is_ratio=average(player_is_ratio, player_valid),
-            player_norm_adv_mean=average(player_norm_advantages, player_valid),
-            player_norm_adv_std=player_norm_advantages.std(where=player_valid),
-            player_value_target_mean=average(player_vtrace.returns, player_valid),
-            player_value_target_std=player_vtrace.returns.std(where=player_valid),
-        )
-    )
-
-    player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.replace(
-        # Update target params and adv mean/std.
-        target_params=optax.incremental_update(
-            player_state.params, player_state.target_params, config.tau
-        ),
-        target_adv_mean=player_state.target_adv_mean * (1 - config.tau)
-        + player_adv_mean * config.tau,
-        target_adv_std=player_state.target_adv_std * (1 - config.tau)
-        + player_adv_std * config.tau,
-        # Update num steps sampled.
-        num_steps=player_state.num_steps + 1,
-        # Add 1 for the final step in each trajectory
-        actor_steps=player_state.actor_steps + player_valid.sum(),
-    )
-
-    training_logs = dict(
-        actor_steps=player_state.actor_steps,
-        Step=player_state.num_steps,
-    )
-
     builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
-    (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
+    (builder_loss_val, training_logs), builder_grads = builder_grad_fn(
         builder_state.params
     )
 
-    builder_logs.update(
+    training_logs.update(
         dict(
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
@@ -535,11 +548,7 @@ def train_step(
         + builder_adv_std * config.tau,
     )
 
-    training_logs.update(collect_batch_telemetry_data(batch))
-    training_logs.update(player_logs)
-    training_logs.update(builder_logs)
-
-    return player_state, builder_state, training_logs
+    return builder_state, training_logs
 
 
 class Learner:
@@ -551,8 +560,8 @@ class Learner:
         replay_buffer: ReplayBuffer,
         controller: ReplayRatioController,
         wandb_run: wandb.wandb_run.Run,
+        num_samples: AtomicCounter,
         gpu_lock: threading.Lock,
-        num_samples: list[int],
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -560,10 +569,10 @@ class Learner:
         self.replay_buffer = replay_buffer
         self.controller = controller
         self.wandb_run = wandb_run
-        self.gpu_lock = gpu_lock
         self.num_samples = num_samples
         self.done = False
-        self.device_q = queue.Queue(maxsize=1)
+        self.gpu_lock = gpu_lock
+        self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
         self.param_lock = FairLock()
 
         self.wandb_run.log_code("inference/")
@@ -585,83 +594,92 @@ class Learner:
             )
 
     def host_to_device_worker(self):
-        """Elementary data pipeline."""
-
         while not self.done:
             try:
-                # Try to get a batch. Skip the iteration if we couldn't.
-                batch = self.replay_buffer.sample(self.learner_config.batch_size)
-                self.device_q.put(jax.device_put(batch))
+                host_batch = self.replay_buffer.sample(self.learner_config.batch_size)
+                self.device_q.put(host_batch)  # host batch; H2D later
             except NotEnoughSamplesError:
                 time.sleep(1)
                 continue
+
+    def get_usage_counts(self, training_logs: dict[str, Any]):
+        usage_logs = {}
+
+        self.species_counts = ((1 - self.learner_config.tau) * self.species_counts) + (
+            self.learner_config.tau * np.array(training_logs.pop("usage_counts"))
+        )
+        if self.player_state.num_steps % 200 == 0:
+            names = list(STOI["species"])
+            counts = self.species_counts / self.species_counts.sum()
+
+            table = wandb.Table(columns=["species", "usage"])
+            for name, count in zip(names, counts):
+                table.add_data(name, count)
+
+            usage_logs["species_usage"] = table
+
+        return usage_logs
 
     def train(self):
         consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         train_progress = tqdm(desc="batches", smoothing=0.1)
         batch_size = self.learner_config.batch_size
 
-        self.controller.learner_wait()
+        # transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        # transfer_thread.start()
 
-        transfer_thread = threading.Thread(target=self.host_to_device_worker)
-        transfer_thread.start()
+        for step_idx in range(self.learner_config.num_steps):
+            self.controller.learner_wait()
 
-        for _ in range(self.learner_config.num_steps):
-            try:
-                self.controller.learner_wait()
+            batch = self.replay_buffer.sample(self.learner_config.batch_size)
+            batch: Trajectory = jax.device_put(batch)  # do H2D here
 
-                batch = self.device_q.get()
+            training_logs = {"step_idx": step_idx}
 
-                with self.gpu_lock:
-                    self.player_state, self.builder_state, logs = train_step(
-                        self.player_state,
-                        self.builder_state,
-                        batch,
-                        self.learner_config,
-                    )
+            with self.gpu_lock:
+                self.player_state, player_logs = player_train_step(
+                    self.player_state,
+                    batch.player_transitions,
+                    batch.player_history,
+                    self.learner_config,
+                )
 
-                self.update_params_for_actor()
+            with self.gpu_lock:
+                self.builder_state, builder_logs = builder_train_step(
+                    self.builder_state,
+                    batch.builder_transitions,
+                    batch.player_transitions.env_output.win_reward[-1],
+                    self.learner_config,
+                )
 
-                self.species_counts = (
-                    (1 - self.learner_config.tau) * self.species_counts
-                ) + (self.learner_config.tau * np.array(logs.pop("usage_counts")))
-                if self.player_state.num_steps % 200 == 0:
-                    names = list(STOI["species"])
-                    counts = self.species_counts / self.species_counts.sum()
+            with self.gpu_lock:
+                training_logs = collect_batch_telemetry_data(batch)
 
-                    table = wandb.Table(columns=["species", "usage"])
-                    for name, count in zip(names, counts):
-                        table.add_data(name, count)
+            usage_logs = self.get_usage_counts(training_logs)
 
-                    self.wandb_run.log({"species_usage": table})
+            training_logs.update(player_logs)
+            training_logs.update(builder_logs)
+            training_logs.update(usage_logs)
 
-                self.wandb_run.log(logs)
+            self.update_params_for_actor()
 
-                # Update the tqdm progress bars.
-                consumer_progress.update(batch_size)
-                train_progress.update(1)
-                self.num_samples[0] += batch_size
+            self.wandb_run.log(training_logs)
 
-                self.controller.signal_actors()
+            # Update the tqdm progress bars.
+            consumer_progress.update(batch_size)
+            train_progress.update(1)
+            self.num_samples.inc(batch_size)
 
-                if self.player_state.num_steps % 5000 == 0:
-                    save_train_state(
-                        self.wandb_run,
-                        self.learner_config,
-                        self.player_state,
-                        self.builder_state,
-                    )
-
-            except KeyboardInterrupt:
-                print("Training interrupted.")
+            if (self.player_state.num_steps % 5000) == 0:
                 save_train_state(
                     self.wandb_run,
                     self.learner_config,
                     self.player_state,
                     self.builder_state,
                 )
-                break
+
+            self.controller.signal_actors()
 
         self.done = True
-        transfer_thread.join()
+        # transfer_thread.join()
         print("Training Finished.")

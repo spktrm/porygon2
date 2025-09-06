@@ -104,7 +104,7 @@ export class WorkerHandler {
             p1team: teamString,
             p2Name: `baseline-${userName}`,
             p2team: generateTeamFromFormat(
-                smogonFormat.replace("all_ou", "ou"),
+                smogonFormat.replace("_ou_all_formats", "_ou_only_format"),
             ),
             smogonFormat,
         });
