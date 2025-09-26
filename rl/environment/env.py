@@ -76,12 +76,14 @@ class TeamBuilderEnvironment:
         generation: int,
         smogon_format: str,
         num_team_members: int = 6,
-        max_ts: int = 32,
+        num_metagame_slots: int = 32,
+        max_ts: int = 24,
     ):
 
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
+        self.num_metagame_slots = num_metagame_slots
         self.max_ts = max_ts
         self.rng_key = jax.random.key(42)
 
@@ -107,11 +109,12 @@ class TeamBuilderEnvironment:
         if self.state.env.done.item():
             return self.state
         self.state = self._step(
-            agent_output.actor_output.continue_head.action_index,
-            agent_output.actor_output.selection_head.action_index,
-            agent_output.actor_output.species_head.action_index,
-            agent_output.actor_output.packed_set_head.action_index,
-            self.state,
+            metagame_token=agent_output.actor_output.metagame_head.action_index,
+            continue_token=agent_output.actor_output.continue_head.action_index,
+            selection_token=agent_output.actor_output.selection_head.action_index,
+            species_token=agent_output.actor_output.species_head.action_index,
+            packed_set_token=agent_output.actor_output.packed_set_head.action_index,
+            state=self.state,
         )
         return self.state
 
@@ -153,12 +156,15 @@ class TeamBuilderEnvironment:
                 packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
+                metagame_token=jnp.array(0, dtype=jnp.int32),
+                metagame_mask=jnp.ones((self.num_metagame_slots,), dtype=jnp.bool),
             )
         )
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
         self,
+        metagame_token: jax.Array,
         continue_token: jax.Array,
         selection_token: jax.Array,
         species_token: jax.Array,
@@ -180,20 +186,25 @@ class TeamBuilderEnvironment:
             & jax.nn.one_hot(selection_token, self.num_team_members, dtype=jnp.bool)
         )
 
-        old_species_token = state.env.species_tokens[selection_token]
-        old_species_mask = self.duplicate_masks[old_species_token]
-        new_species_mask = self.duplicate_masks[species_token]
-
-        species_mask = jnp.where(old_species_mask, state.env.species_mask, True)
-        species_mask = jnp.where(
-            new_species_mask, self.start_mask & species_mask, False
+        old_species_mask = jnp.take(
+            self.duplicate_masks, state.env.species_tokens, axis=0
         )
+        new_species_mask = self.duplicate_masks[species_token]
 
         species_tokens = jnp.where(
             selection_oh, species_token, state.env.species_tokens
         )
+        species_mask = self.start_mask & jnp.prod(
+            jnp.where(
+                selection_oh[..., None], new_species_mask[None], old_species_mask
+            ),
+            axis=0,
+        )
         packed_set_tokens = jnp.where(
             selection_oh, packed_set_token, state.env.packed_set_tokens
+        )
+        metagame_mask = jax.nn.one_hot(
+            metagame_token, self.num_metagame_slots, dtype=jnp.bool
         )
 
         return BuilderActorInput(
@@ -203,5 +214,7 @@ class TeamBuilderEnvironment:
                 packed_set_tokens=packed_set_tokens,
                 done=done,
                 ts=next_ts,
+                metagame_token=metagame_token,
+                metagame_mask=metagame_mask,
             ),
         )

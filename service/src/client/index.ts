@@ -320,7 +320,7 @@ class User {
                 });
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
-                    format.replace("ou", "all_ou"),
+                    format.replace("ou", "_ou_all_formats"),
                     modelOutput.species_indices,
                     modelOutput.packed_set_indices,
                 )!;

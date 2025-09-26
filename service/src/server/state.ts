@@ -607,7 +607,9 @@ function getArrayFromPokemon(
     );
     dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
         pokemon?.set?.teraType === undefined
-            ? TypechartEnum.TYPECHART_ENUM___UNK
+            ? pokemon.terastallized
+                ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
+                : TypechartEnum.TYPECHART_ENUM___UNK
             : IndexValueFromEnum(
                   TypechartEnum,
                   pokemon?.set?.teraType.toString(),

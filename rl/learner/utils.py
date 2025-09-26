@@ -42,12 +42,16 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
     move_ratio = renormalize(action_type_index == 0, can_act)
     switch_ratio = renormalize(action_type_index == 1, can_act)
 
-    wildcard_turn = jnp.where(
-        (action_type_index == 0)
-        & (wildcard_index != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL),
-        jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-        -LARGE_NEGATIVE_BIAS,
-    ).min(axis=0)
+    wildcard_turn = (
+        jnp.where(
+            (action_type_index == 0)
+            & (wildcard_index != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL),
+            jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
+            -LARGE_NEGATIVE_BIAS,
+        )
+        .clip(max=action_type_index.shape[0])
+        .min(axis=0)
+    )
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
