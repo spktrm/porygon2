@@ -1,5 +1,3 @@
-import queue
-
 import jax
 import numpy as np
 
@@ -34,14 +32,12 @@ class Actor:
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
         learner: Learner,
-        queue: queue.Queue | None = None,
         rng_seed: int = 42,
     ):
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(env.generation, "ou_all_formats")
         self._unroll_length = unroll_length
-        self._queue = queue
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
 
@@ -68,7 +64,7 @@ class Actor:
         frame_count: int,
         player_params: Params,
         builder_params: Params,
-    ):
+    ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = jax.random.split(rng_key)
         builder_unroll_length = self._builder_env.max_ts + 1
@@ -83,7 +79,9 @@ class Actor:
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
-                builder_subkeys[builder_step_index], builder_params, builder_actor_input
+                builder_subkeys[builder_step_index],
+                builder_params,
+                builder_actor_input,
             )
             builder_transition = BuilderTransition(
                 env_output=builder_actor_input.env,
@@ -169,10 +167,8 @@ class Actor:
             player_params=player_params,
             builder_params=builder_params,
         )
-        if self._queue is not None:
-            self._queue.put(act_out)
+        if self._player_env.username.startswith("train-"):
+            self._learner.enqueue_traj(act_out)
 
     def pull_params(self):
-        with self._learner.param_lock:
-            step_count, player_params, builder_params = self._learner.params_for_actor
-            return int(step_count), player_params, builder_params
+        return self._learner.params_for_actor

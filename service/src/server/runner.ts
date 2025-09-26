@@ -21,6 +21,31 @@ import { ActionMaskFeature, ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
+async function withTimeoutWarning<T>(
+    fn: () => Promise<T>,
+    thresholdMs: number,
+    fnName: string,
+): Promise<T> {
+    const start = Date.now();
+
+    try {
+        const result = await fn();
+        const duration = Date.now() - start;
+
+        if (duration > thresholdMs) {
+            console.warn(
+                `${fnName} took ${duration}ms (threshold: ${thresholdMs}ms)`,
+            );
+        }
+
+        return result;
+    } catch (err) {
+        const duration = Date.now() - start;
+        console.error(`${fnName} failed after ${duration}ms:`, err);
+        throw err;
+    }
+}
+
 interface Queue<T> {
     enqueue(item: T): void;
     dequeue(): T | undefined;
@@ -391,7 +416,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                     if (cmd === "request" && this.isActionRequired()) {
                         this.rqid = this.getRequest().rqid;
 
-                        const choice = await this.getChoice();
+                        const choice = await withTimeoutWarning(
+                            () => this.getChoice(),
+                            1000,
+                            "getChoice",
+                        );
 
                         // Process the received action
                         this.choose(choice);
@@ -426,7 +455,7 @@ export function createBattle(
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? Math.floor(64 * 2.1);
+    const maxRequestCount = options.maxRequestCount ?? Math.floor(64 * 1.8);
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(

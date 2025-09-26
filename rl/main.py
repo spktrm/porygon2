@@ -1,12 +1,9 @@
 from dotenv import load_dotenv
 
-from rl.concurrency.atom import AtomicCounter
-from rl.concurrency.lock import FairLock
-
 load_dotenv()
 
+
 import json
-import queue
 import threading
 import traceback
 from pprint import pprint
@@ -19,8 +16,6 @@ import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.interfaces import Trajectory
-from rl.learner.buffer import ReplayBuffer, ReplayRatioController
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
@@ -28,20 +23,16 @@ from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
 
 
-def run_training_actor(
-    actor: Actor, stop_signal: list[bool], controller: ReplayRatioController
-):
+def run_training_actor(actor: Actor, stop_signal: list[bool]):
     """Runs an actor to produce trajectories, checking the ratio each time."""
 
     while not stop_signal[0]:
-        controller.actor_wait()
         try:
             step_count, player_params, builder_params = actor.pull_params()
             actor.unroll_and_push(step_count, player_params, builder_params)
         except Exception as e:
             traceback.print_exc()
             raise e
-        controller.signal_learner()
 
 
 def run_eval_actor(
@@ -93,22 +84,6 @@ def run_eval_actor(
             continue
 
 
-def host_to_device_worker(
-    trajectory_queue: queue.Queue[Trajectory],
-    stop_signal: list[bool],
-    replay_buffer: ReplayBuffer,
-    controller: ReplayRatioController,
-):
-    """Elementary data pipeline."""
-    while not stop_signal[0]:
-        try:
-            trajectory = trajectory_queue.get(timeout=10)
-        except queue.Empty:
-            continue
-
-        replay_buffer.add(trajectory)
-
-
 def main():
     """Main function to run the RL learner."""
 
@@ -131,11 +106,6 @@ def main():
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
-    num_samples_counter = AtomicCounter(0)
-
-    trajectory_queue: queue.Queue[Trajectory] = queue.Queue(
-        maxsize=2 * learner_config.num_actors
-    )
 
     player_state, builder_state = create_train_state(
         learner_player_network,
@@ -144,21 +114,10 @@ def main():
         learner_config,
     )
 
-    gpu_lock = FairLock()
-    agent = Agent(actor_player_network.apply, actor_builder_network.apply, gpu_lock)
-
-    replay_buffer = ReplayBuffer(
-        capacity=max(
-            learner_config.replay_buffer_capacity, learner_config.batch_size * 2
-        )
-    )
+    agent = Agent(actor_player_network.apply, actor_builder_network.apply)
 
     player_state, builder_state = load_train_state(
         learner_config, player_state, builder_state
-    )
-
-    controller = ReplayRatioController(
-        replay_buffer, lambda: num_samples_counter.value(), learner_config
     )
 
     wandb_run = wandb.init(
@@ -180,11 +139,7 @@ def main():
         player_state=player_state,
         builder_state=builder_state,
         learner_config=learner_config,
-        replay_buffer=replay_buffer,
-        controller=controller,
         wandb_run=wandb_run,
-        num_samples=num_samples_counter,
-        gpu_lock=gpu_lock,
     )
 
     for game_id in range(learner_config.num_actors // 2):
@@ -196,11 +151,10 @@ def main():
                     generation=learner_config.generation,
                 ),
                 unroll_length=learner_config.unroll_length,
-                queue=trajectory_queue,
                 learner=learner,
                 rng_seed=len(actor_threads),
             )
-            args = (actor, stop_signal, controller)
+            args = (actor, stop_signal)
             actor_threads.append(
                 threading.Thread(
                     target=run_training_actor,
@@ -229,12 +183,6 @@ def main():
     # Start the actors and learner.
     for t in actor_threads:
         t.start()
-
-    transfer_thread = threading.Thread(
-        target=host_to_device_worker,
-        args=(trajectory_queue, stop_signal, replay_buffer, controller),
-    )
-    transfer_thread.start()
 
     learner.train()
 

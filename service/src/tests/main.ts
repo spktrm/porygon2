@@ -74,24 +74,14 @@ async function playerController(player: TrainablePlayerAI) {
 async function runBattle() {
     console.log("Creating battle...");
 
-    const team = generateTeamFromIndices(
-        "gen9_ou_all_formats",
-        [652, 1411, 975, 650, 441, 371],
-        [193, 667, 72, 879, 630, 546],
-    );
-
-    const format = "gen9ou";
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-4`,
-        // p1team: null,
-        // p2team: null,
-        // smogonFormat: "gen9randombattle",
-        p1team: generateTeamFromFormat("gen9_ou_only_format"),
-        p2team: generateTeamFromFormat("gen9_ou_all_formats"),
-        smogonFormat: format,
+        p1team: null,
+        p2team: null,
+        smogonFormat: "gen9randombattle",
     };
-    const { p1, p2 } = createBattle(battleOptions, false);
+    const { p1, p2 } = createBattle(battleOptions, true);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);

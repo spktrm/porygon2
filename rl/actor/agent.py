@@ -1,12 +1,9 @@
 import functools
-from socketserver import ThreadingUnixDatagramServer
-import threading
 from typing import Callable, overload
 
 import jax
 import jax.numpy as jnp
 
-from rl.concurrency.lock import NoOpLock
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
@@ -30,7 +27,6 @@ class Agent:
         builder_apply_fn: (
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
-        gpu_lock: threading.Lock = None,
     ):
         """Constructs an Agent object."""
         if player_apply_fn is None and builder_apply_fn is None:
@@ -41,19 +37,15 @@ class Agent:
         self._player_apply_fn = player_apply_fn
         self._builder_apply_fn = builder_apply_fn
 
-        self._gpu_lock = NoOpLock() if gpu_lock is None else gpu_lock
-
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
     ) -> BuilderAgentOutput:
-        with self._gpu_lock:
-            return self._step_builder(rng_key, params, actor_input)
+        return self._step_builder(rng_key, params, actor_input)
 
     def step_player(
         self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
     ) -> PlayerAgentOutput:
-        with self._gpu_lock:
-            return self._step_player(rng_key, params, actor_input)
+        return self._step_player(rng_key, params, actor_input)
 
     @overload
     def _step_builder(

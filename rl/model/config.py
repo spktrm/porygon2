@@ -199,6 +199,7 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
     entity_size = int(scale * 64 * num_heads)
     dtype = jnp.bfloat16
 
+    cfg.num_metagame_slots = 32
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = dtype

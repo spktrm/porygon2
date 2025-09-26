@@ -217,6 +217,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
     trajectory_length = 33
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
+    ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
@@ -225,12 +226,15 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 ),
                 species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
                 packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
-                ts=np.arange(trajectory_length, dtype=np.int32)[:, None],
+                ts=ts,
                 done=done,
+                metagame_token=np.zeros_like(ts, dtype=np.int32),
+                metagame_mask=np.ones((trajectory_length, 1, 32), dtype=np.bool),
             )
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
+            metagame_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
