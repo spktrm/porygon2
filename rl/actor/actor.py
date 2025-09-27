@@ -67,7 +67,7 @@ class Actor:
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = jax.random.split(rng_key)
-        builder_unroll_length = self._builder_env.max_ts + 1
+        builder_unroll_length = self._builder_env.max_trajectory_length + 1
 
         builder_subkeys = jax.random.split(builder_key, builder_unroll_length)
         player_subkeys = jax.random.split(player_key, self._unroll_length)

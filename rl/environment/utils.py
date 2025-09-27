@@ -221,6 +221,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=np.ones((trajectory_length, 1, 2), dtype=np.bool_),
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
                 ),

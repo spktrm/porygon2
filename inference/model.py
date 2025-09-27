@@ -85,11 +85,13 @@ class InferenceModel:
 
     def reset(self):
         builder_env = TeamBuilderEnvironment(
-            self.learner_config.generation, "ou_all_formats", max_ts=64
+            self.learner_config.generation, "ou_all_formats", max_trajectory_length=64
         )
 
         rng_key = self.split_rng()
-        builder_subkeys = jax.random.split(rng_key, builder_env.max_ts + 1)
+        builder_subkeys = jax.random.split(
+            rng_key, builder_env.max_trajectory_length + 1
+        )
 
         build_traj = []
 

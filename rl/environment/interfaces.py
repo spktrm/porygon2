@@ -57,6 +57,8 @@ class PlayerTransition(NamedTuple):
 
 
 class BuilderEnvOutput(NamedTuple):
+    continue_mask: ArrayLike = ()
+
     species_mask: ArrayLike = ()
 
     species_tokens: ArrayLike = ()

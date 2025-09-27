@@ -9,7 +9,11 @@ import {
 } from "../../protos/service_pb";
 import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
-import { generateTeamFromFormat, generateTeamFromIndices } from "./state";
+import {
+    generateTeamFromFormat,
+    generateTeamFromIndices,
+    getSampleTeam,
+} from "./state";
 
 interface WaitingPlayer {
     userName: string;
@@ -103,9 +107,7 @@ export class WorkerHandler {
             p1Name: userName,
             p1team: teamString,
             p2Name: `baseline-${userName}`,
-            p2team: generateTeamFromFormat(
-                smogonFormat.replace("_ou_all_formats", "_ou_only_format"),
-            ),
+            p2team: getSampleTeam(smogonFormat),
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
