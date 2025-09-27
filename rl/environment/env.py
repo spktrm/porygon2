@@ -77,15 +77,36 @@ class TeamBuilderEnvironment:
         smogon_format: str,
         num_team_members: int = 6,
         num_metagame_slots: int = 32,
-        max_ts: int = 24,
+        max_trajectory_length: int = 24,
+        min_trajectory_length: int = 1,
+        *,
+        initial_metagame_token: int | None = None,
     ):
-
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
         self.num_metagame_slots = num_metagame_slots
-        self.max_ts = max_ts
+        self.max_trajectory_length = max_trajectory_length
+        self.min_trajectory_length = min_trajectory_length
         self.rng_key = jax.random.key(42)
+
+        if max_trajectory_length < min_trajectory_length:
+            raise ValueError(
+                "max_trajectory_length must be greater than or equal to min_trajectory_length"
+            )
+
+        self.initial_continue_mask = (
+            jnp.ones(2, dtype=jnp.bool)
+            if min_trajectory_length <= 1
+            else jnp.array([1, 0], dtype=jnp.bool)
+        )
+        self.metagame_mask = (
+            jnp.ones((self.num_metagame_slots,), dtype=jnp.bool)
+            if initial_metagame_token is None
+            else jax.nn.one_hot(
+                initial_metagame_token, self.num_metagame_slots, dtype=jnp.bool
+            )
+        )
 
         self.duplicate_masks = ~MASKS[generation]["duplicate"]
 
@@ -151,13 +172,14 @@ class TeamBuilderEnvironment:
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=self.initial_continue_mask,
                 species_mask=species_mask,
                 species_tokens=jnp.array(species_tokens),
                 packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
                 metagame_token=jnp.array(0, dtype=jnp.int32),
-                metagame_mask=jnp.ones((self.num_metagame_slots,), dtype=jnp.bool),
+                metagame_mask=self.metagame_mask,
             )
         )
 
@@ -176,7 +198,7 @@ class TeamBuilderEnvironment:
 
         cont_edits = continue_token == 0
         stop_edits = continue_token == 1
-        traj_over = next_ts >= self.max_ts
+        traj_over = next_ts >= self.max_trajectory_length
 
         done = state.env.done | traj_over | stop_edits
 
@@ -207,8 +229,13 @@ class TeamBuilderEnvironment:
             metagame_token, self.num_metagame_slots, dtype=jnp.bool
         )
 
+        continue_mask = jnp.array(
+            [1, next_ts > self.min_trajectory_length], dtype=jnp.bool
+        )
+
         return BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=continue_mask,
                 species_mask=species_mask,
                 species_tokens=species_tokens,
                 packed_set_tokens=packed_set_tokens,

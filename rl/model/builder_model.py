@@ -238,41 +238,19 @@ class Porygon2BuilderModel(nn.Module):
         embedding = self.packed_set_ff(embedding)
         return self.packed_set_key_ln(embedding)
 
-    def _forward_continue_head(self, embedding: jax.Array, continue_head: HeadOutput):
-        train = self.cfg.get("train", False)
-        temp = self.cfg.get("temp", 1.0)
-        logits = self.continue_head(embedding) / temp
-        mask = jnp.ones_like(logits, dtype=jnp.bool)
-        log_policy = legal_log_policy(logits, mask)
-
-        entropy = ()
-        if train:
-            action_index = continue_head.action_index
-            policy = legal_policy(logits, mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
-        else:
-            action_index = sample_categorical(
-                logits,
-                log_policy,
-                mask,
-                self.make_rng("sampling"),
-                self.cfg.get("min_p", 0.0),
-            )
-
-        log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
-
-    def _forward_metagame_head(
-        self, embedding: jax.Array, metagame_head: HeadOutput, mask: jax.Array
+    def _forward_embedding_head(
+        self, logits: jax.Array, head: HeadOutput, mask: jax.Array = None
     ):
         train = self.cfg.get("train", False)
         temp = self.cfg.get("temp", 1.0)
-        logits = self.metagame_head(embedding) / temp
+        logits = logits / temp
+        if mask is None:
+            mask = jnp.ones_like(logits, dtype=jnp.bool)
         log_policy = legal_log_policy(logits, mask)
 
         entropy = ()
         if train:
-            action_index = metagame_head.action_index
+            action_index = head.action_index
             policy = legal_policy(logits, mask)
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
@@ -355,8 +333,8 @@ class Porygon2BuilderModel(nn.Module):
             ),
         ).reshape(-1)
 
-        metagame_head = self._forward_metagame_head(
-            contextual_embedding,
+        metagame_head = self._forward_embedding_head(
+            self.metagame_head(contextual_embedding),
             actor_output.metagame_head,
             actor_input.env.metagame_mask,
         )
@@ -368,8 +346,10 @@ class Porygon2BuilderModel(nn.Module):
 
         value = self._forward_value_head(metagame_contextual_embedding)
 
-        continue_head = self._forward_continue_head(
-            metagame_contextual_embedding, actor_output.continue_head
+        continue_head = self._forward_embedding_head(
+            self.continue_head(metagame_contextual_embedding),
+            actor_output.continue_head,
+            actor_input.env.continue_mask,
         )
 
         selection_head = self._forward_qk_head(
@@ -447,7 +427,6 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 
 def main(debug: bool = False, generation: int = 9):
-
     actor_network = get_builder_model(
         get_builder_model_config(generation, train=False)  # , temp=0.8, min_p=0.05)
     )
@@ -475,8 +454,10 @@ def main(debug: bool = False, generation: int = 9):
     builder_env = TeamBuilderEnvironment(
         generation=generation,
         smogon_format="ou_all_formats",
-        max_ts=64,
+        max_trajectory_length=64,
+        min_trajectory_length=6,
         num_metagame_slots=learner_config.num_metagame_slots,
+        initial_metagame_token=0,
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:
@@ -485,7 +466,9 @@ def main(debug: bool = False, generation: int = 9):
     while True:
 
         rng_key, key = jax.random.split(key)
-        builder_subkeys = jax.random.split(rng_key, builder_env.max_ts + 1)
+        builder_subkeys = jax.random.split(
+            rng_key, builder_env.max_trajectory_length + 1
+        )
 
         build_traj = []
 

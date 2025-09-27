@@ -5,6 +5,7 @@ import {
     EdgeBuffer,
     generateTeamFromFormat,
     generateTeamFromIndices,
+    getSampleTeam,
     StateHandler,
 } from "../server/state";
 import { OneDBoolean } from "../server/utils";
@@ -12,6 +13,7 @@ import { numActionMaskFeatures } from "../server/data";
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { actionMaskToRandomAction } from "../server/baselines/random";
+import { get } from "axios";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -77,9 +79,9 @@ async function runBattle() {
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-4`,
-        p1team: null,
-        p2team: null,
-        smogonFormat: "gen9randombattle",
+        p1team: getSampleTeam("gen9ou"),
+        p2team: getSampleTeam("gen9ou"),
+        smogonFormat: "gen9ou",
     };
     const { p1, p2 } = createBattle(battleOptions, true);
     const players = [p1];
