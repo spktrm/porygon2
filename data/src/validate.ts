@@ -1,98 +1,103 @@
-import { PokemonSet, toID } from "@pkmn/dex";
 import { Teams, TeamValidator } from "@pkmn/sim";
 import * as fs from "fs";
-import * as path from "path";
 
-const FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"];
+const ALL_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"];
+const MAX_PER_SPECIES = 1024;
+const DEBUG = !!process.env.DEBUG;
 
-function processSet(packed: string, validator: TeamValidator) {
-    const unpacked = Teams.unpack([packed].join("]"));
-    if (unpacked === null || unpacked.length === 0) {
-        return false;
+function validateOnce(
+    validator: TeamValidator,
+    cache: Map<string, boolean>,
+    packedSet: string,
+): boolean {
+    const cached = cache.get(packedSet);
+    if (cached !== undefined) return cached;
+
+    // No need for array/join: a single packed set is a valid packed team with 1 member
+    const team = Teams.unpack(packedSet);
+    const result = validator.validateTeam(team);
+    const ok = result == null;
+    cache.set(packedSet, ok);
+
+    if (!ok && DEBUG) {
+        // Keep this quiet by default—logging per-failure is costly
+        // console.log(result);
     }
-    const errors = validator.validateTeam(unpacked);
-    return errors === null;
+    return ok;
 }
 
-function main() {
-    const dataDir = path.resolve(__dirname, "../data");
-    const mainJson = JSON.parse(
-        fs.readFileSync(path.join(dataDir, `data.json`), "utf-8"),
+function processFile(
+    generation: number,
+    smogonFormat: string,
+    suffix: "all_formats" | "only_format",
+    validator: TeamValidator,
+    cache: Map<string, boolean>,
+) {
+    const filePath = `../data/data/gen${generation}/${smogonFormat}_${suffix}.json`;
+    const jsonData: Record<string, string[]> = JSON.parse(
+        fs.readFileSync(filePath, "utf-8"),
     );
 
-    for (let i = 9; i > 0; i--) {
-        const readPath = path.join(dataDir, `gen${i}/packed_sets.json`);
+    for (const [species, packedSets] of Object.entries(jsonData)) {
+        if (!Array.isArray(packedSets) || packedSets.length === 0) continue;
 
-        const packedSets: string[] = JSON.parse(
-            fs.readFileSync(readPath, "utf-8"),
-        );
-
-        const validators: TeamValidator[] = [];
-        FORMATS.map((format) => {
-            const trueFormat = `gen${i}${format}`;
-            try {
-                validators.push(new TeamValidator(trueFormat));
-            } catch (error) {}
-        });
-
-        const unpackedSets = new Set<string>();
-        packedSets.flatMap((packed) => {
-            const unpackedTeam = Teams.unpack([packed].join("]"));
-            if (unpackedTeam !== null && unpackedTeam.length > 0) {
-                const onlySet = unpackedTeam[0];
-                onlySet.moves.sort();
-                unpackedSets.add(JSON.stringify(onlySet));
-            }
-        });
-
-        const output = new Map<string, Record<string, boolean>>();
-        for (const packedSet of [...packedSets].sort()) {
-            const row = new Map<string, boolean>();
-            let anyValid = false;
-            for (const validator of validators) {
-                const valid = processSet(packedSet, validator);
-                anyValid ||= valid;
-                row.set(validator.format.id, valid);
-            }
-            if (anyValid) {
-                output.set(packedSet, Object.fromEntries(row));
+        // We want the *last* 1024 valid sets → scan from the end and stop as soon as we have enough
+        const validatedReversed: string[] = [];
+        for (
+            let i = packedSets.length - 1;
+            i >= 0 && validatedReversed.length < MAX_PER_SPECIES;
+            i--
+        ) {
+            const ps = packedSets[i];
+            if (validateOnce(validator, cache, ps)) {
+                validatedReversed.push(ps);
             }
         }
 
-        for (const format of FORMATS) {
-            const mapping = new Map<string, string[]>();
-            const outputObj = Object.fromEntries(output);
-            const formatSets = Object.entries(outputObj).flatMap(
-                ([packedSet, formats]) => {
-                    const formatValid = formats[`gen${i}${format}`] ?? false;
-                    return formatValid ? [packedSet] : [];
-                },
-            );
-            for (const [species, index] of Object.entries(
-                mainJson["species"],
-            )) {
-                const sets = formatSets.filter((packedSet) => {
-                    const splits = packedSet.split("|", 3);
-                    return splits[0] === species || splits[1] === species;
-                });
-                mapping.set(species, sets);
-            }
-            const finalOutput = Object.fromEntries(mapping);
+        // Restore chronological order of those "last" sets
+        const validated = validatedReversed.reverse();
+        jsonData[species] = validated;
 
-            const writePath = path.join(
-                dataDir,
-                `gen${i}/validated_packed_${format}_sets.json`,
+        // Optional lightweight progress log per species (much cheaper than per-set logs)
+        console.log(
+            generation,
+            smogonFormat,
+            suffix,
+            species,
+            validated.length,
+        );
+    }
+
+    fs.writeFileSync(filePath, JSON.stringify(jsonData));
+}
+
+function main() {
+    for (let generation = 9; generation > 0; generation--) {
+        for (const smogonFormat of [...ALL_FORMATS].reverse()) {
+            const validator = new TeamValidator(
+                `gen${generation}${smogonFormat}`,
             );
-            console.log(
-                Object.values(finalOutput)
-                    .map((sets) => {
-                        return sets.length;
-                    })
-                    .reduce((a, b) => a + b, 0),
-                "valid sets in",
-                writePath,
-            );
-            fs.writeFileSync(writePath, JSON.stringify(finalOutput));
+
+            // Cache validation results across BOTH files ("all_formats" & "only_format")
+            // for this (gen, format) so repeated sets don't get re-validated.
+            const cache = new Map<string, boolean>();
+
+            for (const suffix of ["all_formats", "only_format"] as const) {
+                try {
+                    processFile(
+                        generation,
+                        smogonFormat,
+                        suffix,
+                        validator,
+                        cache,
+                    );
+                } catch (e) {
+                    console.log(
+                        `Error processing gen${generation} ${smogonFormat} ${suffix}:`,
+                        e,
+                    );
+                }
+            }
         }
     }
 }

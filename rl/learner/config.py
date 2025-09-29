@@ -32,10 +32,10 @@ class AdamConfig:
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
-    num_steps = 10_000_000
+    num_steps = 30_000_000
     num_actors: int = 32
     num_eval_actors: int = 5
-    unroll_length: int = 128 * 2
+    unroll_length: int = 64 * 2
     replay_buffer_capacity: int = 512
 
     # Batch iteration params
@@ -45,7 +45,8 @@ class Porygon2LearnerConfig:
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
     learning_rate: float = 5e-5
-    clip_gradient: float = 2.0
+    player_clip_gradient: float = 2.0
+    builder_clip_gradient: float = 50.0
     tau: float = 1e-3
 
     # Discount params
@@ -128,7 +129,7 @@ def create_train_state(
         params=player_params,
         target_params=player_params,
         tx=optax.chain(
-            optax.clip_by_global_norm(config.clip_gradient),
+            optax.clip_by_global_norm(config.player_clip_gradient),
             optax.scale_by_adam(
                 b1=config.adam.b1,
                 b2=config.adam.b2,
@@ -150,7 +151,7 @@ def create_train_state(
         params=builder_params,
         target_params=builder_params,
         tx=optax.chain(
-            optax.clip_by_global_norm(config.clip_gradient),
+            optax.clip_by_global_norm(config.builder_clip_gradient),
             optax.scale_by_adam(
                 b1=config.adam.b1,
                 b2=config.adam.b2,

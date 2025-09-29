@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import ActionMaskFeature, FieldFeature
+from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
@@ -18,6 +18,7 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     return loss / (normalization + (normalization == 0.0))
 
 
+@jax.jit
 def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
     builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
     builder_lengths = builder_valid.sum(0)
@@ -42,12 +43,15 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
     move_ratio = renormalize(action_type_index == 0, can_act)
     switch_ratio = renormalize(action_type_index == 1, can_act)
 
-    wildcard_turn = jnp.where(
-        (action_type_index == 0)
-        & (wildcard_index != ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL),
-        jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-        -LARGE_NEGATIVE_BIAS,
-    ).min(axis=0)
+    wildcard_turn = (
+        jnp.where(
+            (action_type_index == 0) & (wildcard_index != 0),
+            jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
+            -LARGE_NEGATIVE_BIAS,
+        )
+        .clip(max=action_type_index.shape[0])
+        .min(axis=0)
+    )
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 

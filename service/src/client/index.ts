@@ -320,7 +320,7 @@ class User {
                 });
                 const modelOutput = await response.json();
                 const team = generateTeamFromIndices(
-                    format.replace("ou", "all_ou"),
+                    format.replace("ou", "_ou_all_formats"),
                     modelOutput.species_indices,
                     modelOutput.packed_set_indices,
                 )!;
@@ -328,7 +328,7 @@ class User {
                 const errors = validator.validateTeam(Teams.unpack(team));
                 if (errors === null) {
                     this.teams.push(team);
-                    this.send(`|/utm ${team}`);
+                    await this.send(`|/utm ${team}`);
                     break;
                 } else {
                     console.log(
@@ -337,11 +337,19 @@ class User {
                 }
             }
         }
-        this.send(`|/search ${format}`);
+        await this.send(`|/search ${format}`);
     }
 
-    async updateSearch(searchState: SearchState): Promise<void> {
-        this.searchState = searchState;
+    async updateSearch(
+        searchState: SearchState | undefined = undefined,
+    ): Promise<void> {
+        if (searchState !== undefined) {
+            this.searchState = searchState;
+        } else {
+            searchState = this.searchState;
+        }
+        if (searchState === undefined) return;
+
         const { searching, games } = searchState;
         if (searching.length === 0 && games === null && !this.searchUpdated) {
             this.search("gen9ou");
@@ -412,6 +420,8 @@ connection.open((data) => {
         user.receiveBattleData(roomId, data);
         return;
     }
+
+    let searchState = undefined;
     for (const { args } of Protocol.parse(data)) {
         switch (args[0]) {
             case "challstr": {
@@ -446,9 +456,16 @@ connection.open((data) => {
             }
 
             case "updatesearch": {
-                const searchState = JSON.parse(args[1]);
+                searchState = JSON.parse(args[1]);
                 user.updateSearch(searchState);
                 break;
+            }
+
+            case "popup": {
+                if (args[1].startsWith("Your team was rejected")) {
+                    user.updateSearch();
+                    break;
+                }
             }
         }
     }

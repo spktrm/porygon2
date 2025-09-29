@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import pickle
 
 import jax
@@ -34,15 +38,14 @@ class InferenceModel:
         seed: int = 42,
         precision: int = 2,
         temp: float = 0.8,
-        min_p: float = 0.05,
+        min_p: float = 0.01,
     ):
         self.learner_config = get_learner_config()
         self.player_model_config = get_player_model_config(
             self.learner_config.generation, train=False, temp=temp, min_p=min_p
         )
         self.builder_model_config = get_builder_model_config(
-            self.learner_config.generation,
-            train=False,  # temp=temp, min_p=min_p
+            self.learner_config.generation, train=False, temp=temp, min_p=min_p
         )
 
         self.player_network = get_player_model(self.player_model_config)
@@ -81,10 +84,14 @@ class InferenceModel:
         return subkey
 
     def reset(self):
-        builder_env = TeamBuilderEnvironment(self.learner_config.generation, max_ts=64)
+        builder_env = TeamBuilderEnvironment(
+            self.learner_config.generation, "ou_all_formats", max_trajectory_length=64
+        )
 
         rng_key = self.split_rng()
-        builder_subkeys = jax.random.split(rng_key, builder_env.max_ts + 1)
+        builder_subkeys = jax.random.split(
+            rng_key, builder_env.max_trajectory_length + 1
+        )
 
         build_traj = []
 

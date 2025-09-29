@@ -162,12 +162,17 @@ def process_state(state: EnvironmentState) -> PlayerActorInput:
     # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
     win_reward = win_reward_token / MAX_RATIO_TOKEN
 
+    fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
+    # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
+    fib_reward = fib_reward_token / MAX_RATIO_TOKEN
+
     action_mask = get_action_mask(state)
 
     env_step = PlayerEnvOutput(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
         win_reward=win_reward.astype(np.float32),
+        fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         field=field,
@@ -217,20 +222,25 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
     trajectory_length = 33
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
+    ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=np.ones((trajectory_length, 1, 2), dtype=np.bool_),
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
                 ),
                 species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
                 packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
-                ts=np.arange(trajectory_length, dtype=np.int32)[:, None],
+                ts=ts,
                 done=done,
+                metagame_token=np.zeros_like(ts, dtype=np.int32),
+                metagame_mask=np.ones((trajectory_length, 1, 32), dtype=np.bool),
             )
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
+            metagame_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),

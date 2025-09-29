@@ -124,6 +124,8 @@ const customScrapingFunctions: {
             "futuresight",
             "doomdesire",
             "fallen",
+            "wideguard",
+            "quickguard",
         ];
     },
     genderName: (content: string, file: string): string[] => {
@@ -546,6 +548,9 @@ async function scrapeRepo() {
         ]),
         "mimikyubusted",
         "fallen",
+        "stealeat",
+        "gem",
+        "incinerate",
     ];
     data["Condition"] = standardize(conditions, EXTRA_TOKENS);
     data["Natures"] = standardize(
@@ -574,6 +579,10 @@ async function scrapeRepo() {
         ],
         EXTRA_TOKENS,
     );
+
+    if (!fs.existsSync(PARENT_DATA_DIR)) {
+        fs.mkdirSync(PARENT_DATA_DIR, { recursive: true });
+    }
 
     fs.writeFileSync(
         `${PARENT_DATA_DIR}/data.json`,

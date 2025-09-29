@@ -3430,6 +3430,7 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     VOLATILESTATUS_ENUM__PROTECT: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__PROTOSYNTHESIS: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__QUARKDRIVE: _ClassVar[VolatilestatusEnum]
+    VOLATILESTATUS_ENUM__QUICKGUARD: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__RAGE: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__RAGEPOWDER: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__REFLECT: _ClassVar[VolatilestatusEnum]
@@ -3474,6 +3475,7 @@ class VolatilestatusEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     VOLATILESTATUS_ENUM__UPROAR: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__WATERSPORT: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__WHIRLPOOL: _ClassVar[VolatilestatusEnum]
+    VOLATILESTATUS_ENUM__WIDEGUARD: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__WRAP: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__YAWN: _ClassVar[VolatilestatusEnum]
     VOLATILESTATUS_ENUM__ZENMODE: _ClassVar[VolatilestatusEnum]
@@ -3784,6 +3786,7 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__HELPINGHAND: _ClassVar[ConditionEnum]
     CONDITION_ENUM__ICEBALL: _ClassVar[ConditionEnum]
     CONDITION_ENUM__IMPRISON: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__INCINERATE: _ClassVar[ConditionEnum]
     CONDITION_ENUM__INFESTATION: _ClassVar[ConditionEnum]
     CONDITION_ENUM__INGRAIN: _ClassVar[ConditionEnum]
     CONDITION_ENUM__INVULNERABILITY: _ClassVar[ConditionEnum]
@@ -3862,6 +3865,7 @@ class ConditionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONDITION_ENUM__SPIKYSHIELD: _ClassVar[ConditionEnum]
     CONDITION_ENUM__SPOTLIGHT: _ClassVar[ConditionEnum]
     CONDITION_ENUM__STALL: _ClassVar[ConditionEnum]
+    CONDITION_ENUM__STEALEAT: _ClassVar[ConditionEnum]
     CONDITION_ENUM__STEALTHROCK: _ClassVar[ConditionEnum]
     CONDITION_ENUM__STICKYWEB: _ClassVar[ConditionEnum]
     CONDITION_ENUM__STOCKPILE: _ClassVar[ConditionEnum]
@@ -5391,6 +5395,7 @@ class EffectEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     EFFECT_ENUM__STARSWEET: _ClassVar[EffectEnum]
     EFFECT_ENUM__STATIC: _ClassVar[EffectEnum]
     EFFECT_ENUM__STEADFAST: _ClassVar[EffectEnum]
+    EFFECT_ENUM__STEALEAT: _ClassVar[EffectEnum]
     EFFECT_ENUM__STEALTHROCK: _ClassVar[EffectEnum]
     EFFECT_ENUM__STEAMENGINE: _ClassVar[EffectEnum]
     EFFECT_ENUM__STEAMERUPTION: _ClassVar[EffectEnum]
@@ -9170,6 +9175,7 @@ VOLATILESTATUS_ENUM__POWERTRICK: VolatilestatusEnum
 VOLATILESTATUS_ENUM__PROTECT: VolatilestatusEnum
 VOLATILESTATUS_ENUM__PROTOSYNTHESIS: VolatilestatusEnum
 VOLATILESTATUS_ENUM__QUARKDRIVE: VolatilestatusEnum
+VOLATILESTATUS_ENUM__QUICKGUARD: VolatilestatusEnum
 VOLATILESTATUS_ENUM__RAGE: VolatilestatusEnum
 VOLATILESTATUS_ENUM__RAGEPOWDER: VolatilestatusEnum
 VOLATILESTATUS_ENUM__REFLECT: VolatilestatusEnum
@@ -9214,6 +9220,7 @@ VOLATILESTATUS_ENUM__UNBURDEN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__UPROAR: VolatilestatusEnum
 VOLATILESTATUS_ENUM__WATERSPORT: VolatilestatusEnum
 VOLATILESTATUS_ENUM__WHIRLPOOL: VolatilestatusEnum
+VOLATILESTATUS_ENUM__WIDEGUARD: VolatilestatusEnum
 VOLATILESTATUS_ENUM__WRAP: VolatilestatusEnum
 VOLATILESTATUS_ENUM__YAWN: VolatilestatusEnum
 VOLATILESTATUS_ENUM__ZENMODE: VolatilestatusEnum
@@ -9491,6 +9498,7 @@ CONDITION_ENUM__HEALBLOCK: ConditionEnum
 CONDITION_ENUM__HELPINGHAND: ConditionEnum
 CONDITION_ENUM__ICEBALL: ConditionEnum
 CONDITION_ENUM__IMPRISON: ConditionEnum
+CONDITION_ENUM__INCINERATE: ConditionEnum
 CONDITION_ENUM__INFESTATION: ConditionEnum
 CONDITION_ENUM__INGRAIN: ConditionEnum
 CONDITION_ENUM__INVULNERABILITY: ConditionEnum
@@ -9569,6 +9577,7 @@ CONDITION_ENUM__SPIKES: ConditionEnum
 CONDITION_ENUM__SPIKYSHIELD: ConditionEnum
 CONDITION_ENUM__SPOTLIGHT: ConditionEnum
 CONDITION_ENUM__STALL: ConditionEnum
+CONDITION_ENUM__STEALEAT: ConditionEnum
 CONDITION_ENUM__STEALTHROCK: ConditionEnum
 CONDITION_ENUM__STICKYWEB: ConditionEnum
 CONDITION_ENUM__STOCKPILE: ConditionEnum
@@ -11092,6 +11101,7 @@ EFFECT_ENUM__STARFBERRY: EffectEnum
 EFFECT_ENUM__STARSWEET: EffectEnum
 EFFECT_ENUM__STATIC: EffectEnum
 EFFECT_ENUM__STEADFAST: EffectEnum
+EFFECT_ENUM__STEALEAT: EffectEnum
 EFFECT_ENUM__STEALTHROCK: EffectEnum
 EFFECT_ENUM__STEAMENGINE: EffectEnum
 EFFECT_ENUM__STEAMERUPTION: EffectEnum

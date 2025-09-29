@@ -13,7 +13,23 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
 )
-from rl.model.utils import LARGE_NEGATIVE_BIAS, legal_log_policy, legal_policy
+from rl.model.utils import legal_log_policy, legal_policy
+
+
+def sample_categorical(
+    logits: jax.Array,
+    log_policy: jax.Array,
+    mask: jax.Array,
+    rng: jax.random.PRNGKey,
+    min_p: float = 0,
+):
+    masked_logits = jnp.where(mask, logits, -jnp.inf)
+    if 0.0 < min_p < 1.0:
+        masked_log_policy = jnp.where(mask, log_policy, -jnp.inf)
+        max_logp = masked_log_policy.max(keepdims=True, axis=-1)
+        keep = masked_log_policy >= (max_logp + math.log(min_p))
+        masked_logits = jnp.where(keep & mask, masked_logits, -jnp.inf)
+    return jax.random.categorical(rng, masked_logits.astype(jnp.float32))
 
 
 class MoveHead(nn.Module):
@@ -60,16 +76,12 @@ class MoveHead(nn.Module):
             policy = legal_policy(logits, query_mask)
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
-            masked_logits = jnp.where(query_mask, logits, LARGE_NEGATIVE_BIAS)
-            min_p = self.cfg.get("min_p", 0.0)
-            if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(query_mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
-                masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
-            action_index = jax.random.categorical(
-                self.make_rng("sampling"), masked_logits.astype(jnp.float32)
+            action_index = sample_categorical(
+                logits,
+                log_policy,
+                query_mask,
+                self.make_rng("sampling"),
+                self.cfg.get("min_p", 0.0),
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
@@ -96,16 +108,12 @@ class MoveHead(nn.Module):
             policy = legal_policy(logits, mask)
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
-            masked_logits = jnp.where(mask, logits, LARGE_NEGATIVE_BIAS)
-            min_p = self.cfg.get("min_p", 0.0)
-            if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
-                masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
-            action_index = jax.random.categorical(
-                self.make_rng("sampling"), masked_logits.astype(jnp.float32)
+            action_index = sample_categorical(
+                logits,
+                log_policy,
+                mask,
+                self.make_rng("sampling"),
+                self.cfg.get("min_p", 0.0),
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
@@ -175,16 +183,12 @@ class PolicyHead(nn.Module):
             policy = legal_policy(logits, query_mask)
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
-            masked_logits = jnp.where(query_mask, logits, LARGE_NEGATIVE_BIAS)
-            min_p = self.cfg.get("min_p", 0.0)
-            if 0.0 < min_p < 1.0:
-                max_logp = jnp.where(query_mask, log_policy, LARGE_NEGATIVE_BIAS).max(
-                    keepdims=True, axis=-1
-                )
-                keep = log_policy >= (max_logp + math.log(min_p))
-                masked_logits = jnp.where(keep, masked_logits, LARGE_NEGATIVE_BIAS)
-            action_index = jax.random.categorical(
-                self.make_rng("sampling"), masked_logits.astype(jnp.float32)
+            action_index = sample_categorical(
+                logits,
+                log_policy,
+                query_mask,
+                self.make_rng("sampling"),
+                self.cfg.get("min_p", 0.0),
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)

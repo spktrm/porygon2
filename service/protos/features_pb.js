@@ -13,7 +13,13 @@
 
 var jspb = require('google-protobuf');
 var goog = jspb;
-var global = (function() { return this || window || global || self || Function('return this')(); }).call(null);
+var global =
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof window !== 'undefined' && window) ||
+    (typeof global !== 'undefined' && global) ||
+    (typeof self !== 'undefined' && self) ||
+    (function () { return this; }).call(null) ||
+    Function('return this')();
 
 goog.exportSymbol('proto.ActionMaskFeature', null, global);
 goog.exportSymbol('proto.ActionType', null, global);
@@ -197,7 +203,8 @@ proto.InfoFeature = {
   INFO_FEATURE__PLAYER_INDEX: 2,
   INFO_FEATURE__TURN: 3,
   INFO_FEATURE__WIN_REWARD: 4,
-  INFO_FEATURE__REQUEST_COUNT: 5
+  INFO_FEATURE__FIB_REWARD: 5,
+  INFO_FEATURE__REQUEST_COUNT: 6
 };
 
 /**

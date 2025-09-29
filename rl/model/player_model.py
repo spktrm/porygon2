@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import pickle
 from pprint import pprint
 
@@ -16,7 +20,6 @@ from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import MoveHead, PolicyHead, ScalarHead
 from rl.model.utils import get_most_recent_file, get_num_params
-from rl.utils import init_jax_jit_cache
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -120,14 +123,8 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
 
 
 def main(generation: int = 9):
-    init_jax_jit_cache()
-
-    actor_network = get_player_model(
-        get_player_model_config(generation, dict(train=False))
-    )
-    learner_network = get_player_model(
-        get_player_model_config(generation, dict(train=True))
-    )
+    actor_network = get_player_model(get_player_model_config(generation, train=False))
+    learner_network = get_player_model(get_player_model_config(generation, train=True))
 
     ex_actor_input, ex_actor_output = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
@@ -145,6 +142,7 @@ def main(generation: int = 9):
 
     actor_output = actor_network.apply(params, ex_actor_input, rngs={"sampling": key})
     learner_network.apply(params, ex_actor_input, actor_output)
+
     pprint(get_num_params(params))
     pprint(actor_output)
 
