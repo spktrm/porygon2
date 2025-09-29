@@ -12,7 +12,7 @@ import { Generations, PokemonSet } from "@pkmn/data";
 import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
-import { EventHandler, StateHandler } from "./state";
+import { EventHandler, RewardTracker, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
 import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
@@ -135,6 +135,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     tasks: TaskQueueSystem<StepRequest>;
     outgoingQueue: AsyncQueue<EnvironmentState>;
+    rewardTracker: RewardTracker;
 
     currentRequest: ChoiceRequest | null = null;
     done: boolean;
@@ -146,6 +147,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     isBaseline: boolean;
     baselineIndex: number;
+    earliestTeraTurn: number;
 
     constructor(
         userName: string,
@@ -157,6 +159,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         } = {},
         debug: boolean = false,
         sets?: PokemonSet[],
+        earliestTeraTurn: number = 0,
     ) {
         super(playerStream, options, debug);
 
@@ -169,11 +172,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
+        this.rewardTracker = new RewardTracker();
 
         this.playerIndex = undefined;
         this.requestCount = 0;
         this.finishedEarly = false;
         this.rqid = -1;
+        this.earliestTeraTurn = earliestTeraTurn;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -423,7 +428,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                         );
 
                         // Process the received action
-                        this.choose(choice);
+                        try {
+                            this.choose(choice);
+                        } catch (err) {
+                            console.error(
+                                `Error choosing action ${choice}:`,
+                                err,
+                            );
+                        }
 
                         // Increment internal counters
                         this.requestCount += 1;
@@ -441,6 +453,35 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.privateBattle.destroy();
         this.publicBattle.destroy();
     }
+}
+
+let totalBattles = 0;
+
+function sampleEarliestTeraTurn(
+    minTurn: number = 2,
+    maxTurn: number = 20,
+    scale: number = 500,
+): number {
+    if (minTurn > maxTurn) {
+        throw new Error("minTurn must be ≤ maxTurn");
+    }
+
+    // Compute a shape parameter. As totalBattles grows, alpha grows and
+    // the distribution becomes more skewed toward smaller values.
+    const alpha = 1 + totalBattles / Math.max(1, scale);
+
+    // Draw a uniform random number U in (0, 1)
+    const u = Math.random();
+
+    // Transform U to follow a Beta(1, alpha) distribution.
+    // Beta(1, alpha) is skewed toward 0 for alpha > 1.
+    const x = 1 - Math.pow(u, 1 / alpha);
+
+    // Map x ∈ [0, 1) to an integer turn in [minTurn, maxTurn].
+    const range = maxTurn - minTurn + 1;
+    const turn = minTurn + Math.floor(x * range);
+
+    return turn;
 }
 
 export function createBattle(
@@ -481,12 +522,15 @@ export function createBattle(
         team: Teams.pack(p2Sets),
     };
 
+    totalBattles += 1;
+
     const p1 = new TrainablePlayerAI(
         p1spec.name,
         streams.p1,
         {},
         debug,
         p1Sets,
+        sampleEarliestTeraTurn(),
     );
     const p2 = new TrainablePlayerAI(
         p2spec.name,
@@ -494,6 +538,7 @@ export function createBattle(
         {},
         debug,
         p2Sets,
+        sampleEarliestTeraTurn(),
     );
 
     p1.start();

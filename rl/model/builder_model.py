@@ -457,7 +457,7 @@ def main(debug: bool = False, generation: int = 9):
         max_trajectory_length=64,
         min_trajectory_length=6,
         num_metagame_slots=learner_config.num_metagame_slots,
-        initial_metagame_token=0,
+        initial_metagame_token=17,
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:

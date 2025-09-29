@@ -168,7 +168,8 @@ export interface InfoFeatureMap {
   INFO_FEATURE__PLAYER_INDEX: 2;
   INFO_FEATURE__TURN: 3;
   INFO_FEATURE__WIN_REWARD: 4;
-  INFO_FEATURE__REQUEST_COUNT: 5;
+  INFO_FEATURE__FIB_REWARD: 5;
+  INFO_FEATURE__REQUEST_COUNT: 6;
 }
 
 export const InfoFeature: InfoFeatureMap;

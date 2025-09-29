@@ -192,7 +192,10 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    rewards = player_transitions.env_output.win_reward
+    rewards = (
+        player_transitions.env_output.win_reward
+        + player_transitions.env_output.fib_reward
+    ) / 2.0
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     player_vtrace = compute_returns(
@@ -472,9 +475,7 @@ def builder_train_step(
         )
 
         loss_v = value_loss(
-            pred_v=builder_pred.v,
-            target_v=builder_vtrace.returns,
-            valid=builder_valid,
+            pred_v=builder_pred.v, target_v=builder_vtrace.returns, valid=builder_valid
         )
 
         loss_entropy = builder_entropy_loss(
@@ -636,7 +637,7 @@ class Learner:
         self,
         batch: list[Trajectory],
         player_transition_resolution: int = 64,
-        player_history_resolution: int = 128,
+        player_history_resolution: int = 32 * 3,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
@@ -719,6 +720,16 @@ class Learner:
 
         return usage_logs
 
+    @functools.partial(jax.jit, static_argnames=["self"])
+    def calculate_builder_final_reward(self, batch: Trajectory):
+        return (
+            batch.player_transitions.env_output.win_reward[-1]
+            + batch.player_transitions.env_output.fib_reward.sum(
+                axis=0,
+                where=jnp.bitwise_not(batch.player_transitions.env_output.done),
+            )
+        ) / 2
+
     def train(self):
 
         batch_size = self.learner_config.batch_size
@@ -739,10 +750,11 @@ class Learner:
                 self.learner_config,
             )
 
+            final_reward = self.calculate_builder_final_reward(batch)
             self.builder_state, builder_logs = builder_train_step(
                 self.builder_state,
                 batch.builder_transitions,
-                batch.player_transitions.env_output.win_reward[-1],
+                final_reward,
                 self.learner_config,
             )
 
