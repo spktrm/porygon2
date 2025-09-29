@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import DEFAULT_SMOGON_FORMAT, MASKS, SET_MASK
+from rl.environment.data import MASKS, SET_MASK
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderAgentOutput,
@@ -49,7 +49,7 @@ class SinglePlayerSyncEnvironment:
                 username=self.username,
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
-                smogon_format=f"gen{self.generation}{DEFAULT_SMOGON_FORMAT}",
+                smogon_format=f"gen{self.generation}_ou_all_formats",
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -74,16 +74,39 @@ class TeamBuilderEnvironment:
     def __init__(
         self,
         generation: int,
-        smogon_format: str = DEFAULT_SMOGON_FORMAT,
+        smogon_format: str,
         num_team_members: int = 6,
-        max_ts: int = 32,
+        num_metagame_slots: int = 32,
+        max_trajectory_length: int = 24,
+        min_trajectory_length: int = 1,
+        *,
+        initial_metagame_token: int | None = None,
     ):
-
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
-        self.max_ts = max_ts
+        self.num_metagame_slots = num_metagame_slots
+        self.max_trajectory_length = max_trajectory_length
+        self.min_trajectory_length = min_trajectory_length
         self.rng_key = jax.random.key(42)
+
+        if max_trajectory_length < min_trajectory_length:
+            raise ValueError(
+                "max_trajectory_length must be greater than or equal to min_trajectory_length"
+            )
+
+        self.initial_continue_mask = (
+            jnp.ones(2, dtype=jnp.bool)
+            if min_trajectory_length <= 1
+            else jnp.array([1, 0], dtype=jnp.bool)
+        )
+        self.metagame_mask = (
+            jnp.ones((self.num_metagame_slots,), dtype=jnp.bool)
+            if initial_metagame_token is None
+            else jax.nn.one_hot(
+                initial_metagame_token, self.num_metagame_slots, dtype=jnp.bool
+            )
+        )
 
         self.duplicate_masks = ~MASKS[generation]["duplicate"]
 
@@ -107,11 +130,12 @@ class TeamBuilderEnvironment:
         if self.state.env.done.item():
             return self.state
         self.state = self._step(
-            agent_output.actor_output.continue_head.action_index,
-            agent_output.actor_output.selection_head.action_index,
-            agent_output.actor_output.species_head.action_index,
-            agent_output.actor_output.packed_set_head.action_index,
-            self.state,
+            metagame_token=agent_output.actor_output.metagame_head.action_index,
+            continue_token=agent_output.actor_output.continue_head.action_index,
+            selection_token=agent_output.actor_output.selection_head.action_index,
+            species_token=agent_output.actor_output.species_head.action_index,
+            packed_set_token=agent_output.actor_output.packed_set_head.action_index,
+            state=self.state,
         )
         return self.state
 
@@ -148,17 +172,21 @@ class TeamBuilderEnvironment:
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=self.initial_continue_mask,
                 species_mask=species_mask,
                 species_tokens=jnp.array(species_tokens),
                 packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
+                metagame_token=jnp.array(0, dtype=jnp.int32),
+                metagame_mask=self.metagame_mask,
             )
         )
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
         self,
+        metagame_token: jax.Array,
         continue_token: jax.Array,
         selection_token: jax.Array,
         species_token: jax.Array,
@@ -170,7 +198,7 @@ class TeamBuilderEnvironment:
 
         cont_edits = continue_token == 0
         stop_edits = continue_token == 1
-        traj_over = next_ts >= self.max_ts
+        traj_over = next_ts >= self.max_trajectory_length
 
         done = state.env.done | traj_over | stop_edits
 
@@ -180,26 +208,40 @@ class TeamBuilderEnvironment:
             & jax.nn.one_hot(selection_token, self.num_team_members, dtype=jnp.bool)
         )
 
-        old_species_token = state.env.species_tokens[selection_token]
-        old_species_mask = self.duplicate_masks[old_species_token]
+        old_species_mask = jnp.take(
+            self.duplicate_masks, state.env.species_tokens, axis=0
+        )
         new_species_mask = self.duplicate_masks[species_token]
-
-        species_mask = jnp.where(old_species_mask, state.env.species_mask, True)
-        species_mask = jnp.where(new_species_mask, species_mask, False)
 
         species_tokens = jnp.where(
             selection_oh, species_token, state.env.species_tokens
         )
+        species_mask = self.start_mask & jnp.prod(
+            jnp.where(
+                selection_oh[..., None], new_species_mask[None], old_species_mask
+            ),
+            axis=0,
+        )
         packed_set_tokens = jnp.where(
             selection_oh, packed_set_token, state.env.packed_set_tokens
+        )
+        metagame_mask = jax.nn.one_hot(
+            metagame_token, self.num_metagame_slots, dtype=jnp.bool
+        )
+
+        continue_mask = jnp.array(
+            [1, next_ts > self.min_trajectory_length], dtype=jnp.bool
         )
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
+                continue_mask=continue_mask,
                 species_mask=species_mask,
                 species_tokens=species_tokens,
                 packed_set_tokens=packed_set_tokens,
                 done=done,
                 ts=next_ts,
+                metagame_token=metagame_token,
+                metagame_mask=metagame_mask,
             ),
         )
