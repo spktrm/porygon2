@@ -160,6 +160,7 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__PLAYER_INDEX: _ClassVar[InfoFeature]
     INFO_FEATURE__TURN: _ClassVar[InfoFeature]
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
+    INFO_FEATURE__FIB_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -359,6 +360,7 @@ INFO_FEATURE__DONE: InfoFeature
 INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
+INFO_FEATURE__FIB_REWARD: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType

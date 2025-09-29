@@ -43,7 +43,7 @@ class ReplayBuffer:
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
 
-    def add(self, item):
+    def add(self, item: Trajectory):
         with self._lock:
             if self._size == len(self._buf):  # buffer full and maxlen hit
                 # deque will evict leftmost; keep _size consistent with len

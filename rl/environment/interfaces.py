@@ -8,6 +8,7 @@ class PlayerEnvOutput(NamedTuple):
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
+    fib_reward: ArrayLike = ()
     public_team: ArrayLike = ()
     field: ArrayLike = ()
 

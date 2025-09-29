@@ -3,6 +3,7 @@ import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
 import { OneDBoolean } from "../utils";
 import { Action } from "../../../protos/service_pb";
+import { AnyObject } from "@pkmn/sim";
 
 export function getRandomOneIndex(arr: number[]): number {
     // Collect indices where the element is 1
@@ -83,8 +84,12 @@ export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
 }
 
 export const GetRandomAction: EvalActionFnType = ({ player }) => {
-    const { actionMask } = StateHandler.getActionMask(
-        player.privateBattle.request,
-    );
+    const request = player.privateBattle.request as
+        | AnyObject
+        | null
+        | undefined;
+    const { actionMask } = StateHandler.getActionMask({
+        request,
+    });
     return actionMaskToRandomAction(actionMask);
 };
