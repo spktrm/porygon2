@@ -1,9 +1,11 @@
+import functools
 import json
 import os
 import traceback
 
 import jax.numpy as jnp
 import numpy as np
+import requests
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -150,7 +152,7 @@ ACTION_MAX_VALUES = {
 }
 
 with open("data/data/data.json", "r") as f:
-    data = json.load(f)
+    token_data = json.load(f)
 
 
 PACKED_SET_MAX_VALUES = {
@@ -160,12 +162,73 @@ PACKED_SET_MAX_VALUES = {
     PackedSetFeature.PACKED_SET_FEATURE__TERATYPE: NUM_TYPECHART,
 }
 
+ITOS = {key.lower(): {v: k for k, v in token_data[key].items()} for key in token_data}
+STOI = {key.lower(): {k: v for k, v in token_data[key].items()} for key in token_data}
+
+
+def toid(string: str) -> str:
+    return "".join(c for c in string if c.isalnum() or c == "_").lower()
+
+
+@functools.lru_cache(maxsize=None)
+def do_request(url: str, **kwargs):
+    return requests.get(url, **kwargs).json()
+
+
+def make_species_count(generation: int, smogon_format: str):
+    data = do_request(
+        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
+    )
+    total_count = sum(d["count"] for d in data["pokemon"].values())
+    species_count = np.zeros(NUM_SPECIES, dtype=np.float32)
+    for k, v in data["pokemon"].items():
+        species_id = STOI["species"].get(toid(k), 0)
+        species_count[species_id] = v["count"] / total_count
+    return species_count
+
+
+def make_species_count(generation: int, smogon_format: str):
+    data = do_request(
+        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
+    )
+    species_count = np.zeros(NUM_SPECIES, dtype=np.float32)
+    for k, v in data["pokemon"].items():
+        species_id = STOI["species"].get(toid(k), 0)
+        species_count[species_id] = v["usage"]["raw"]
+    return species_count
+
+
+def make_teammate_count(generation: int, smogon_format: str):
+    data = do_request(
+        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
+    )
+    teammate_count = np.zeros((NUM_SPECIES, NUM_SPECIES), dtype=np.float32)
+    for k, v in data["pokemon"].items():
+        species_id = STOI["species"].get(toid(k), 0)
+        for teammate, rew in v["teammates"].items():
+            teammate_id = STOI["species"].get(toid(teammate), 0)
+            teammate_count[species_id, teammate_id] = rew
+    return teammate_count
+
+
+HUMAN_SPECIES_COUNTS = {
+    generation: {
+        smogon_format: make_species_count(generation, smogon_format)
+        for smogon_format in ["ou"]
+    }
+    for generation in range(1, 10)
+}
+
+HUMAN_TEAMMATE_COUNTS = {
+    generation: {
+        smogon_format: make_teammate_count(generation, smogon_format)
+        for smogon_format in ["ou"]
+    }
+    for generation in range(1, 10)
+}
 
 NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 
-
-ITOS = {key.lower(): {v: k for k, v in data[key].items()} for key in data}
-STOI = {key.lower(): {k: v for k, v in data[key].items()} for key in data}
 
 ONEHOT_DTYPE = jnp.bfloat16
 

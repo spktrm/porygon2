@@ -70,6 +70,9 @@ class BuilderEnvOutput(NamedTuple):
     metagame_token: ArrayLike = ()
     metagame_mask: ArrayLike = ()
 
+    species_reward: ArrayLike = ()
+    teammate_reward: ArrayLike = ()
+
 
 class BuilderHistoryOutput(NamedTuple):
     placeholder: ArrayLike = ()

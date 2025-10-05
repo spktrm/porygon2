@@ -32,7 +32,7 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
     # logits_masked has illegal actions set to -inf.
-    logits_masked = logits + jnp.log(legal_actions)
+    logits_masked = jnp.where(legal_actions, logits, -jnp.inf).astype(logits.dtype)
     max_legal_logit = logits_masked.max(axis=-1, keepdims=True)
     logits_masked = logits_masked - max_legal_logit
     # exp_logits_masked is 0 for illegal actions.

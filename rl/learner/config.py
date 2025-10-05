@@ -50,10 +50,10 @@ class Porygon2LearnerConfig:
     tau: float = 1e-3
 
     # Discount params
-    player_lambda_: float = 0.95
+    player_lambda_: float = 1.0
     player_gamma: float = 1.0
 
-    builder_lambda_: float = 0.90
+    builder_lambda_: float = 1.0
     builder_gamma: float = 1.0
 
     # Vtrace params

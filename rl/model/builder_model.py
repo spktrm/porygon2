@@ -42,8 +42,8 @@ from rl.model.config import get_builder_model_config
 from rl.model.heads import sample_categorical
 from rl.model.modules import (
     MLP,
-    FeedForwardResidual,
     MergeEmbeddings,
+    OutputLayer,
     RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
@@ -107,7 +107,11 @@ class Porygon2BuilderModel(nn.Module):
         self.contextual_metagame_merge = MergeEmbeddings(entity_size, dtype=dtype)
 
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.packed_set_ff = FeedForwardResidual(entity_size, dtype=dtype)
+
+        self.metagame_query_head = MLP((entity_size, entity_size), dtype=dtype)
+        self.metagame_key_head = MLP((entity_size, entity_size), dtype=dtype)
+        self.metagame_query_ln = RMSNorm(dtype=dtype)
+        self.metagame_key_ln = RMSNorm(dtype=dtype)
 
         self.selection_query_head = MLP((entity_size, entity_size), dtype=dtype)
         self.selection_key_head = MLP((entity_size, entity_size), dtype=dtype)
@@ -120,18 +124,18 @@ class Porygon2BuilderModel(nn.Module):
 
         self.packed_set_query_head = MLP((entity_size, entity_size), dtype=dtype)
         self.packed_set_query_ln = RMSNorm(dtype=dtype)
-        self.packed_set_key_ln = RMSNorm(dtype=dtype)
 
         transformer_config = self.cfg.transformer.to_dict()
 
         self.encoder = TransformerEncoder(**transformer_config)
         self.decoder = TransformerDecoder(**transformer_config)
 
-        self.continue_head = MLP((entity_size, 2), dtype=dtype)
-        self.metagame_head = MLP(
-            (entity_size, self.cfg.num_metagame_slots), dtype=dtype
-        )
-        self.value_head = MLP((entity_size, 1), dtype=dtype)
+        self.continue_tower = MLP(entity_size, dtype=dtype)
+        self.continue_out = OutputLayer(2, dtype=dtype)
+
+        self.value_tower = MLP(entity_size, dtype=dtype)
+        self.value_out = OutputLayer(1, dtype=dtype)
+
         self.metagame_pred_head = MLP(
             (entity_size, self.cfg.num_metagame_slots), dtype=dtype
         )
@@ -201,7 +205,8 @@ class Porygon2BuilderModel(nn.Module):
                 _encode_one_hot_set(
                     packed_set, PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
                 ),
-            ]
+            ],
+            dtype=self.cfg.dtype,
         )
 
         ev_indices = np.array(
@@ -227,7 +232,7 @@ class Porygon2BuilderModel(nn.Module):
         evs = packed_set[ev_indices] / 255
         ivs = packed_set[iv_indices] / 31
 
-        embedding = self.packed_set_merge(
+        return self.packed_set_merge(
             boolean_code,
             self._embed_species(species_token),
             self._embed_ability(ability_token),
@@ -235,8 +240,6 @@ class Porygon2BuilderModel(nn.Module):
             move_encodings.sum(axis=0),
             jnp.concatenate((evs, ivs), axis=-1),
         )
-        embedding = self.packed_set_ff(embedding)
-        return self.packed_set_key_ln(embedding)
 
     def _forward_embedding_head(
         self, logits: jax.Array, head: HeadOutput, mask: jax.Array = None
@@ -299,7 +302,8 @@ class Porygon2BuilderModel(nn.Module):
         return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
 
     def _forward_value_head(self, embedding: jax.Array):
-        return jnp.tanh(self.value_head(embedding)).squeeze(-1)
+        shared_embedding = self.value_tower(embedding)
+        return self.value_out(shared_embedding).squeeze(-1)
 
     def _forward(
         self,
@@ -333,8 +337,11 @@ class Porygon2BuilderModel(nn.Module):
             ),
         ).reshape(-1)
 
-        metagame_head = self._forward_embedding_head(
-            self.metagame_head(contextual_embedding),
+        metagame_head = self._forward_qk_head(
+            self.metagame_query_ln(self.metagame_query_head(contextual_embedding)),
+            self.metagame_key_ln(
+                self.metagame_key_head(self.metagame_embeddings.embedding)
+            ),
             actor_output.metagame_head,
             actor_input.env.metagame_mask,
         )
@@ -347,16 +354,16 @@ class Porygon2BuilderModel(nn.Module):
         value = self._forward_value_head(metagame_contextual_embedding)
 
         continue_head = self._forward_embedding_head(
-            self.continue_head(metagame_contextual_embedding),
+            self.continue_out(self.continue_tower(metagame_contextual_embedding)),
             actor_output.continue_head,
             actor_input.env.continue_mask,
         )
 
         selection_head = self._forward_qk_head(
-            self.selection_key_ln(
+            self.selection_query_ln(
                 self.selection_query_head(metagame_contextual_embedding)
             ),
-            self.selection_query_ln(self.selection_key_head(contextual_embeddings)),
+            self.selection_key_ln(self.selection_key_head(contextual_embeddings)),
             actor_output.selection_head,
         )
         selected_embedding = jnp.take(
@@ -454,14 +461,15 @@ def main(debug: bool = False, generation: int = 9):
     builder_env = TeamBuilderEnvironment(
         generation=generation,
         smogon_format="ou_all_formats",
-        max_trajectory_length=64,
-        min_trajectory_length=6,
+        max_trajectory_length=6,
+        min_trajectory_length=1,
         num_metagame_slots=learner_config.num_metagame_slots,
-        initial_metagame_token=17,
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:
         packed_sets = json.load(f)
+
+    metagame_counts = {i: 0 for i in range(32)}
 
     while True:
 
@@ -494,6 +502,8 @@ def main(debug: bool = False, generation: int = 9):
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
         )
+
+        metagame_counts[builder_trajectory.env_output.metagame_token[-1].item()] += 1
 
         # learner_output = learner_network.apply(
         #     builder_params,

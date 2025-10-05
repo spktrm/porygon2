@@ -3006,9 +3006,9 @@ export class RewardTracker {
         const [currp1, currp2] = this.currFaintedCount.map(
             (x) => this.funcCache.get(x)!,
         );
-        const reward = currp1 - prevp1 - (currp2 - prevp2);
-        const sign = playerIndex === 0 ? -1 : 1;
-        return sign * reward || 0;
+        const reward = currp2 - prevp2 - (currp1 - prevp1);
+        const sign = playerIndex === 0 ? 1 : -1;
+        return sign * reward;
     }
 }
 
@@ -3345,6 +3345,48 @@ export class StateHandler {
 
         infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = this.getWinReward();
         infoBuffer[InfoFeature.INFO_FEATURE__FIB_REWARD] = this.getFibReward();
+
+        const getHpRatio = (member: Pokemon) => {
+            const isHpBug = !member.fainted && member.hp === 0;
+            const hp = isHpBug ? 100 : member.hp;
+            const maxHp = isHpBug ? 100 : member.maxhp;
+            return hp / maxHp;
+        };
+
+        let [myFaintedCount, myHpCount] = [0, 0];
+        const mySide = this.player.privateBattle.sides[playerIndex];
+        for (const member of mySide.team) {
+            if (member.fainted) {
+                myFaintedCount += 1;
+            } else {
+                myHpCount += getHpRatio(member);
+            }
+        }
+        myHpCount += mySide.totalPokemon - mySide.team.length;
+
+        let [oppFaintedCount, oppHpCount] = [0, 0];
+        const oppSide = this.player.privateBattle.sides[1 - playerIndex];
+        for (const member of oppSide.team) {
+            if (member.fainted) {
+                oppFaintedCount += 1;
+            } else {
+                oppHpCount += getHpRatio(member);
+            }
+        }
+        oppHpCount += oppSide.totalPokemon - oppSide.team.length;
+
+        infoBuffer[InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT] = Math.floor(
+            (MAX_RATIO_TOKEN * myFaintedCount) / mySide.totalPokemon,
+        );
+        infoBuffer[InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT] = Math.floor(
+            (MAX_RATIO_TOKEN * oppFaintedCount) / oppSide.totalPokemon,
+        );
+        infoBuffer[InfoFeature.INFO_FEATURE__MY_HP_COUNT] = Math.floor(
+            (MAX_RATIO_TOKEN * myHpCount) / mySide.totalPokemon,
+        );
+        infoBuffer[InfoFeature.INFO_FEATURE__OPP_HP_COUNT] = Math.floor(
+            (MAX_RATIO_TOKEN * oppHpCount) / oppSide.totalPokemon,
+        );
 
         return new Uint8Array(infoBuffer.buffer);
     }

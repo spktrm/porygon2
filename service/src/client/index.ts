@@ -15,9 +15,9 @@ import {
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
-// const server = "ws://localhost:8000/showdown/websocket";
+const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
-const server = "wss://pokeagentshowdown.com/showdown/websocket";
+// const server = "wss://pokeagentshowdown.com/showdown/websocket";
 const MAX_BATTLES = 50; // Maximum number of battles to run in sequence
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
@@ -181,7 +181,7 @@ class Battle {
                     method: "POST",
                     body: state.serializeBinary(),
                 });
-                await new Promise((resolve) => setTimeout(resolve, rateLimit));
+                // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
                 const stepResponse = await response.json();
                 const stepRequest = new StepRequest();

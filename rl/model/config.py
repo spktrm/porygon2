@@ -76,7 +76,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_qk_layer_norm = True
-    encoder_use_bias = True
+    encoder_use_bias = False
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -85,7 +85,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
     decoder_qk_layer_norm = True
-    decoder_use_bias = True
+    decoder_use_bias = False
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -133,17 +133,9 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
     cfg.encoder.action_encoder.need_pos = False
 
-    cfg.encoder.move_encoder = ConfigDict()
-    set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.move_encoder.need_pos = False
-
-    cfg.encoder.switch_encoder = ConfigDict()
-    set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.switch_encoder.need_pos = False
-
     cfg.encoder.entity_timestep_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_timestep_decoder.num_layers = 2
+    cfg.encoder.entity_timestep_decoder.num_layers = 1
     cfg.encoder.entity_timestep_decoder.need_pos = True
 
     cfg.encoder.entity_action_decoder = ConfigDict()
@@ -161,6 +153,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.action_type_head.generation = generation
     cfg.action_type_head.transformer = ConfigDict()
     set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
+    cfg.action_type_head.output_features = 3
     cfg.action_type_head.dtype = dtype
 
     cfg.move_head = ConfigDict()
@@ -212,7 +205,7 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)
     qk_layer_norm = True
-    use_bias = True
+    use_bias = False
 
     transformer_kwargs = dict(
         num_layers=num_layers,
