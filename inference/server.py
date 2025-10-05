@@ -15,7 +15,7 @@ app = FastAPI()
 
 
 # Initialize the model
-model = InferenceModel(seed=random.randint(0, 2**32 - 1))
+model = InferenceModel(seed=random.randint(0, 2**32 - 1), temp=1, min_p=0.0)
 
 
 def pprint_nparray(arr: np.ndarray):

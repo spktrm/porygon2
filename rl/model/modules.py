@@ -1,3 +1,5 @@
+import math
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -7,6 +9,183 @@ from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
+
+
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+
+
+class GatLayer(nn.Module):
+    out_dim: int
+    num_heads: int = 1
+    negative_slope: float = 0.2
+    max_edges: int = 4
+    dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, x: jax.Array, e: jax.Array, f: jax.Array, valid_mask: jax.Array):
+        """
+        x: (N, D) node embeddings
+        e: (N, D) edge embeddings, fully connected to valid nodes
+        f: (D) global embedding, affects all valid nodes/edges
+        valid_mask: (N,) bool
+        returns: (N, out_dim)
+        """
+        N, D = x.shape
+        # Choose head dim to cover out_dim across heads
+        head_dim = math.ceil(self.out_dim / self.num_heads)
+
+        # Projectors
+        node_proj = nn.Dense(
+            self.num_heads * head_dim,
+            use_bias=False,
+            name="node_proj",
+            dtype=self.dtype,
+        )
+        edge_proj = nn.Dense(
+            self.num_heads * head_dim,
+            use_bias=False,
+            name="edge_proj",
+            dtype=self.dtype,
+        )
+        glob_proj = nn.Dense(
+            self.num_heads * head_dim,
+            use_bias=False,
+            name="glob_proj",
+            dtype=self.dtype,
+        )
+        msg_proj = nn.Dense(
+            self.num_heads * head_dim, use_bias=False, name="msg_proj", dtype=self.dtype
+        )
+        out_proj = nn.Dense(
+            self.out_dim, use_bias=True, name="out_proj", dtype=self.dtype
+        )
+
+        # Attention vector per head over [h_src || h_tgt || h_edge || h_global]
+        attn_vec = self.param(
+            "attn_vec",
+            nn.initializers.lecun_normal(),
+            (self.num_heads, 3 * head_dim + head_dim),
+            self.dtype,
+        )
+
+        # Precompute projected representations
+        H_nodes = node_proj(x).reshape(N, self.num_heads, head_dim)  # (N, H, Hd)
+        H_edges = edge_proj(e).reshape(N, self.num_heads, head_dim)  # (N, H, Hd)
+        H_glob = glob_proj(f[None, :]).reshape(
+            1, self.num_heads, head_dim
+        )  # (1, H, Hd), broadcastable
+
+        # Build fully-connected edges among valid nodes, truncated to max_edges
+        adj = jnp.outer(valid_mask, valid_mask)  # (N, N) bool
+        num_edges = jnp.count_nonzero(adj)
+        src_idx, tgt_idx = jnp.nonzero(adj, size=self.max_edges, fill_value=0)
+        edge_mask = (jnp.arange(self.max_edges) < num_edges).astype(jnp.bool_)
+
+        # Gather features for (src, tgt) edges
+        h_src = jnp.take(H_nodes, src_idx, axis=0)  # (E, H, Hd)
+        h_tgt = jnp.take(H_nodes, tgt_idx, axis=0)  # (E, H, Hd)
+        h_edg = jnp.take(H_edges, src_idx, axis=0)  # (E, H, Hd)  (edge tied to source)
+        h_glb = jnp.broadcast_to(H_glob, h_src.shape)  # (E, H, Hd)
+
+        # Attention logits
+        # concat along feature dim: (E, H, 4*Hd)
+        cat = jnp.concatenate([h_src, h_tgt, h_edg, h_glb], axis=-1)
+        # (E, H)
+        logits = jnp.einsum("ehf,hf->eh", cat, attn_vec)
+        logits = nn.leaky_relu(logits, negative_slope=self.negative_slope)
+
+        # Mask out padded edges
+        logits = jnp.where(edge_mask[:, None], logits, LARGE_NEGATIVE_BIAS)
+
+        # Softmax over incoming edges per target node, per head
+        # We'll compute per-head softmax with segment-wise operations.
+
+        def segment_softmax_per_head(
+            log_e: jax.Array, segments: jax.Array, num_segments: int
+        ) -> jax.Array:
+            # log_e: (E,)
+            # segments: (E,)
+            # returns: (E,)
+            max_per_seg = jnp.full(
+                (num_segments,), LARGE_NEGATIVE_BIAS, dtype=self.dtype
+            )
+            max_per_seg = max_per_seg.at[segments].max(log_e)
+            log_e_centered = log_e - max_per_seg[segments]
+            exp_e = jnp.exp(log_e_centered) * (segments >= 0)  # guard
+            denom = jnp.zeros((num_segments,), dtype=self.dtype)
+            denom = denom.at[segments].add(exp_e)
+            return exp_e / (denom[segments] + 1e-9)
+
+        # Compute attention weights α_{src->tgt}^{(h)}
+        def per_head_softmax(h: int) -> jax.Array:
+            return segment_softmax_per_head(logits[:, h], tgt_idx, N)
+
+        alphas = jax.vmap(per_head_softmax)(jnp.arange(self.num_heads))  # (H, E)
+
+        # Messages: function of source node, edge, and global
+        msg_in = jnp.concatenate([h_src, h_edg, h_glb], axis=-1)  # (E, H, 3*Hd)
+        msgs = msg_proj(
+            msg_in.reshape(self.max_edges, self.num_heads * 3 * head_dim)
+        ).reshape(
+            self.max_edges, self.num_heads, head_dim
+        )  # (E, H, Hd)
+
+        # Weight by attention and aggregate to targets
+        weighted = msgs * alphas[:, :, None]  # (E, H, Hd)
+        # Scatter-add over targets
+        agg = (
+            jnp.zeros((N, self.num_heads, head_dim), dtype=self.dtype)
+            .at[tgt_idx]
+            .add(jnp.where(edge_mask[:, None, None], weighted, 0.0))
+        )
+
+        # Zero out invalid nodes (in case any padding crept in)
+        agg = agg * valid_mask[:, None, None]
+
+        # Combine heads and project out
+        agg = agg.reshape(N, self.num_heads * head_dim)
+        out = out_proj(agg)  # (N, out_dim)
+
+        # Keep output zero for invalid nodes to be safe
+        out = jnp.where(valid_mask[:, None], out, 0.0)
+        return out
+
+
+class GatNet(nn.Module):
+    out_dim: int
+    num_layers: int
+    num_heads: int = 1
+    negative_slope: float = 0.2
+    max_edges: int = 4
+    dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, x: jax.Array, e: jax.Array, f: jax.Array, valid_mask: jax.Array):
+        """
+        x: (N, D) node embeddings
+        e: (N, D) edge embeddings, fully connected to valid nodes
+        f: (D) global embedding, affects all valid nodes/edges
+        valid_mask: (N,) bool
+        returns: (N, out_dim)
+        """
+        for _ in range(self.num_layers):
+            mha = GatLayer(
+                out_dim=self.out_dim,
+                num_heads=self.num_heads,
+                negative_slope=self.negative_slope,
+                max_edges=self.max_edges,
+                dtype=self.dtype,
+            )(x, e, f, valid_mask)
+            mha = layer_norm(mha, self.dtype)
+            x = x + x
+            qkv_ln = layer_norm(x, self.dtype)
+            ffn = FeedForward(x.shape[-1], dtype=self.dtype)(qkv_ln)
+            ffn = layer_norm(ffn, self.dtype)
+            x = x + ffn
+            x = jnp.where(valid_mask[..., None], x, 0)
+        return x
 
 
 class RMSNorm(nn.Module):
@@ -82,30 +261,6 @@ class Logits(nn.Module):
         return x
 
 
-def get_freqs(seq_len: int, dim: int, base: int = 10000) -> tuple[jax.Array, jax.Array]:
-    """
-    Get frequency embeddings.
-
-    Args:
-        seq_len (int): Sequence length.
-        dim (int): Dimension.
-        base (int, optional): Base value. Defaults to 10000.
-
-    Returns:
-        tuple[jax.Array, jax.Array]: Frequency embeddings.
-    """
-    theta = 1 / (base ** (jnp.arange(0, dim, 2) / dim))
-    t = jnp.arange(seq_len)
-
-    idx_theta = jnp.einsum("i,j->ij", t, theta)
-    idx_theta = jnp.concatenate([idx_theta, idx_theta], axis=1)
-
-    freqs_cos = jnp.cos(idx_theta)
-    freqs_sin = jnp.sin(idx_theta)
-
-    return freqs_cos, freqs_sin
-
-
 def apply_rope(
     inputs: jax.Array, positions: jax.Array, max_wavelength: int = 10_000
 ) -> jax.Array:
@@ -119,7 +274,7 @@ def apply_rope(
         jax.Array: Rotary position embeddings.
     """
     *_, seq_len, num_heads, head_dim = inputs.shape
-    fraction = 2 * jnp.arange(0, head_dim // 2) / head_dim
+    fraction = 2 * jnp.arange(0, head_dim // 2, dtype=jnp.int32) / head_dim
     timescale = max_wavelength**fraction
 
     sinusoid_inp = positions[..., jnp.newaxis] / timescale[jnp.newaxis, :]
@@ -471,6 +626,7 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int]
     use_layer_norm: bool = True
+    kernel_init: callable = nn.initializers.lecun_normal()
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -493,8 +649,23 @@ class MLP(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x, self.dtype)
             x = activation_fn(x)
-            x = nn.Dense(size, dtype=self.dtype)(x)
+            x = nn.Dense(size, kernel_init=self.kernel_init, dtype=self.dtype)(x)
         return x
+
+
+class OutputLayer(nn.Module):
+    layer_size: int
+    gain: float = 1e-2
+    dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        return MLP(
+            self.layer_size,
+            use_layer_norm=True,
+            kernel_init=nn.initializers.orthogonal(self.gain),
+            dtype=self.dtype,
+        )(x)
 
 
 class PretrainedEmbedding:
@@ -526,6 +697,7 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
+    norm_output: bool = True
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
@@ -545,7 +717,10 @@ class SumEmbeddings(nn.Module):
             (self.hidden_size or self.output_size,),
             self.dtype,
         )
-        return MLP((self.output_size,), dtype=self.dtype)(embedding)
+        output = MLP((self.output_size,), dtype=self.dtype)(embedding)
+        if self.norm_output:
+            output = layer_norm(output, self.dtype)
+        return output
 
 
 class MergeEmbeddings(nn.Module):
@@ -611,7 +786,8 @@ def one_hot_concat_jax(
     indices = jnp.stack(
         [idx + offset for (idx, _), offset in zip(one_hot_encoded, sum_offsets[:-1])]
     )
-    return jnp.matmul(
-        jnp.ones((len(indices),), dtype),
-        indices[:, jnp.newaxis] == jnp.arange(sum_offsets[-1]),
+    return (
+        (indices[:, jnp.newaxis] == np.arange(sum_offsets[-1]))
+        .sum(axis=0)
+        .astype(dtype)
     )
