@@ -335,6 +335,11 @@ export class WorkerResponse extends jspb.Message {
   getErrorResponse(): ErrorResponse | undefined;
   setErrorResponse(value?: ErrorResponse): void;
 
+  hasOpponentResetRequest(): boolean;
+  clearOpponentResetRequest(): void;
+  getOpponentResetRequest(): ResetRequest | undefined;
+  setOpponentResetRequest(value?: ResetRequest): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): WorkerResponse.AsObject;
   static toObject(includeInstance: boolean, msg: WorkerResponse): WorkerResponse.AsObject;
@@ -350,6 +355,7 @@ export namespace WorkerResponse {
     taskId: number,
     environmentResponse?: EnvironmentResponse.AsObject,
     errorResponse?: ErrorResponse.AsObject,
+    opponentResetRequest?: ResetRequest.AsObject,
   }
 }
 
