@@ -1,5 +1,6 @@
 import random
 
+from fastapi.responses import PlainTextResponse
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
@@ -20,6 +21,11 @@ model = InferenceModel(seed=random.randint(0, 2**32 - 1), temp=1, min_p=0.0)
 
 def pprint_nparray(arr: np.ndarray):
     print(np.array2string(arr, precision=3, suppress_small=True))
+
+
+@app.get("/ping", response_class=PlainTextResponse)
+async def ping():
+    return "pong"
 
 
 @app.post("/reset", response_model=ResetResponse)
