@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import math
 import os
-from typing import Callable
+from typing import Callable, TypeVar, cast
 
 import chex
 import jax
@@ -8,6 +10,7 @@ import jax.numpy as jnp
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
+PredT = TypeVar("PredT")  # whatever structure 'pred' has, we return the same
 
 
 LARGE_NEGATIVE_BIAS = -1e10
@@ -116,3 +119,13 @@ def assert_no_nan_or_inf(gradients, path=""):
     else:
         if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
+
+
+def promote_map(pred: PredT) -> PredT:
+    def maybe_promote(x):
+        if isinstance(x, jnp.ndarray) and x.dtype == jnp.bfloat16:
+            return x.astype(jnp.float32)
+        return x
+
+    out = jax.tree_util.tree_map(maybe_promote, pred)
+    return cast(PredT, out)

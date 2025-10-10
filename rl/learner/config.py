@@ -16,6 +16,7 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
+    Trajectory,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.model.utils import Params, get_most_recent_file
@@ -32,7 +33,7 @@ class AdamConfig:
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
-    num_steps = 30_000_000
+    num_steps = 10_000_000
     num_actors: int = 32
     num_eval_actors: int = 5
     unroll_length: int = 64 * 2
@@ -45,15 +46,15 @@ class Porygon2LearnerConfig:
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
     learning_rate: float = 5e-5
-    player_clip_gradient: float = 2.0
-    builder_clip_gradient: float = 50.0
+    player_clip_gradient: float = 1.0
+    builder_clip_gradient: float = 1.0
     tau: float = 1e-3
 
     # Discount params
-    player_lambda_: float = 1.0
+    player_lambda_: float = 0.95
     player_gamma: float = 1.0
 
-    builder_lambda_: float = 1.0
+    builder_lambda_: float = 0.95
     builder_gamma: float = 1.0
 
     # Vtrace params
@@ -71,6 +72,8 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_entropy_loss_coef: float = 0.05
     builder_kl_loss_coef: float = 0.05
+
+    target_kl: float = 0.1
 
     # Smogon Generation
     generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
@@ -119,15 +122,17 @@ def create_train_state(
         lambda x: x[:, 0], get_ex_builder_step()
     )
 
-    player_params = player_network.init(rng, ex_player_actor_inp, ex_player_actor_out)
-    builder_params = builder_network.init(
+    player_params_init_fn = lambda: player_network.init(
+        rng, ex_player_actor_inp, ex_player_actor_out
+    )
+    builder_params_init_fn = lambda: builder_network.init(
         rng, ex_builder_actor_inp, ex_builder_actor_out
     )
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1), out_axes=1),
-        params=player_params,
-        target_params=player_params,
+        params=player_params_init_fn(),
+        target_params=player_params_init_fn(),
         tx=optax.chain(
             optax.clip_by_global_norm(config.player_clip_gradient),
             optax.scale_by_adam(
@@ -148,8 +153,8 @@ def create_train_state(
 
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
-        params=builder_params,
-        target_params=builder_params,
+        params=builder_params_init_fn(),
+        target_params=builder_params_init_fn(),
         tx=optax.chain(
             optax.clip_by_global_norm(config.builder_clip_gradient),
             optax.scale_by_adam(
@@ -187,37 +192,50 @@ def save_train_state(
 
 def save_train_state_locally(
     learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
+    player_state: Porygon2PlayerTrainState = None,
+    builder_state: Porygon2BuilderTrainState = None,
+    batch: Trajectory = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
     )
+
+    return save_state(save_path, learner_config, player_state, builder_state, batch)
+
+
+def save_state(
+    save_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState = None,
+    builder_state: Porygon2BuilderTrainState = None,
+    batch: Trajectory = None,
+):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with open(save_path, "wb") as f:
-        pickle.dump(
-            dict(
-                player_state=dict(
-                    params=player_state.params,
-                    target_params=player_state.target_params,
-                    opt_state=player_state.opt_state,
-                    num_steps=player_state.num_steps,
-                    num_samples=player_state.num_samples,
-                    actor_steps=player_state.actor_steps,
-                    target_adv_mean=player_state.target_adv_mean,
-                    target_adv_std=player_state.target_adv_std,
-                ),
-                builder_state=dict(
-                    params=builder_state.params,
-                    target_params=builder_state.target_params,
-                    opt_state=builder_state.opt_state,
-                    target_adv_mean=builder_state.target_adv_mean,
-                    target_adv_std=builder_state.target_adv_std,
-                ),
-            ),
-            f,
+    data = dict(learner_config=learner_config)
+    if player_state is not None:
+        data["player_state"] = dict(
+            params=player_state.params,
+            target_params=player_state.target_params,
+            opt_state=player_state.opt_state,
+            num_steps=player_state.num_steps,
+            num_samples=player_state.num_samples,
+            actor_steps=player_state.actor_steps,
+            target_adv_mean=player_state.target_adv_mean,
+            target_adv_std=player_state.target_adv_std,
         )
+    if builder_state is not None:
+        data["builder_state"] = dict(
+            params=builder_state.params,
+            target_params=builder_state.target_params,
+            opt_state=builder_state.opt_state,
+            target_adv_mean=builder_state.target_adv_mean,
+            target_adv_std=builder_state.target_adv_std,
+        )
+    if batch is not None:
+        data["batch"] = batch
+    with open(save_path, "wb") as f:
+        pickle.dump(data, f)
     return save_path
 
 

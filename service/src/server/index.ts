@@ -109,7 +109,7 @@ export class WorkerPool {
         return workerResponse;
     }
 
-    async step(stepRequest: StepRequest): Promise<EnvironmentResponse> {
+    async step(stepRequest: StepRequest): Promise<WorkerResponse> {
         const userName = stepRequest.getUsername();
         if (!userName) {
             throw new Error("Username must be provided in step request");
@@ -117,13 +117,7 @@ export class WorkerPool {
         const info = this.routedWorker(userName);
         const workerRequest = new WorkerRequest();
         workerRequest.setStepRequest(stepRequest);
-        const workerResponse = await this.send(info, workerRequest);
-        const environmentResponse = workerResponse.getEnvironmentResponse();
-        if (environmentResponse) {
-            return environmentResponse;
-        } else {
-            throw new Error("No environment response found");
-        }
+        return await this.send(info, workerRequest);
     }
 
     nextWorker(userName: string): WorkerInfo {
@@ -134,7 +128,7 @@ export class WorkerPool {
         }
     }
 
-    async reset(resetRequest: ResetRequest): Promise<EnvironmentResponse> {
+    async reset(resetRequest: ResetRequest): Promise<WorkerResponse> {
         const userName = resetRequest.getUsername();
         if (!userName) {
             throw new Error("Username must be provided in reset request");
@@ -142,13 +136,7 @@ export class WorkerPool {
         const info = this.nextWorker(userName);
         const workerRequest = new WorkerRequest();
         workerRequest.setResetRequest(resetRequest);
-        const workerResponse = await this.send(info, workerRequest);
-        const environmentResponse = workerResponse.getEnvironmentResponse();
-        if (environmentResponse) {
-            return environmentResponse;
-        } else {
-            throw new Error("No environemnt response found");
-        }
+        return await this.send(info, workerRequest);
     }
 
     /** Graceful shutdown */
@@ -217,9 +205,9 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.STEP: {
                     const stepRequest = clientRequest.getStep();
                     if (stepRequest !== undefined) {
-                        const environmentResponse =
+                        const workerResponse =
                             await this.pool.step(stepRequest);
-                        ws.send(environmentResponse.serializeBinary());
+                        ws.send(workerResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");
                     }
@@ -228,9 +216,9 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.RESET: {
                     const resetRequest = clientRequest.getReset();
                     if (resetRequest !== undefined) {
-                        const environmentResponse =
+                        const workerResponse =
                             await this.pool.reset(resetRequest);
-                        ws.send(environmentResponse.serializeBinary());
+                        ws.send(workerResponse.serializeBinary());
                     } else {
                         throw new Error("StepRequest not defined");
                     }

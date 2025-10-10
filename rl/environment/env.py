@@ -19,9 +19,9 @@ from rl.environment.interfaces import (
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
-    EnvironmentResponse,
     ResetRequest,
     StepRequest,
+    WorkerResponse,
 )
 from rl.environment.utils import get_ex_builder_step, process_state
 
@@ -42,10 +42,16 @@ class SinglePlayerSyncEnvironment:
         self.generation = generation
 
     def _recv(self):
-        server_message_data = self.websocket.recv()
-        server_message = EnvironmentResponse.FromString(server_message_data)
-        self.rqid = server_message.state.rqid
-        self.last_state = process_state(server_message.state)
+        recv_data = self.websocket.recv()
+        worker_response = WorkerResponse.FromString(recv_data)
+        environment_response = worker_response.environment_response
+        self.rqid = environment_response.state.rqid
+
+        opponent_reset_request = worker_response.opponent_reset_request
+        self.last_state = process_state(
+            environment_response.state,
+            opponent_reset_request if opponent_reset_request.username else None,
+        )
         return self.last_state
 
     def reset(self, species_indices: list[int], packed_set_indices: list[int]):

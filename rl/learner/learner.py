@@ -11,15 +11,15 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import MAX_RATIO_TOKEN, STOI
+from rl.environment.data import STOI
 from rl.environment.interfaces import (
     BuilderTransition,
     PlayerActorInput,
+    PlayerHiddenInfo,
     PlayerHistoryOutput,
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.utils import clip_history
 from rl.learner.buffer import ReplayBuffer, ReplayRatioTokenBucket
 from rl.learner.config import (
@@ -30,7 +30,8 @@ from rl.learner.config import (
 )
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.utils import Params
+from rl.model.config import DEFAULT_DTYPE
+from rl.model.utils import Params, promote_map
 from rl.utils import average
 
 
@@ -97,7 +98,6 @@ def backward_kl_loss(
     return average(loss, valid)
 
 
-@functools.partial(jax.jit, static_argnames=["config"])
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     player_transitions: PlayerTransition,
@@ -108,10 +108,12 @@ def player_train_step(
     player_actor_input = PlayerActorInput(
         env=player_transitions.env_output, history=player_history
     )
-    player_target_pred = player_state.apply_fn(
-        player_state.target_params,
-        player_actor_input,
-        player_transitions.agent_output.actor_output,
+    player_target_pred = promote_map(
+        player_state.apply_fn(
+            player_state.target_params,
+            player_actor_input,
+            player_transitions.agent_output.actor_output,
+        )
     )
 
     actor_action_type_head = (
@@ -151,25 +153,18 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    my_fainted_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    ]
-    opp_fainted_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    ]
-    my_hp_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_HP_COUNT
-    ]
-    opp_hp_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
-    ]
-    phi_t = (
-        opp_fainted_count - my_fainted_count + 0.1 * (my_hp_count - opp_hp_count)
-    ) / MAX_RATIO_TOKEN
-    phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
-    shaped_reward = phi_tp1 - phi_t
+    # my_fainted_count = player_transitions.env_output.info[
+    #     ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    # ]
+    # opp_fainted_count = player_transitions.env_output.info[
+    #     ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    # ]
+    # phi_t = (opp_fainted_count - my_fainted_count) / MAX_RATIO_TOKEN
+    # phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
+    # shaped_reward = phi_tp1 - phi_t
 
-    rewards = player_transitions.env_output.win_reward + 0.1 * shaped_reward
+    # Accounting for revival blessing
+    rewards = player_transitions.env_output.win_reward  # + (6 / 7) * shaped_reward
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     player_vtrace = compute_returns(
@@ -194,14 +189,18 @@ def player_train_step(
     player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     # Update entropy schedule coefficient.
-    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (player_state.actor_steps + 1000))
+    ent_kl_coef_mult = jnp.sqrt(
+        config.num_steps / (player_state.actor_steps + 1000)
+    ).astype(DEFAULT_DTYPE)
 
     def player_loss_fn(params: Params):
 
-        player_pred = player_state.apply_fn(
-            params,
-            player_actor_input,
-            player_transitions.agent_output.actor_output,
+        player_pred = promote_map(
+            player_state.apply_fn(
+                params,
+                player_actor_input,
+                player_transitions.agent_output.actor_output,
+            )
         )
 
         pred_action_type_head = player_pred.action_type_head
@@ -242,8 +241,8 @@ def player_train_step(
 
         action_type_head_entropy = average(pred_action_type_head.entropy, player_valid)
         move_head_entropy = average(pred_move_head.entropy, move_valid)
-        switch_head_entropy = average(pred_switch_head.entropy, wildcard_valid)
-        wildcard_head_entropy = average(pred_wildcard_head.entropy, switch_valid)
+        switch_head_entropy = average(pred_switch_head.entropy, switch_valid)
+        wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
         loss_entropy = (
             action_type_head_entropy
@@ -267,6 +266,10 @@ def player_train_step(
                 - config.player_entropy_loss_coef * loss_entropy
             )
         )
+
+        # Modulate loss based on target KL
+        loss = (learner_target_log_ratio <= (1.5 * config.target_kl)) * loss
+
         learner_actor_approx_kl = average(-learner_actor_log_ratio, player_valid)
         learner_target_approx_kl = average(-learner_target_log_ratio, player_valid)
 
@@ -340,20 +343,24 @@ def player_train_step(
     return player_state, training_logs
 
 
-@functools.partial(jax.jit, static_argnames=["config"])
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
     builder_transitions: BuilderTransition,
+    player_hidden: PlayerHiddenInfo,
     final_reward: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
 
-    builder_actor_input = PlayerActorInput(env=builder_transitions.env_output)
-    builder_target_pred = builder_state.apply_fn(
-        builder_state.target_params,
-        builder_actor_input,
-        builder_transitions.agent_output.actor_output,
+    builder_actor_input = PlayerActorInput(
+        env=builder_transitions.env_output, hidden=player_hidden
+    )
+    builder_target_pred = promote_map(
+        builder_state.apply_fn(
+            builder_state.target_params,
+            builder_actor_input,
+            builder_transitions.agent_output.actor_output,
+        )
     )
 
     actor_metagame_head = builder_transitions.agent_output.actor_output.metagame_head
@@ -394,13 +401,10 @@ def builder_train_step(
 
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    phi_t = builder_target_pred.v
-    phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
-    shaped_reward = phi_tp1 - phi_t
     builder_rewards = (
         jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
         * final_reward[None]
-    ) + shaped_reward
+    )
 
     builder_vtrace = compute_returns(
         builder_target_pred.v,
@@ -422,10 +426,12 @@ def builder_train_step(
 
     def builder_loss_fn(params: Params):
         """Builder loss function."""
-        builder_pred = builder_state.apply_fn(
-            params,
-            builder_actor_input,
-            builder_transitions.agent_output.actor_output,
+        builder_pred = promote_map(
+            builder_state.apply_fn(
+                params,
+                builder_actor_input,
+                builder_transitions.agent_output.actor_output,
+            )
         )
 
         learner_metagame_head = builder_pred.metagame_head
@@ -482,10 +488,15 @@ def builder_train_step(
             valid=builder_valid,
         )
 
-        loss_info_ce = optax.softmax_cross_entropy(
-            logits=builder_pred.metagame_pred_logits[-1],
-            labels=builder_transitions.env_output.metagame_mask[-1].astype(jnp.float32),
-        ).mean()
+        loss_info_ce = (
+            optax.softmax_cross_entropy(
+                logits=builder_pred.metagame_pred_logits[1:],
+                labels=builder_transitions.env_output.metagame_mask[1:].astype(
+                    jnp.float32
+                ),
+            ).sum(where=builder_valid[1:])
+            / builder_valid[1:].sum()
+        )
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
@@ -496,6 +507,10 @@ def builder_train_step(
             )
             + loss_info_ce
         )
+
+        # Modulate loss based on target KL
+        loss = (learner_target_log_ratio <= (1.5 * config.target_kl)) * loss
+
         learner_actor_approx_kl = average(-learner_actor_log_ratio, builder_valid)
         learner_target_approx_kl = average(-learner_target_log_ratio, builder_valid)
 
@@ -649,6 +664,7 @@ class Learner:
             player_history=clip_history(
                 stacked_trajectory.player_history, resolution=player_history_resolution
             ),
+            player_hidden=stacked_trajectory.player_hidden,
         )
 
         return clipped_trajectory
@@ -708,10 +724,17 @@ class Learner:
 
     @functools.partial(jax.jit, static_argnames=["self"])
     def calculate_builder_final_reward(self, batch: Trajectory):
-        fib_reward = batch.player_transitions.env_output.fib_reward.sum(
-            axis=0,
-            where=jnp.bitwise_not(batch.player_transitions.env_output.done),
-        )
+        # my_fainted_count = batch.player_transitions.env_output.info[
+        #     ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+        # ]
+        # opp_fainted_count = batch.player_transitions.env_output.info[
+        #     ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+        # ]
+        # phi_t = (opp_fainted_count - my_fainted_count) / MAX_RATIO_TOKEN
+        # phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
+        # shaped_reward = phi_tp1 - phi_t
+        # player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+
         return batch.player_transitions.env_output.win_reward[-1]
 
     def train(self):
@@ -721,6 +744,9 @@ class Learner:
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
 
+        player_train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
+        builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
+
         for step_idx in range(1, self.learner_config.num_steps + 1):
             batch = self.device_q.get()
             batch: Trajectory = jax.device_put(batch)
@@ -728,22 +754,46 @@ class Learner:
             training_logs = {"step_idx": step_idx}
             training_logs = collect_batch_telemetry_data(batch)
 
-            self.player_state, player_logs = player_train_step(
+            self.player_state, player_logs = player_train_step_jit(
                 self.player_state,
                 batch.player_transitions,
                 batch.player_history,
                 self.learner_config,
             )
+            # if player_logs["player_gradient_norm"].item() > 1000:
+            #     logger.warning(
+            #         f"Large player gradient norm: {player_logs['player_gradient_norm']}"
+            #     )
+            #     save_state(
+            #         f"debug/player_ckpt_{self.player_state.num_steps:08}",
+            #         self.learner_config,
+            #         self.player_state,
+            #         None,
+            #         batch,
+            #     )
+
             training_logs.update(jax.device_get(player_logs))
 
-            builder_final_reward = batch.player_transitions.env_output.win_reward[-1]
-            # builder_final_reward = self.calculate_builder_final_reward(batch)
-            self.builder_state, builder_logs = builder_train_step(
+            builder_final_reward = self.calculate_builder_final_reward(batch)
+            self.builder_state, builder_logs = builder_train_step_jit(
                 self.builder_state,
                 batch.builder_transitions,
+                batch.player_hidden,
                 builder_final_reward,
                 self.learner_config,
             )
+            # if builder_logs["builder_gradient_norm"].item() > 1000:
+            #     logger.warning(
+            #         f"Large builder gradient norm: {builder_logs['builder_gradient_norm']}"
+            #     )
+            #     save_state(
+            #         f"debug/builder_ckpt_{self.player_state.num_steps:08}",
+            #         self.learner_config,
+            #         None,
+            #         self.builder_state,
+            #         batch,
+            #     )
+
             training_logs.update(jax.device_get(builder_logs))
 
             usage_logs = self.get_usage_counts(self.replay._species_counts)

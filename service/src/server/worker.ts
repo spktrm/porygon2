@@ -15,11 +15,21 @@ import {
     getSampleTeam,
 } from "./state";
 
-interface WaitingPlayer {
+interface PlayerDetails {
     userName: string;
-    team: string | null;
     smogonFormat: string;
-    resolve: (player: TrainablePlayerAI) => void;
+    speciesIndices?: number[];
+    packedSetIndices?: number[];
+}
+
+interface WaitingPlayerResolveArgs {
+    player: TrainablePlayerAI;
+    opponentDetails: PlayerDetails | null;
+}
+
+interface WaitingPlayer {
+    playerDetails: PlayerDetails;
+    resolve: (args: WaitingPlayerResolveArgs) => void;
 }
 
 export class WorkerHandler {
@@ -52,53 +62,75 @@ export class WorkerHandler {
 
     private resetPlayerFromTrainingUserName(
         userName: string,
-        teamString: string | null,
         smogonFormat: string,
-    ): Promise<TrainablePlayerAI> {
+        speciesIndices?: number[],
+        packedSetIndices?: number[],
+    ): Promise<WaitingPlayerResolveArgs> {
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
         }
+        const details = {
+            userName,
+            smogonFormat,
+            speciesIndices,
+            packedSetIndices,
+        };
 
         if (this.waitingPlayers.length > 0) {
             // Pair found, create battle
             const opponent = this.waitingPlayers.shift()!;
-            if (opponent.smogonFormat !== smogonFormat) {
+            if (opponent.playerDetails.smogonFormat !== smogonFormat) {
                 throw new Error(
-                    `Mismatched formats: ${opponent.smogonFormat} vs ${smogonFormat}`,
+                    `Mismatched formats: ${opponent.playerDetails.smogonFormat} vs ${smogonFormat}`,
                 );
             }
             const { p1: player1, p2: player2 } = createBattle({
-                p1Name: opponent.userName,
+                p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
-                p1team: opponent.team,
-                p2team: teamString,
+                p1team: generateTeamFromIndices(
+                    smogonFormat,
+                    opponent.playerDetails.speciesIndices,
+                    opponent.playerDetails.packedSetIndices,
+                ),
+                p2team: generateTeamFromIndices(
+                    smogonFormat,
+                    speciesIndices,
+                    packedSetIndices,
+                ),
                 smogonFormat,
             });
 
-            this.playerMapping.set(opponent.userName, player1);
-            opponent.resolve(player1);
+            this.playerMapping.set(opponent.playerDetails.userName, player1);
+            opponent.resolve({
+                player: player1,
+                opponentDetails: details,
+            });
 
             this.playerMapping.set(userName, player2);
-            return Promise.resolve(player2);
+            return Promise.resolve({
+                player: player2,
+                opponentDetails: opponent.playerDetails,
+            });
         } else {
             // No pair, wait
-            return new Promise<TrainablePlayerAI>((resolve) => {
-                this.waitingPlayers.push({
-                    userName,
-                    team: teamString,
-                    smogonFormat,
-                    resolve,
-                });
+            return new Promise((resolve) => {
+                this.waitingPlayers.push({ playerDetails: details, resolve });
             });
         }
     }
 
     private resetPlayerFromEvalUserName(
         userName: string,
-        teamString: string | null,
         smogonFormat: string,
+        speciesIndices?: number[],
+        packedSetIndices?: number[],
     ) {
+        const teamString = generateTeamFromIndices(
+            smogonFormat,
+            speciesIndices,
+            packedSetIndices,
+        );
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -111,7 +143,7 @@ export class WorkerHandler {
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
-        return player1;
+        return { player: player1, opponentDetails: null };
     }
 
     private async handleMessage(data: Buffer): Promise<void> {
@@ -188,25 +220,22 @@ export class WorkerHandler {
         smogonFormat: string,
         speciesIndices?: number[],
         packedSetIndices?: number[],
-    ): Promise<TrainablePlayerAI> {
-        const teamString = generateTeamFromIndices(
-            smogonFormat,
-            speciesIndices,
-            packedSetIndices,
-        );
+    ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(
                 this.resetPlayerFromEvalUserName(
                     userName,
-                    teamString,
                     smogonFormat,
+                    speciesIndices,
+                    packedSetIndices,
                 ),
             );
         } else {
             return this.resetPlayerFromTrainingUserName(
                 userName,
-                teamString,
                 smogonFormat,
+                speciesIndices,
+                packedSetIndices,
             );
         }
     }
@@ -220,7 +249,7 @@ export class WorkerHandler {
         const packedSetIndices = resetRequest.getPackedSetIndicesList();
         const smogonFormat = resetRequest.getSmogonFormat();
 
-        const player = await this.resetPlayerFromUserName(
+        const { player, opponentDetails } = await this.resetPlayerFromUserName(
             userName,
             smogonFormat,
             speciesIndices,
@@ -234,6 +263,22 @@ export class WorkerHandler {
 
         const workerResponse = new WorkerResponse();
         workerResponse.setEnvironmentResponse(environmentResponse);
+        if (opponentDetails) {
+            const opponentResetRequest = new ResetRequest();
+            opponentResetRequest.setUsername(opponentDetails.userName);
+            opponentResetRequest.setSmogonFormat(opponentDetails.smogonFormat);
+            if (opponentDetails.speciesIndices) {
+                opponentResetRequest.setSpeciesIndicesList(
+                    opponentDetails.speciesIndices,
+                );
+            }
+            if (opponentDetails.packedSetIndices) {
+                opponentResetRequest.setPackedSetIndicesList(
+                    opponentDetails.packedSetIndices,
+                );
+            }
+            workerResponse.setOpponentResetRequest(opponentResetRequest);
+        }
 
         this.sendMessage(taskId, workerResponse);
     }

@@ -1,4 +1,4 @@
-import math
+from typing import Optional
 
 import flax.linen as nn
 import jax
@@ -11,154 +11,11 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
-import jax
-import jax.numpy as jnp
-from flax import linen as nn
-
-
-class GatLayer(nn.Module):
-    out_dim: int
-    num_heads: int = 1
-    negative_slope: float = 0.2
-    max_edges: int = 4
-    dtype: jnp.dtype = jnp.float32
-
-    @nn.compact
-    def __call__(self, x: jax.Array, e: jax.Array, f: jax.Array, valid_mask: jax.Array):
-        """
-        x: (N, D) node embeddings
-        e: (N, D) edge embeddings, fully connected to valid nodes
-        f: (D) global embedding, affects all valid nodes/edges
-        valid_mask: (N,) bool
-        returns: (N, out_dim)
-        """
-        N, D = x.shape
-        # Choose head dim to cover out_dim across heads
-        head_dim = math.ceil(self.out_dim / self.num_heads)
-
-        # Projectors
-        node_proj = nn.Dense(
-            self.num_heads * head_dim,
-            use_bias=False,
-            name="node_proj",
-            dtype=self.dtype,
-        )
-        edge_proj = nn.Dense(
-            self.num_heads * head_dim,
-            use_bias=False,
-            name="edge_proj",
-            dtype=self.dtype,
-        )
-        glob_proj = nn.Dense(
-            self.num_heads * head_dim,
-            use_bias=False,
-            name="glob_proj",
-            dtype=self.dtype,
-        )
-        msg_proj = nn.Dense(
-            self.num_heads * head_dim, use_bias=False, name="msg_proj", dtype=self.dtype
-        )
-        out_proj = nn.Dense(
-            self.out_dim, use_bias=True, name="out_proj", dtype=self.dtype
-        )
-
-        # Attention vector per head over [h_src || h_tgt || h_edge || h_global]
-        attn_vec = self.param(
-            "attn_vec",
-            nn.initializers.lecun_normal(),
-            (self.num_heads, 3 * head_dim + head_dim),
-            self.dtype,
-        )
-
-        # Precompute projected representations
-        H_nodes = node_proj(x).reshape(N, self.num_heads, head_dim)  # (N, H, Hd)
-        H_edges = edge_proj(e).reshape(N, self.num_heads, head_dim)  # (N, H, Hd)
-        H_glob = glob_proj(f[None, :]).reshape(
-            1, self.num_heads, head_dim
-        )  # (1, H, Hd), broadcastable
-
-        # Build fully-connected edges among valid nodes, truncated to max_edges
-        adj = jnp.outer(valid_mask, valid_mask)  # (N, N) bool
-        num_edges = jnp.count_nonzero(adj)
-        src_idx, tgt_idx = jnp.nonzero(adj, size=self.max_edges, fill_value=0)
-        edge_mask = (jnp.arange(self.max_edges) < num_edges).astype(jnp.bool_)
-
-        # Gather features for (src, tgt) edges
-        h_src = jnp.take(H_nodes, src_idx, axis=0)  # (E, H, Hd)
-        h_tgt = jnp.take(H_nodes, tgt_idx, axis=0)  # (E, H, Hd)
-        h_edg = jnp.take(H_edges, src_idx, axis=0)  # (E, H, Hd)  (edge tied to source)
-        h_glb = jnp.broadcast_to(H_glob, h_src.shape)  # (E, H, Hd)
-
-        # Attention logits
-        # concat along feature dim: (E, H, 4*Hd)
-        cat = jnp.concatenate([h_src, h_tgt, h_edg, h_glb], axis=-1)
-        # (E, H)
-        logits = jnp.einsum("ehf,hf->eh", cat, attn_vec)
-        logits = nn.leaky_relu(logits, negative_slope=self.negative_slope)
-
-        # Mask out padded edges
-        logits = jnp.where(edge_mask[:, None], logits, LARGE_NEGATIVE_BIAS)
-
-        # Softmax over incoming edges per target node, per head
-        # We'll compute per-head softmax with segment-wise operations.
-
-        def segment_softmax_per_head(
-            log_e: jax.Array, segments: jax.Array, num_segments: int
-        ) -> jax.Array:
-            # log_e: (E,)
-            # segments: (E,)
-            # returns: (E,)
-            max_per_seg = jnp.full(
-                (num_segments,), LARGE_NEGATIVE_BIAS, dtype=self.dtype
-            )
-            max_per_seg = max_per_seg.at[segments].max(log_e)
-            log_e_centered = log_e - max_per_seg[segments]
-            exp_e = jnp.exp(log_e_centered) * (segments >= 0)  # guard
-            denom = jnp.zeros((num_segments,), dtype=self.dtype)
-            denom = denom.at[segments].add(exp_e)
-            return exp_e / (denom[segments] + 1e-9)
-
-        # Compute attention weights α_{src->tgt}^{(h)}
-        def per_head_softmax(h: int) -> jax.Array:
-            return segment_softmax_per_head(logits[:, h], tgt_idx, N)
-
-        alphas = jax.vmap(per_head_softmax)(jnp.arange(self.num_heads))  # (H, E)
-
-        # Messages: function of source node, edge, and global
-        msg_in = jnp.concatenate([h_src, h_edg, h_glb], axis=-1)  # (E, H, 3*Hd)
-        msgs = msg_proj(
-            msg_in.reshape(self.max_edges, self.num_heads * 3 * head_dim)
-        ).reshape(
-            self.max_edges, self.num_heads, head_dim
-        )  # (E, H, Hd)
-
-        # Weight by attention and aggregate to targets
-        weighted = msgs * alphas[:, :, None]  # (E, H, Hd)
-        # Scatter-add over targets
-        agg = (
-            jnp.zeros((N, self.num_heads, head_dim), dtype=self.dtype)
-            .at[tgt_idx]
-            .add(jnp.where(edge_mask[:, None, None], weighted, 0.0))
-        )
-
-        # Zero out invalid nodes (in case any padding crept in)
-        agg = agg * valid_mask[:, None, None]
-
-        # Combine heads and project out
-        agg = agg.reshape(N, self.num_heads * head_dim)
-        out = out_proj(agg)  # (N, out_dim)
-
-        # Keep output zero for invalid nodes to be safe
-        out = jnp.where(valid_mask[:, None], out, 0.0)
-        return out
-
-
 class GatNet(nn.Module):
     out_dim: int
     num_layers: int
     num_heads: int = 1
-    negative_slope: float = 0.2
-    max_edges: int = 4
+    max_edges: int = 2
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -170,46 +27,60 @@ class GatNet(nn.Module):
         valid_mask: (N,) bool
         returns: (N, out_dim)
         """
-        for _ in range(self.num_layers):
-            mha = GatLayer(
-                out_dim=self.out_dim,
-                num_heads=self.num_heads,
-                negative_slope=self.negative_slope,
-                max_edges=self.max_edges,
-                dtype=self.dtype,
-            )(x, e, f, valid_mask)
-            mha = layer_norm(mha, self.dtype)
-            x = x + x
-            qkv_ln = layer_norm(x, self.dtype)
-            ffn = FeedForward(x.shape[-1], dtype=self.dtype)(qkv_ln)
-            ffn = layer_norm(ffn, self.dtype)
-            x = x + ffn
-            x = jnp.where(valid_mask[..., None], x, 0)
-        return x
+        x = nn.Dense(self.out_dim, dtype=self.dtype)(x)
+
+        valid_idx = jnp.where(valid_mask, size=self.max_edges, fill_value=-1)[0]
+        take_mask = valid_idx != -1  # True only for real indices
+
+        # Safely gather with padding -> zeros (avoids accidental -1 indexing)
+        valid_node = jnp.take(x, valid_idx, axis=0, mode="fill", fill_value=0)
+        valid_edge = jnp.take(e, valid_idx, axis=0, mode="fill", fill_value=0)
+        where_mask = take_mask  # use this everywhere downstream
+
+        messages = jnp.concatenate(
+            (valid_node, valid_edge, jnp.broadcast_to(f, valid_edge.shape)), axis=-1
+        )
+
+        output = TransformerDecoder(
+            qk_size=self.out_dim // self.num_heads,
+            v_size=self.out_dim // self.num_heads,
+            model_size=self.out_dim,
+            resblocks_hidden_size=self.out_dim,
+            num_layers=self.num_layers,
+            num_heads=self.num_heads,
+        )(
+            layer_norm(valid_node),
+            messages,
+            create_attention_mask(where_mask, where_mask),
+        )
+
+        safe_idx = valid_idx.clip(min=0)
+        weights = take_mask.astype(output.dtype)[..., None]  # (max_edges, 1)
+        return jnp.zeros_like(x).at[safe_idx].add(output * weights)
 
 
 class RMSNorm(nn.Module):
     """RMSNorm layer."""
 
     dtype: jnp.dtype = jnp.float32
+    param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
         scale = self.param(
-            "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.dtype
+            "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.param_dtype
         )
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
         # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+        normed_inputs = x * jax.lax.rsqrt(var + 1e-6)
 
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        normed_inputs = normed_inputs * (1 + scale)
-        return normed_inputs
+        return (normed_inputs * (1 + scale)).astype(self.dtype)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -219,11 +90,11 @@ def activation_fn(array: jax.Array) -> jax.Array:
     return nn.gelu(array)
 
 
-def layer_norm(array: jax.Array, dtype: jnp.dtype) -> jax.Array:
+def layer_norm(array: jax.Array) -> jax.Array:
     """
     Apply layer normalization with RMS Norm.
     """
-    return RMSNorm(dtype=dtype)(array)
+    return RMSNorm(dtype=array.dtype)(array)
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
@@ -231,34 +102,6 @@ def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
     Apply softcap function.
     """
     return max_value * nn.tanh(array / max_value)
-
-
-class Logits(nn.Module):
-    """Logits for scalar heads."""
-
-    num_logits: int = None
-    num_linear_layers: int = 3
-    use_layer_norm: bool = True
-    dtype: jnp.dtype = jnp.float32
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        """Logits for scalar heads."""
-
-        for i in range(self.num_linear_layers):
-            if i == self.num_linear_layers - 1:
-                output_size = self.num_logits or x.shape[-1]
-            else:
-                output_size = x.shape[-1]
-
-            # Optionally apply LayerNorm
-            if self.use_layer_norm:
-                x = layer_norm(x, self.dtype)
-
-            # Apply activation and dense layer with custom kernel initializer
-            x = activation_fn(x)
-            x = nn.Dense(features=output_size, dtype=self.dtype)(x)
-        return x
 
 
 def apply_rope(
@@ -325,20 +168,7 @@ class MultiHeadAttention(nn.Module):
     need_pos: bool = False
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
-
-    def _linear_projection(
-        self, x: jax.Array, head_size: int, use_layer_norm: bool = False
-    ) -> jax.Array:
-        y = nn.Dense(
-            self.num_heads * head_size,
-            use_bias=self.use_bias,
-            dtype=self.dtype,
-        )(x)
-        *leading_dims, _ = x.shape
-        y = y.reshape((*leading_dims, self.num_heads, head_size))
-        if use_layer_norm:
-            y = layer_norm(y, self.dtype)
-        return y
+    param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(
@@ -351,15 +181,35 @@ class MultiHeadAttention(nn.Module):
     ) -> jax.Array:
         # In shape hints below, we suppress the leading dims [...] for brevity.
         # Hence e.g. [A, B] should be read in every case as [..., A, B].
-        *leading_dims, s1_length, _ = q.shape
+        *q_leading_dims, _ = q.shape
+        *kv_leading_dims, _ = kv.shape
 
         qk_size = self.qk_size
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = self._linear_projection(q, qk_size, self.qk_layer_norm)
-        key_heads = self._linear_projection(kv, qk_size, self.qk_layer_norm)
-        value_heads = self._linear_projection(kv, v_size)
+        query_heads = nn.Dense(
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            name="q_proj",
+        )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
+        key_heads = nn.Dense(
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            name="k_proj",
+        )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
+        value_heads = nn.Dense(
+            self.num_heads * v_size,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            name="v_proj",
+        )(kv).reshape((*kv_leading_dims, self.num_heads, v_size))
+
+        if self.qk_layer_norm:
+            query_heads = layer_norm(query_heads)
+            key_heads = layer_norm(key_heads)
 
         if self.need_pos:
             if q_positions is None or kv_positions is None:
@@ -380,11 +230,18 @@ class MultiHeadAttention(nn.Module):
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        attn = jnp.reshape(attn, (*leading_dims, s1_length, -1))  # [T', H*V]
+        head_scale = self.param(
+            "head_scale",
+            nn.initializers.zeros_init(),
+            (1, self.num_heads, 1),
+            self.param_dtype,
+        )
+        attn = attn * jnp.asarray(1 + head_scale, dtype=self.dtype)
+        attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
         final_projection = nn.Dense(
-            model_size, use_bias=self.use_bias, dtype=self.dtype
+            model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
 
@@ -412,38 +269,6 @@ def create_attention_mask(
     return jnp.expand_dims(mask, axis=-3)
 
 
-class FeedForward(nn.Module):
-    """Feed forward module."""
-
-    hidden_dim: int
-    dtype: jnp.dtype = jnp.float32
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        ff_gate = nn.Dense(self.hidden_dim, dtype=self.dtype)(x)
-        gate_value = nn.gelu(ff_gate)
-
-        ff1 = nn.Dense(self.hidden_dim, dtype=self.dtype)(x)
-        activations = gate_value * ff1
-
-        outputs = nn.Dense(x.shape[-1], dtype=self.dtype)(activations)
-        return outputs
-
-
-class FeedForwardResidual(nn.Module):
-
-    hidden_dim: int
-    post_ffw_norm: bool = True
-    dtype: jnp.dtype = jnp.float32
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        ffw = FeedForward(self.hidden_dim, dtype=self.dtype)(layer_norm(x, self.dtype))
-        if self.post_ffw_norm:
-            ffw = layer_norm(ffw, self.dtype)
-        return x + ffw
-
-
 class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
@@ -454,11 +279,10 @@ class TransformerEncoder(nn.Module):
     num_heads: int
     use_bias: bool = True
     need_pos: bool = False
-    qk_layer_norm: bool = False
+    qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = True
-    use_post_ffw_norm: bool = True
-    dtype: jnp.dtype = jnp.float32
+    use_post_attn_norm: bool = False
+    use_post_ffw_norm: bool = False
 
     def layer(
         self,
@@ -467,7 +291,7 @@ class TransformerEncoder(nn.Module):
         positionwise_mask: jax.Array,
         qkv_positions: jax.Array | None = None,
     ):
-        qkv_ln = layer_norm(qkv, self.dtype)
+        qkv_ln = layer_norm(qkv)
         mha = MultiHeadAttention(
             num_heads=self.num_heads,
             qk_size=self.qk_size,
@@ -476,7 +300,7 @@ class TransformerEncoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             use_bias=self.use_bias,
             need_pos=self.need_pos,
-            dtype=self.dtype,
+            dtype=qkv.dtype,
         )(
             q=qkv_ln,
             kv=qkv_ln,
@@ -485,12 +309,14 @@ class TransformerEncoder(nn.Module):
             kv_positions=qkv_positions,
         )
         if self.use_post_attn_norm:
-            mha = layer_norm(mha, self.dtype)
+            mha = layer_norm(mha)
         qkv = qkv + mha
-        qkv_ln = layer_norm(qkv, self.dtype)
-        ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(qkv_ln)
+        qkv_ln = layer_norm(qkv)
+        ffn = MLP(
+            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
+        )(qkv_ln)
         if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn, self.dtype)
+            ffn = layer_norm(ffn)
         qkv = qkv + ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
@@ -539,9 +365,8 @@ class TransformerDecoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = True
-    use_post_ffw_norm: bool = True
-    dtype: jnp.dtype = jnp.float32
+    use_post_attn_norm: bool = False
+    use_post_ffw_norm: bool = False
 
     def layer(
         self,
@@ -552,8 +377,8 @@ class TransformerDecoder(nn.Module):
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
     ):
-        q_ln = layer_norm(q, self.dtype)
-        kv_ln = layer_norm(kv, self.dtype)
+        q_ln = layer_norm(q)
+        kv_ln = layer_norm(kv)
         mha = MultiHeadAttention(
             num_heads=self.num_heads,
             qk_size=self.qk_size,
@@ -562,7 +387,7 @@ class TransformerDecoder(nn.Module):
             use_bias=self.use_bias,
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
-            dtype=self.dtype,
+            dtype=q.dtype,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -571,12 +396,14 @@ class TransformerDecoder(nn.Module):
             kv_positions=kv_positions,
         )
         if self.use_post_attn_norm:
-            mha = layer_norm(mha, self.dtype)
+            mha = layer_norm(mha)
         q = q + mha
-        q_ln = layer_norm(q, self.dtype)
-        ffn = FeedForward(self.resblocks_hidden_size, dtype=self.dtype)(q_ln)
+        q_ln = layer_norm(q)
+        ffn = MLP(
+            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
+        )(q_ln)
         if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn, self.dtype)
+            ffn = layer_norm(ffn)
         q = q + ffn
         return jnp.where(positionwise_mask, q, 0)
 
@@ -626,8 +453,7 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int]
     use_layer_norm: bool = True
-    kernel_init: callable = nn.initializers.lecun_normal()
-    dtype: jnp.dtype = jnp.float32
+    input_activation: bool = True
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -645,27 +471,13 @@ class MLP(nn.Module):
         else:
             layer_sizes = self.layer_sizes
 
-        for size in layer_sizes:
+        for i, size in enumerate(layer_sizes):
             if self.use_layer_norm:
-                x = layer_norm(x, self.dtype)
-            x = activation_fn(x)
-            x = nn.Dense(size, kernel_init=self.kernel_init, dtype=self.dtype)(x)
+                x = layer_norm(x)
+            if (i > 0) or (i == 0 and self.input_activation):
+                x = activation_fn(x)
+            x = nn.Dense(size, dtype=x.dtype)(x)
         return x
-
-
-class OutputLayer(nn.Module):
-    layer_size: int
-    gain: float = 1e-2
-    dtype: jnp.dtype = jnp.float32
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        return MLP(
-            self.layer_size,
-            use_layer_norm=True,
-            kernel_init=nn.initializers.orthogonal(self.gain),
-            dtype=self.dtype,
-        )(x)
 
 
 class PretrainedEmbedding:
@@ -697,77 +509,90 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
-    norm_output: bool = True
+    param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
         """Sum embeddings."""
-        embedding = sum(
-            [
-                nn.Dense(
-                    self.hidden_size or self.output_size,
-                    use_bias=False,
-                    dtype=self.dtype,
-                )(embedding)
-                for embedding in embeddings
-            ]
+        num_embeddings = len(embeddings)
+        if num_embeddings == 0:
+            raise ValueError("No embeddings provided")
+
+        aggregated = sum(
+            nn.Dense(self.hidden_size or self.output_size, dtype=self.dtype)(embedding)
+            for embedding in embeddings
         ) + self.param(
-            "bias",
-            nn.initializers.zeros_init(),
-            (self.hidden_size or self.output_size,),
-            self.dtype,
+            "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
         )
-        output = MLP((self.output_size,), dtype=self.dtype)(embedding)
-        if self.norm_output:
-            output = layer_norm(output, self.dtype)
-        return output
+        return VectorResblock()(aggregated.astype(self.dtype))
 
 
-class MergeEmbeddings(nn.Module):
-    output_size: int
-    dtype: jnp.dtype = jnp.float32
+class VectorResblock(nn.Module):
+    num_layers: int = 2
+    hidden_size: Optional[int] = None
+    use_layer_norm: bool = True
 
     @nn.compact
-    def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
-        """
-        Sum embeddings.
+    def __call__(self, x: jax.Array) -> jax.Array:
+        shortcut = x
+        input_size = x.shape[-1]
+        for i in range(self.num_layers):
+            if i < self.num_layers - 1:
+                output_size = self.hidden_size or input_size
+                dense_kwargs = dict()
+            else:
+                output_size = input_size
+                dense_kwargs = dict(
+                    kernel_init=nn.initializers.normal(5e-3),
+                    bias_init=nn.initializers.zeros_init(),
+                )
+            if self.use_layer_norm:
+                x = layer_norm(x)
+            x = activation_fn(x)
+            x = nn.Dense(output_size, dtype=x.dtype, **dense_kwargs)(x)
+        return x + shortcut
 
-        Args:
-            encodings (List[jax.Array]): List of encoding arrays.
-            embeddings (Optional[List[jax.Array]], optional): List of embedding arrays. Defaults to None.
 
-        Returns:
-            jax.Array: Summed embeddings array.
-        """
-        num_module_embeddings = len(embeddings)
-        if num_module_embeddings == 0:
-            raise ValueError("No embeddings or encodings provided")
+class Resnet(nn.Module):
+    num_resblocks: int
+    use_layer_norm: bool = True
 
-        outputs = []
-        gates = []
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        for _ in range(self.num_resblocks):
+            x = VectorResblock(use_layer_norm=self.use_layer_norm)(x)
+        return x
 
-        def _gate_layer_fn():
-            return nn.Dense(
-                num_module_embeddings,
-                kernel_init=nn.initializers.normal(5e-3),
-                dtype=self.dtype,
-            )
 
-        def _output_layer_fn():
-            return nn.Dense(self.output_size, dtype=self.dtype)
+class PointerLogits(nn.Module):
+    num_layers_query: int = 2
+    num_layers_keys: int = 2
+    key_size: int = 64
+    use_layer_norm: bool = True
 
-        for embedding in embeddings:
-            feature = layer_norm(embedding, self.dtype)
-            feature = activation_fn(feature)
-            gates.append(_gate_layer_fn()(feature))
-            outputs.append(_output_layer_fn()(feature))
+    @nn.compact
+    def __call__(self, query: jax.Array, keys: jax.Array) -> jax.Array:
+        for i in range(self.num_layers_query):
+            if self.use_layer_norm:
+                query = layer_norm(query)
+            query = activation_fn(query)
+            if i == self.num_layers_query - 1:
+                query = nn.Dense(self.key_size, dtype=query.dtype)(query)
+            else:
+                query = nn.Dense(query.shape[-1], dtype=query.dtype)(query)
 
-        stacked_outputs = jnp.stack(outputs, axis=0)
-        gate = sum(gates)
-        weights = nn.softmax(gate.reshape(-1), axis=-1)
+        for i in range(self.num_layers_keys):
+            if self.use_layer_norm:
+                keys = layer_norm(keys)
+            keys = activation_fn(keys)
+            if i == self.num_layers_keys - 1:
+                keys = nn.Dense(self.key_size, dtype=keys.dtype)(keys)
+            else:
+                keys = nn.Dense(keys.shape[-1], dtype=keys.dtype)(keys)
 
-        scale = jax.lax.rsqrt((weights**2).sum())
-        return (weights @ stacked_outputs).reshape(-1) * scale
+        return jnp.einsum("d,jd->j", query, keys) / np.sqrt(self.key_size).astype(
+            query.dtype
+        )
 
 
 def one_hot_concat_jax(
