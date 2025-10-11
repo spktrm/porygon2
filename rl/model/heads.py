@@ -38,7 +38,10 @@ class PolicyQKHead(nn.Module):
         head: HeadOutput,
     ):
         resnet = Resnet(**self.cfg.resnet.to_dict())
-        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
+        qk_logits = PointerLogits(
+            keys_final_kernel_init=nn.initializers.orthogonal(1e-2),
+            **self.cfg.qk_logits.to_dict()
+        )
 
         temp = self.cfg.get("temp", 1.0)
         logits = qk_logits(resnet(query_embedding), key_embeddings)
@@ -71,7 +74,10 @@ class PolicyLogitHead(nn.Module):
     @nn.compact
     def __call__(self, embedding: jax.Array, valid_mask: jax.Array, head: HeadOutput):
         resnet = Resnet(**self.cfg.resnet.to_dict())
-        logits = MLP(**self.cfg.logits.to_dict())
+        logits = MLP(
+            final_kernel_init=nn.initializers.orthogonal(1e-2),
+            **self.cfg.logits.to_dict()
+        )
 
         temp = self.cfg.get("temp", 1.0)
         embedding = resnet(embedding)

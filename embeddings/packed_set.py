@@ -82,7 +82,7 @@ def encode_packed_set(generation: int, packed_set: str):
     return arr
 
 
-def main():
+def main(max_set_size: int = 1024):
     for generation in range(9, 0, -1):
         packed_set_fpaths = [
             f
@@ -95,9 +95,9 @@ def main():
             with open(read_path, "r") as f:
                 data = json.load(f)
 
-            packed_set_mask = np.zeros((NUM_SPECIES, 1024), dtype=np.bool_)
+            packed_set_mask = np.zeros((NUM_SPECIES, max_set_size), dtype=np.bool_)
             packed_set_features = np.zeros(
-                (NUM_SPECIES, 1024, NUM_PACKED_SET_FEATURES), dtype=np.int32
+                (NUM_SPECIES, max_set_size, NUM_PACKED_SET_FEATURES), dtype=np.int32
             )
 
             packed_set_features[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES] = (
@@ -105,7 +105,7 @@ def main():
             )
 
             for i, (species, sets) in enumerate(data.items()):
-                for j, packed_set in enumerate(sets):
+                for j, packed_set in enumerate(sets[:max_set_size]):
                     packed_set_features[i, j] = encode_packed_set(
                         generation, packed_set
                     )
