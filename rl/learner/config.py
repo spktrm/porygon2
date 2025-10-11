@@ -44,8 +44,8 @@ class Porygon2LearnerConfig:
     target_replay_ratio: float = 2.5
 
     # Learning params
-    adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-5)
-    learning_rate: float = 5e-5
+    adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-6)
+    learning_rate: float = 2.5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     tau: float = 1e-3
@@ -60,7 +60,7 @@ class Porygon2LearnerConfig:
     # Vtrace params
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
-    clip_ppo: float = 0.3
+    clip_ppo: float = 0.15
 
     # Loss coefficients
     player_value_loss_coef: float = 0.5
@@ -73,7 +73,7 @@ class Porygon2LearnerConfig:
     builder_entropy_loss_coef: float = 0.05
     builder_kl_loss_coef: float = 0.05
 
-    target_kl: float = 0.1
+    target_kl: float = 0.05
 
     # Smogon Generation
     generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
@@ -103,6 +103,8 @@ class Porygon2BuilderTrainState(train_state.TrainState):
         [Params, BuilderActorInput, BuilderActorOutput], BuilderActorOutput
     ] = struct.field(pytree_node=False)
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+
+    actor_steps: int = 0
 
     target_adv_mean: float = 0
     target_adv_std: float = 1
@@ -290,6 +292,7 @@ def load_train_state(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
+        actor_steps=ckpt_builder_state["actor_steps"],
         target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )

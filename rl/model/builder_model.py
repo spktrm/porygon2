@@ -398,11 +398,7 @@ def main(debug: bool = False, generation: int = 9):
     agent = Agent(builder_apply_fn=actor_network.apply)
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation,
-        smogon_format="ou_all_formats",
-        max_trajectory_length=6,
-        min_trajectory_length=1,
-        num_metagame_slots=learner_config.num_metagame_slots,
+        generation=generation, smogon_format="ou_all_formats"
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:

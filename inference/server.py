@@ -1,10 +1,10 @@
 import random
 
-from fastapi.responses import PlainTextResponse
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import PlainTextResponse
 from model import InferenceModel
 from rich.pretty import pprint
 
