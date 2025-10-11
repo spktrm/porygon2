@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import math
 import os
-from typing import Callable
+from typing import Callable, TypeVar, cast
 
 import chex
 import jax
@@ -8,6 +10,7 @@ import jax.numpy as jnp
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
+PredT = TypeVar("PredT")  # whatever structure 'pred' has, we return the same
 
 
 LARGE_NEGATIVE_BIAS = -1e10
@@ -32,7 +35,7 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
     # logits_masked has illegal actions set to -inf.
-    logits_masked = logits + jnp.log(legal_actions)
+    logits_masked = jnp.where(legal_actions, logits, -jnp.inf).astype(logits.dtype)
     max_legal_logit = logits_masked.max(axis=-1, keepdims=True)
     logits_masked = logits_masked - max_legal_logit
     # exp_logits_masked is 0 for illegal actions.
@@ -116,3 +119,13 @@ def assert_no_nan_or_inf(gradients, path=""):
     else:
         if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
+
+
+def promote_map(pred: PredT) -> PredT:
+    def maybe_promote(x):
+        if isinstance(x, jnp.ndarray) and x.dtype == jnp.bfloat16:
+            return x.astype(jnp.float32)
+        return x
+
+    out = jax.tree_util.tree_map(maybe_promote, pred)
+    return cast(PredT, out)

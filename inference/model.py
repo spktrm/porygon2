@@ -36,7 +36,6 @@ class InferenceModel:
         self,
         fpath: str = None,
         seed: int = 42,
-        precision: int = 2,
         temp: float = 0.8,
         min_p: float = 0.01,
     ):
@@ -56,7 +55,6 @@ class InferenceModel:
             builder_apply_fn=self.builder_network.apply,
         )
         self.rng_key = jax.random.key(seed)
-        self.precision = precision
 
         if not fpath:
             fpath = get_most_recent_file("./ckpts/gen9")

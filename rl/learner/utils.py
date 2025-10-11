@@ -4,7 +4,6 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.utils import LARGE_NEGATIVE_BIAS
@@ -62,16 +61,18 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         builder_trajectory_length_mean=builder_lengths.mean(),
         builder_trajectory_length_min=builder_lengths.min(),
         builder_trajectory_length_max=builder_lengths.max(),
+        builder_species_reward_sum=batch.builder_transitions.env_output.species_reward.sum(
+            axis=0, where=builder_valid
+        ).mean(),
+        builder_teammate_reward_sum=batch.builder_transitions.env_output.teammate_reward.sum(
+            axis=0, where=builder_valid
+        ).mean(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
-        usage_counts=jnp.bincount(
-            batch.builder_transitions.env_output.species_tokens[-1].reshape(-1),
-            length=NUM_SPECIES,
-        ),
     )
 
 

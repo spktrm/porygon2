@@ -87,7 +87,7 @@ class Agent:
         )
 
         actor_output = self._player_apply_fn(
-            params, actor_input, rngs={"sampling": rng_key}
+            params, actor_input, PlayerActorOutput(), rngs={"sampling": rng_key}
         )
         # Remove the padding from above.
         actor_output: PlayerActorOutput = jax.tree.map(

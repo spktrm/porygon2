@@ -68,4 +68,5 @@ message WorkerResponse {
   int32 task_id = 1;
   EnvironmentResponse environment_response = 2; 
   ErrorResponse error_response = 3; 
+  optional ResetRequest opponent_reset_request = 4;
 }
