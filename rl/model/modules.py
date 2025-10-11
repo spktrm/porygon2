@@ -454,6 +454,7 @@ class MLP(nn.Module):
     layer_sizes: int | tuple[int] | list[int]
     use_layer_norm: bool = True
     input_activation: bool = True
+    final_kernel_init: Optional[nn.initializers.Initializer] = None
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -476,7 +477,10 @@ class MLP(nn.Module):
                 x = layer_norm(x)
             if (i > 0) or (i == 0 and self.input_activation):
                 x = activation_fn(x)
-            x = nn.Dense(size, dtype=x.dtype)(x)
+            dense_kwargs = dict()
+            if (i == len(layer_sizes) - 1) and (self.final_kernel_init is not None):
+                dense_kwargs["kernel_init"] = self.final_kernel_init
+            x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
 
 
@@ -571,6 +575,7 @@ class PointerLogits(nn.Module):
     num_layers_keys: int = 2
     key_size: int = 64
     use_layer_norm: bool = True
+    keys_final_kernel_init: Optional[nn.initializers.Initializer] = None
 
     @nn.compact
     def __call__(self, query: jax.Array, keys: jax.Array) -> jax.Array:
@@ -588,7 +593,10 @@ class PointerLogits(nn.Module):
                 keys = layer_norm(keys)
             keys = activation_fn(keys)
             if i == self.num_layers_keys - 1:
-                keys = nn.Dense(self.key_size, dtype=keys.dtype)(keys)
+                dense_kwargs = dict()
+                if self.keys_final_kernel_init is not None:
+                    dense_kwargs["kernel_init"] = self.keys_final_kernel_init
+                keys = nn.Dense(self.key_size, dtype=keys.dtype, **dense_kwargs)(keys)
             else:
                 keys = nn.Dense(keys.shape[-1], dtype=keys.dtype)(keys)
 

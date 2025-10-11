@@ -1,4 +1,3 @@
-import functools
 import queue
 import threading
 
@@ -30,7 +29,6 @@ from rl.learner.config import (
 )
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.config import DEFAULT_DTYPE
 from rl.model.utils import Params, promote_map
 from rl.utils import average
 
