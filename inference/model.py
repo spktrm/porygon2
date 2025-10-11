@@ -7,6 +7,7 @@ import pickle
 import jax
 import jax.numpy as jnp
 import numpy as np
+from rich.pretty import pprint
 
 from inference.interfaces import ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
@@ -83,10 +84,12 @@ class InferenceModel:
 
     def reset(self):
         builder_env = TeamBuilderEnvironment(
-            self.learner_config.generation, "ou_all_formats", max_trajectory_length=64
+            self.learner_config.generation, "ou_all_formats"
         )
 
         rng_key = self.split_rng()
+
+        pprint(rng_key)
         builder_subkeys = jax.random.split(
             rng_key, builder_env.max_trajectory_length + 1
         )
@@ -109,10 +112,6 @@ class InferenceModel:
                 break
             builder_actor_input = builder_env.step(builder_agent_output)
 
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: jnp.stack(xs), *build_traj
-        )
-
         # Send set tokens to the player environment.
         return ResetResponse(
             species_indices=builder_actor_input.env.species_tokens.reshape(-1).tolist(),
@@ -124,6 +123,8 @@ class InferenceModel:
 
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
+        pprint(rng_key)
+
         agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(

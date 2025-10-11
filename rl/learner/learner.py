@@ -98,6 +98,17 @@ def backward_kl_loss(
     return average(loss, valid)
 
 
+def forward_kl_loss(
+    *, policy_ratio: jax.Array, log_policy_ratio: jax.Array, valid: jax.Array
+):
+    """
+    Calculate the Forward KL loss.
+    Taken from http://joschu.net/blog/kl-approx.html
+    """
+    loss = (policy_ratio - 1) - log_policy_ratio
+    return average(loss, valid)
+
+
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     player_transitions: PlayerTransition,
@@ -189,9 +200,7 @@ def player_train_step(
     player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     # Update entropy schedule coefficient.
-    ent_kl_coef_mult = jnp.sqrt(
-        config.num_steps / (player_state.actor_steps + 1000)
-    ).astype(DEFAULT_DTYPE)
+    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (player_state.actor_steps + 1000))
 
     def player_loss_fn(params: Params):
 
@@ -224,6 +233,17 @@ def player_train_step(
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = player_is_ratio * learner_actor_ratio
+
+        learner_actor_approx_kl = forward_kl_loss(
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
+            valid=player_valid,
+        )
+        learner_target_approx_kl = forward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=player_valid,
+        )
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
@@ -267,12 +287,6 @@ def player_train_step(
             )
         )
 
-        # Modulate loss based on target KL
-        loss = (learner_target_log_ratio <= (1.5 * config.target_kl)) * loss
-
-        learner_actor_approx_kl = average(-learner_actor_log_ratio, player_valid)
-        learner_target_approx_kl = average(-learner_target_log_ratio, player_valid)
-
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
@@ -291,7 +305,7 @@ def player_train_step(
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
-            ent_kl_coef_mult=ent_kl_coef_mult,
+            player_ent_kl_coef_mult=ent_kl_coef_mult,
             player_value_function_r2=calculate_r2(
                 value_prediction=player_pred.v,
                 value_target=player_vtrace.returns,
@@ -424,6 +438,9 @@ def builder_train_step(
         builder_vtrace.pg_advantage - builder_state.target_adv_mean
     ) / (builder_state.target_adv_std + 1e-8)
 
+    # Update entropy schedule coefficient.
+    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (builder_state.actor_steps + 1000))
+
     def builder_loss_fn(params: Params):
         """Builder loss function."""
         builder_pred = promote_map(
@@ -456,6 +473,17 @@ def builder_train_step(
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = builder_is_ratio * learner_actor_ratio
+
+        learner_actor_approx_kl = forward_kl_loss(
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
+            valid=builder_valid,
+        )
+        learner_target_approx_kl = forward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=builder_valid,
+        )
 
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
@@ -501,18 +529,13 @@ def builder_train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + (
+            + ent_kl_coef_mult
+            * (
                 config.builder_kl_loss_coef * loss_kl
                 - config.builder_entropy_loss_coef * loss_entropy
             )
             + loss_info_ce
         )
-
-        # Modulate loss based on target KL
-        loss = (learner_target_log_ratio <= (1.5 * config.target_kl)) * loss
-
-        learner_actor_approx_kl = average(-learner_actor_log_ratio, builder_valid)
-        learner_target_approx_kl = average(-learner_target_log_ratio, builder_valid)
 
         return loss, dict(
             builder_loss_pg=loss_pg,
@@ -533,6 +556,7 @@ def builder_train_step(
             builder_learner_actor_approx_kl=learner_actor_approx_kl,
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
+            builder_ent_kl_coef_mult=ent_kl_coef_mult,
             builder_value_function_r2=calculate_r2(
                 value_prediction=builder_pred.v,
                 value_target=builder_vtrace.returns,
@@ -570,9 +594,25 @@ def builder_train_step(
         + builder_adv_mean * config.tau,
         target_adv_std=builder_state.target_adv_std * (1 - config.tau)
         + builder_adv_std * config.tau,
+        actor_steps=builder_state.actor_steps + builder_valid.sum(),
     )
 
     return builder_state, training_logs
+
+
+def calculate_builder_final_reward(batch: Trajectory):
+    # my_fainted_count = batch.player_transitions.env_output.info[
+    #     ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    # ]
+    # opp_fainted_count = batch.player_transitions.env_output.info[
+    #     ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    # ]
+    # phi_t = (opp_fainted_count - my_fainted_count) / MAX_RATIO_TOKEN
+    # phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
+    # shaped_reward = phi_tp1 - phi_t
+    # player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+
+    return batch.player_transitions.env_output.win_reward[-1]
 
 
 class Learner:
@@ -722,21 +762,6 @@ class Learner:
 
         return usage_logs
 
-    @functools.partial(jax.jit, static_argnames=["self"])
-    def calculate_builder_final_reward(self, batch: Trajectory):
-        # my_fainted_count = batch.player_transitions.env_output.info[
-        #     ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-        # ]
-        # opp_fainted_count = batch.player_transitions.env_output.info[
-        #     ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-        # ]
-        # phi_t = (opp_fainted_count - my_fainted_count) / MAX_RATIO_TOKEN
-        # phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
-        # shaped_reward = phi_tp1 - phi_t
-        # player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
-
-        return batch.player_transitions.env_output.win_reward[-1]
-
     def train(self):
 
         batch_size = self.learner_config.batch_size
@@ -751,49 +776,38 @@ class Learner:
             batch = self.device_q.get()
             batch: Trajectory = jax.device_put(batch)
 
-            training_logs = {"step_idx": step_idx}
-            training_logs = collect_batch_telemetry_data(batch)
-
-            self.player_state, player_logs = player_train_step_jit(
+            new_player_state, player_logs = player_train_step_jit(
                 self.player_state,
                 batch.player_transitions,
                 batch.player_history,
                 self.learner_config,
             )
-            # if player_logs["player_gradient_norm"].item() > 1000:
-            #     logger.warning(
-            #         f"Large player gradient norm: {player_logs['player_gradient_norm']}"
-            #     )
-            #     save_state(
-            #         f"debug/player_ckpt_{self.player_state.num_steps:08}",
-            #         self.learner_config,
-            #         self.player_state,
-            #         None,
-            #         batch,
-            #     )
 
-            training_logs.update(jax.device_get(player_logs))
-
-            builder_final_reward = self.calculate_builder_final_reward(batch)
-            self.builder_state, builder_logs = builder_train_step_jit(
+            builder_final_reward = calculate_builder_final_reward(batch)
+            new_builder_state, builder_logs = builder_train_step_jit(
                 self.builder_state,
                 batch.builder_transitions,
                 batch.player_hidden,
                 builder_final_reward,
                 self.learner_config,
             )
-            # if builder_logs["builder_gradient_norm"].item() > 1000:
-            #     logger.warning(
-            #         f"Large builder gradient norm: {builder_logs['builder_gradient_norm']}"
-            #     )
-            #     save_state(
-            #         f"debug/builder_ckpt_{self.player_state.num_steps:08}",
-            #         self.learner_config,
-            #         None,
-            #         self.builder_state,
-            #         batch,
-            #     )
 
+            if (
+                player_logs["player_loss_kl"].item() <= self.learner_config.target_kl
+            ) and (
+                builder_logs["builder_loss_kl"].item() <= self.learner_config.target_kl
+            ):
+                self.player_state = new_player_state
+                self.builder_state = new_builder_state
+            else:
+                logger.info(
+                    f"Skipping params update due to high KL: player {player_logs['player_loss_kl'].item():.3f}, builder {builder_logs['builder_loss_kl'].item():.3f}"
+                )
+                continue
+
+            training_logs = {"step_idx": step_idx}
+            training_logs.update(jax.device_get(collect_batch_telemetry_data(batch)))
+            training_logs.update(jax.device_get(player_logs))
             training_logs.update(jax.device_get(builder_logs))
 
             usage_logs = self.get_usage_counts(self.replay._species_counts)

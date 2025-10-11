@@ -519,7 +519,9 @@ class SumEmbeddings(nn.Module):
             raise ValueError("No embeddings provided")
 
         aggregated = sum(
-            nn.Dense(self.hidden_size or self.output_size, dtype=self.dtype)(embedding)
+            nn.Dense(
+                self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
+            )(embedding)
             for embedding in embeddings
         ) + self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
