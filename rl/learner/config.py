@@ -60,7 +60,7 @@ class Porygon2LearnerConfig:
     # Vtrace params
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
-    clip_ppo: float = 0.15
+    clip_ppo: float = 0.3
 
     # Loss coefficients
     player_value_loss_coef: float = 0.5
@@ -70,8 +70,8 @@ class Porygon2LearnerConfig:
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.01
-    builder_kl_loss_coef: float = 0.01
+    builder_entropy_loss_coef: float = 0.05
+    builder_kl_loss_coef: float = 0.05
 
     target_kl: float = 0.05
 

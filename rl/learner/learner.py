@@ -171,6 +171,7 @@ def player_train_step(
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
+    target_actor_ratio = jnp.exp(-actor_target_log_ratio)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
     move_valid = player_valid & (actor_action_type_head.action_index == 0)
@@ -199,7 +200,7 @@ def player_train_step(
         jnp.concatenate((rewards[1:], rewards[-1:])),
         jnp.concatenate((player_valid[1:], jnp.zeros_like(player_valid[-1:])))
         * config.player_gamma,
-        actor_target_ratio,
+        target_actor_ratio,
         lambda_=config.player_lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
@@ -212,7 +213,7 @@ def player_train_step(
         player_vtrace.pg_advantage - player_state.target_adv_mean
     ) / (player_state.target_adv_std + 1e-8)
 
-    player_is_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     # Update entropy schedule coefficient.
     ent_kl_coef_mult = jnp.sqrt(config.num_steps / (player_state.actor_steps + 1000))
@@ -247,7 +248,7 @@ def player_train_step(
         learner_target_log_ratio = learner_log_prob - target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        ratio = player_is_ratio * learner_actor_ratio
+        ratio = actor_target_clipped_ratio * learner_actor_ratio
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -259,19 +260,12 @@ def player_train_step(
             log_policy_ratio=learner_target_log_ratio,
             valid=player_valid,
         )
-        kl_mask = player_valid & (
-            approx_forward_kl(
-                policy_ratio=learner_target_ratio,
-                log_policy_ratio=learner_target_log_ratio,
-            )
-            <= config.target_kl
-        )
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=player_norm_advantages,
-            valid=kl_mask,
+            valid=player_valid,
             clip_ppo=config.clip_ppo,
         )
 
@@ -294,7 +288,7 @@ def player_train_step(
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=kl_mask,
+            valid=player_valid,
         )
 
         loss = (
@@ -324,7 +318,6 @@ def player_train_step(
             # Approx KL values
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
-            player_kl_mask_fraction=average(kl_mask, player_valid),
             # Extra stats
             player_ent_kl_coef_mult=ent_kl_coef_mult,
             player_value_function_r2=calculate_r2(
@@ -344,7 +337,7 @@ def player_train_step(
             player_gradient_norm=optax.global_norm(player_grads),
             player_adv_mean=player_adv_mean,
             player_adv_std=player_adv_std,
-            player_is_ratio=average(player_is_ratio, player_valid),
+            player_is_ratio=average(actor_target_clipped_ratio, player_valid),
             player_norm_adv_mean=average(player_norm_advantages, player_valid),
             player_norm_adv_std=player_norm_advantages.std(where=player_valid),
             player_value_target_mean=average(player_vtrace.returns, player_valid),
@@ -431,8 +424,9 @@ def builder_train_step(
 
     actor_target_builder_log_ratio = actor_builder_log_prob - target_builder_log_prob
     actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
+    target_actor_builder_ratio = jnp.exp(-actor_target_builder_log_ratio)
 
-    builder_is_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
+    actor_target_clipped_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
 
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
@@ -447,7 +441,7 @@ def builder_train_step(
         jnp.concatenate((builder_rewards[1:], builder_rewards[-1:])),
         jnp.concatenate((builder_valid[1:], jnp.zeros_like(builder_valid[-1:])))
         * config.builder_gamma,
-        actor_target_builder_ratio,
+        target_actor_builder_ratio,
         lambda_=config.builder_lambda_,
         clip_rho_threshold=config.clip_rho_threshold,
         clip_pg_rho_threshold=config.clip_pg_rho_threshold,
@@ -493,7 +487,7 @@ def builder_train_step(
         learner_target_log_ratio = learner_builder_log_prob - target_builder_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        ratio = builder_is_ratio * learner_actor_ratio
+        ratio = actor_target_clipped_ratio * learner_actor_ratio
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -505,19 +499,12 @@ def builder_train_step(
             log_policy_ratio=learner_target_log_ratio,
             valid=builder_valid,
         )
-        kl_mask = builder_valid & (
-            approx_forward_kl(
-                policy_ratio=learner_target_ratio,
-                log_policy_ratio=learner_target_log_ratio,
-            )
-            <= config.target_kl
-        )
 
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=builder_norm_advantages,
-            valid=kl_mask,
+            valid=builder_valid,
             clip_ppo=config.clip_ppo,
         )
 
@@ -541,7 +528,7 @@ def builder_train_step(
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=kl_mask,
+            valid=builder_valid,
         )
 
         loss_info_ce = (
@@ -583,7 +570,6 @@ def builder_train_step(
             # Approx KL values
             builder_learner_actor_approx_kl=learner_actor_approx_kl,
             builder_learner_target_approx_kl=learner_target_approx_kl,
-            builder_kl_mask_fraction=average(kl_mask, builder_valid),
             # Extra stats
             builder_ent_kl_coef_mult=ent_kl_coef_mult,
             builder_value_function_r2=calculate_r2(
@@ -605,7 +591,7 @@ def builder_train_step(
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_adv_mean=builder_adv_mean,
             builder_adv_std=builder_adv_std,
-            builder_is_ratio=average(builder_is_ratio, builder_valid),
+            builder_is_ratio=average(actor_target_clipped_ratio, builder_valid),
             builder_norm_adv_mean=average(builder_norm_advantages, builder_valid),
             builder_norm_adv_std=builder_norm_advantages.std(where=builder_valid),
             builder_value_target_mean=average(builder_vtrace.returns, builder_valid),
