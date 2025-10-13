@@ -33,8 +33,8 @@ class AdamConfig:
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
-    num_steps = 10_000_000
-    num_actors: int = 32
+    num_steps = 1_000_000
+    num_actors: int = 16
     num_eval_actors: int = 5
     unroll_length: int = 64 * 2
     replay_buffer_capacity: int = 512
@@ -70,8 +70,8 @@ class Porygon2LearnerConfig:
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.05
-    builder_kl_loss_coef: float = 0.05
+    builder_entropy_loss_coef: float = 0.01
+    builder_kl_loss_coef: float = 0.01
 
     target_kl: float = 0.05
 
@@ -231,6 +231,7 @@ def save_state(
             params=builder_state.params,
             target_params=builder_state.target_params,
             opt_state=builder_state.opt_state,
+            actor_steps=builder_state.actor_steps,
             target_adv_mean=builder_state.target_adv_mean,
             target_adv_std=builder_state.target_adv_std,
         )

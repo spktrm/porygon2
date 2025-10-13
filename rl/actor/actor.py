@@ -1,3 +1,4 @@
+import random
 import jax
 import numpy as np
 
@@ -36,7 +37,9 @@ class Actor:
     ):
         self._agent = agent
         self._player_env = env
-        self._builder_env = TeamBuilderEnvironment(env.generation, "ou_all_formats")
+        self._builder_env = TeamBuilderEnvironment(
+            env.generation, "ou_all_formats", initial_seed=random.randint(0, 2**31 - 1)
+        )
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)

@@ -67,6 +67,9 @@ class InferenceModel:
         self.builder_params = step["builder_state"]["params"]
 
         print("initializing...")
+        self.builder_env = TeamBuilderEnvironment(
+            self.learner_config.generation, "ou_all_formats"
+        )
         self.reset()  # warm up the model
 
         ex_actor_input, _ = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
@@ -83,20 +86,17 @@ class InferenceModel:
         return subkey
 
     def reset(self):
-        builder_env = TeamBuilderEnvironment(
-            self.learner_config.generation, "ou_all_formats"
-        )
 
         rng_key = self.split_rng()
 
         pprint(rng_key)
         builder_subkeys = jax.random.split(
-            rng_key, builder_env.max_trajectory_length + 1
+            rng_key, self.builder_env.max_trajectory_length + 1
         )
 
         build_traj = []
 
-        builder_actor_input = builder_env.reset()
+        builder_actor_input = self.builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
@@ -110,7 +110,7 @@ class InferenceModel:
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = builder_env.step(builder_agent_output)
+            builder_actor_input = self.builder_env.step(builder_agent_output)
 
         # Send set tokens to the player environment.
         return ResetResponse(
