@@ -1,5 +1,6 @@
 import functools
 import json
+import random
 
 import jax
 import jax.numpy as jnp
@@ -93,19 +94,22 @@ class TeamBuilderEnvironment:
         min_trajectory_length: int = 1,
         *,
         initial_metagame_token: int | None = None,
+        initial_seed: int = random.randint(0, 2**31 - 1),
     ):
+        if num_team_members < 1 or num_team_members > 6:
+            raise ValueError("num_team_members must be between 1 and 6")
+        if max_trajectory_length < min_trajectory_length:
+            raise ValueError(
+                "max_trajectory_length must be greater than or equal to min_trajectory_length"
+            )
+
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
         self.num_metagame_slots = num_metagame_slots
         self.max_trajectory_length = max_trajectory_length
         self.min_trajectory_length = min_trajectory_length
-        self.rng_key = jax.random.key(42)
-
-        if max_trajectory_length < min_trajectory_length:
-            raise ValueError(
-                "max_trajectory_length must be greater than or equal to min_trajectory_length"
-            )
+        self.rng_key = jax.random.key(initial_seed)
 
         self.initial_continue_mask = (
             jnp.ones(2, dtype=jnp.bool)

@@ -1,3 +1,4 @@
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -82,6 +83,8 @@ def run_eval_actor(
         except Exception:
             traceback.print_exc()
             continue
+
+        time.sleep(2)
 
 
 def main():

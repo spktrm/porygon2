@@ -95,8 +95,9 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.global_metagame_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.contextual_metagame_merge = SumEmbeddings(entity_size, dtype=dtype)
+        self.continue_query_merge = SumEmbeddings(entity_size, dtype=dtype)
+        self.selection_query_merge = SumEmbeddings(entity_size, dtype=dtype)
+        self.packed_set_query_merge = SumEmbeddings(entity_size, dtype=dtype)
 
         transformer_config = self.cfg.transformer.to_dict()
 
@@ -279,35 +280,33 @@ class Porygon2BuilderModel(nn.Module):
         metagame_idx_oh = jax.nn.one_hot(
             metagame_head.action_index, self.cfg.num_metagame_slots
         )
-        metagame_contextual_embedding = self.global_metagame_merge(
-            my_embedding, metagame_idx_oh
-        )
 
         value = self._forward_value_head(
             my_embeddings, my_embedding, opp_embeddings, opp_embedding
         )
 
+        continue_query = self.continue_query_merge(my_embedding, metagame_idx_oh)
         continue_head = self.continue_head(
-            metagame_contextual_embedding,
+            continue_query,
             actor_env.continue_mask,
             actor_output.continue_head,
         )
 
         selection_head = self.selection_head(
-            metagame_contextual_embedding,
+            continue_query,
             my_embeddings,
             jnp.ones_like(my_embeddings[..., 0], dtype=jnp.bool),
             actor_output.selection_head,
         )
+
         selected_embedding = jnp.take(
             my_embeddings, selection_head.action_index, axis=0
         )
-        metagame_contextual_selected_embedding = self.contextual_metagame_merge(
-            selected_embedding, metagame_idx_oh
+        selection_query = self.selection_query_merge(
+            my_embedding, selected_embedding, metagame_idx_oh
         )
-
         species_head = self.species_head(
-            metagame_contextual_selected_embedding,
+            selection_query,
             species_keys,
             actor_env.species_mask,
             actor_output.species_head,
@@ -324,9 +323,26 @@ class Porygon2BuilderModel(nn.Module):
         ]
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
 
+        expanded_mask = (packed_set_mask + (packed_set_mask.sum(keepdims=True) == 0))[
+            ..., None
+        ]
+        packed_set_mean = jnp.mean(
+            packed_set_keys, axis=0, keepdims=True, where=expanded_mask
+        )
+        packed_set_var = jnp.var(
+            packed_set_keys, axis=0, keepdims=True, where=expanded_mask
+        )
+        packed_set_keys_normed = (packed_set_keys - packed_set_mean) * jax.lax.rsqrt(
+            packed_set_var + 1e-6
+        )
+
+        species_embedding = jnp.take(species_keys, species_head.action_index, axis=0)
+        packed_set_query = self.packed_set_query_merge(
+            selection_query, species_embedding
+        )
         packed_set_head = self.packed_set_head(
-            metagame_contextual_selected_embedding,
-            packed_set_keys,
+            packed_set_query,
+            packed_set_keys_normed,
             packed_set_mask,
             actor_output.packed_set_head,
         )
@@ -372,7 +388,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = False, generation: int = 9):
+def main(debug: bool = True, generation: int = 9):
     actor_network = get_builder_model(
         get_builder_model_config(generation, train=False)  # , temp=0.8, min_p=0.05)
     )
@@ -398,7 +414,7 @@ def main(debug: bool = False, generation: int = 9):
     agent = Agent(builder_apply_fn=actor_network.apply)
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation, smogon_format="ou_all_formats"
+        generation=generation, smogon_format="ou_all_formats", initial_seed=42
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:

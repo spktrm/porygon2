@@ -84,15 +84,30 @@ def value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     return 0.5 * average(mse_loss, valid)
 
 
+def approx_backward_kl(*, policy_ratio: jax.Array, log_policy_ratio: jax.Array):
+    """
+    Calculate the Backward KL approximation.
+    """
+    return policy_ratio * log_policy_ratio - (policy_ratio - 1)
+
+
+def approx_forward_kl(*, policy_ratio: jax.Array, log_policy_ratio: jax.Array):
+    """
+    Calculate the Forward KL approximation.
+    """
+    return (policy_ratio - 1) - log_policy_ratio
+
+
 def backward_kl_loss(
     *, policy_ratio: jax.Array, log_policy_ratio: jax.Array, valid: jax.Array
 ):
     """
     Calculate the Backward KL loss.
-    Taken from the MMD paper: https://arxiv.org/pdf/2206.05825
-    as well as: https://arxiv.org/pdf/2502.08938
+    Taken from http://joschu.net/blog/kl-approx.html
     """
-    loss = policy_ratio * log_policy_ratio - (policy_ratio - 1)
+    loss = approx_backward_kl(
+        policy_ratio=policy_ratio, log_policy_ratio=log_policy_ratio
+    )
     return average(loss, valid)
 
 
@@ -103,7 +118,9 @@ def forward_kl_loss(
     Calculate the Forward KL loss.
     Taken from http://joschu.net/blog/kl-approx.html
     """
-    loss = (policy_ratio - 1) - log_policy_ratio
+    loss = approx_forward_kl(
+        policy_ratio=policy_ratio, log_policy_ratio=log_policy_ratio
+    )
     return average(loss, valid)
 
 
@@ -242,19 +259,24 @@ def player_train_step(
             log_policy_ratio=learner_target_log_ratio,
             valid=player_valid,
         )
+        kl_mask = player_valid & (
+            approx_forward_kl(
+                policy_ratio=learner_target_ratio,
+                log_policy_ratio=learner_target_log_ratio,
+            )
+            <= config.target_kl
+        )
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=player_norm_advantages,
-            valid=player_valid,
+            valid=kl_mask,
             clip_ppo=config.clip_ppo,
         )
 
         loss_v = value_loss(
-            pred_v=player_pred.v,
-            target_v=player_vtrace.returns,
-            valid=player_valid,
+            pred_v=player_pred.v, target_v=player_vtrace.returns, valid=player_valid
         )
 
         action_type_head_entropy = average(pred_action_type_head.entropy, player_valid)
@@ -272,7 +294,7 @@ def player_train_step(
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=player_valid,
+            valid=kl_mask,
         )
 
         loss = (
@@ -302,6 +324,7 @@ def player_train_step(
             # Approx KL values
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
+            player_kl_mask_fraction=average(kl_mask, player_valid),
             # Extra stats
             player_ent_kl_coef_mult=ent_kl_coef_mult,
             player_value_function_r2=calculate_r2(
@@ -482,12 +505,19 @@ def builder_train_step(
             log_policy_ratio=learner_target_log_ratio,
             valid=builder_valid,
         )
+        kl_mask = builder_valid & (
+            approx_forward_kl(
+                policy_ratio=learner_target_ratio,
+                log_policy_ratio=learner_target_log_ratio,
+            )
+            <= config.target_kl
+        )
 
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=builder_norm_advantages,
-            valid=builder_valid,
+            valid=kl_mask,
             clip_ppo=config.clip_ppo,
         )
 
@@ -511,7 +541,7 @@ def builder_train_step(
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=builder_valid,
+            valid=kl_mask,
         )
 
         loss_info_ce = (
@@ -553,6 +583,7 @@ def builder_train_step(
             # Approx KL values
             builder_learner_actor_approx_kl=learner_actor_approx_kl,
             builder_learner_target_approx_kl=learner_target_approx_kl,
+            builder_kl_mask_fraction=average(kl_mask, builder_valid),
             # Extra stats
             builder_ent_kl_coef_mult=ent_kl_coef_mult,
             builder_value_function_r2=calculate_r2(
@@ -774,7 +805,7 @@ class Learner:
             batch = self.device_q.get()
             batch: Trajectory = jax.device_put(batch)
 
-            new_player_state, player_logs = player_train_step_jit(
+            self.player_state, player_logs = player_train_step_jit(
                 self.player_state,
                 batch.player_transitions,
                 batch.player_history,
@@ -782,7 +813,7 @@ class Learner:
             )
 
             builder_final_reward = calculate_builder_final_reward(batch)
-            new_builder_state, builder_logs = builder_train_step_jit(
+            self.builder_state, builder_logs = builder_train_step_jit(
                 self.builder_state,
                 batch.builder_transitions,
                 batch.player_hidden,
@@ -790,18 +821,18 @@ class Learner:
                 self.learner_config,
             )
 
-            if (
-                player_logs["player_loss_kl"].item() <= self.learner_config.target_kl
-            ) and (
-                builder_logs["builder_loss_kl"].item() <= self.learner_config.target_kl
-            ):
-                self.player_state = new_player_state
-                self.builder_state = new_builder_state
-            else:
-                logger.info(
-                    f"Skipping params update due to high KL: player {player_logs['player_loss_kl'].item():.3f}, builder {builder_logs['builder_loss_kl'].item():.3f}"
-                )
-                continue
+            # if (
+            #     player_logs["player_loss_kl"].item() <= self.learner_config.target_kl
+            # ) and (
+            #     builder_logs["builder_loss_kl"].item() <= self.learner_config.target_kl
+            # ):
+            #     self.player_state = new_player_state
+            #     self.builder_state = new_builder_state
+            # else:
+            #     logger.info(
+            #         f"Skipping params update due to high KL: player {player_logs['player_loss_kl'].item():.3f}, builder {builder_logs['builder_loss_kl'].item():.3f}"
+            #     )
+            #     continue
 
             training_logs = {"step_idx": step_idx}
             training_logs.update(jax.device_get(collect_batch_telemetry_data(batch)))
