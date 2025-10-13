@@ -1,11 +1,9 @@
-import time
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
 import json
 import threading
+import time
 import traceback
 from pprint import pprint
 
