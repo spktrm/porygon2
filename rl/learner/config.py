@@ -31,9 +31,12 @@ class AdamConfig:
     eps: float
 
 
+GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
-    num_steps = 1_000_000
+    num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 5
     unroll_length: int = 64 * 2
@@ -66,17 +69,15 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
     player_entropy_loss_coef: float = 0.05
-    player_kl_loss_coef: float = 0.05
+    player_kl_loss_coef: float = 0.005
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.05
-    builder_kl_loss_coef: float = 0.05
-
-    target_kl: float = 0.05
+    builder_entropy_loss_coef: float = 0.01
+    builder_kl_loss_coef: float = 0.005
 
     # Smogon Generation
-    generation: Literal[1, 2, 3, 4, 5, 6, 7, 8, 9] = 9
+    generation: GenT = 9
 
 
 def get_learner_config():

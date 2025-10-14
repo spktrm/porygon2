@@ -1,3 +1,4 @@
+import math
 import queue
 import threading
 
@@ -65,6 +66,30 @@ def calculate_builder_log_prob(
     )
 
 
+def spo_objective(
+    *,
+    policy_ratios: jax.Array,
+    advantages: jax.Array,
+    clip_ppo: float,
+):
+    """Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025"""
+    return policy_ratios * advantages - (
+        jnp.abs(advantages) * (1 - policy_ratios) ** 2
+    ) / (2 * clip_ppo)
+
+
+def ppo_objective(
+    *,
+    policy_ratios: jax.Array,
+    advantages: jax.Array,
+    clip_ppo: float,
+):
+    """Generic PPO clipped surrogate loss"""
+    l1 = policy_ratios * advantages
+    l2 = jnp.clip(policy_ratios, 1.0 - clip_ppo, 1.0 + clip_ppo) * advantages
+    return jnp.minimum(l1, l2)
+
+
 def policy_gradient_loss(
     *,
     policy_ratios: jax.Array,
@@ -72,11 +97,21 @@ def policy_gradient_loss(
     valid: jax.Array,
     clip_ppo: float,
 ):
-    """Objective taken from SPO paper: https://arxiv.org/pdf/2401.16025"""
-    pg_loss = policy_ratios * advantages - (
-        jnp.abs(advantages) * (1 - policy_ratios) ** 2
-    ) / (2 * clip_ppo)
+    pg_loss = ppo_objective(
+        policy_ratios=policy_ratios, advantages=advantages, clip_ppo=clip_ppo
+    )
     return -average(pg_loss, valid)
+
+
+def clip_fraction(
+    *,
+    policy_ratios: jax.Array,
+    valid: jax.Array,
+    clip_ppo: float,
+):
+    """Calculate the fraction of clips."""
+    clipped = jnp.abs(policy_ratios - 1) > clip_ppo
+    return average(clipped, valid)
 
 
 def value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
@@ -122,6 +157,10 @@ def forward_kl_loss(
         policy_ratio=policy_ratio, log_policy_ratio=log_policy_ratio
     )
     return average(loss, valid)
+
+
+def clip_log_ratio(log_ratio: jax.Array, eps: float = 0.2):
+    return jnp.clip(log_ratio, a_min=math.log1p(-eps), a_max=math.log1p(eps))
 
 
 def player_train_step(
@@ -215,9 +254,6 @@ def player_train_step(
 
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
-    # Update entropy schedule coefficient.
-    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (player_state.actor_steps + 1000))
-
     def player_loss_fn(params: Params):
 
         player_pred = promote_map(
@@ -250,17 +286,6 @@ def player_train_step(
 
         ratio = actor_target_clipped_ratio * learner_actor_ratio
 
-        learner_actor_approx_kl = forward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
-            valid=player_valid,
-        )
-        learner_target_approx_kl = forward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
-            valid=player_valid,
-        )
-
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
@@ -285,6 +310,16 @@ def player_train_step(
             + wildcard_head_entropy
         )
 
+        learner_actor_approx_kl = forward_kl_loss(
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
+            valid=player_valid,
+        )
+        learner_target_approx_kl = forward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=player_valid,
+        )
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
@@ -294,11 +329,8 @@ def player_train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
-            + ent_kl_coef_mult
-            * (
-                config.player_kl_loss_coef * loss_kl
-                - config.player_entropy_loss_coef * loss_entropy
-            )
+            + config.player_kl_loss_coef * loss_kl
+            - config.player_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
@@ -313,13 +345,15 @@ def player_train_step(
             player_switch_entropy=switch_head_entropy,
             player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
+            player_ratio_clip_fraction=clip_fraction(
+                policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo
+            ),
             player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
             player_learner_target_ratio=average(learner_target_ratio, player_valid),
             # Approx KL values
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
-            player_ent_kl_coef_mult=ent_kl_coef_mult,
             player_value_function_r2=calculate_r2(
                 value_prediction=player_pred.v,
                 value_target=player_vtrace.returns,
@@ -453,9 +487,6 @@ def builder_train_step(
         builder_vtrace.pg_advantage - builder_state.target_adv_mean
     ) / (builder_state.target_adv_std + 1e-8)
 
-    # Update entropy schedule coefficient.
-    ent_kl_coef_mult = jnp.sqrt(config.num_steps / (builder_state.actor_steps + 1000))
-
     def builder_loss_fn(params: Params):
         """Builder loss function."""
         builder_pred = promote_map(
@@ -489,17 +520,6 @@ def builder_train_step(
 
         ratio = actor_target_clipped_ratio * learner_actor_ratio
 
-        learner_actor_approx_kl = forward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
-            valid=builder_valid,
-        )
-        learner_target_approx_kl = forward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
-            valid=builder_valid,
-        )
-
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
@@ -525,6 +545,16 @@ def builder_train_step(
             + packed_set_entropy
         )
 
+        learner_actor_approx_kl = forward_kl_loss(
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
+            valid=builder_valid,
+        )
+        learner_target_approx_kl = forward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=builder_valid,
+        )
         loss_kl = backward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
@@ -544,11 +574,8 @@ def builder_train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + ent_kl_coef_mult
-            * (
-                config.builder_kl_loss_coef * loss_kl
-                - config.builder_entropy_loss_coef * loss_entropy
-            )
+            + config.builder_kl_loss_coef * loss_kl
+            - config.builder_entropy_loss_coef * loss_entropy
             + loss_info_ce
         )
 
@@ -565,13 +592,15 @@ def builder_train_step(
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
             # Ratios
+            builder_ratio_clip_fraction=clip_fraction(
+                policy_ratios=ratio, valid=builder_valid, clip_ppo=config.clip_ppo
+            ),
             builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
             builder_learner_target_ratio=average(learner_target_ratio, builder_valid),
             # Approx KL values
             builder_learner_actor_approx_kl=learner_actor_approx_kl,
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
-            builder_ent_kl_coef_mult=ent_kl_coef_mult,
             builder_value_function_r2=calculate_r2(
                 value_prediction=builder_pred.v,
                 value_target=builder_vtrace.returns,
@@ -660,13 +689,14 @@ class Learner:
         )
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
 
+        self.wandb_run.log_code("rl/")
         self.wandb_run.log_code("inference/")
         self.wandb_run.log_code(
             "service/src/client/", include_fn=lambda x: x.endswith(".ts")
         )
 
         self.params_for_actor: tuple[int, Params, Params] = (
-            0,
+            player_state.num_steps.item(),
             jax.device_get(self.player_state.params),
             jax.device_get(self.builder_state.params),
         )
@@ -829,7 +859,7 @@ class Learner:
             training_logs.update(jax.device_get(usage_logs))
 
             self.params_for_actor = (
-                step_idx,
+                self.player_state.num_steps.item(),
                 jax.device_get(self.player_state.params),
                 jax.device_get(self.builder_state.params),
             )
