@@ -561,15 +561,10 @@ def builder_train_step(
             valid=builder_valid,
         )
 
-        loss_info_ce = (
-            optax.softmax_cross_entropy(
-                logits=builder_pred.metagame_pred_logits[1:],
-                labels=builder_transitions.env_output.metagame_mask[1:].astype(
-                    jnp.float32
-                ),
-            ).sum(where=builder_valid[1:])
-            / builder_valid[1:].sum()
-        )
+        loss_info_ce = optax.softmax_cross_entropy(
+            logits=builder_pred.metagame_pred_logits[1:],
+            labels=builder_transitions.env_output.metagame_mask[1:].astype(jnp.float32),
+        ).sum(where=builder_valid[1:]) / builder_valid[1:].sum().clip(min=1)
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
@@ -695,8 +690,13 @@ class Learner:
             "service/src/client/", include_fn=lambda x: x.endswith(".ts")
         )
 
+        try:
+            init_steps = player_state.num_steps.item()
+        except:
+            init_steps = int(player_state.num_steps)
+
         self.params_for_actor: tuple[int, Params, Params] = (
-            player_state.num_steps.item(),
+            init_steps,
             jax.device_get(self.player_state.params),
             jax.device_get(self.builder_state.params),
         )

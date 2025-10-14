@@ -6,6 +6,7 @@ from typing import Any, Callable, Literal
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 import optax
 import wandb.wandb_run
 from flax import core, struct
@@ -69,15 +70,15 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
     player_entropy_loss_coef: float = 0.05
-    player_kl_loss_coef: float = 0.005
+    player_kl_loss_coef: float = tau * 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_entropy_loss_coef: float = 0.01
-    builder_kl_loss_coef: float = 0.005
+    builder_kl_loss_coef: float = tau * 0.05
 
     # Smogon Generation
-    generation: GenT = 9
+    generation: GenT = 1
 
 
 def get_learner_config():
@@ -119,10 +120,10 @@ def create_train_state(
 ):
     """Creates an initial `TrainState`."""
     ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
-        lambda x: x[:, 0], get_ex_player_step()
+        lambda x: jnp.asarray(x[:, 0]), get_ex_player_step()
     )
     ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
-        lambda x: x[:, 0], get_ex_builder_step()
+        lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
     )
 
     player_params_init_fn = lambda: player_network.init(

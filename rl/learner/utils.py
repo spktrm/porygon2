@@ -6,7 +6,6 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -46,7 +45,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         jnp.where(
             (action_type_index == 0) & (wildcard_index != 0),
             jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-            -LARGE_NEGATIVE_BIAS,
+            jnp.iinfo(action_type_index.dtype).max,
         )
         .clip(max=action_type_index.shape[0])
         .min(axis=0)

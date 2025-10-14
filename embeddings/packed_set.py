@@ -83,7 +83,7 @@ def encode_packed_set(generation: int, packed_set: str):
 
 
 def main(max_set_size: int = 1024):
-    for generation in range(9, 0, -1):
+    for generation in range(1, 10):
         packed_set_fpaths = [
             f
             for f in os.listdir(f"data/data/gen{generation}")

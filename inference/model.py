@@ -7,7 +7,6 @@ import pickle
 import jax
 import jax.numpy as jnp
 import numpy as np
-from rich.pretty import pprint
 
 from inference.interfaces import ResetResponse, StepResponse
 from rl.actor.actor import ACTION_TYPE_MAPPING
@@ -19,7 +18,7 @@ from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
-from rl.model.utils import LARGE_NEGATIVE_BIAS, get_most_recent_file
+from rl.model.utils import get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -27,7 +26,8 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 def restrict_values(arr: np.ndarray):
     if arr.dtype.name == "bfloat16":
-        return np.clip(arr, a_min=LARGE_NEGATIVE_BIAS, a_max=-LARGE_NEGATIVE_BIAS)
+        finfo = jnp.finfo(arr.dtype)
+        return np.clip(arr, a_min=finfo.min, a_max=finfo.max)
     else:
         return np.nan_to_num(arr)
 
@@ -36,6 +36,7 @@ class InferenceModel:
     def __init__(
         self,
         fpath: str = None,
+        generation: int = 1,
         seed: int = 42,
         temp: float = 0.8,
         min_p: float = 0.01,
@@ -58,7 +59,7 @@ class InferenceModel:
         self.rng_key = jax.random.key(seed)
 
         if not fpath:
-            fpath = get_most_recent_file("./ckpts/gen9")
+            fpath = get_most_recent_file(f"./ckpts/gen{generation}")
         print(f"loading checkpoint from {fpath}")
         with open(fpath, "rb") as f:
             step = pickle.load(f)
@@ -89,7 +90,6 @@ class InferenceModel:
 
         rng_key = self.split_rng()
 
-        pprint(rng_key)
         builder_subkeys = jax.random.split(
             rng_key, self.builder_env.max_trajectory_length + 1
         )
@@ -123,7 +123,6 @@ class InferenceModel:
 
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
-        pprint(rng_key)
 
         agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
         actor_output = agent_output.actor_output

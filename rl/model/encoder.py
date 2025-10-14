@@ -43,7 +43,6 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def _binary_scale_encoding(
@@ -829,7 +828,9 @@ class Encoder(nn.Module):
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         # For padded timesteps, request count is 0, so we use a large bias value.
         timestep_mask = request_count[..., None] >= jnp.where(
-            history_valid_mask, history_request_count, -LARGE_NEGATIVE_BIAS
+            history_valid_mask,
+            history_request_count,
+            jnp.iinfo(request_count.dtype).max,
         )
 
         def _batched_forward(

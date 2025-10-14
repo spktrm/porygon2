@@ -326,12 +326,12 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     return net
 
 
-def main(make_graphs: bool = False):
+def main(make_graphs: bool = True):
     with open("data/data/data.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     name: str
-    for gen in range(3, 10):
+    for gen in range(1, 10):
         print(gen)
         enc = GenerationEncodings(gen, data)
         for name, func in [
@@ -345,6 +345,10 @@ def main(make_graphs: bool = False):
                 encodings_arr = func()
             except NoDataFramesError:
                 traceback.print_exc()
+
+                encodings_arr = np.zeros((len(enc.stoi[name]), 1), dtype=np.float32)
+                with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
+                    np.save(f, encodings_arr)
                 continue
             except VectorContainsNanError as e:
                 raise e
@@ -357,7 +361,8 @@ def main(make_graphs: bool = False):
             # pca = PCA(0.99)
             # encoded = pca.fit_transform(encodings_arr[mask])
 
-            if make_graphs:
+            do_graphs = make_graphs and name != "learnset"
+            if do_graphs:
                 names = np.array(list(enc.stoi[name]))[mask.flatten()]
                 fig = ff.create_dendrogram(encoded, labels=names)
                 fig.update_layout(width=5 * 1920, height=1080)
@@ -381,19 +386,19 @@ def main(make_graphs: bool = False):
             with open(f"data/data/gen{gen}/{name}.npy", "wb") as f:
                 np.save(f, encodings_arr)
 
-            if make_graphs:
+            if do_graphs:
                 cosine_sim = cosine_similarity(encoded)
                 cosine_sim_flat = cosine_sim.flatten()
                 threshold_mask = (
                     (1 - np.eye(cosine_sim.shape[0])).astype(bool).flatten()
                 )
                 cosine_sim_flat = cosine_sim_flat[threshold_mask]
-                threshold = np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
+                np.mean(cosine_sim_flat) + 3 * np.std(cosine_sim_flat)
 
-                graph = cosine_matrix_to_pyvis(
-                    cosine_matrix=cosine_sim, labels=names, threshold=threshold
-                )
-                graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
+                # graph = cosine_matrix_to_pyvis(
+                #     cosine_matrix=cosine_sim, labels=names, threshold=threshold
+                # )
+                # graph.write_html(f"data/data/gen{gen}/{name}_graph.html")
 
                 df_cosine_sim = pd.DataFrame(cosine_sim, columns=names, index=names)
 
