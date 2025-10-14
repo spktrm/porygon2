@@ -223,10 +223,8 @@ class Porygon2BuilderModel(nn.Module):
         opp_embeddings: jax.Array,
         opp_embedding: jax.Array,
     ):
-        l2_normalize = lambda x: x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-6)
-
-        my_embeddings = l2_normalize(my_embeddings)
-        opp_embeddings = l2_normalize(opp_embeddings)
+        my_embeddings = nn.normalization._l2_normalize(my_embeddings, axis=-1)
+        opp_embeddings = nn.normalization._l2_normalize(opp_embeddings, axis=-1)
 
         pairwise_interactions = jnp.einsum("ie,je->ij", my_embeddings, opp_embeddings)
         pairwise_interactions = pairwise_interactions.mean()
@@ -388,7 +386,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = True, generation: int = 9):
+def main(debug: bool = False, generation: int = 1):
     actor_network = get_builder_model(
         get_builder_model_config(generation, train=False)  # , temp=0.8, min_p=0.05)
     )

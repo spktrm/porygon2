@@ -128,14 +128,16 @@ class Pokedex:
         competitive_use_mask = ~does_nothing_mask
         competitive_items = self.items[competitive_use_mask]
 
-        competitive_mask = np.eye(len(numbered_items))[
-            np.array(
-                [
-                    numbered_items.get(toid(item))
-                    for item in competitive_items["id"].tolist()
-                ]
-            )
-        ].sum(axis=0)
+        competitive_idx = np.array(
+            [
+                numbered_items.get(toid(item))
+                for item in competitive_items["id"].tolist()
+            ]
+        )
+        if competitive_idx.size > 0:
+            competitive_mask = np.eye(len(numbered_items))[competitive_idx].sum(axis=0)
+        else:
+            competitive_mask = np.zeros(len(numbered_items), dtype=bool)
 
         for _, row in self.species.iterrows():
             row_index = numbered_species.get(toid(row["id"]))
@@ -213,8 +215,8 @@ class Pokedex:
         return mask
 
 
-def save_gen_three():
-    for generation in range(9, 2, -1):
+def save_all():
+    for generation in range(1, 10):
         pokedex = Pokedex(generation=generation)
 
         for name, mask_arr in [
@@ -233,7 +235,7 @@ def save_gen_three():
 
 
 def main():
-    save_gen_three()
+    save_all()
 
 
 if __name__ == "__main__":

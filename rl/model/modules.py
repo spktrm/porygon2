@@ -5,8 +5,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rl.model.utils import LARGE_NEGATIVE_BIAS
-
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
@@ -224,7 +222,7 @@ class MultiHeadAttention(nn.Module):
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        attn_logits = jnp.where(mask, attn_logits, LARGE_NEGATIVE_BIAS)
+        attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
         attn_weights = nn.softmax(attn_logits)
         attn_weights = jnp.where(mask, attn_weights, 0)
 
@@ -495,6 +493,23 @@ class PretrainedEmbedding:
         with open(fpath, "rb") as f:
             arr = np.load(f)
         self.embeddings = jnp.asarray(arr, dtype=dtype)
+
+    def __call__(self, indices: jax.Array) -> jax.Array:
+        """
+        Get embeddings for the given indices.
+
+        Args:
+            indices (jax.Array): Indices array.
+
+        Returns:
+            jax.Array: Embeddings array.
+        """
+        return jnp.take(self.embeddings, indices, axis=0)
+
+
+class ZeroEmbedding:
+    def __init__(self, dtype: jnp.dtype = jnp.float32):
+        self.embeddings = jnp.zeros((5, 1), dtype=dtype)
 
     def __call__(self, indices: jax.Array) -> jax.Array:
         """

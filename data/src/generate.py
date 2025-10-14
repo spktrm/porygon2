@@ -536,7 +536,7 @@ ALL_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
 
 def main():
 
-    for generation in range(9, 0, -1):
+    for generation in range(1, 10):
         all_formats = {f: {s: [] for s in STOI["species"]} for f in ALL_FORMATS}
         only_format = {f: {s: [] for s in STOI["species"]} for f in ALL_FORMATS}
 

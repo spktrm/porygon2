@@ -39,7 +39,7 @@ from rl.environment.protos.features_pb2 import (
     PackedSetFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentTrajectory
-from rl.model.modules import PretrainedEmbedding
+from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())
@@ -211,12 +211,14 @@ def make_teammate_count(generation: int, smogon_format: str):
     return teammate_count
 
 
+VALID_GENERATIONS = [1, 9]
+
 HUMAN_SPECIES_COUNTS = {
     generation: {
         smogon_format: make_species_count(generation, smogon_format)
         for smogon_format in ["ou"]
     }
-    for generation in range(1, 10)
+    for generation in VALID_GENERATIONS
 }
 
 HUMAN_TEAMMATE_COUNTS = {
@@ -224,7 +226,7 @@ HUMAN_TEAMMATE_COUNTS = {
         smogon_format: make_teammate_count(generation, smogon_format)
         for smogon_format in ["ou"]
     }
-    for generation in range(1, 10)
+    for generation in VALID_GENERATIONS
 }
 
 NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
@@ -232,37 +234,42 @@ NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 
 ONEHOT_DTYPE = jnp.bfloat16
 
+
+def load_masks(generation):
+    table = {}
+    table["species"] = jnp.asarray(
+        np.load(
+            f"data/data/gen{generation}/species_mask.npy",
+        )
+    ).astype(ONEHOT_DTYPE)
+    try:
+        table["abilities"] = jnp.asarray(
+            np.load(
+                f"data/data/gen{generation}/ability_mask.npy",
+            )
+        ).astype(ONEHOT_DTYPE)
+    except:
+        pass
+    table["items"] = jnp.asarray(
+        np.load(
+            f"data/data/gen{generation}/item_mask.npy",
+        )
+    ).astype(ONEHOT_DTYPE)
+    table["learnset"] = jnp.asarray(
+        np.load(
+            f"data/data/gen{generation}/learnset_mask.npy",
+        )
+    ).astype(ONEHOT_DTYPE)
+    table["duplicate"] = jnp.asarray(
+        np.load(
+            f"data/data/gen{generation}/duplicate_mask.npy",
+        )
+    )
+    return table
+
+
 try:
-    MASKS = {
-        generation: {
-            "species": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/species_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "abilities": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/ability_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "items": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/item_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "learnset": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/learnset_mask.npy",
-                )
-            ).astype(ONEHOT_DTYPE),
-            "duplicate": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/duplicate_mask.npy",
-                )
-            ),
-        }
-        for generation in range(3, 10)
-    }
+    MASKS = {generation: load_masks(generation) for generation in VALID_GENERATIONS}
 
     SET_TOKENS = {
         generation: {
@@ -274,7 +281,7 @@ try:
             for smogon_format in ["ou"]
             for suffix in ["all_formats", "only_format"]
         }
-        for generation in range(9, 10)
+        for generation in VALID_GENERATIONS
     }
     SET_MASK = {
         generation: {
@@ -286,32 +293,28 @@ try:
             for smogon_format in ["ou"]
             for suffix in ["all_formats", "only_format"]
         }
-        for generation in range(9, 10)
+        for generation in VALID_GENERATIONS
     }
 except:
     traceback.print_exc()
 
+
+def add_pretrained_embedding(generation):
+    tables = {}
+    for name in ["species", "abilities", "items", "moves", "learnset"]:
+        try:
+            tables[name] = PretrainedEmbedding(
+                fpath=f"data/data/gen{generation}/{name}.npy",
+                dtype=ONEHOT_DTYPE,
+            )
+        except:
+            traceback.print_exc()
+            tables[name] = ZeroEmbedding(dtype=ONEHOT_DTYPE)
+    return tables
+
+
 ONEHOT_ENCODERS = {
-    generation: {
-        "species": PretrainedEmbedding(
-            fpath=f"data/data/gen{generation}/species.npy",
-            dtype=ONEHOT_DTYPE,
-        ),
-        "abilities": PretrainedEmbedding(
-            fpath=f"data/data/gen{generation}/abilities.npy",
-            dtype=ONEHOT_DTYPE,
-        ),
-        "items": PretrainedEmbedding(
-            fpath=f"data/data/gen{generation}/items.npy", dtype=ONEHOT_DTYPE
-        ),
-        "moves": PretrainedEmbedding(
-            fpath=f"data/data/gen{generation}/moves.npy", dtype=ONEHOT_DTYPE
-        ),
-        "learnset": PretrainedEmbedding(
-            fpath=f"data/data/gen{generation}/learnset.npy", dtype=ONEHOT_DTYPE
-        ),
-    }
-    for generation in range(3, 10)
+    generation: add_pretrained_embedding(generation) for generation in VALID_GENERATIONS
 }
 
 with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:

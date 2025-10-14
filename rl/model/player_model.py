@@ -20,7 +20,7 @@ from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import PolicyLogitHead, PolicyQKHead, ValueLogitHead
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -106,22 +106,23 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def main(generation: int = 9):
+def main(generation: int = 1):
     actor_network = get_player_model(get_player_model_config(generation, train=False))
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 
     ex_actor_input, ex_actor_output = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     )
+    key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    # latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = "ckpts/gen1/ckpt_00035000"
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
         params = step["player_state"]["params"]
     else:
-        key = jax.random.key(42)
         params = learner_network.init(key, ex_actor_input, ex_actor_output)
 
     actor_output = actor_network.apply(
