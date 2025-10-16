@@ -322,26 +322,13 @@ class Porygon2BuilderModel(nn.Module):
         ]
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
 
-        expanded_mask = (packed_set_mask + (packed_set_mask.sum(keepdims=True) == 0))[
-            ..., None
-        ]
-        packed_set_mean = jnp.mean(
-            packed_set_keys, axis=0, keepdims=True, where=expanded_mask
-        )
-        packed_set_var = jnp.var(
-            packed_set_keys, axis=0, keepdims=True, where=expanded_mask
-        )
-        packed_set_keys_normed = (packed_set_keys - packed_set_mean) * jax.lax.rsqrt(
-            packed_set_var + 1e-6
-        )
-
         species_embedding = jnp.take(species_keys, species_head.action_index, axis=0)
         packed_set_query = self.packed_set_query_merge(
             selection_query, species_embedding
         )
         packed_set_head = self.packed_set_head(
             packed_set_query,
-            packed_set_keys_normed,
+            packed_set_keys,
             packed_set_mask,
             actor_output.packed_set_head,
         )
