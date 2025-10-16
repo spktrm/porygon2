@@ -464,13 +464,15 @@ def builder_train_step(
 
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    potential_reward = jnp.concatenate(
-        (
-            jnp.zeros_like(builder_transitions.env_output.cum_teammate_reward[:1]),
-            builder_transitions.env_output.cum_teammate_reward[1:]
-            - builder_transitions.env_output.cum_teammate_reward[:-1],
-        ),
-        axis=0,
+    potential_reward = (
+        jnp.concatenate(
+            (
+                builder_transitions.env_output.cum_teammate_reward[1:],
+                builder_transitions.env_output.cum_teammate_reward[-1:],
+            ),
+            axis=0,
+        )
+        - builder_transitions.env_output.cum_teammate_reward
     )
     builder_rewards = (
         jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
