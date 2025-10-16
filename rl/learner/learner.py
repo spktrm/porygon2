@@ -321,8 +321,8 @@ def player_train_step(
             valid=player_valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
             valid=player_valid,
         )
 
@@ -464,10 +464,18 @@ def builder_train_step(
 
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
+    potential_reward = jnp.concatenate(
+        (
+            jnp.zeros_like(builder_transitions.env_output.cum_teammate_reward[:1]),
+            builder_transitions.env_output.cum_teammate_reward[1:]
+            - builder_transitions.env_output.cum_teammate_reward[:-1],
+        ),
+        axis=0,
+    )
     builder_rewards = (
         jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
         * final_reward[None]
-    )
+    ) + potential_reward / 30
 
     builder_vtrace = compute_returns(
         builder_target_pred.v,
@@ -556,8 +564,8 @@ def builder_train_step(
             valid=builder_valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
             valid=builder_valid,
         )
 
@@ -797,10 +805,9 @@ class Learner:
 
         if self.player_state.num_steps % 200 == 0:
             names = list(STOI["species"])
-            counts = usage_counts / usage_counts.sum()
 
             table = wandb.Table(columns=["species", "usage"])
-            for name, count in zip(names, counts):
+            for name, count in zip(names, usage_counts):
                 table.add_data(name, count)
 
             usage_logs["species_usage"] = table
@@ -821,7 +828,7 @@ class Learner:
             batch = self.device_q.get()
             batch: Trajectory = jax.device_put(batch)
 
-            self.player_state, player_logs = player_train_step_jit(
+            new_player_state, player_logs = player_train_step_jit(
                 self.player_state,
                 batch.player_transitions,
                 batch.player_history,
@@ -829,7 +836,7 @@ class Learner:
             )
 
             builder_final_reward = calculate_builder_final_reward(batch)
-            self.builder_state, builder_logs = builder_train_step_jit(
+            new_builder_state, builder_logs = builder_train_step_jit(
                 self.builder_state,
                 batch.builder_transitions,
                 batch.player_hidden,
@@ -837,18 +844,15 @@ class Learner:
                 self.learner_config,
             )
 
-            # if (
-            #     player_logs["player_loss_kl"].item() <= self.learner_config.target_kl
-            # ) and (
-            #     builder_logs["builder_loss_kl"].item() <= self.learner_config.target_kl
-            # ):
-            #     self.player_state = new_player_state
-            #     self.builder_state = new_builder_state
-            # else:
-            #     logger.info(
-            #         f"Skipping params update due to high KL: player {player_logs['player_loss_kl'].item():.3f}, builder {builder_logs['builder_loss_kl'].item():.3f}"
-            #     )
-            #     continue
+            # Safety check: only apply the update if the losses are finite.
+            if (
+                jnp.isfinite(player_logs["player_loss"]).item()
+                and jnp.isfinite(builder_logs["builder_loss"]).item()
+            ):
+                self.player_state = new_player_state
+                self.builder_state = new_builder_state
+            else:
+                continue
 
             training_logs = {"step_idx": step_idx}
             training_logs.update(jax.device_get(collect_batch_telemetry_data(batch)))

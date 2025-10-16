@@ -17,7 +17,7 @@ app = FastAPI()
 
 # Initialize the model
 model = InferenceModel(
-    generation=1, seed=random.randint(0, 2**32 - 1), temp=0.8, min_p=0.05
+    generation=1, seed=random.randint(0, 2**32 - 1), temp=1, min_p=0.01
 )
 
 
