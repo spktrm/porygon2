@@ -47,6 +47,7 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
     one_hot_concat_jax,
+    softcap,
 )
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -230,7 +231,7 @@ class Porygon2BuilderModel(nn.Module):
         pairwise_interactions = pairwise_interactions.mean()
 
         cat_embedding = jnp.concatenate([my_embedding, opp_embedding], axis=-1)
-        return jnp.tanh(self.value_head(cat_embedding) + pairwise_interactions)
+        return softcap(self.value_head(cat_embedding) + pairwise_interactions, 1.5)
 
     def _encode_team(self, species_tokens: jax.Array, packed_set_tokens: jax.Array):
         packed_set_attn_mask = jnp.ones_like(packed_set_tokens, dtype=jnp.bool)
@@ -412,7 +413,9 @@ def main(debug: bool = False, generation: int = 1):
     agent = Agent(builder_apply_fn=actor_network.apply)
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation, smogon_format="ou_all_formats", initial_seed=42
+        generation=generation,
+        smogon_format="ou_all_formats",
+        initial_seed=42,
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:

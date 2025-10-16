@@ -70,12 +70,12 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
     player_entropy_loss_coef: float = 0.05
-    player_kl_loss_coef: float = tau * 0.05
+    player_kl_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_entropy_loss_coef: float = 0.01
-    builder_kl_loss_coef: float = tau * 0.05
+    builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: GenT = 1

@@ -158,7 +158,7 @@ def compute_returns(
     lambda_,
     clip_rho_threshold,
     clip_pg_rho_threshold,
-    on_cpu: bool = False,
+    on_cpu: bool = True,
 ) -> VTraceOutput:
     if on_cpu:
         return jax.vmap(
