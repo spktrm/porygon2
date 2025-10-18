@@ -2580,7 +2580,8 @@ proto.servicev2.WorkerResponse.toObject = function(includeInstance, msg) {
   var f, obj = {
 taskId: jspb.Message.getFieldWithDefault(msg, 1, 0),
 environmentResponse: (f = msg.getEnvironmentResponse()) && proto.servicev2.EnvironmentResponse.toObject(includeInstance, f),
-errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f)
+errorResponse: (f = msg.getErrorResponse()) && proto.servicev2.ErrorResponse.toObject(includeInstance, f),
+opponentResetRequest: (f = msg.getOpponentResetRequest()) && proto.servicev2.ResetRequest.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -2630,6 +2631,11 @@ proto.servicev2.WorkerResponse.deserializeBinaryFromReader = function(msg, reade
       var value = new proto.servicev2.ErrorResponse;
       reader.readMessage(value,proto.servicev2.ErrorResponse.deserializeBinaryFromReader);
       msg.setErrorResponse(value);
+      break;
+    case 4:
+      var value = new proto.servicev2.ResetRequest;
+      reader.readMessage(value,proto.servicev2.ResetRequest.deserializeBinaryFromReader);
+      msg.setOpponentResetRequest(value);
       break;
     default:
       reader.skipField();
@@ -2681,6 +2687,14 @@ proto.servicev2.WorkerResponse.serializeBinaryToWriter = function(message, write
       3,
       f,
       proto.servicev2.ErrorResponse.serializeBinaryToWriter
+    );
+  }
+  f = message.getOpponentResetRequest();
+  if (f != null) {
+    writer.writeMessage(
+      4,
+      f,
+      proto.servicev2.ResetRequest.serializeBinaryToWriter
     );
   }
 };
@@ -2775,6 +2789,43 @@ proto.servicev2.WorkerResponse.prototype.clearErrorResponse = function() {
  */
 proto.servicev2.WorkerResponse.prototype.hasErrorResponse = function() {
   return jspb.Message.getField(this, 3) != null;
+};
+
+
+/**
+ * optional ResetRequest opponent_reset_request = 4;
+ * @return {?proto.servicev2.ResetRequest}
+ */
+proto.servicev2.WorkerResponse.prototype.getOpponentResetRequest = function() {
+  return /** @type{?proto.servicev2.ResetRequest} */ (
+    jspb.Message.getWrapperField(this, proto.servicev2.ResetRequest, 4));
+};
+
+
+/**
+ * @param {?proto.servicev2.ResetRequest|undefined} value
+ * @return {!proto.servicev2.WorkerResponse} returns this
+*/
+proto.servicev2.WorkerResponse.prototype.setOpponentResetRequest = function(value) {
+  return jspb.Message.setWrapperField(this, 4, value);
+};
+
+
+/**
+ * Clears the message field making it undefined.
+ * @return {!proto.servicev2.WorkerResponse} returns this
+ */
+proto.servicev2.WorkerResponse.prototype.clearOpponentResetRequest = function() {
+  return this.setOpponentResetRequest(undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.servicev2.WorkerResponse.prototype.hasOpponentResetRequest = function() {
+  return jspb.Message.getField(this, 4) != null;
 };
 
 

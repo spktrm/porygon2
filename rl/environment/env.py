@@ -1,10 +1,17 @@
 import functools
+import json
+import random
 
 import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
-from rl.environment.data import MASKS, SET_MASK
+from rl.environment.data import (
+    HUMAN_SPECIES_COUNTS,
+    HUMAN_TEAMMATE_COUNTS,
+    MASKS,
+    SET_MASK,
+)
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderAgentOutput,
@@ -13,9 +20,9 @@ from rl.environment.interfaces import (
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
-    EnvironmentResponse,
     ResetRequest,
     StepRequest,
+    WorkerResponse,
 )
 from rl.environment.utils import get_ex_builder_step, process_state
 
@@ -36,10 +43,16 @@ class SinglePlayerSyncEnvironment:
         self.generation = generation
 
     def _recv(self):
-        server_message_data = self.websocket.recv()
-        server_message = EnvironmentResponse.FromString(server_message_data)
-        self.rqid = server_message.state.rqid
-        self.last_state = process_state(server_message.state)
+        recv_data = self.websocket.recv()
+        worker_response = WorkerResponse.FromString(recv_data)
+        environment_response = worker_response.environment_response
+        self.rqid = environment_response.state.rqid
+
+        opponent_reset_request = worker_response.opponent_reset_request
+        self.last_state = process_state(
+            environment_response.state,
+            opponent_reset_request if opponent_reset_request.username else None,
+        )
         return self.last_state
 
     def reset(self, species_indices: list[int], packed_set_indices: list[int]):
@@ -77,28 +90,29 @@ class TeamBuilderEnvironment:
         smogon_format: str,
         num_team_members: int = 6,
         num_metagame_slots: int = 32,
-        max_trajectory_length: int = 24,
+        max_trajectory_length: int = 7,
         min_trajectory_length: int = 1,
         *,
         initial_metagame_token: int | None = None,
+        initial_seed: int = random.randint(0, 2**31 - 1),
     ):
+        if num_team_members < 1 or num_team_members > 6:
+            raise ValueError("num_team_members must be between 1 and 6")
+        if max_trajectory_length < min_trajectory_length:
+            raise ValueError(
+                "max_trajectory_length must be greater than or equal to min_trajectory_length"
+            )
+
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
         self.num_metagame_slots = num_metagame_slots
         self.max_trajectory_length = max_trajectory_length
         self.min_trajectory_length = min_trajectory_length
-        self.rng_key = jax.random.key(42)
+        self.rng_key = jax.random.key(initial_seed)
 
-        if max_trajectory_length < min_trajectory_length:
-            raise ValueError(
-                "max_trajectory_length must be greater than or equal to min_trajectory_length"
-            )
-
-        self.initial_continue_mask = (
-            jnp.ones(2, dtype=jnp.bool)
-            if min_trajectory_length <= 1
-            else jnp.array([1, 0], dtype=jnp.bool)
+        self.initial_continue_mask = self._continue_mask_for_ts(
+            jnp.array(0, dtype=jnp.int32)
         )
         self.metagame_mask = (
             jnp.ones((self.num_metagame_slots,), dtype=jnp.bool)
@@ -108,9 +122,22 @@ class TeamBuilderEnvironment:
             )
         )
 
+        self.species_rewards = jnp.asarray(
+            HUMAN_SPECIES_COUNTS[generation][smogon_format.replace("_all_formats", "")]
+        )
+        self.teammate_rewards = jnp.asarray(
+            HUMAN_TEAMMATE_COUNTS[generation][smogon_format.replace("_all_formats", "")]
+        )
+
+        with open(f"data/data/gen{generation}/{smogon_format}.json", "r") as f:
+            packed_sets = json.load(f)
+        self.packed_set_mask = jnp.array(list(len(v) for v in packed_sets.values())) > 0
+
         self.duplicate_masks = ~MASKS[generation]["duplicate"]
 
-        self.start_mask = SET_MASK[generation][smogon_format].any(axis=-1)
+        self.start_mask = (
+            SET_MASK[generation][smogon_format].any(axis=-1) & self.packed_set_mask
+        )
 
         self.ex = get_ex_builder_step()
 
@@ -120,6 +147,16 @@ class TeamBuilderEnvironment:
     def split_rng(self):
         subkey, self.rng_key = jax.random.split(self.rng_key)
         return subkey
+
+    def _continue_mask_for_ts(self, ts: jax.Array) -> jax.Array:
+        # [continue_allowed, stop_allowed]
+        return jnp.array(
+            [
+                ts < self.max_trajectory_length,
+                ts >= self.min_trajectory_length,
+            ],
+            dtype=jnp.bool,
+        )
 
     def reset(self) -> BuilderActorInput:
         key = self.split_rng()
@@ -150,7 +187,8 @@ class TeamBuilderEnvironment:
         packed_set_tokens = []
 
         for i in range(self.num_team_members):
-            species_policy = species_mask / species_mask.sum()
+            species_policy = species_mask * self.species_rewards
+            species_policy = species_policy / species_policy.sum()
 
             species_token_i = jax.random.choice(
                 species_subkeys[i], species_mask.shape[-1], (1,), p=species_policy
@@ -170,18 +208,37 @@ class TeamBuilderEnvironment:
             ).squeeze()
             packed_set_tokens.append(packed_set_token_i)
 
+        species_tokens = jnp.array(species_tokens)
+
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 continue_mask=self.initial_continue_mask,
                 species_mask=species_mask,
-                species_tokens=jnp.array(species_tokens),
+                species_tokens=species_tokens,
                 packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
                 metagame_token=jnp.array(0, dtype=jnp.int32),
                 metagame_mask=self.metagame_mask,
+                cum_teammate_reward=self._calculate_teammate_rewards(
+                    species_tokens,
+                ),
+                cum_species_reward=self._calculate_species_rewards(
+                    species_tokens,
+                ),
             )
         )
+
+    def _calculate_species_rewards(self, species_tokens: jax.Array):
+        return jnp.take(self.species_rewards, species_tokens, axis=0).sum()
+
+    def _calculate_teammate_rewards(self, species_tokens: jax.Array):
+        pairwise_teammate_rewards = jnp.take(
+            jnp.take(self.teammate_rewards, species_tokens, axis=0),
+            species_tokens,
+            axis=1,
+        )
+        return pairwise_teammate_rewards.sum()
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
@@ -204,7 +261,7 @@ class TeamBuilderEnvironment:
 
         selection_oh = (
             cont_edits
-            & ~state.env.done
+            & jnp.logical_not(state.env.done)
             & jax.nn.one_hot(selection_token, self.num_team_members, dtype=jnp.bool)
         )
 
@@ -216,7 +273,7 @@ class TeamBuilderEnvironment:
         species_tokens = jnp.where(
             selection_oh, species_token, state.env.species_tokens
         )
-        species_mask = self.start_mask & jnp.prod(
+        species_mask = self.start_mask & jnp.all(
             jnp.where(
                 selection_oh[..., None], new_species_mask[None], old_species_mask
             ),
@@ -229,9 +286,7 @@ class TeamBuilderEnvironment:
             metagame_token, self.num_metagame_slots, dtype=jnp.bool
         )
 
-        continue_mask = jnp.array(
-            [1, next_ts > self.min_trajectory_length], dtype=jnp.bool
-        )
+        continue_mask = self._continue_mask_for_ts(next_ts)
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
@@ -243,5 +298,12 @@ class TeamBuilderEnvironment:
                 ts=next_ts,
                 metagame_token=metagame_token,
                 metagame_mask=metagame_mask,
-            ),
+                # Prevent reward hacking by choosing common species
+                cum_teammate_reward=self._calculate_teammate_rewards(
+                    species_tokens,
+                ),
+                cum_species_reward=self._calculate_species_rewards(
+                    species_tokens,
+                ),
+            )
         )

@@ -1,3 +1,5 @@
+import random
+
 import jax
 import numpy as np
 
@@ -14,7 +16,7 @@ from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history
 from rl.learner.learner import Learner
-from rl.model.utils import Params
+from rl.model.utils import Params, promote_map
 
 ACTION_TYPE_MAPPING = {
     0: ActionType.ACTION_TYPE__MOVE,
@@ -36,7 +38,9 @@ class Actor:
     ):
         self._agent = agent
         self._player_env = env
-        self._builder_env = TeamBuilderEnvironment(env.generation, "ou_all_formats")
+        self._builder_env = TeamBuilderEnvironment(
+            env.generation, "ou_all_formats", initial_seed=random.randint(0, 2**31 - 1)
+        )
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
@@ -110,6 +114,8 @@ class Actor:
             builder_actor_input.env.species_tokens.reshape(-1).tolist(),
             builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
         )
+        # Extract opponent hidden info to better inform builder value function.
+        player_hidden = player_actor_input.hidden
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
@@ -146,9 +152,10 @@ class Actor:
             player_transitions=player_trajectory,
             # builder_history=builder_actor_input.history,
             player_history=player_actor_input.history,
+            player_hidden=player_hidden,
         )
 
-        return trajectory
+        return promote_map(trajectory)
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = jax.random.split(self._rng_key)

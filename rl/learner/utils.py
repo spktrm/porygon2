@@ -4,10 +4,8 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.model.utils import LARGE_NEGATIVE_BIAS
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -47,7 +45,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         jnp.where(
             (action_type_index == 0) & (wildcard_index != 0),
             jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-            -LARGE_NEGATIVE_BIAS,
+            jnp.iinfo(action_type_index.dtype).max,
         )
         .clip(max=action_type_index.shape[0])
         .min(axis=0)
@@ -62,16 +60,18 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         builder_trajectory_length_mean=builder_lengths.mean(),
         builder_trajectory_length_min=builder_lengths.min(),
         builder_trajectory_length_max=builder_lengths.max(),
+        builder_species_reward_sum=batch.builder_transitions.env_output.cum_species_reward[
+            -1
+        ].mean(),
+        builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
+            -1
+        ].mean(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
-        usage_counts=jnp.bincount(
-            batch.builder_transitions.env_output.species_tokens[-1].reshape(-1),
-            length=NUM_SPECIES,
-        ),
     )
 
 
