@@ -53,6 +53,13 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
+    builder_info_reward = (
+        batch.builder_transitions.agent_output.actor_output.metagame_pred_head.log_prob
+        - batch.builder_transitions.agent_output.actor_output.metagame_sele_head.log_prob[
+            :1
+        ]
+    )
+
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
@@ -66,6 +73,7 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
             -1
         ].mean(),
+        builder_info_reward=builder_info_reward.sum(where=builder_valid, axis=0).mean(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,

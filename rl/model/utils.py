@@ -2,11 +2,23 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Callable, TypeVar, cast
+from typing import Callable, NamedTuple, TypeVar, cast
 
 import chex
 import jax
 import jax.numpy as jnp
+
+
+class ParamsContainer(NamedTuple):
+    is_leader: bool
+    step_count: int
+    frame_count: int
+    player_params: chex.ArrayTree
+    builder_params: chex.ArrayTree
+
+    def __eq__(self, value: "ParamsContainer") -> bool:
+        return self.frame_count == value.frame_count
+
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params

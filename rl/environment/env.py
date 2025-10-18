@@ -167,7 +167,7 @@ class TeamBuilderEnvironment:
         if self.state.env.done.item():
             return self.state
         self.state = self._step(
-            metagame_token=agent_output.actor_output.metagame_head.action_index,
+            metagame_token=agent_output.actor_output.metagame_sele_head.action_index,
             continue_token=agent_output.actor_output.continue_head.action_index,
             selection_token=agent_output.actor_output.selection_head.action_index,
             species_token=agent_output.actor_output.species_head.action_index,
@@ -187,7 +187,7 @@ class TeamBuilderEnvironment:
         packed_set_tokens = []
 
         for i in range(self.num_team_members):
-            species_policy = species_mask * self.species_rewards
+            species_policy = species_mask  # * self.species_rewards
             species_policy = species_policy / species_policy.sum()
 
             species_token_i = jax.random.choice(
