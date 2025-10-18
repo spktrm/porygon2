@@ -30,7 +30,7 @@ from rl.learner.config import (
 )
 from rl.learner.returns import compute_returns
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.utils import Params, promote_map
+from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
 
@@ -425,7 +425,12 @@ def builder_train_step(
         )
     )
 
-    actor_metagame_head = builder_transitions.agent_output.actor_output.metagame_head
+    actor_metagame_sele_head = (
+        builder_transitions.agent_output.actor_output.metagame_sele_head
+    )
+    actor_metagame_pred_head = (
+        builder_transitions.agent_output.actor_output.metagame_pred_head
+    )
     actor_continue_head = builder_transitions.agent_output.actor_output.continue_head
     actor_selection_head = builder_transitions.agent_output.actor_output.selection_head
     actor_species_head = builder_transitions.agent_output.actor_output.species_head
@@ -433,14 +438,14 @@ def builder_train_step(
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
-    target_metagame_head = builder_target_pred.metagame_head
+    target_metagame_sele_head = builder_target_pred.metagame_sele_head
     target_continue_head = builder_target_pred.continue_head
     target_selection_head = builder_target_pred.selection_head
     target_species_head = builder_target_pred.species_head
     target_packed_set_head = builder_target_pred.packed_set_head
 
     actor_builder_log_prob = calculate_builder_log_prob(
-        metagame_log_prob=actor_metagame_head.log_prob,
+        metagame_log_prob=actor_metagame_sele_head.log_prob,
         continue_log_prob=actor_continue_head.log_prob,
         continue_index=actor_continue_head.action_index,
         selection_log_prob=actor_selection_head.log_prob,
@@ -448,7 +453,7 @@ def builder_train_step(
         packed_set_log_prob=actor_packed_set_head.log_prob,
     )
     target_builder_log_prob = calculate_builder_log_prob(
-        metagame_log_prob=target_metagame_head.log_prob,
+        metagame_log_prob=target_metagame_sele_head.log_prob,
         continue_log_prob=target_continue_head.log_prob,
         continue_index=target_continue_head.action_index,
         selection_log_prob=target_selection_head.log_prob,
@@ -464,20 +469,13 @@ def builder_train_step(
 
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    potential_reward = (
-        jnp.concatenate(
-            (
-                builder_transitions.env_output.cum_teammate_reward[1:],
-                builder_transitions.env_output.cum_teammate_reward[-1:],
-            ),
-            axis=0,
-        )
-        - builder_transitions.env_output.cum_teammate_reward
+    potential_reward = 0.5 * (
+        actor_metagame_pred_head.log_prob - actor_metagame_sele_head.log_prob[:1]
     )
     builder_rewards = (
         jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
         * final_reward[None]
-    ) + potential_reward / 30
+    ) + jnp.where(builder_valid, potential_reward, 0.0)
 
     builder_vtrace = compute_returns(
         builder_target_pred.v,
@@ -507,14 +505,15 @@ def builder_train_step(
             )
         )
 
-        learner_metagame_head = builder_pred.metagame_head
+        learner_metagame_sele_head = builder_pred.metagame_sele_head
+        learner_metagame_pred_head = builder_pred.metagame_pred_head
         learner_continue_head = builder_pred.continue_head
         learner_selection_head = builder_pred.selection_head
         learner_species_head = builder_pred.species_head
         learner_packed_set_head = builder_pred.packed_set_head
 
         learner_builder_log_prob = calculate_builder_log_prob(
-            metagame_log_prob=learner_metagame_head.log_prob,
+            metagame_log_prob=learner_metagame_sele_head.log_prob,
             continue_log_prob=learner_continue_head.log_prob,
             continue_index=learner_continue_head.action_index,
             selection_log_prob=learner_selection_head.log_prob,
@@ -542,8 +541,11 @@ def builder_train_step(
             pred_v=builder_pred.v, target_v=builder_vtrace.returns, valid=builder_valid
         )
 
+        metagame_valid = builder_valid & (
+            builder_transitions.env_output.metagame_mask.sum(axis=-1) > 1
+        )
         continue_entropy = average(learner_continue_head.entropy, builder_valid)
-        metagame_entropy = average(learner_metagame_head.entropy, builder_valid)
+        metagame_entropy = average(learner_metagame_sele_head.entropy, metagame_valid)
         selection_entropy = average(learner_selection_head.entropy, builder_valid)
         species_entropy = average(learner_species_head.entropy, builder_valid)
         packed_set_entropy = average(learner_packed_set_head.entropy, builder_valid)
@@ -571,17 +573,15 @@ def builder_train_step(
             valid=builder_valid,
         )
 
-        loss_info_ce = optax.softmax_cross_entropy(
-            logits=builder_pred.metagame_pred_logits[1:],
-            labels=builder_transitions.env_output.metagame_mask[1:].astype(jnp.float32),
-        ).sum(where=builder_valid[1:]) / builder_valid[1:].sum().clip(min=1)
+        # NLL Loss on discriminator for predicted metagame
+        loss_disc = -average(learner_metagame_pred_head.log_prob, builder_valid)
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
-            + loss_info_ce
+            + loss_disc
         )
 
         return loss, dict(
@@ -589,7 +589,7 @@ def builder_train_step(
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
-            builder_loss_info_ce=loss_info_ce,
+            builder_loss_disc=loss_disc,
             # Head entropies
             builder_continue_entropy=continue_entropy,
             builder_metagame_entropy=metagame_entropy,
@@ -670,6 +670,7 @@ class Learner:
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
         learner_config: Porygon2LearnerConfig,
+        best_params: ParamsContainer,
         wandb_run: wandb.wandb_run.Run,
     ):
         self.player_state = player_state
@@ -701,14 +702,25 @@ class Learner:
         )
 
         try:
-            init_steps = player_state.num_steps.item()
+            init_frame_count = player_state.actor_steps.item()
+            init_step_count = player_state.num_steps.item()
         except:
-            init_steps = int(player_state.num_steps)
+            init_frame_count = int(player_state.actor_steps)
+            init_step_count = int(player_state.num_steps)
 
-        self.params_for_actor: tuple[int, Params, Params] = (
-            init_steps,
-            jax.device_get(self.player_state.params),
-            jax.device_get(self.builder_state.params),
+        self.challenger: ParamsContainer = ParamsContainer(
+            is_leader=False,
+            frame_count=init_frame_count,
+            step_count=init_step_count,
+            player_params=jax.device_get(self.player_state.params),
+            builder_params=jax.device_get(self.builder_state.params),
+        )
+        self.leader: ParamsContainer = ParamsContainer(
+            is_leader=True,
+            frame_count=np.array(best_params.frame_count).item(),
+            step_count=np.array(best_params.step_count).item(),
+            player_params=jax.device_get(best_params.player_params),
+            builder_params=jax.device_get(best_params.builder_params),
         )
 
         # progress bars
@@ -716,7 +728,7 @@ class Learner:
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
-    def enqueue_traj(self, traj):
+    def enqueue_traj(self, is_leader: bool, traj: Trajectory):
         # Block if minting this trajectory would overflow capacity.
         with self.cv:
             self.cv.wait_for(
@@ -729,7 +741,7 @@ class Learner:
             # Mint tokens and ingest ONE trajectory (trajectory-based RR)
             self.controller.on_trajectories(1)
             self.producer_progress.update(1)
-            self.replay.add(traj)
+            self.replay.add(is_leader, traj)
             self.cv.notify_all()  # wake learner
 
     def stack_batch(
@@ -826,10 +838,15 @@ class Learner:
         player_train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
         builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
 
+        last_leader_update = 0
+        num_games = 1 / self.replay._winrate_tau
+        leader_update_threshold = 0.5 * (1 + (1.96 / math.sqrt(num_games + 1.96**2)))
+
         for step_idx in range(1, self.learner_config.num_steps + 1):
             batch = self.device_q.get()
             batch: Trajectory = jax.device_put(batch)
 
+            new_player_state: Porygon2PlayerTrainState
             new_player_state, player_logs = player_train_step_jit(
                 self.player_state,
                 batch.player_transitions,
@@ -838,6 +855,7 @@ class Learner:
             )
 
             builder_final_reward = calculate_builder_final_reward(batch)
+            new_builder_state: Porygon2BuilderTrainState
             new_builder_state, builder_logs = builder_train_step_jit(
                 self.builder_state,
                 batch.builder_transitions,
@@ -864,11 +882,28 @@ class Learner:
             usage_logs = self.get_usage_counts(self.replay._species_counts)
             training_logs.update(jax.device_get(usage_logs))
 
-            self.params_for_actor = (
-                self.player_state.num_steps.item(),
-                jax.device_get(self.player_state.params),
-                jax.device_get(self.builder_state.params),
+            self.challenger = ParamsContainer(
+                is_leader=False,
+                frame_count=self.player_state.actor_steps.item(),
+                step_count=self.player_state.num_steps.item(),
+                player_params=jax.device_get(self.player_state.params),
+                builder_params=jax.device_get(self.builder_state.params),
             )
+            if (step_idx * batch_size - last_leader_update) >= (
+                num_games
+            ) and self.replay._challenger_winrate > leader_update_threshold:
+                self.leader = ParamsContainer(
+                    is_leader=True,
+                    frame_count=self.challenger.frame_count,
+                    step_count=self.challenger.step_count,
+                    player_params=self.challenger.player_params,
+                    builder_params=self.challenger.builder_params,
+                )
+                last_leader_update = step_idx * batch_size
+                logger.info(
+                    f"New leader at step {step_idx * batch_size} with winrate {self.replay._challenger_winrate:.3f}"
+                )
+                self.replay.reset_winrate_tracking()
 
             # Update the tqdm progress bars.
             self.consumer_progress.update(batch_size)
@@ -877,6 +912,8 @@ class Learner:
             self.train_progress.set_description(f"batches - rr: {rr:.2f}")
 
             training_logs["replay_ratio"] = rr
+            training_logs["challenger_winrate"] = self.replay._challenger_winrate
+            training_logs["leader_winrate"] = self.replay._leader_winrate
 
             self.wandb_run.log(training_logs)
 
@@ -886,6 +923,7 @@ class Learner:
                     self.learner_config,
                     self.player_state,
                     self.builder_state,
+                    self.leader,
                 )
 
         self.done = True

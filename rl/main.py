@@ -27,8 +27,8 @@ def run_training_actor(actor: Actor, stop_signal: list[bool]):
 
     while not stop_signal[0]:
         try:
-            step_count, player_params, builder_params = actor.pull_params()
-            actor.unroll_and_push(step_count, player_params, builder_params)
+            param_container = actor.pull_params()
+            actor.unroll_and_push(param_container)
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -39,13 +39,17 @@ def run_eval_actor(
 ):
     """Runs an actor to produce num_trajectories trajectories."""
 
-    old_step_count, player_params, builder_params = actor.pull_params()
+    param_container = actor.pull_params()
+    old_step_count = np.array(actor._learner.player_state.num_steps).item()
+
     session_id = actor._player_env.username
     win_reward_sum = {old_step_count: (0, 0)}
 
     while not stop_signal[0]:
         try:
-            step_count, player_params, builder_params = actor.pull_params()
+            param_container = actor.pull_params()
+            step_count = np.array(actor._learner.player_state.num_steps).item()
+
             assert step_count >= old_step_count, (
                 f"Actor {session_id} tried to pull params with frame count "
                 f"{step_count} but expected at least {old_step_count}."
@@ -63,8 +67,8 @@ def run_eval_actor(
                 )
                 old_step_count = step_count
 
-            player_params = jax.device_put(player_params)
-            builder_params = jax.device_put(builder_params)
+            player_params = jax.device_put(param_container.player_params)
+            builder_params = jax.device_put(param_container.builder_params)
             subkey = actor.split_rng()
             eval_trajectory = actor.unroll(
                 subkey, step_count, player_params, builder_params
@@ -121,7 +125,7 @@ def main():
 
     agent = Agent(actor_player_network.apply, actor_builder_network.apply)
 
-    player_state, builder_state = load_train_state(
+    player_state, builder_state, best_params = load_train_state(
         learner_config, player_state, builder_state
     )
 
@@ -144,15 +148,17 @@ def main():
         player_state=player_state,
         builder_state=builder_state,
         learner_config=learner_config,
+        best_params=best_params,
         wandb_run=wandb_run,
     )
 
+    train_username_prefixes = ["challenger", "leader"]
     for game_id in range(learner_config.num_actors // 2):
         for player_id in range(2):
             actor = Actor(
                 agent=agent,
                 env=SinglePlayerSyncEnvironment(
-                    f"train-{game_id:02d}{player_id:02d}",
+                    f"{train_username_prefixes[player_id]}-{game_id:02d}",
                     generation=learner_config.generation,
                 ),
                 unroll_length=learner_config.unroll_length,

@@ -16,7 +16,7 @@ from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history
 from rl.learner.learner import Learner
-from rl.model.utils import Params, promote_map
+from rl.model.utils import Params, ParamsContainer, promote_map
 
 ACTION_TYPE_MAPPING = {
     0: ActionType.ACTION_TYPE__MOVE,
@@ -161,21 +161,28 @@ class Actor:
         self._rng_key, subkey = jax.random.split(self._rng_key)
         return subkey
 
-    def unroll_and_push(
-        self, frame_count: int, player_params: Params, builder_params: Params
-    ):
+    def unroll_and_push(self, params_container: ParamsContainer):
         """Run one unroll and send trajectory to learner."""
-        player_params = jax.device_put(player_params)
-        builder_params = jax.device_put(builder_params)
+        player_params = jax.device_put(params_container.player_params)
+        builder_params = jax.device_put(params_container.builder_params)
         subkey = self.split_rng()
         act_out = self.unroll(
             rng_key=subkey,
-            frame_count=frame_count,
+            frame_count=params_container.frame_count,
             player_params=player_params,
             builder_params=builder_params,
         )
-        if self._player_env.username.startswith("train-"):
-            self._learner.enqueue_traj(act_out)
+        if not self._player_env.username.startswith("eval"):
+            self._learner.enqueue_traj(params_container.is_leader, act_out)
 
-    def pull_params(self):
-        return self._learner.params_for_actor
+    def pull_params(self) -> ParamsContainer:
+        if self._player_env.username.startswith("challenger-"):
+            return self._learner.challenger
+        elif self._player_env.username.startswith("leader-"):
+            return self._learner.leader
+        elif self._player_env.username.startswith("eval-"):
+            return self._learner.leader
+        else:
+            raise ValueError(
+                f"Unknown actor type with username {self._player_env.username}"
+            )

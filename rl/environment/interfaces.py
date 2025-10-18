@@ -92,13 +92,12 @@ class BuilderActorInput(NamedTuple):
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
 
-    metagame_head: HeadOutput = HeadOutput()
+    metagame_sele_head: HeadOutput = HeadOutput()
+    metagame_pred_head: HeadOutput = HeadOutput()
     continue_head: HeadOutput = HeadOutput()
     selection_head: HeadOutput = HeadOutput()
     species_head: HeadOutput = HeadOutput()
     packed_set_head: HeadOutput = HeadOutput()
-
-    metagame_pred_logits: ArrayLike = ()
 
 
 class BuilderAgentOutput(NamedTuple):

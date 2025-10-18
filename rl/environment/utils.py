@@ -264,7 +264,12 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
-            metagame_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            metagame_sele_head=HeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            metagame_pred_head=HeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
             continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
