@@ -51,23 +51,26 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
         setattr(config_dict, key, value)
 
 
+DEFAULT_DTYPE = jnp.bfloat16
+
+
 def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
     cfg = ConfigDict()
 
-    num_heads = 3
+    base_size = 128
+    num_heads = 2
     scale = 1
 
-    entity_size = int(scale * 64 * num_heads)
-    dtype = jnp.bfloat16
+    entity_size = int(scale * base_size * num_heads)
 
     cfg.generation = generation
     cfg.entity_size = entity_size
-    cfg.dtype = dtype
+    cfg.dtype = DEFAULT_DTYPE
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
-    cfg.encoder.dtype = dtype
+    cfg.encoder.dtype = DEFAULT_DTYPE
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -96,7 +99,6 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         use_bias=encoder_use_bias,
         resblocks_hidden_size=encoder_hidden_size,
         qk_layer_norm=encoder_qk_layer_norm,
-        dtype=dtype,
     )
 
     transformer_decoder_kwargs = dict(
@@ -108,22 +110,17 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         use_bias=decoder_use_bias,
         resblocks_hidden_size=decoder_hidden_size,
         qk_layer_norm=decoder_qk_layer_norm,
-        dtype=dtype,
     )
 
     cfg.encoder.entity_encoder = ConfigDict()
     set_attributes(cfg.encoder.entity_encoder, **transformer_encoder_kwargs)
     cfg.encoder.entity_encoder.need_pos = False
 
-    cfg.encoder.per_timestep_node_encoder = ConfigDict()
-    set_attributes(cfg.encoder.per_timestep_node_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.per_timestep_node_encoder.need_pos = False
-
-    cfg.encoder.per_timestep_node_edge_encoder = ConfigDict()
-    set_attributes(
-        cfg.encoder.per_timestep_node_edge_encoder, **transformer_encoder_kwargs
-    )
-    cfg.encoder.per_timestep_node_edge_encoder.need_pos = False
+    cfg.encoder.timestep_gat = ConfigDict()
+    cfg.encoder.timestep_gat.out_dim = entity_size
+    cfg.encoder.timestep_gat.num_layers = 2
+    cfg.encoder.timestep_gat.num_heads = num_heads
+    cfg.encoder.timestep_gat.max_edges = 2
 
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
@@ -132,14 +129,6 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.encoder.action_encoder = ConfigDict()
     set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
     cfg.encoder.action_encoder.need_pos = False
-
-    cfg.encoder.move_encoder = ConfigDict()
-    set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.move_encoder.need_pos = False
-
-    cfg.encoder.switch_encoder = ConfigDict()
-    set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.switch_encoder.need_pos = False
 
     cfg.encoder.entity_timestep_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
@@ -151,6 +140,11 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.encoder.entity_action_decoder.num_layers = 2
     cfg.encoder.entity_action_decoder.need_pos = False
 
+    cfg.encoder.query_pool = ConfigDict()
+    set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
+    cfg.encoder.query_pool.num_layers = 1
+    cfg.encoder.query_pool.need_pos = False
+
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
     cfg.encoder.action_entity_decoder.num_layers = 2
@@ -158,34 +152,46 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
 
     # Policy Head Configuration
     cfg.action_type_head = ConfigDict()
-    cfg.action_type_head.generation = generation
-    cfg.action_type_head.transformer = ConfigDict()
-    set_attributes(cfg.action_type_head.transformer, **transformer_encoder_kwargs)
-    cfg.action_type_head.dtype = dtype
+    cfg.wildcard_head = ConfigDict()
+    cfg.value_head = ConfigDict()
+
+    for head, output_size in [
+        (cfg.value_head, 1),
+        (cfg.action_type_head, 3),
+        (cfg.wildcard_head, 5),
+    ]:
+        head.logits = ConfigDict()
+        head.logits.layer_sizes = output_size
+        head.logits.use_layer_norm = True
 
     cfg.move_head = ConfigDict()
-    cfg.move_head.generation = generation
-    cfg.move_head.transformer = ConfigDict()
-    set_attributes(cfg.move_head.transformer, **transformer_encoder_kwargs)
-    cfg.move_head.dtype = dtype
-
     cfg.switch_head = ConfigDict()
-    cfg.switch_head.generation = generation
-    cfg.switch_head.transformer = ConfigDict()
-    set_attributes(cfg.switch_head.transformer, **transformer_encoder_kwargs)
-    cfg.switch_head.dtype = dtype
+
+    for head in [cfg.move_head, cfg.switch_head]:
+        head.qk_logits = ConfigDict()
+        head.qk_logits.num_layers_query = 1
+        head.qk_logits.num_layers_keys = 3
+        head.qk_logits.use_layer_norm = True
+
+    for head in [
+        cfg.value_head,
+        cfg.action_type_head,
+        cfg.move_head,
+        cfg.switch_head,
+        cfg.wildcard_head,
+    ]:
+        head.resnet = ConfigDict()
+        head.resnet.num_resblocks = 1
 
     if head_params is not None:
-        for head in [cfg.action_type_head, cfg.move_head, cfg.switch_head]:
+        for head in [
+            cfg.action_type_head,
+            cfg.move_head,
+            cfg.switch_head,
+            cfg.wildcard_head,
+        ]:
             for param_name, param_value in head_params.items():
                 setattr(head, param_name, param_value)
-
-    # Value Head Configuration
-    cfg.value_head = ConfigDict()
-    cfg.value_head.transformer = ConfigDict()
-    set_attributes(cfg.value_head.transformer, **transformer_encoder_kwargs)
-    cfg.value_head.output_features = 1
-    cfg.value_head.dtype = dtype
 
     return cfg
 
@@ -193,16 +199,16 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
 def get_builder_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
     cfg = ConfigDict()
 
-    num_heads = 3
+    base_size = 128
+    num_heads = 2
     scale = 1
 
-    entity_size = int(scale * 64 * num_heads)
-    dtype = jnp.bfloat16
+    entity_size = int(scale * base_size * num_heads)
 
     cfg.num_metagame_slots = 32
     cfg.entity_size = entity_size
     cfg.generation = generation
-    cfg.dtype = dtype
+    cfg.dtype = DEFAULT_DTYPE
     cfg.temp = 1.0
 
     num_layers = 2
@@ -223,16 +229,57 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         use_bias=use_bias,
         resblocks_hidden_size=hidden_size,
         qk_layer_norm=qk_layer_norm,
-        dtype=dtype,
     )
 
     cfg.transformer = ConfigDict()
     set_attributes(cfg.transformer, **transformer_kwargs)
     cfg.transformer.need_pos = True
-    cfg.dtype = dtype
 
     for param_name, param_value in head_params.items():
         setattr(cfg, param_name, param_value)
+
+    for name in [
+        "continue_head",
+        "metagame_head",
+        "selection_head",
+        "species_head",
+        "packed_set_head",
+        "value_head",
+    ]:
+        head_cfg = ConfigDict()
+        head_cfg.resnet = ConfigDict()
+        head_cfg.resnet.num_resblocks = 1
+        setattr(cfg, name, head_cfg)
+
+    for head, output_size in [
+        (cfg.continue_head, 2),
+        (cfg.metagame_head, cfg.num_metagame_slots),
+        (cfg.value_head, 1),
+    ]:
+        head.logits = ConfigDict()
+        head.logits.layer_sizes = output_size
+        head.logits.use_layer_norm = True
+
+    for head in [
+        cfg.selection_head,
+        cfg.species_head,
+        cfg.packed_set_head,
+    ]:
+        head.qk_logits = ConfigDict()
+        head.qk_logits.num_layers_query = 1
+        head.qk_logits.num_layers_keys = 3
+        head.qk_logits.use_layer_norm = True
+
+    if head_params is not None:
+        for head in [
+            cfg.continue_head,
+            cfg.metagame_head,
+            cfg.selection_head,
+            cfg.species_head,
+            cfg.packed_set_head,
+        ]:
+            for param_name, param_value in head_params.items():
+                setattr(head, param_name, param_value)
 
     return cfg
 

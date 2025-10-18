@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import math
 import os
-from typing import Callable
+from typing import Callable, TypeVar, cast
 
 import chex
 import jax
@@ -8,44 +10,24 @@ import jax.numpy as jnp
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
-
-
-LARGE_NEGATIVE_BIAS = -1e10
+PredT = TypeVar("PredT")  # whatever structure 'pred' has, we return the same
 
 
 def legal_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """A soft-max policy that respects legal_actions."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
-    l_min = logits.min(axis=-1, keepdims=True)
-    logits = jnp.where(legal_actions, logits, l_min)
-    logits -= logits.max(axis=-1, keepdims=True)
-    logits *= legal_actions
-    exp_logits = jnp.where(
-        legal_actions, jnp.exp(logits), 0
-    )  # Illegal actions become 0.
-    exp_logits_sum = jnp.sum(exp_logits, axis=-1, keepdims=True)
-    return exp_logits / exp_logits_sum
+    masked_logits = jnp.where(legal_actions, logits, jnp.finfo(logits.dtype).min)
+    policy = jax.nn.softmax(masked_logits, axis=-1)
+    return jnp.where(legal_actions, policy, 0.0)
 
 
 def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
-    # logits_masked has illegal actions set to -inf.
-    logits_masked = logits + jnp.log(legal_actions)
-    max_legal_logit = logits_masked.max(axis=-1, keepdims=True)
-    logits_masked = logits_masked - max_legal_logit
-    # exp_logits_masked is 0 for illegal actions.
-    exp_logits_masked = jnp.exp(logits_masked)
-
-    baseline = jnp.log(jnp.sum(exp_logits_masked, axis=-1, keepdims=True))
-    # Subtract baseline from logits. We do not simply return
-    #     logits_masked - baseline
-    # because that has -inf for illegal actions, or
-    #     legal_actions * (logits_masked - baseline)
-    # because that leads to 0 * -inf == nan for illegal actions.
-    log_policy = legal_actions * (logits - max_legal_logit - baseline)
-    return log_policy
+    masked_logits = jnp.where(legal_actions, logits, jnp.finfo(logits.dtype).min)
+    log_policy = jax.nn.log_softmax(masked_logits, axis=-1)
+    return jnp.where(legal_actions, log_policy, 0.0)
 
 
 def get_most_recent_file(dir_path: str, pattern: str = None):
@@ -116,3 +98,13 @@ def assert_no_nan_or_inf(gradients, path=""):
     else:
         if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
+
+
+def promote_map(pred: PredT) -> PredT:
+    def maybe_promote(x):
+        if isinstance(x, jnp.ndarray) and x.dtype == jnp.bfloat16:
+            return x.astype(jnp.float32)
+        return x
+
+    out = jax.tree_util.tree_map(maybe_promote, pred)
+    return cast(PredT, out)

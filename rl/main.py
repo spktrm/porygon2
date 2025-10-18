@@ -1,10 +1,9 @@
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
 import json
 import threading
+import time
 import traceback
 from pprint import pprint
 
@@ -83,6 +82,8 @@ def run_eval_actor(
             traceback.print_exc()
             continue
 
+        time.sleep(2)
+
 
 def main():
     """Main function to run the RL learner."""
@@ -90,19 +91,23 @@ def main():
     learner_config = get_learner_config()
     pprint(learner_config)
 
-    player_model_config = get_player_model_config(learner_config.generation, train=True)
-    builder_model_config = get_builder_model_config(
+    learner_player_model_config = get_player_model_config(
         learner_config.generation, train=True
     )
+    learner_builder_model_config = get_builder_model_config(
+        learner_config.generation, train=True
+    )
+    actor_player_model_config = get_player_model_config(
+        learner_config.generation, train=False
+    )
+    actor_builder_model_config = get_builder_model_config(
+        learner_config.generation, train=False
+    )
 
-    learner_player_network = get_player_model(player_model_config)
-    learner_builder_network = get_builder_model(builder_model_config)
-    actor_player_network = get_player_model(
-        get_player_model_config(learner_config.generation, train=False)
-    )
-    actor_builder_network = get_builder_model(
-        get_builder_model_config(learner_config.generation, train=False)
-    )
+    learner_player_network = get_player_model(learner_player_model_config)
+    learner_builder_network = get_builder_model(learner_builder_model_config)
+    actor_player_network = get_player_model(actor_player_model_config)
+    actor_builder_network = get_builder_model(actor_builder_model_config)
 
     actor_threads: list[threading.Thread] = []
     stop_signal = [False]
@@ -127,10 +132,10 @@ def main():
             "num_builder_params": get_num_params(builder_state.params),
             "learner_config": learner_config,
             "player_model_config": json.loads(
-                player_model_config.to_json_best_effort()
+                learner_player_model_config.to_json_best_effort()
             ),
             "builder_model_config": json.loads(
-                builder_model_config.to_json_best_effort()
+                learner_builder_model_config.to_json_best_effort()
             ),
         },
     )

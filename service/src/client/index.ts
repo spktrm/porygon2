@@ -15,10 +15,13 @@ import {
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
+const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
+
 // const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
 const server = "wss://pokeagentshowdown.com/showdown/websocket";
 const MAX_BATTLES = 50; // Maximum number of battles to run in sequence
+const smogonFormat = "gen1ou";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -176,12 +179,11 @@ class Battle {
         while (true) {
             const state = await this.player.receiveEnvironmentState();
             if (!this.player.done) {
-                const response = await fetch("http://127.0.0.1:8001/step", {
-                    // Ensure this URL is correct for your setup
+                const response = await fetch(`${RL_SERVER_URL}/step`, {
                     method: "POST",
                     body: state.serializeBinary(),
                 });
-                await new Promise((resolve) => setTimeout(resolve, rateLimit));
+                // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
                 const stepResponse = await response.json();
                 const stepRequest = new StepRequest();
@@ -313,8 +315,7 @@ class User {
     async search(format: string): Promise<void> {
         if (!format.endsWith("randombattle")) {
             while (true) {
-                const response = await fetch("http://127.0.0.1:8001/reset", {
-                    // Ensure this URL is correct for your setup
+                const response = await fetch(`${RL_SERVER_URL}/reset`, {
                     method: "POST",
                     body: JSON.stringify({ format }),
                 });
@@ -352,7 +353,7 @@ class User {
 
         const { searching, games } = searchState;
         if (searching.length === 0 && games === null && !this.searchUpdated) {
-            this.search("gen9ou");
+            this.search(smogonFormat);
             this.searchUpdated = true;
             return;
         }
@@ -398,75 +399,96 @@ class User {
     }
 }
 
-const connection = new Connection();
-const user = new User(connection);
-
-const result = dotenv.config({
-    path: path.resolve(__dirname, "../../../.env"), // Adjust path if your .env is elsewhere
-});
-if (result.error) {
-    console.error(
-        "Error loading .env file. Please ensure it exists and is configured correctly.",
-        result.error,
-    );
-    // throw result.error; // Or handle more gracefully
-    process.exit(1);
+async function waitForServer(waitTimeout: number = 1000) {
+    while (true) {
+        try {
+            const response = await fetch(`${RL_SERVER_URL}/ping`, {
+                // Ensure this URL is correct for your setup
+                method: "GET",
+            });
+            const pong = await response.text();
+            if (pong === "pong") {
+                break;
+            }
+        } catch (error) {
+            console.log("Waiting for RL server to be ready...");
+            await new Promise((resolve) => setTimeout(resolve, waitTimeout));
+            continue;
+        }
+    }
 }
 
-connection.open((data) => {
-    console.log(data);
-    if (data.startsWith(">")) {
-        const roomId = data.split("\n", 1)[0].slice(1);
-        user.receiveBattleData(roomId, data);
-        return;
+waitForServer().then(() => {
+    const connection = new Connection();
+    const user = new User(connection);
+
+    const result = dotenv.config({
+        path: path.resolve(__dirname, "../../../.env"), // Adjust path if your .env is elsewhere
+    });
+    if (result.error) {
+        console.error(
+            "Error loading .env file. Please ensure it exists and is configured correctly.",
+            result.error,
+        );
+        // throw result.error; // Or handle more gracefully
+        process.exit(1);
     }
 
-    let searchState = undefined;
-    for (const { args } of Protocol.parse(data)) {
-        switch (args[0]) {
-            case "challstr": {
-                const challstr = args[1];
-                const {
-                    SHOWDOWN_USERNAME: username,
-                    SHOWDOWN_PASSWORD: password,
-                } = process.env;
-                if (!username || !password) {
-                    console.error(
-                        "Please set SHOWDOWN_USERNAME and SHOWDOWN_PASSWORD in your .env file.",
-                    );
-                    connection.close();
-                    process.exit(1);
-                }
-                user.login({
-                    challstr,
-                    username,
-                    password,
-                });
-                break;
-            }
+    connection.open((data) => {
+        console.log(data);
+        if (data.startsWith(">")) {
+            const roomId = data.split("\n", 1)[0].slice(1);
+            user.receiveBattleData(roomId, data);
+            return;
+        }
 
-            case "updateuser": {
-                const username = args[1].trim();
-                const namedStatus = args[2].trim();
-                if (namedStatus === "1") {
-                    user.setUsername(username);
-                    console.log(`Logged in as '${username}'`);
-                }
-                break;
-            }
-
-            case "updatesearch": {
-                searchState = JSON.parse(args[1]);
-                user.updateSearch(searchState);
-                break;
-            }
-
-            case "popup": {
-                if (args[1].startsWith("Your team was rejected")) {
-                    user.updateSearch();
+        let searchState = undefined;
+        for (const { args } of Protocol.parse(data)) {
+            switch (args[0]) {
+                case "challstr": {
+                    const challstr = args[1];
+                    const {
+                        SHOWDOWN_USERNAME: username,
+                        SHOWDOWN_PASSWORD: password,
+                    } = process.env;
+                    if (!username || !password) {
+                        console.error(
+                            "Please set SHOWDOWN_USERNAME and SHOWDOWN_PASSWORD in your .env file.",
+                        );
+                        connection.close();
+                        process.exit(1);
+                    }
+                    user.login({
+                        challstr,
+                        username,
+                        password,
+                    });
                     break;
+                }
+
+                case "updateuser": {
+                    const username = args[1].trim();
+                    const namedStatus = args[2].trim();
+                    if (namedStatus === "1") {
+                        user.setUsername(username);
+                        console.log(`Logged in as '${username}'`);
+                    }
+                    break;
+                }
+
+                case "updatesearch": {
+                    searchState = JSON.parse(args[1]);
+                    user.updateSearch(searchState);
+                    break;
+                }
+
+                case "popup": {
+                    if (args[1].startsWith("Your team was rejected")) {
+                        user.updateSearch();
+                        break;
+                    }
                 }
             }
         }
-    }
+    });
 });

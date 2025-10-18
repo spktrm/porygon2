@@ -18,8 +18,9 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import MoveHead, PolicyHead, ScalarHead
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.heads import PolicyLogitHead, PolicyQKHead, ValueLogitHead
+from rl.model.modules import SumEmbeddings
+from rl.model.utils import get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -30,87 +31,70 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-
-        self.action_type_head = PolicyHead(self.cfg.action_type_head)
-        self.move_head = MoveHead(self.cfg.move_head)
-        self.switch_head = PolicyHead(self.cfg.switch_head)
-
-        self.value_head = ScalarHead(self.cfg.value_head)
+        self.action_type_head = PolicyLogitHead(self.cfg.action_type_head)
+        self.move_head = PolicyQKHead(self.cfg.move_head)
+        self.switch_head = PolicyQKHead(self.cfg.switch_head)
+        self.wildcard_merge = SumEmbeddings(
+            output_size=self.cfg.entity_size, dtype=self.cfg.dtype
+        )
+        self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
+        self.value_head = ValueLogitHead(self.cfg.value_head)
 
     def get_head_outputs(
         self,
-        entity_embeddings: jax.Array,
-        action_embeddings: jax.Array,
-        entity_mask: jax.Array,
+        state_query: jax.Array,
+        contextual_moves: jax.Array,
+        contextual_switches: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
     ):
-
-        move_embeddings = action_embeddings[:4]
-        switch_embeddings = action_embeddings[4:]
-
-        average_move_embedding = (
-            env_step.move_mask @ move_embeddings
-        ) / env_step.move_mask.sum(axis=-1, keepdims=True).clip(min=1)
-        average_switch_embedding = (
-            env_step.switch_mask @ switch_embeddings
-        ) / env_step.switch_mask.sum(axis=-1, keepdims=True).clip(min=1)
-        action_embeddings = jnp.stack(
-            (average_move_embedding, average_switch_embedding, average_switch_embedding)
+        action_type_head = self.action_type_head(
+            state_query, env_step.action_type_mask, actor_output.action_type_head
         )
-
-        # Apply the value head
-        value = jnp.tanh(self.value_head(entity_embeddings, entity_mask))
-
-        # Get the moves and wild cards
-        move_head, wildcard_head = self.move_head(
-            move_embeddings,
-            entity_embeddings,
+        move_head = self.move_head(
+            state_query,
+            contextual_moves,
             env_step.move_mask,
-            entity_mask,
-            env_step.wildcard_mask,
             actor_output.move_head,
+        )
+        selected_move_embedding = jnp.take(
+            contextual_moves, move_head.action_index, axis=0
+        )
+        wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
+        wildcard_head = self.wildcard_head(
+            wildcard_merge,
+            env_step.wildcard_mask,
             actor_output.wildcard_head,
         )
+        switch_head = self.switch_head(
+            state_query,
+            contextual_switches,
+            env_step.switch_mask,
+            actor_output.switch_head,
+        )
+        value = jnp.tanh(self.value_head(state_query))
 
-        # Return the model output
         return PlayerActorOutput(
-            action_type_head=self.action_type_head(
-                action_embeddings,
-                entity_embeddings,
-                env_step.action_type_mask,
-                entity_mask,
-                actor_output.action_type_head,
-            ),
+            action_type_head=action_type_head,
             move_head=move_head,
+            switch_head=switch_head,
             wildcard_head=wildcard_head,
-            switch_head=self.switch_head(
-                switch_embeddings,
-                entity_embeddings,
-                env_step.switch_mask,
-                entity_mask,
-                actor_output.switch_head,
-            ),
             v=value,
         )
 
-    def __call__(
-        self,
-        actor_input: PlayerActorInput,
-        actor_output: PlayerActorOutput = PlayerActorOutput(),
-    ):
+    def __call__(self, actor_input: PlayerActorInput, actor_output: PlayerActorOutput):
         """
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        entity_embeddings, action_embeddings, entity_mask = self.encoder(
+        state_query, contextual_moves, contextual_switches = self.encoder(
             actor_input.env, actor_input.history
         )
 
         return jax.vmap(self.get_head_outputs)(
-            entity_embeddings,
-            action_embeddings,
-            entity_mask,
+            state_query,
+            contextual_moves,
+            contextual_switches,
             actor_input.env,
             actor_output,
         )
@@ -122,29 +106,34 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def main(generation: int = 9):
+def main(generation: int = 1):
     actor_network = get_player_model(get_player_model_config(generation, train=False))
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 
     ex_actor_input, ex_actor_output = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     )
+    key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file("./ckpts")
+    # latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = "ckpts/gen1/ckpt_00035000"
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
         params = step["player_state"]["params"]
     else:
-        key = jax.random.key(42)
         params = learner_network.init(key, ex_actor_input, ex_actor_output)
 
-    actor_output = actor_network.apply(params, ex_actor_input, rngs={"sampling": key})
-    learner_network.apply(params, ex_actor_input, actor_output)
+    actor_output = actor_network.apply(
+        params, ex_actor_input, PlayerActorOutput(), rngs={"sampling": key}
+    )
+    pprint(actor_output)
+
+    learner_output = learner_network.apply(params, ex_actor_input, actor_output)
+    pprint(learner_output)
 
     pprint(get_num_params(params))
-    pprint(actor_output)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,6 @@
 SESSION=train
 
 cd service
-npm run kill
 cd ../
 
 # Start clean

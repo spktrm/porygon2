@@ -18,7 +18,7 @@ from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
-from rl.model.utils import LARGE_NEGATIVE_BIAS, get_most_recent_file
+from rl.model.utils import get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -26,7 +26,8 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 def restrict_values(arr: np.ndarray):
     if arr.dtype.name == "bfloat16":
-        return np.clip(arr, a_min=LARGE_NEGATIVE_BIAS, a_max=-LARGE_NEGATIVE_BIAS)
+        finfo = jnp.finfo(arr.dtype)
+        return np.clip(arr, a_min=finfo.min, a_max=finfo.max)
     else:
         return np.nan_to_num(arr)
 
@@ -35,8 +36,8 @@ class InferenceModel:
     def __init__(
         self,
         fpath: str = None,
+        generation: int = 1,
         seed: int = 42,
-        precision: int = 2,
         temp: float = 0.8,
         min_p: float = 0.01,
     ):
@@ -56,10 +57,9 @@ class InferenceModel:
             builder_apply_fn=self.builder_network.apply,
         )
         self.rng_key = jax.random.key(seed)
-        self.precision = precision
 
         if not fpath:
-            fpath = get_most_recent_file("./ckpts/gen9")
+            fpath = get_most_recent_file(f"./ckpts/gen{generation}")
         print(f"loading checkpoint from {fpath}")
         with open(fpath, "rb") as f:
             step = pickle.load(f)
@@ -68,6 +68,9 @@ class InferenceModel:
         self.builder_params = step["builder_state"]["params"]
 
         print("initializing...")
+        self.builder_env = TeamBuilderEnvironment(
+            self.learner_config.generation, "ou_all_formats"
+        )
         self.reset()  # warm up the model
 
         ex_actor_input, _ = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
@@ -84,18 +87,16 @@ class InferenceModel:
         return subkey
 
     def reset(self):
-        builder_env = TeamBuilderEnvironment(
-            self.learner_config.generation, "ou_all_formats", max_trajectory_length=64
-        )
 
         rng_key = self.split_rng()
+
         builder_subkeys = jax.random.split(
-            rng_key, builder_env.max_trajectory_length + 1
+            rng_key, self.builder_env.max_trajectory_length + 1
         )
 
         build_traj = []
 
-        builder_actor_input = builder_env.reset()
+        builder_actor_input = self.builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
@@ -109,11 +110,7 @@ class InferenceModel:
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = builder_env.step(builder_agent_output)
-
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: jnp.stack(xs), *build_traj
-        )
+            builder_actor_input = self.builder_env.step(builder_agent_output)
 
         # Send set tokens to the player environment.
         return ResetResponse(
@@ -126,6 +123,7 @@ class InferenceModel:
 
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
+
         agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(

@@ -140,7 +140,7 @@ export const jsonDatum = transformJson(JSON.parse(fileContent));
 
 export const sets: { [k: string]: Record<string, string[]> } = {};
 
-for (let i = 1; i <= 9; i++) {
+for (const i of [1, 9]) {
     for (const smogonFormat of ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]) {
         for (const suffix of ["all_formats", "only_format"] as const) {
             try {
