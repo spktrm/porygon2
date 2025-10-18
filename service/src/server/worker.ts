@@ -60,7 +60,29 @@ export class WorkerHandler {
         return player;
     }
 
-    private resetPlayerFromTrainingUserName(
+    private async cycleWaitingPlayers(
+        lookingForUsernamePrefix: string,
+    ): Promise<WaitingPlayer> {
+        while (true) {
+            const opponent = this.waitingPlayers.shift();
+            if (opponent !== undefined) {
+                if (
+                    opponent.playerDetails.userName.startsWith(
+                        lookingForUsernamePrefix,
+                    )
+                ) {
+                    return opponent;
+                } else {
+                    this.waitingPlayers.push(opponent);
+                }
+            }
+
+            // Yield control to avoid blocking (especially in long loops)
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+    }
+
+    private async resetPlayerFromTrainingUserName(
         userName: string,
         smogonFormat: string,
         speciesIndices?: number[],
@@ -79,7 +101,21 @@ export class WorkerHandler {
 
         if (this.waitingPlayers.length > 0) {
             // Pair found, create battle
-            const opponent = this.waitingPlayers.shift()!;
+            const oppositePrefix = {
+                challenger: "leader",
+                leader: "challenger",
+            }[userName.split("-")[0]];
+            if (oppositePrefix === undefined) {
+                throw new Error(
+                    `Invalid training userName prefix: ${userName}`,
+                );
+            }
+            const opponent = await this.cycleWaitingPlayers(oppositePrefix);
+
+            console.log(
+                `Pairing ${userName} vs ${opponent.playerDetails.userName}`,
+            );
+
             if (opponent.playerDetails.smogonFormat !== smogonFormat) {
                 throw new Error(
                     `Mismatched formats: ${opponent.playerDetails.smogonFormat} vs ${smogonFormat}`,

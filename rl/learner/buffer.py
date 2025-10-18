@@ -54,7 +54,12 @@ class ReplayBuffer:
         self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
         self._tau = 1
 
-    def add(self, traj: Trajectory):
+        # Winrates
+        self._winrate_tau = 1 / 200
+        self._challenger_winrate = 0.0
+        self._leader_winrate = 1.0
+
+    def add(self, is_leader: bool, traj: Trajectory):
         with self._lock:
             self._species_counts = calculate_tracking(
                 self._species_counts,
@@ -68,8 +73,24 @@ class ReplayBuffer:
                 pass
             else:
                 self._size += 1
+
+            win = float((traj.player_transitions.env_output.win_reward[-1] > 0).item())
+            if is_leader:
+                self._leader_winrate = (
+                    1 - self._winrate_tau
+                ) * self._leader_winrate + self._winrate_tau * win
+            else:
+                self._challenger_winrate = (
+                    1 - self._winrate_tau
+                ) * self._challenger_winrate + self._winrate_tau * win
+
             self._buf.append(traj)
             self._not_empty.notify()
+
+    def reset_winrate_tracking(self):
+        with self._lock:
+            self._challenger_winrate = 0.0
+            self._leader_winrate = 1.0
 
     def can_sample(self, n: int) -> bool:
         with self._lock:

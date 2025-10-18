@@ -7,6 +7,7 @@ import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import wandb.wandb_run
 from flax import core, struct
@@ -20,7 +21,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.model.utils import Params, get_most_recent_file
+from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
 
 @chex.dataclass(frozen=True)
@@ -78,7 +79,7 @@ class Porygon2LearnerConfig:
     builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: GenT = 1
+    generation: GenT = 9
 
 
 def get_learner_config():
@@ -185,8 +186,11 @@ def save_train_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
+    best_params: ParamsContainer,
 ):
-    save_path = save_train_state_locally(learner_config, player_state, builder_state)
+    save_path = save_train_state_locally(
+        learner_config, player_state, builder_state, best_params
+    )
     wandb_run.log_artifact(
         artifact_or_path=save_path,
         name=f"latest-gen{learner_config.generation}",
@@ -198,13 +202,15 @@ def save_train_state_locally(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
+    best_params: ParamsContainer = None,
     batch: Trajectory = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
     )
-
-    return save_state(save_path, learner_config, player_state, builder_state, batch)
+    return save_state(
+        save_path, learner_config, player_state, builder_state, best_params, batch
+    )
 
 
 def save_state(
@@ -212,6 +218,7 @@ def save_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
+    best_params: ParamsContainer = None,
     batch: Trajectory = None,
 ):
     if not os.path.exists(os.path.dirname(save_path)):
@@ -237,6 +244,13 @@ def save_state(
             target_adv_mean=builder_state.target_adv_mean,
             target_adv_std=builder_state.target_adv_std,
         )
+    if best_params is not None:
+        data["best_params"] = dict(
+            frame_count=best_params.frame_count,
+            step_count=best_params.step_count,
+            player_params=best_params.player_params,
+            builder_params=best_params.builder_params,
+        )
     if batch is not None:
         data["batch"] = batch
     with open(save_path, "wb") as f:
@@ -255,7 +269,14 @@ def load_train_state(
 
     latest_ckpt = get_most_recent_file(save_path)
     if not latest_ckpt:
-        return player_state, builder_state
+        best_params = ParamsContainer(
+            is_leader=True,
+            frame_count=np.array(player_state.actor_steps).item(),
+            step_count=np.array(player_state.num_steps).item(),
+            player_params=player_state.params,
+            builder_params=builder_state.params,
+        )
+        return player_state, builder_state, best_params
 
     print(f"loading checkpoint from {latest_ckpt}")
     with open(latest_ckpt, "rb") as f:
@@ -264,6 +285,25 @@ def load_train_state(
     print("Checkpoint data:")
     ckpt_player_state = ckpt_data.get("player_state", {})
     ckpt_builder_state = ckpt_data.get("builder_state", {})
+    ckpt_best_params = ckpt_data.get("best_params", None)
+
+    if ckpt_best_params is not None:
+        best_params = ParamsContainer(
+            is_leader=True,
+            frame_count=ckpt_best_params.get("frame_count", player_state.actor_steps),
+            step_count=ckpt_best_params.get("step_count", player_state.num_steps),
+            player_params=ckpt_best_params["player_params"],
+            builder_params=ckpt_best_params["builder_params"],
+        )
+    else:
+        print("No best_params found in checkpoint, using current params.")
+        best_params = ParamsContainer(
+            is_leader=True,
+            frame_count=ckpt_player_state["actor_steps"],
+            step_count=ckpt_player_state["num_steps"],
+            player_params=ckpt_player_state["params"],
+            builder_params=ckpt_builder_state["params"],
+        )
 
     pprint(
         {
@@ -300,4 +340,4 @@ def load_train_state(
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
 
-    return player_state, builder_state
+    return player_state, builder_state, best_params
