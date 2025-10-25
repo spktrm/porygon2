@@ -73,8 +73,6 @@ class BuilderEnvOutput(NamedTuple):
 
     ts: ArrayLike = ()
     done: ArrayLike = ()
-    metagame_token: ArrayLike = ()
-    metagame_mask: ArrayLike = ()
 
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
@@ -92,8 +90,6 @@ class BuilderActorInput(NamedTuple):
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
 
-    metagame_sele_head: HeadOutput = HeadOutput()
-    metagame_pred_head: HeadOutput = HeadOutput()
     continue_head: HeadOutput = HeadOutput()
     selection_head: HeadOutput = HeadOutput()
     species_head: HeadOutput = HeadOutput()

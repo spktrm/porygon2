@@ -183,7 +183,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
         if (isBaseline) {
-            const baselineIndex = parseInt(userName.split("-").at(-1) ?? "");
+            const baselineIndex = parseInt(userName.split(":").at(-1) ?? "");
             this.baselineIndex = baselineIndex;
         } else {
             this.baselineIndex = -1;
@@ -205,6 +205,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             ) - 1) as 0 | 1;
             return this.playerIndex;
         }
+        throw new Error(
+            "Player index is undefined and request is not available",
+        );
     }
 
     public submitStepRequest(stepRequest: StepRequest) {
@@ -326,7 +329,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         if (cmd !== "request") {
             this.publicBattle.add(line);
         }
-        this.getPlayerIndex();
     }
 
     async generateStepRequest(
@@ -367,6 +369,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             );
         }
         const evalFn = evalActionMapping[this.baselineIndex];
+        if (evalFn === undefined) {
+            throw new Error(
+                `No eval function found for username: ${this.userName}`,
+            );
+        }
         const action = evalFn({
             player: this,
         });

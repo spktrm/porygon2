@@ -2,9 +2,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import pickle
 from pprint import pprint
 
+import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -72,7 +72,7 @@ class Porygon2PlayerModel(nn.Module):
             env_step.switch_mask,
             actor_output.switch_head,
         )
-        value = jnp.tanh(self.value_head(state_query))
+        value = self.value_head(state_query)
 
         return PlayerActorOutput(
             action_type_head=action_type_head,
@@ -106,7 +106,7 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def main(generation: int = 1):
+def main(generation: int = 9):
     actor_network = get_player_model(get_player_model_config(generation, train=False))
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 

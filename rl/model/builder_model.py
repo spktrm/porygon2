@@ -3,11 +3,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
-import pickle
 from functools import partial
 from pprint import pprint
 
 import chex
+import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -29,7 +29,6 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderEnvOutput,
     BuilderTransition,
-    HeadOutput,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -40,12 +39,7 @@ from rl.environment.protos.enums_pb2 import (
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.model.config import get_builder_model_config
-from rl.model.heads import (
-    PolicyLogitHead,
-    PolicyQKHead,
-    ValueLogitHead,
-    sample_categorical,
-)
+from rl.model.heads import PolicyLogitHead, PolicyQKHead, ValueLogitHead
 from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
@@ -53,12 +47,7 @@ from rl.model.modules import (
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import (
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 def _encode_one_hot(
@@ -101,10 +90,8 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.continue_query_merge = SumEmbeddings(entity_size, dtype=dtype)
         self.selection_query_merge = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_query_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.value_merge = SumEmbeddings(entity_size, dtype=dtype)
 
         transformer_config = self.cfg.transformer.to_dict()
 
@@ -116,11 +103,6 @@ class Porygon2BuilderModel(nn.Module):
         self.species_head = PolicyQKHead(self.cfg.species_head)
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
         self.value_head = ValueLogitHead(self.cfg.value_head)
-
-        self.z_logits = self.param(
-            "z_logits", nn.initializers.zeros_init(), (self.cfg.num_metagame_slots,)
-        )
-        self.metagame_pred_head = PolicyLogitHead(self.cfg.metagame_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -225,17 +207,9 @@ class Porygon2BuilderModel(nn.Module):
 
         return embedding
 
-    def _forward_value_head(
-        self,
-        my_embedding: jax.Array,
-        opp_embedding: jax.Array,
-        selected_metagame_oh: jax.Array,
-    ):
+    def _forward_value_head(self, my_embedding: jax.Array, opp_embedding: jax.Array):
         concatenated_embedding = jnp.concatenate((my_embedding, opp_embedding), axis=-1)
-        merged_embedding = self.value_merge(
-            concatenated_embedding, selected_metagame_oh
-        )
-        return self.value_head(merged_embedding)
+        return self.value_head(concatenated_embedding)
 
     def _encode_team(self, species_tokens: jax.Array, packed_set_tokens: jax.Array):
         packed_set_attn_mask = jnp.ones_like(packed_set_tokens, dtype=jnp.bool)
@@ -276,30 +250,6 @@ class Porygon2BuilderModel(nn.Module):
 
         return contextual_embeddings, contextual_embedding
 
-    def _get_metagame_head(self, valid_mask: jax.Array, head: HeadOutput) -> HeadOutput:
-        temp = self.cfg.get("temp", 1.0)
-        logits = self.z_logits / temp
-
-        log_policy = legal_log_policy(logits, valid_mask)
-
-        entropy = ()
-        train = self.cfg.get("train", False)
-        if train:
-            action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
-        else:
-            action_index = sample_categorical(
-                logits,
-                log_policy,
-                valid_mask,
-                self.make_rng("sampling"),
-                self.cfg.get("min_p", 0.0),
-            )
-
-        log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
-
     def _forward(
         self,
         actor_env: BuilderEnvOutput,
@@ -311,29 +261,18 @@ class Porygon2BuilderModel(nn.Module):
             actor_env.species_tokens, actor_env.packed_set_tokens
         )
 
-        metagame_sele_head = self._get_metagame_head(
-            actor_env.metagame_mask,
-            actor_output.metagame_sele_head,
-        )
+        value = self._forward_value_head(my_embedding, opp_embedding)
 
-        selected_metagame_oh = jax.nn.one_hot(
-            metagame_sele_head.action_index,
-            self.cfg.num_metagame_slots,
-            dtype=self.cfg.dtype,
-        )
-        value = self._forward_value_head(
-            my_embedding, opp_embedding, selected_metagame_oh
-        )
-
-        continue_query = self.continue_query_merge(my_embedding, selected_metagame_oh)
+        continue_query = my_embedding
         continue_head = self.continue_head(
             continue_query,
             actor_env.continue_mask,
             actor_output.continue_head,
         )
 
+        selection_query = my_embedding
         selection_head = self.selection_head(
-            continue_query,
+            selection_query,
             my_embeddings,
             jnp.ones_like(my_embeddings[..., 0], dtype=jnp.bool),
             actor_output.selection_head,
@@ -343,7 +282,7 @@ class Porygon2BuilderModel(nn.Module):
             my_embeddings, selection_head.action_index, axis=0
         )
         selection_query = self.selection_query_merge(
-            my_embedding, selected_embedding, selected_metagame_oh
+            selection_query, selected_embedding
         )
         species_head = self.species_head(
             selection_query,
@@ -374,15 +313,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.packed_set_head,
         )
 
-        metagame_pred_head = self.metagame_pred_head(
-            my_embedding,
-            jnp.ones_like(actor_env.metagame_mask),
-            actor_output.metagame_sele_head,
-        )
-
         return BuilderActorOutput(
-            metagame_sele_head=metagame_sele_head,
-            metagame_pred_head=metagame_pred_head,
             continue_head=continue_head,
             selection_head=selection_head,
             species_head=species_head,
@@ -416,9 +347,9 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = False, generation: int = 1):
+def main(debug: bool = False, generation: int = 9):
     actor_network = get_builder_model(
-        get_builder_model_config(generation, train=False)  # , temp=0.8, min_p=0.05)
+        get_builder_model_config(generation, train=False)  # , temp=2, min_p=0.05)
     )
     learner_config = get_builder_model_config(generation, train=True)
     learner_network = get_builder_model(learner_config)
@@ -442,15 +373,14 @@ def main(debug: bool = False, generation: int = 1):
     agent = Agent(builder_apply_fn=actor_network.apply)
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation,
-        smogon_format="ou_all_formats",
-        initial_seed=42,
+        generation=generation, smogon_format="ou_all_formats", initial_seed=42
     )
 
     with open(f"data/data/gen{generation}/{builder_env.smogon_format}.json", "r") as f:
         packed_sets = json.load(f)
 
-    metagame_counts = {i: 0 for i in range(32)}
+    species_reward_bounds = (0, 0)
+    teammate_reward_bounds = (0, 0)
 
     while True:
 
@@ -484,7 +414,27 @@ def main(debug: bool = False, generation: int = 1):
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
         )
 
-        metagame_counts[builder_trajectory.env_output.metagame_token[-1].item()] += 1
+        species_reward_sum = (
+            builder_trajectory.env_output.cum_species_reward[1:]
+            - builder_trajectory.env_output.cum_species_reward[:-1]
+        ).sum()
+        new_species_reward_bounds = (
+            min(species_reward_sum.item(), species_reward_bounds[0]),
+            max(species_reward_sum.item(), species_reward_bounds[1]),
+        )
+        if new_species_reward_bounds != species_reward_bounds:
+            species_reward_bounds = new_species_reward_bounds
+
+        teammate_reward_sum = (
+            builder_trajectory.env_output.cum_teammate_reward[1:]
+            - builder_trajectory.env_output.cum_teammate_reward[:-1]
+        ).sum()
+        new_teammate_reward_bounds = (
+            min(teammate_reward_sum.item(), teammate_reward_bounds[0]),
+            max(teammate_reward_sum.item(), teammate_reward_bounds[1]),
+        )
+        if new_teammate_reward_bounds != teammate_reward_bounds:
+            teammate_reward_bounds = new_teammate_reward_bounds
 
         # learner_output = learner_network.apply(
         #     builder_params,
@@ -492,9 +442,9 @@ def main(debug: bool = False, generation: int = 1):
         #     builder_trajectory.agent_output.actor_output,
         # )
 
-        print(
-            "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
-        )
+        # print(
+        #     "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
+        # )
 
         assert np.all(
             builder_actor_input.env.species_tokens > SpeciesEnum.SPECIES_ENUM___UNK

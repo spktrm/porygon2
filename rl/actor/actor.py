@@ -161,6 +161,15 @@ class Actor:
         self._rng_key, subkey = jax.random.split(self._rng_key)
         return subkey
 
+    def set_current_ckpt(self, ckpt: int):
+        self._player_env._set_current_ckpt(ckpt)
+
+    def set_opponent_ckpt(self, ckpt: int):
+        self._player_env._set_opponent_ckpt(ckpt)
+
+    def reset_ckpts(self):
+        self._player_env._reset_ckpts()
+
     def unroll_and_push(self, params_container: ParamsContainer):
         """Run one unroll and send trajectory to learner."""
         player_params = jax.device_put(params_container.player_params)
@@ -172,17 +181,30 @@ class Actor:
             player_params=player_params,
             builder_params=builder_params,
         )
-        if not self._player_env.username.startswith("eval"):
-            self._learner.enqueue_traj(params_container.is_leader, act_out)
+        self.reset_ckpts()
 
-    def pull_params(self) -> ParamsContainer:
-        if self._player_env.username.startswith("challenger-"):
-            return self._learner.challenger
-        elif self._player_env.username.startswith("leader-"):
-            return self._learner.leader
-        elif self._player_env.username.startswith("eval-"):
-            return self._learner.leader
-        else:
-            raise ValueError(
-                f"Unknown actor type with username {self._player_env.username}"
-            )
+        if self._player_env.username.startswith("train"):
+            self._learner.enqueue_traj(act_out)
+        return act_out
+
+    def pull_best_params(self) -> ParamsContainer:
+        return self._learner.league.get_best_player()
+
+    def pull_player(self) -> ParamsContainer:
+        league = self._learner.league
+        return league.sample_player()
+
+    def pull_main_player(self) -> ParamsContainer:
+        league = self._learner.league
+        return league.get_main_player()
+
+    def pull_opponent(self, player: ParamsContainer) -> ParamsContainer:
+        league = self._learner.league
+        return league.sample_opponent(player)
+
+    def update_player_league_stats(
+        self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory
+    ):
+        """Update league stats based on trajectory outcome."""
+        payoff = trajectory.player_transitions.env_output.win_reward[-1]
+        self._learner.league.update_payoff(sender, receiver, payoff)
