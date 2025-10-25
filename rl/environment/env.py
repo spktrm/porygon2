@@ -35,12 +35,24 @@ class SinglePlayerSyncEnvironment:
         self.username = username
         self.rqid = None
         self.last_state = None
+        self.current_ckpt = None
+        self.opponent_ckpt = None
 
         self.websocket = connect(
             SERVER_URI,
             additional_headers={"username": username},
         )
         self.generation = generation
+
+    def _set_current_ckpt(self, ckpt: str):
+        self.current_ckpt = ckpt
+
+    def _set_opponent_ckpt(self, ckpt: str):
+        self.opponent_ckpt = ckpt
+
+    def _reset_ckpts(self):
+        self.current_ckpt = None
+        self.opponent_ckpt = None
 
     def _recv(self):
         recv_data = self.websocket.recv()
@@ -63,6 +75,8 @@ class SinglePlayerSyncEnvironment:
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
                 smogon_format=f"gen{self.generation}_ou_all_formats",
+                current_ckpt=self.current_ckpt,
+                opponent_ckpt=self.opponent_ckpt,
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -89,11 +103,9 @@ class TeamBuilderEnvironment:
         generation: int,
         smogon_format: str,
         num_team_members: int = 6,
-        num_metagame_slots: int = 32,
         max_trajectory_length: int = 7,
         min_trajectory_length: int = 1,
         *,
-        initial_metagame_token: int | None = None,
         initial_seed: int = random.randint(0, 2**31 - 1),
     ):
         if num_team_members < 1 or num_team_members > 6:
@@ -106,20 +118,12 @@ class TeamBuilderEnvironment:
         self.smogon_format = smogon_format
         self.generation = generation
         self.num_team_members = num_team_members
-        self.num_metagame_slots = num_metagame_slots
         self.max_trajectory_length = max_trajectory_length
         self.min_trajectory_length = min_trajectory_length
         self.rng_key = jax.random.key(initial_seed)
 
         self.initial_continue_mask = self._continue_mask_for_ts(
             jnp.array(0, dtype=jnp.int32)
-        )
-        self.metagame_mask = (
-            jnp.ones((self.num_metagame_slots,), dtype=jnp.bool)
-            if initial_metagame_token is None
-            else jax.nn.one_hot(
-                initial_metagame_token, self.num_metagame_slots, dtype=jnp.bool
-            )
         )
 
         self.species_rewards = jnp.asarray(
@@ -167,7 +171,6 @@ class TeamBuilderEnvironment:
         if self.state.env.done.item():
             return self.state
         self.state = self._step(
-            metagame_token=agent_output.actor_output.metagame_sele_head.action_index,
             continue_token=agent_output.actor_output.continue_head.action_index,
             selection_token=agent_output.actor_output.selection_head.action_index,
             species_token=agent_output.actor_output.species_head.action_index,
@@ -218,14 +221,8 @@ class TeamBuilderEnvironment:
                 packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
-                metagame_token=jnp.array(0, dtype=jnp.int32),
-                metagame_mask=self.metagame_mask,
-                cum_teammate_reward=self._calculate_teammate_rewards(
-                    species_tokens,
-                ),
-                cum_species_reward=self._calculate_species_rewards(
-                    species_tokens,
-                ),
+                cum_teammate_reward=0,
+                cum_species_reward=0,
             )
         )
 
@@ -243,7 +240,6 @@ class TeamBuilderEnvironment:
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
         self,
-        metagame_token: jax.Array,
         continue_token: jax.Array,
         selection_token: jax.Array,
         species_token: jax.Array,
@@ -282,9 +278,6 @@ class TeamBuilderEnvironment:
         packed_set_tokens = jnp.where(
             selection_oh, packed_set_token, state.env.packed_set_tokens
         )
-        metagame_mask = jax.nn.one_hot(
-            metagame_token, self.num_metagame_slots, dtype=jnp.bool
-        )
 
         continue_mask = self._continue_mask_for_ts(next_ts)
 
@@ -296,8 +289,6 @@ class TeamBuilderEnvironment:
                 packed_set_tokens=packed_set_tokens,
                 done=done,
                 ts=next_ts,
-                metagame_token=metagame_token,
-                metagame_mask=metagame_mask,
                 # Prevent reward hacking by choosing common species
                 cum_teammate_reward=self._calculate_teammate_rewards(
                     species_tokens,

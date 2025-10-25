@@ -1,7 +1,8 @@
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
+from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -36,16 +37,20 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username", "species_indices", "packed_set_indices", "smogon_format")
+    __slots__ = ("username", "species_indices", "packed_set_indices", "smogon_format", "current_ckpt", "opponent_ckpt")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     SPECIES_INDICES_FIELD_NUMBER: _ClassVar[int]
     PACKED_SET_INDICES_FIELD_NUMBER: _ClassVar[int]
     SMOGON_FORMAT_FIELD_NUMBER: _ClassVar[int]
+    CURRENT_CKPT_FIELD_NUMBER: _ClassVar[int]
+    OPPONENT_CKPT_FIELD_NUMBER: _ClassVar[int]
     username: str
     species_indices: _containers.RepeatedScalarFieldContainer[int]
     packed_set_indices: _containers.RepeatedScalarFieldContainer[int]
     smogon_format: str
-    def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ...) -> None: ...
+    current_ckpt: int
+    opponent_ckpt: int
+    def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ..., current_ckpt: _Optional[int] = ..., opponent_ckpt: _Optional[int] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_nodes", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "private_team", "field", "rqid")

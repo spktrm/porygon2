@@ -254,8 +254,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
                 ts=ts,
                 done=done,
-                metagame_token=np.zeros_like(ts, dtype=np.int32),
-                metagame_mask=np.ones((trajectory_length, 1, 32), dtype=np.bool),
             ),
             hidden=PlayerHiddenInfo(
                 species_tokens=np.zeros((6, 1), dtype=np.int32),
@@ -264,12 +262,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
-            metagame_sele_head=HeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
-            metagame_pred_head=HeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
             continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
@@ -278,3 +270,14 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             ),
         ),
     )
+
+
+def main():
+    """Main function for testing the utilities."""
+    ex_player_input, ex_player_output = get_ex_player_step()
+    ex_builder_input, ex_builder_output = get_ex_builder_step()
+    print()
+
+
+if __name__ == "__main__":
+    main()

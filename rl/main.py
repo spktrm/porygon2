@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 
 load_dotenv()
+
+import concurrent.futures
 import json
 import threading
 import time
@@ -22,71 +24,65 @@ from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_num_params, get_player_model
 
 
-def run_training_actor(actor: Actor, stop_signal: list[bool]):
-    """Runs an actor to produce trajectories, checking the ratio each time."""
+def run_training_actor_pair(
+    sender: Actor,
+    receiver: Actor,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    stop_signal: list[bool],
+):
+    """Runs an actor to produce trajectories"""
 
     while not stop_signal[0]:
         try:
-            param_container = actor.pull_params()
-            actor.unroll_and_push(param_container)
+            player = sender.pull_main_player()
+            opponent = sender.pull_opponent(player)
+
+            future1 = executor.submit(sender.unroll_and_push, player)
+            future2 = executor.submit(receiver.unroll_and_push, opponent)
+
+            trajectory1 = future1.result()
+            trajectory2 = future2.result()
+
+            sender.update_player_league_stats(player, opponent, trajectory1)
+            receiver.update_player_league_stats(opponent, player, trajectory2)
         except Exception as e:
             traceback.print_exc()
             raise e
 
 
-def run_eval_actor(
-    actor: Actor, wandb_run: wandb.wandb_run.Run, stop_signal: list[bool]
+def run_eval_heuristic(
+    actor: Actor,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    stop_signal: list[bool],
+    wandb_run: wandb.wandb_run.Run,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
+    learner = actor._learner
 
-    param_container = actor.pull_params()
-    old_step_count = np.array(actor._learner.player_state.num_steps).item()
+    step_count = np.array(learner.player_state.num_steps).item()
 
     session_id = actor._player_env.username
-    win_reward_sum = {old_step_count: (0, 0)}
 
     while not stop_signal[0]:
         try:
-            param_container = actor.pull_params()
-            step_count = np.array(actor._learner.player_state.num_steps).item()
+            new_step_count = np.array(learner.player_state.num_steps).item()
+            if new_step_count > step_count:
+                step_count = new_step_count
 
-            assert step_count >= old_step_count, (
-                f"Actor {session_id} tried to pull params with frame count "
-                f"{step_count} but expected at least {old_step_count}."
-            )
-            if step_count not in win_reward_sum:
-                win_reward_sum[step_count] = (0, 0)
+                player = actor.pull_best_params()
 
-            if step_count > old_step_count:
-                reward_count, reward_sum = win_reward_sum.pop(old_step_count)
-                wandb_run.log(
-                    {
-                        "Step": old_step_count,
-                        f"wr-{session_id}": reward_sum / max(1, reward_count),
-                    }
-                )
-                old_step_count = step_count
+                future1 = executor.submit(actor.unroll_and_push, player)
+                eval_trajectory = future1.result()
 
-            player_params = jax.device_put(param_container.player_params)
-            builder_params = jax.device_put(param_container.builder_params)
-            subkey = actor.split_rng()
-            eval_trajectory = actor.unroll(
-                subkey, step_count, player_params, builder_params
-            )
+                payoff = eval_trajectory.player_transitions.env_output.win_reward[-1]
 
-            win_rewards = np.sign(
-                eval_trajectory.player_transitions.env_output.win_reward[-1]
-            )
-            # Update the win reward sum for this step count.
-            reward_count, reward_sum = win_reward_sum[step_count]
-            win_reward_sum[step_count] = (reward_count + 1, reward_sum + win_rewards)
+                wandb_run.log({"Step": step_count, f"wr-{session_id}": payoff})
 
-            # Log the win reward mean for this step count if we have enough data.
         except Exception:
             traceback.print_exc()
             continue
 
-        time.sleep(2)
+        time.sleep(5)
 
 
 def main():
@@ -123,9 +119,12 @@ def main():
         learner_config,
     )
 
-    agent = Agent(actor_player_network.apply, actor_builder_network.apply)
+    gpu_lock = None  # threading.Lock()
+    agent = Agent(
+        actor_player_network.apply, actor_builder_network.apply, gpu_lock=gpu_lock
+    )
 
-    player_state, builder_state, best_params = load_train_state(
+    player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state
     )
 
@@ -148,58 +147,65 @@ def main():
         player_state=player_state,
         builder_state=builder_state,
         learner_config=learner_config,
-        best_params=best_params,
+        league=league,
         wandb_run=wandb_run,
+        gpu_lock=gpu_lock,
     )
 
-    train_username_prefixes = ["challenger", "leader"]
-    for game_id in range(learner_config.num_actors // 2):
-        for player_id in range(2):
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors)
+    ) as executor:
+
+        for game_id in range(learner_config.num_actors // 2):
+            actors = [
+                Actor(
+                    agent=agent,
+                    env=SinglePlayerSyncEnvironment(
+                        f"train:p{player_id}g{game_id:02d}",
+                        generation=learner_config.generation,
+                    ),
+                    unroll_length=learner_config.unroll_length,
+                    learner=learner,
+                    rng_seed=len(actor_threads),
+                )
+                for player_id in range(2)
+            ]
+            args = (*actors, executor, stop_signal)
+            actor_threads.append(
+                threading.Thread(
+                    target=run_training_actor_pair,
+                    args=args,
+                    name=f"Selfplay-{game_id}",
+                )
+            )
+
+        for eval_id in range(learner_config.num_eval_actors):
             actor = Actor(
                 agent=agent,
                 env=SinglePlayerSyncEnvironment(
-                    f"{train_username_prefixes[player_id]}-{game_id:02d}",
+                    f"eval-heuristic:{eval_id:04d}",
                     generation=learner_config.generation,
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
                 rng_seed=len(actor_threads),
             )
-            args = (actor, stop_signal)
+            args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
                 threading.Thread(
-                    target=run_training_actor,
-                    args=args,
-                    name=f"Actor-{game_id}-{player_id}",
+                    target=run_eval_heuristic, args=args, name=f"EvalActor-{eval_id}"
                 )
             )
 
-    for eval_id in range(learner_config.num_eval_actors):
-        actor = Actor(
-            agent=agent,
-            env=SinglePlayerSyncEnvironment(
-                f"eval-{eval_id:04d}", generation=learner_config.generation
-            ),
-            unroll_length=learner_config.unroll_length,
-            learner=learner,
-            rng_seed=len(actor_threads),
-        )
-        args = (actor, wandb_run, stop_signal)
-        actor_threads.append(
-            threading.Thread(
-                target=run_eval_actor, args=args, name=f"EvalActor-{eval_id}"
-            )
-        )
+        # Start the actors and learner.
+        for t in actor_threads:
+            t.start()
 
-    # Start the actors and learner.
-    for t in actor_threads:
-        t.start()
+        learner.train()
 
-    learner.train()
-
-    stop_signal[0] = True
-    for t in actor_threads:
-        t.join()
+        stop_signal[0] = True
+        for t in actor_threads:
+            t.join()
 
     print("done")
 

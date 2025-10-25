@@ -5,10 +5,10 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
-from model import InferenceModel
 from rich.pretty import pprint
 
 from inference.interfaces import ResetResponse, StepResponse
+from inference.model import InferenceModel
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
 
@@ -17,7 +17,12 @@ app = FastAPI()
 
 # Initialize the model
 model = InferenceModel(
-    generation=1, seed=random.randint(0, 2**32 - 1), temp=1, min_p=0.01
+    generation=9,
+    seed=random.randint(0, 2**32 - 1),
+    player_temp=0.8,
+    player_min_p=0.05,
+    builder_temp=1.0,
+    builder_min_p=0.01,
 )
 
 

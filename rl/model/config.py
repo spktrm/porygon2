@@ -205,7 +205,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
 
     entity_size = int(scale * base_size * num_heads)
 
-    cfg.num_metagame_slots = 32
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
@@ -240,7 +239,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
 
     for name in [
         "continue_head",
-        "metagame_head",
         "selection_head",
         "species_head",
         "packed_set_head",
@@ -253,7 +251,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
 
     for head, output_size in [
         (cfg.continue_head, 2),
-        (cfg.metagame_head, cfg.num_metagame_slots),
         (cfg.value_head, 1),
     ]:
         head.logits = ConfigDict()
@@ -273,7 +270,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
     if head_params is not None:
         for head in [
             cfg.continue_head,
-            cfg.metagame_head,
             cfg.selection_head,
             cfg.species_head,
             cfg.packed_set_head,
