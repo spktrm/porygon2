@@ -168,6 +168,10 @@ def clip_log_ratio(log_ratio: jax.Array, eps: float = 0.2):
     return jnp.clip(log_ratio, a_min=math.log1p(-eps), a_max=math.log1p(eps))
 
 
+def shift_left_with_zeros(tensor: jax.Array):
+    return jnp.concatenate((tensor[1:], jnp.zeros_like(tensor[-1:])), axis=0)
+
+
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     player_transitions: PlayerTransition,
@@ -218,6 +222,8 @@ def player_train_step(
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
 
+    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+
     valid = jnp.bitwise_not(player_transitions.env_output.done)
     move_valid = valid & (actor_action_type_head.action_index == 0)
     switch_valid = valid & (actor_action_type_head.action_index == 1)
@@ -249,17 +255,13 @@ def player_train_step(
     )
 
     # Accounting for revival blessing
-    rewards = player_transitions.env_output.win_reward + shaped_reward
+    rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
-    rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
-    discounts = (
-        jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:]))) * config.player_gamma
-    ).astype(v_t.dtype)
+    rewards = shift_left_with_zeros(rewards_tm1)
+    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
     lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
-    # Shift lambdas left one slot, such that V_t matches indices with lambda_tp1.
-    lambdas = jnp.concatenate((lambdas[1:], jnp.ones_like(lambdas[-1:])), axis=0)
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace_td_error_and_advantage = jax.vmap(
@@ -274,6 +276,8 @@ def player_train_step(
     vtrace = vtrace_td_error_and_advantage(
         v_tm1, v_t, rewards, discounts, target_actor_ratio, lambdas
     )
+    target_v = vtrace.errors + v_tm1
+
     player_adv_mean = average(vtrace.pg_advantage, valid)
     player_adv_std = vtrace.pg_advantage.std(where=valid)
 
@@ -281,8 +285,6 @@ def player_train_step(
     player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
         player_state.target_adv_std + 1e-8
     )
-
-    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     def player_loss_fn(params: Params):
 
@@ -324,7 +326,7 @@ def player_train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = value_loss(pred_v=player_pred.v, target_v=vtrace.errors, valid=valid)
+        loss_v = value_loss(pred_v=player_pred.v, target_v=target_v, valid=valid)
 
         action_type_head_entropy = average(pred_action_type_head.entropy, valid)
         move_head_entropy = average(pred_move_head.entropy, move_valid)
@@ -383,9 +385,7 @@ def player_train_step(
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
-                value_prediction=player_pred.v,
-                value_target=vtrace.errors,
-                mask=valid,
+                value_prediction=player_pred.v, value_target=target_v, mask=valid
             ),
         )
 
@@ -402,8 +402,8 @@ def player_train_step(
             player_is_ratio=average(actor_target_clipped_ratio, valid),
             player_norm_adv_mean=average(player_norm_advantages, valid),
             player_norm_adv_std=player_norm_advantages.std(where=valid),
-            player_value_target_mean=average(vtrace.errors, valid),
-            player_value_target_std=vtrace.errors.std(where=valid),
+            player_value_target_mean=average(target_v, valid),
+            player_value_target_std=target_v.std(where=valid),
         )
     )
 
@@ -497,19 +497,15 @@ def builder_train_step(
         (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     )
 
-    rewards = (
+    rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
     ) + shaped_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
-    rewards = jnp.concatenate((rewards[1:], rewards[-1:]))
-    discounts = (
-        jnp.concatenate((valid[1:], jnp.zeros_like(valid[-1:]))) * config.player_gamma
-    ).astype(v_t.dtype)
-    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
-    # Shift lambdas left one slot, such that V_t matches indices with lambda_tp1.
-    lambdas = jnp.concatenate((lambdas[1:], jnp.ones_like(lambdas[-1:])), axis=0)
+    rewards_t = shift_left_with_zeros(rewards_tm1)
+    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
+    lambdas = ((rewards_t + discounts * v_t) >= v_tm1).astype(v_t.dtype)
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace_td_error_and_advantage = jax.vmap(
@@ -522,16 +518,20 @@ def builder_train_step(
         out_axes=1,
     )
     vtrace = vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, target_actor_ratio, lambdas
+        v_tm1, v_t, rewards_t, discounts, target_actor_ratio, lambdas
     )
+    target_v = vtrace.errors + v_tm1
+
     builder_adv_mean = average(vtrace.pg_advantage, valid)
     builder_adv_std = vtrace.pg_advantage.std(where=valid)
+
+    # Normalize by the ema mean and std of the advantages.
     builder_norm_advantages = (vtrace.pg_advantage - builder_state.target_adv_mean) / (
         builder_state.target_adv_std + 1e-8
     )
 
     def builder_loss_fn(params: Params):
-        """Builder loss function."""
+
         builder_pred = promote_map(
             builder_state.apply_fn(
                 params,
@@ -569,7 +569,7 @@ def builder_train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = value_loss(pred_v=builder_pred.v, target_v=vtrace.errors, valid=valid)
+        loss_v = value_loss(pred_v=builder_pred.v, target_v=target_v, valid=valid)
 
         continue_entropy = average(learner_continue_head.entropy, valid)
         selection_entropy = average(learner_selection_head.entropy, valid)
@@ -623,7 +623,7 @@ def builder_train_step(
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             builder_value_function_r2=calculate_r2(
-                value_prediction=builder_pred.v, value_target=vtrace.errors, mask=valid
+                value_prediction=builder_pred.v, value_target=target_v, mask=valid
             ),
         )
 
@@ -642,8 +642,8 @@ def builder_train_step(
             builder_is_ratio=average(actor_target_clipped_ratio, valid),
             builder_norm_adv_mean=average(builder_norm_advantages, valid),
             builder_norm_adv_std=builder_norm_advantages.std(where=valid),
-            builder_value_target_mean=average(vtrace.errors, valid),
-            builder_value_target_std=vtrace.errors.std(where=valid),
+            builder_value_target_mean=average(target_v, valid),
+            builder_value_target_std=target_v.std(where=valid),
         )
     )
 
@@ -922,7 +922,7 @@ class Learner:
                 if (num_steps % self.learner_config.new_player_interval) == 0:
                     print("Adding new player to league @ step", num_steps)
                     self.league.add_player(
-                        new_params=ParamsContainer(
+                        ParamsContainer(
                             frame_count=self.player_state.actor_steps.item(),
                             step_count=num_steps,
                             player_params=self.player_state.params,

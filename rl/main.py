@@ -25,8 +25,8 @@ from rl.model.player_model import get_num_params, get_player_model
 
 
 def run_training_actor_pair(
-    sender: Actor,
-    receiver: Actor,
+    player: Actor,
+    opponent: Actor,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
 ):
@@ -34,17 +34,21 @@ def run_training_actor_pair(
 
     while not stop_signal[0]:
         try:
-            player = sender.pull_main_player()
-            opponent = sender.pull_opponent(player)
+            player_params = player.pull_main_player()
+            opponent_params = player.pull_opponent(player_params)
 
-            future1 = executor.submit(sender.unroll_and_push, player)
-            future2 = executor.submit(receiver.unroll_and_push, opponent)
+            future1 = executor.submit(player.unroll_and_push, player_params)
+            future2 = executor.submit(opponent.unroll_and_push, opponent_params)
 
             trajectory1 = future1.result()
             trajectory2 = future2.result()
 
-            sender.update_player_league_stats(player, opponent, trajectory1)
-            receiver.update_player_league_stats(opponent, player, trajectory2)
+            player.update_player_league_stats(
+                player_params, opponent_params, trajectory1
+            )
+            opponent.update_player_league_stats(
+                opponent_params, player_params, trajectory2
+            )
         except Exception as e:
             traceback.print_exc()
             raise e

@@ -349,7 +349,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 def main(debug: bool = False, generation: int = 9):
     actor_network = get_builder_model(
-        get_builder_model_config(generation, train=False)  # , temp=2, min_p=0.05)
+        get_builder_model_config(generation, train=False, min_p=0.05)
     )
     learner_config = get_builder_model_config(generation, train=True)
     learner_network = get_builder_model(learner_config)
