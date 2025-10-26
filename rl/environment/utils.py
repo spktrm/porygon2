@@ -2,6 +2,7 @@ from typing import Sequence, TypeVar
 
 import jax
 import numpy as np
+import rlax
 
 from rl.environment.data import (
     EX_TRAJECTORY,
@@ -276,7 +277,47 @@ def main():
     """Main function for testing the utilities."""
     ex_player_input, ex_player_output = get_ex_player_step()
     ex_builder_input, ex_builder_output = get_ex_builder_step()
-    print()
+
+    my_fainted_count = ex_player_input.env.info[
+        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    ]
+    opp_fainted_count = ex_player_input.env.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    ]
+    my_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__MY_HP_COUNT]
+    opp_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT]
+    phi_t = (
+        (opp_fainted_count - my_fainted_count) + 0.2 * (my_hp_count - opp_hp_count)
+    ) / MAX_RATIO_TOKEN
+
+    shaped_reward = phi_t[1:] - phi_t[:-1]
+    shaped_reward = np.concatenate(
+        (np.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
+    )
+
+    rewards_tm1 = (shaped_reward).squeeze(-1)
+    valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
+
+    rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
+
+    oracle_value = rewards[::-1].cumsum()[::-1]
+    perturbed_oracle_value = oracle_value + np.random.normal(
+        scale=1e-2, size=oracle_value.shape
+    )
+
+    v_tm1 = valid * perturbed_oracle_value
+    v_t = np.concatenate((v_tm1[1:], v_tm1[-1:]))
+    discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
+        v_t.dtype
+    )
+    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
+
+    vtrace = rlax.vtrace_td_error_and_advantage(
+        v_tm1, v_t, rewards, discounts, valid, lambdas
+    )
+    errors = vtrace.errors
+    errors + v_tm1
+    print(vtrace)
 
 
 if __name__ == "__main__":

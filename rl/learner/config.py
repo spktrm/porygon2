@@ -73,12 +73,12 @@ class Porygon2LearnerConfig:
     # Loss coefficients
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_entropy_loss_coef: float = 0.025
+    player_entropy_loss_coef: float = 0.05
     player_kl_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.025
+    builder_entropy_loss_coef: float = 0.05
     builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
@@ -108,6 +108,7 @@ class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
         [Params, BuilderActorInput, BuilderActorOutput], BuilderActorOutput
     ] = struct.field(pytree_node=False)
+
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     actor_steps: int = 0

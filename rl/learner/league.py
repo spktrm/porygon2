@@ -31,13 +31,13 @@ class League:
         self,
         main_player: ParamsContainer,
         players: list[ParamsContainer],
-        max_num_params: int = 16,
+        league_size: int = 16,
         tau: float = 1e-3,
     ):
         if tau <= 0:
             raise ValueError("Tau must be positive.")
 
-        self.max_players = max_num_params
+        self.league_size = league_size
         self.decay = tau
         self.lock = threading.Lock()
 
@@ -61,7 +61,7 @@ class League:
                 draws=self.draws,
                 losses=self.losses,
                 games=self.games,
-                max_players=self.max_players,
+                max_players=self.league_size,
                 decay=self.decay,
             )
         )
@@ -118,7 +118,7 @@ class League:
         ]
 
     def add_player(self, player: ParamsContainer):
-        while len(self.players) >= self.max_players:
+        while len(self.players) >= self.league_size:
             self.remove_weakest_player()
         self.players[player.step_count] = player
 
@@ -208,6 +208,7 @@ class League:
 
             while True:
                 # Remove player with worst win rate v main player
+                # This is the player that the main agent has the highest win rate against
                 weakest_idx = np.argmax(win_rates[player_to_idx[MAIN_KEY]]).item()
                 weakest_player = idx_to_player[weakest_idx]
                 if weakest_player == MAIN_KEY:

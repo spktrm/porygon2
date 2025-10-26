@@ -13,7 +13,6 @@ from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
 from rl.learner.config import get_learner_config
-from rl.learner.returns import hl_gauss_transform
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.player_model import get_player_model
@@ -71,16 +70,8 @@ class InferenceModel:
         with open(fpath, "rb") as f:
             step = pickle.load(f)
 
-        best_params = step["best_params"]
-        self.player_params = best_params["player_params"]
-        self.builder_params = best_params["builder_params"]
-
-        self.transform_to_probs, self.transform_from_probs = hl_gauss_transform(
-            min_value=self.learner_config.hl_gauss_min,
-            max_value=self.learner_config.hl_gauss_max,
-            num_bins=self.learner_config.hl_gauss_num_bins,
-            sigma=self.learner_config.hl_gauss_sigma,
-        )
+        self.player_params = step["player_state"]["params"]
+        self.builder_params = step["builder_state"]["params"]
 
         print("initializing...")
         self.builder_env = TeamBuilderEnvironment(
@@ -133,9 +124,7 @@ class InferenceModel:
             packed_set_indices=builder_actor_input.env.packed_set_tokens.reshape(
                 -1
             ).tolist(),
-            v=self.transform_from_probs(
-                jax.nn.softmax(builder_agent_output.actor_output.v)
-            ).item(),
+            v=builder_agent_output.actor_output.v.item(),
         )
 
     def step(self, timestep: PlayerActorInput):
@@ -144,7 +133,7 @@ class InferenceModel:
         agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
-            v=self.transform_from_probs(jax.nn.softmax(actor_output.v)).item(),
+            v=actor_output.v.item(),
             action_type=ACTION_TYPE_MAPPING[
                 agent_output.actor_output.action_type_head.action_index.item()
             ],
