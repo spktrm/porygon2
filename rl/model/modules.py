@@ -446,6 +446,131 @@ class TransformerDecoder(nn.Module):
         return q
 
 
+class Transformer(nn.Module):
+    qk_size: int
+    v_size: int
+    model_size: int
+    num_layers: int
+    num_heads: int
+    use_bias: bool = True
+    encoder_need_pos: bool = False
+    decoder_need_pos: bool = False
+    qk_layer_norm: bool = False
+    resblocks_hidden_size: int | None = None
+    use_post_attn_norm: bool = False
+    use_post_ffw_norm: bool = False
+
+    def encoder_layer(
+        self,
+        qkv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+        qkv_positions: jax.Array | None = None,
+    ):
+        qkv_ln = layer_norm(qkv)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            qk_layer_norm=self.qk_layer_norm,
+            use_bias=self.use_bias,
+            need_pos=self.encoder_need_pos,
+            dtype=qkv.dtype,
+        )(
+            q=qkv_ln,
+            kv=qkv_ln,
+            mask=attn_mask,
+            q_positions=qkv_positions,
+            kv_positions=qkv_positions,
+        )
+        if self.use_post_attn_norm:
+            mha = layer_norm(mha)
+        qkv = qkv + mha
+        qkv_ln = layer_norm(qkv)
+        ffn = MLP(
+            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
+        )(qkv_ln)
+        if self.use_post_ffw_norm:
+            ffn = layer_norm(ffn)
+        qkv = qkv + ffn
+        return jnp.where(positionwise_mask, qkv, 0)
+
+    def decoder_layer(
+        self,
+        q: jax.Array,
+        kv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
+    ):
+        q_ln = layer_norm(q)
+        kv_ln = layer_norm(kv)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            use_bias=self.use_bias,
+            qk_layer_norm=self.qk_layer_norm,
+            need_pos=self.decoder_need_pos,
+            dtype=q.dtype,
+        )(
+            q=q_ln,
+            kv=kv_ln,
+            mask=attn_mask,
+            q_positions=q_positions,
+            kv_positions=kv_positions,
+        )
+        if self.use_post_attn_norm:
+            mha = layer_norm(mha)
+        q = q + mha
+        q_ln = layer_norm(q)
+        ffn = MLP(
+            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
+        )(q_ln)
+        if self.use_post_ffw_norm:
+            ffn = layer_norm(ffn)
+        q = q + ffn
+        return jnp.where(positionwise_mask, q, 0)
+
+    @nn.compact
+    def __call__(
+        self,
+        q: jax.Array,
+        kv: jax.Array,
+        encoder_attn_mask: jax.Array | None = None,
+        decoder_attn_mask: jax.Array | None = None,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
+    ):
+        if encoder_attn_mask is None:
+            qkv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+            encoder_attn_mask = create_attention_mask(qkv_mask, qkv_mask)
+
+        if decoder_attn_mask is None:
+            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+            decoder_attn_mask = create_attention_mask(q_mask, kv_mask)
+
+        positionwise_mask = encoder_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
+
+        if self.encoder_need_pos or self.decoder_need_pos:
+            if q_positions is None:
+                q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
+            if kv_positions is None:
+                kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
+
+        for _ in range(self.num_layers):
+            q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
+            q = self.decoder_layer(
+                q, kv, decoder_attn_mask, positionwise_mask, q_positions, kv_positions
+            )
+
+        return q
+
+
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 

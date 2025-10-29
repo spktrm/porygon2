@@ -42,12 +42,15 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 5
-    unroll_length: int = 64 * 2
+    unroll_length: int = 64
     replay_buffer_capacity: int = 512
+
+    # False for the beginning
+    builder_start_step: int = 100_000
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
-    new_player_interval: int = 5_000
+    new_player_interval: int = 10_000
     league_size: int = 16
 
     # Batch iteration params

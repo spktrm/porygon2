@@ -63,6 +63,11 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
 
     entity_size = int(scale * base_size * num_heads)
 
+    num_state_latents = 6
+    num_history_latents = 64
+    cfg.num_state_latents = num_state_latents
+    cfg.num_history_latents = num_history_latents
+
     cfg.generation = generation
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
@@ -71,6 +76,8 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
+    cfg.encoder.num_state_latents = num_state_latents
+    cfg.encoder.num_history_latents = num_history_latents
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -112,33 +119,25 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         qk_layer_norm=decoder_qk_layer_norm,
     )
 
-    cfg.encoder.entity_encoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.entity_encoder.need_pos = False
-
     cfg.encoder.timestep_gat = ConfigDict()
     cfg.encoder.timestep_gat.out_dim = entity_size
-    cfg.encoder.timestep_gat.num_layers = 2
+    cfg.encoder.timestep_gat.num_layers = 1
     cfg.encoder.timestep_gat.num_heads = num_heads
-    cfg.encoder.timestep_gat.max_edges = 2
+    cfg.encoder.timestep_gat.max_edges = 4
 
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
-    cfg.encoder.action_encoder = ConfigDict()
-    set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.action_encoder.need_pos = False
+    cfg.encoder.timestep_decoder = ConfigDict()
+    set_attributes(cfg.encoder.timestep_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.timestep_decoder.need_pos = True
 
-    cfg.encoder.entity_timestep_decoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_timestep_decoder.num_layers = 2
-    cfg.encoder.entity_timestep_decoder.need_pos = True
-
-    cfg.encoder.entity_action_decoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_action_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_action_decoder.num_layers = 2
-    cfg.encoder.entity_action_decoder.need_pos = False
+    cfg.encoder.entity_timestep_transformer = ConfigDict()
+    set_attributes(
+        cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
+    )
+    cfg.encoder.entity_timestep_transformer.num_layers = 4
 
     cfg.encoder.query_pool = ConfigDict()
     set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
@@ -147,7 +146,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
 
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.action_entity_decoder.num_layers = 2
+    cfg.encoder.action_entity_decoder.num_layers = 1
     cfg.encoder.action_entity_decoder.need_pos = False
 
     # Policy Head Configuration
@@ -203,7 +202,10 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
     num_heads = 2
     scale = 1
 
+    num_latents = 3
     entity_size = int(scale * base_size * num_heads)
+
+    cfg.num_latents = num_latents
 
     cfg.entity_size = entity_size
     cfg.generation = generation

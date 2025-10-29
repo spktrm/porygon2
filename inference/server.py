@@ -19,10 +19,10 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=random.randint(0, 2**32 - 1),
-    player_temp=0.8,
-    player_min_p=0.05,
-    builder_temp=1.0,
-    builder_min_p=0.01,
+    player_temp=0.2,
+    player_min_p=0.45,
+    builder_temp=0.2,
+    builder_min_p=0.45,
 )
 
 
@@ -51,7 +51,7 @@ async def step(request: Request):
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
-    ts = process_state(state)
+    ts = process_state(state, None, max_history=512)
     response = await run_in_threadpool(model.step, ts)
     pprint(response)
 
