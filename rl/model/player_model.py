@@ -49,7 +49,9 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
     ):
         action_type_head = self.action_type_head(
-            state_query, env_step.action_type_mask, actor_output.action_type_head
+            state_query,
+            env_step.action_type_mask,
+            actor_output.action_type_head,
         )
         move_head = self.move_head(
             state_query,

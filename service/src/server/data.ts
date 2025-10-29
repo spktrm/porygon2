@@ -100,7 +100,7 @@ export const numInfoFeatures = Object.keys(InfoFeature).length;
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
 
-export const NUM_HISTORY = 384;
+export const NUM_HISTORY = 256;
 
 export const AllValidActions = new OneDBoolean(10, Uint8Array);
 for (let actionIndex = 0; actionIndex < 10; actionIndex++) {

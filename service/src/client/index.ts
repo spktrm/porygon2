@@ -20,7 +20,7 @@ const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
 // const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
 const server = "wss://pokeagentshowdown.com/showdown/websocket";
-const MAX_BATTLES = 250; // Maximum number of battles to run in sequence
+const MAX_BATTLES = 500; // Maximum number of battles to run in sequence
 const smogonFormat = "gen9ou";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {

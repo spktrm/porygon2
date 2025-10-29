@@ -64,8 +64,6 @@ class PlayerTransition(NamedTuple):
 
 
 class BuilderEnvOutput(NamedTuple):
-    continue_mask: ArrayLike = ()
-
     species_mask: ArrayLike = ()
 
     species_tokens: ArrayLike = ()
@@ -90,8 +88,6 @@ class BuilderActorInput(NamedTuple):
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
 
-    continue_head: HeadOutput = HeadOutput()
-    selection_head: HeadOutput = HeadOutput()
     species_head: HeadOutput = HeadOutput()
     packed_set_head: HeadOutput = HeadOutput()
 

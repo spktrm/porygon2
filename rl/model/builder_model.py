@@ -90,18 +90,29 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
-        self.selection_query_merge = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_query_merge = SumEmbeddings(entity_size, dtype=dtype)
 
         transformer_config = self.cfg.transformer.to_dict()
 
+        # Latent embeddings for global state representation.
+        self.latent_embeddings = self.param(
+            "latent_embeddings",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (self.cfg.num_latents, entity_size),
+        )
+        self.unk_embedding = self.param(
+            "unk_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+
         self.encoder = TransformerEncoder(**transformer_config)
         self.decoder = TransformerDecoder(**transformer_config)
 
-        self.continue_head = PolicyLogitHead(self.cfg.continue_head)
-        self.selection_head = PolicyQKHead(self.cfg.selection_head)
         self.species_head = PolicyQKHead(self.cfg.species_head)
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
+
+        self.value_merge = SumEmbeddings(output_size=2 * entity_size, dtype=dtype)
         self.value_head = ValueLogitHead(self.cfg.value_head)
 
     def _embed_species(self, token: jax.Array):
@@ -208,8 +219,8 @@ class Porygon2BuilderModel(nn.Module):
         return embedding
 
     def _forward_value_head(self, my_embedding: jax.Array, opp_embedding: jax.Array):
-        concatenated_embedding = jnp.concatenate((my_embedding, opp_embedding), axis=-1)
-        return self.value_head(concatenated_embedding)
+        hidden = self.value_merge(my_embedding, opp_embedding)
+        return self.value_head(hidden)
 
     def _encode_team(self, species_tokens: jax.Array, packed_set_tokens: jax.Array):
         packed_set_attn_mask = jnp.ones_like(packed_set_tokens, dtype=jnp.bool)
@@ -221,6 +232,11 @@ class Porygon2BuilderModel(nn.Module):
             valid_packed_sets, packed_set_tokens
         )
         set_embeddings = jax.vmap(self._embed_packed_set)(packed_sets)
+        set_embeddings = jnp.where(
+            species_tokens[:, None] == SpeciesEnum.SPECIES_ENUM___UNK,
+            self.unk_embedding,
+            set_embeddings,
+        )
 
         positions = (jnp.arange(set_embeddings.shape[0], dtype=jnp.int32) < 1).astype(
             jnp.int32
@@ -231,19 +247,12 @@ class Porygon2BuilderModel(nn.Module):
             qkv_positions=positions,
         )
 
-        pool_queries = jnp.concatenate(
-            (
-                contextual_embeddings.mean(axis=0, keepdims=True),
-                contextual_embeddings.max(axis=0, keepdims=True),
-                contextual_embeddings.min(axis=0, keepdims=True),
-            ),
-            axis=0,
-        )
         contextual_embedding = self.decoder(
-            pool_queries,
+            self.latent_embeddings,
             contextual_embeddings,
             create_attention_mask(
-                packed_set_attn_mask.any(axis=0, keepdims=True), packed_set_attn_mask
+                jnp.ones((self.cfg.num_latents,), dtype=packed_set_attn_mask.dtype),
+                packed_set_attn_mask,
             ),
             kv_positions=positions,
         ).reshape(-1)
@@ -257,35 +266,14 @@ class Porygon2BuilderModel(nn.Module):
         species_keys: jax.Array,
         opp_embedding: jax.Array,
     ) -> BuilderActorOutput:
-        my_embeddings, my_embedding = self._encode_team(
+        _, my_embedding = self._encode_team(
             actor_env.species_tokens, actor_env.packed_set_tokens
         )
 
         value = self._forward_value_head(my_embedding, opp_embedding)
 
-        continue_query = my_embedding
-        continue_head = self.continue_head(
-            continue_query,
-            actor_env.continue_mask,
-            actor_output.continue_head,
-        )
-
-        selection_query = my_embedding
-        selection_head = self.selection_head(
-            selection_query,
-            my_embeddings,
-            jnp.ones_like(my_embeddings[..., 0], dtype=jnp.bool),
-            actor_output.selection_head,
-        )
-
-        selected_embedding = jnp.take(
-            my_embeddings, selection_head.action_index, axis=0
-        )
-        selection_query = self.selection_query_merge(
-            selection_query, selected_embedding
-        )
         species_head = self.species_head(
-            selection_query,
+            my_embedding,
             species_keys,
             actor_env.species_mask,
             actor_output.species_head,
@@ -303,9 +291,7 @@ class Porygon2BuilderModel(nn.Module):
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
 
         species_embedding = jnp.take(species_keys, species_head.action_index, axis=0)
-        packed_set_query = self.packed_set_query_merge(
-            selection_query, species_embedding
-        )
+        packed_set_query = self.packed_set_query_merge(my_embedding, species_embedding)
         packed_set_head = self.packed_set_head(
             packed_set_query,
             packed_set_keys,
@@ -314,11 +300,7 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         return BuilderActorOutput(
-            continue_head=continue_head,
-            selection_head=selection_head,
-            species_head=species_head,
-            packed_set_head=packed_set_head,
-            v=value,
+            species_head=species_head, packed_set_head=packed_set_head, v=value
         )
 
     def __call__(

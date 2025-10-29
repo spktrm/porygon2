@@ -113,7 +113,9 @@ def get_tera_mask(mask: jax.Array):
 
 
 def process_state(
-    state: EnvironmentState, opponent_team: ResetRequest = None
+    state: EnvironmentState,
+    opponent_team: ResetRequest = None,
+    max_history: int = NUM_HISTORY,
 ) -> PlayerActorInput:
     history_length = state.history_length
 
@@ -123,21 +125,21 @@ def process_state(
         np.frombuffer(state.history_entity_nodes, dtype=np.int16).reshape(
             (history_length, 12, NUM_ENTITY_NODE_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     history_entity_edges = padnstack(
         np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
             (history_length, 12, NUM_ENTITY_EDGE_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     history_field = padnstack(
         np.frombuffer(state.history_field, dtype=np.int16).reshape(
             (history_length, NUM_FIELD_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     moveset = (
@@ -240,14 +242,13 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
-    trajectory_length = 33
+    trajectory_length = 7
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
     ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
-                continue_mask=np.ones((trajectory_length, 1, 2), dtype=np.bool_),
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
                 ),
@@ -263,8 +264,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
-            continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             packed_set_head=HeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)

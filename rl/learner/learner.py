@@ -60,15 +60,10 @@ def calculate_player_log_prob(
 
 def calculate_builder_log_prob(
     *,
-    continue_log_prob: jax.Array,
-    continue_index: jax.Array,
-    selection_log_prob: jax.Array,
     species_log_prob: jax.Array,
     packed_set_log_prob: jax.Array,
 ):
-    return continue_log_prob + (continue_index == 0) * (
-        selection_log_prob + species_log_prob + packed_set_log_prob
-    )
+    return species_log_prob + packed_set_log_prob
 
 
 def spo_objective(
@@ -243,9 +238,11 @@ def player_train_step(
     opp_hp_count = player_transitions.env_output.info[
         ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
     ]
+
+    mult = 0.1
     phi_t = (
-        0.2
-        * ((opp_fainted_count - my_fainted_count) + 0.2 * (my_hp_count - opp_hp_count))
+        mult
+        * ((opp_fainted_count - my_fainted_count) + mult * (my_hp_count - opp_hp_count))
         / MAX_RATIO_TOKEN
     )
 
@@ -254,14 +251,12 @@ def player_train_step(
         (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     )
 
-    # Accounting for revival blessing
     rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
-    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace_td_error_and_advantage = jax.vmap(
@@ -274,7 +269,7 @@ def player_train_step(
         out_axes=1,
     )
     vtrace = vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, target_actor_ratio, lambdas
+        v_tm1, v_t, rewards, discounts, target_actor_ratio
     )
     target_v = vtrace.errors + v_tm1
 
@@ -453,29 +448,19 @@ def builder_train_step(
         )
     )
 
-    actor_continue_head = builder_transitions.agent_output.actor_output.continue_head
-    actor_selection_head = builder_transitions.agent_output.actor_output.selection_head
     actor_species_head = builder_transitions.agent_output.actor_output.species_head
     actor_packed_set_head = (
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
-    target_continue_head = builder_target_pred.continue_head
-    target_selection_head = builder_target_pred.selection_head
     target_species_head = builder_target_pred.species_head
     target_packed_set_head = builder_target_pred.packed_set_head
 
     actor_log_prob = calculate_builder_log_prob(
-        continue_log_prob=actor_continue_head.log_prob,
-        continue_index=actor_continue_head.action_index,
-        selection_log_prob=actor_selection_head.log_prob,
         species_log_prob=actor_species_head.log_prob,
         packed_set_log_prob=actor_packed_set_head.log_prob,
     )
     target_log_prob = calculate_builder_log_prob(
-        continue_log_prob=target_continue_head.log_prob,
-        continue_index=target_continue_head.action_index,
-        selection_log_prob=target_selection_head.log_prob,
         species_log_prob=target_species_head.log_prob,
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
@@ -488,24 +473,23 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    phi_t = (
-        builder_transitions.env_output.cum_species_reward / 0.5
-        + builder_transitions.env_output.cum_teammate_reward / 5
-    ) / 20
-    shaped_reward = phi_t[1:] - phi_t[:-1]
-    shaped_reward = jnp.concatenate(
-        (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
-    )
+    # phi_t = (
+    #     builder_transitions.env_output.cum_species_reward / 0.5
+    #     + builder_transitions.env_output.cum_teammate_reward / 5
+    # ) / 20
+    # shaped_reward = phi_t[1:] - phi_t[:-1]
+    # shaped_reward = jnp.concatenate(
+    #     (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
+    # )
 
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    ) + shaped_reward
+    )  # + shaped_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards_t = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
-    lambdas = ((rewards_t + discounts * v_t) >= v_tm1).astype(v_t.dtype)
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace_td_error_and_advantage = jax.vmap(
@@ -518,7 +502,7 @@ def builder_train_step(
         out_axes=1,
     )
     vtrace = vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards_t, discounts, target_actor_ratio, lambdas
+        v_tm1, v_t, rewards_t, discounts, target_actor_ratio
     )
     target_v = vtrace.errors + v_tm1
 
@@ -540,15 +524,10 @@ def builder_train_step(
             )
         )
 
-        learner_continue_head = builder_pred.continue_head
-        learner_selection_head = builder_pred.selection_head
         learner_species_head = builder_pred.species_head
         learner_packed_set_head = builder_pred.packed_set_head
 
         learner_log_prob = calculate_builder_log_prob(
-            continue_log_prob=learner_continue_head.log_prob,
-            continue_index=learner_continue_head.action_index,
-            selection_log_prob=learner_selection_head.log_prob,
             species_log_prob=learner_species_head.log_prob,
             packed_set_log_prob=learner_packed_set_head.log_prob,
         )
@@ -571,13 +550,9 @@ def builder_train_step(
 
         loss_v = value_loss(pred_v=builder_pred.v, target_v=target_v, valid=valid)
 
-        continue_entropy = average(learner_continue_head.entropy, valid)
-        selection_entropy = average(learner_selection_head.entropy, valid)
         species_entropy = average(learner_species_head.entropy, valid)
         packed_set_entropy = average(learner_packed_set_head.entropy, valid)
-        loss_entropy = (
-            continue_entropy + selection_entropy + species_entropy + packed_set_entropy
-        )
+        loss_entropy = species_entropy + packed_set_entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -608,8 +583,6 @@ def builder_train_step(
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
             # Head entropies
-            builder_continue_entropy=continue_entropy,
-            builder_selection_entropy=selection_entropy,
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
             # Ratios
@@ -756,8 +729,8 @@ class Learner:
     def stack_batch(
         self,
         batch: list[Trajectory],
-        player_transition_resolution: int = 64,
-        player_history_resolution: int = 128,
+        player_transition_resolution: int = 32,
+        player_history_resolution: int = 64,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
@@ -846,6 +819,8 @@ class Learner:
                 batch = self.device_q.get()
                 batch: Trajectory = jax.device_put(batch)
 
+                num_steps = np.array(self.player_state.num_steps).item()
+
                 new_player_state: Porygon2PlayerTrainState
                 with self.gpu_lock:
                     new_player_state, player_logs = player_train_step_jit(
@@ -855,29 +830,31 @@ class Learner:
                         self.learner_config,
                     )
 
-                builder_final_reward = calculate_builder_final_reward(batch)
-                new_builder_state: Porygon2BuilderTrainState
-                with self.gpu_lock:
-                    new_builder_state, builder_logs = builder_train_step_jit(
-                        self.builder_state,
-                        batch.builder_transitions,
-                        batch.player_hidden,
-                        builder_final_reward,
-                        self.learner_config,
-                    )
+                if num_steps >= self.learner_config.builder_start_step:
+                    builder_final_reward = calculate_builder_final_reward(batch)
+                    new_builder_state: Porygon2BuilderTrainState
+                    with self.gpu_lock:
+                        new_builder_state, builder_logs = builder_train_step_jit(
+                            self.builder_state,
+                            batch.builder_transitions,
+                            batch.player_hidden,
+                            builder_final_reward,
+                            self.learner_config,
+                        )
+                else:
+                    new_builder_state = self.builder_state
+                    builder_logs = {}
 
                 # Safety check: only apply the update if the losses are finite.
-                if (
-                    jnp.isfinite(player_logs["player_loss"]).item()
-                    and jnp.isfinite(builder_logs["builder_loss"]).item()
+                if jnp.isfinite(player_logs["player_loss"]).item() and (
+                    not builder_logs
+                    or jnp.isfinite(builder_logs["builder_loss"]).item()
                 ):
                     self.player_state = new_player_state
                     self.builder_state = new_builder_state
                 else:
                     print("Non-finite loss detected @ step", step_idx)
                     continue
-
-                num_steps = self.player_state.num_steps.item()
 
                 training_logs = {"step_idx": step_idx}
                 training_logs.update(
@@ -890,7 +867,7 @@ class Learner:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)
                     training_logs.update(jax.device_get(usage_logs))
 
-                if (num_steps % 200) == 0:
+                if (num_steps % 1000) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
 

@@ -48,7 +48,7 @@ class Actor:
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
             env=timestep.env,
-            history=clip_history(timestep.history, resolution=128),
+            history=clip_history(timestep.history, resolution=64),
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):

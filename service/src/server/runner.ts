@@ -503,7 +503,7 @@ export function createBattle(
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? Math.floor(64 * 1.8);
+    const maxRequestCount = options.maxRequestCount ?? 60;
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
