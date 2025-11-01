@@ -1,9 +1,9 @@
 import functools
 import json
-import random
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.data import (
@@ -16,6 +16,7 @@ from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderAgentOutput,
     BuilderEnvOutput,
+    BuilderHistoryOutput,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.service_pb2 import (
@@ -44,6 +45,7 @@ class SinglePlayerSyncEnvironment:
             additional_headers={"username": username},
         )
         self.generation = generation
+        self.metgame_token = None
 
     def _set_current_ckpt(self, ckpt: str):
         self.current_ckpt = ckpt
@@ -62,13 +64,20 @@ class SinglePlayerSyncEnvironment:
         self.rqid = environment_response.state.rqid
 
         opponent_reset_request = worker_response.opponent_reset_request
+
         self.last_state = process_state(
             environment_response.state,
             opponent_reset_request if opponent_reset_request.username else None,
+            self.metagame_token,
         )
         return self.last_state
 
-    def reset(self, species_indices: list[int], packed_set_indices: list[int]):
+    def reset(
+        self,
+        species_indices: list[int],
+        packed_set_indices: list[int],
+        metagame_token: int = None,
+    ):
         self.rqid = None
         reset_message = ClientRequest(
             reset=ResetRequest(
@@ -80,6 +89,7 @@ class SinglePlayerSyncEnvironment:
                 opponent_ckpt=self.opponent_ckpt,
             )
         )
+        self.metagame_token = metagame_token
         self.websocket.send(reset_message.SerializeToString())
         return self._recv()
 
@@ -99,6 +109,8 @@ class SinglePlayerSyncEnvironment:
 
 
 class TeamBuilderEnvironment:
+    state: BuilderActorInput
+
     def __init__(
         self,
         generation: int,
@@ -106,8 +118,7 @@ class TeamBuilderEnvironment:
         num_team_members: int = 6,
         max_trajectory_length: int = 6,
         min_trajectory_length: int = 1,
-        *,
-        initial_seed: int = random.randint(0, 2**31 - 1),
+        metagame_vocab_size: int = 32,
     ):
         if num_team_members < 1 or num_team_members > 6:
             raise ValueError("num_team_members must be between 1 and 6")
@@ -116,11 +127,12 @@ class TeamBuilderEnvironment:
                 "max_trajectory_length must be greater than or equal to min_trajectory_length"
             )
 
-        self.smogon_format = smogon_format
-        self.generation = generation
-        self.num_team_members = num_team_members
-        self.max_trajectory_length = max_trajectory_length
-        self.min_trajectory_length = min_trajectory_length
+        self._smogon_format = smogon_format
+        self._generation = generation
+        self._num_team_members = num_team_members
+        self._max_trajectory_length = max_trajectory_length
+        self._min_trajectory_length = min_trajectory_length
+        self._metagame_vocab_size = metagame_vocab_size
 
         self.species_rewards = jnp.asarray(
             HUMAN_SPECIES_COUNTS[generation][smogon_format.replace("_all_formats", "")]
@@ -141,11 +153,10 @@ class TeamBuilderEnvironment:
 
         self.ex = get_ex_builder_step()
 
-        self.state: BuilderActorInput
-        self.reset()
-
-    def reset(self) -> BuilderActorInput:
-        self.state = self._reset()
+    def reset(self, metagame_token: jax.Array = None) -> BuilderActorInput:
+        if metagame_token is None:
+            metagame_token = np.random.randint(0, self._metagame_vocab_size - 1)
+        self.state = self._reset(metagame_token)
         return self.state
 
     def step(self, agent_output: BuilderAgentOutput) -> BuilderActorInput:
@@ -159,11 +170,11 @@ class TeamBuilderEnvironment:
         return self.state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self):
+    def _reset(self, metagame_token: jax.Array) -> BuilderActorInput:
         species_mask = self.start_mask
 
         species_tokens = (
-            jnp.ones((self.num_team_members,), dtype=jnp.int32)
+            jnp.ones((self._num_team_members,), dtype=jnp.int32)
             * SpeciesEnum.SPECIES_ENUM___UNK
         )
         packed_set_tokens = jnp.zeros_like(species_tokens)
@@ -171,13 +182,16 @@ class TeamBuilderEnvironment:
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=species_mask,
-                species_tokens=species_tokens,
-                packed_set_tokens=jnp.array(packed_set_tokens),
                 done=jnp.array(0, dtype=jnp.bool),
                 ts=jnp.array(0, dtype=jnp.int32),
                 cum_teammate_reward=0,
                 cum_species_reward=0,
-            )
+                metagame_token=jnp.array(metagame_token, dtype=jnp.int32),
+            ),
+            history=BuilderHistoryOutput(
+                species_tokens=species_tokens,
+                packed_set_tokens=packed_set_tokens,
+            ),
         )
 
     def _calculate_species_rewards(self, species_tokens: jax.Array):
@@ -201,28 +215,26 @@ class TeamBuilderEnvironment:
         ts = state.env.ts
         next_ts = ts + 1
 
-        traj_over = next_ts >= self.max_trajectory_length
+        traj_over = next_ts >= self._max_trajectory_length
         done = state.env.done | traj_over
 
         selection_oh = jax.nn.one_hot(
-            ts, num_classes=self.num_team_members, dtype=jnp.bool_
+            ts, num_classes=self._num_team_members, dtype=jnp.bool_
         )
         species_tokens = jnp.where(
-            selection_oh, species_token, state.env.species_tokens
+            selection_oh, species_token, state.history.species_tokens
         )
         species_mask = (
             jnp.take(self.duplicate_masks, species_tokens, axis=0).all(axis=0)
             & self.packed_set_mask
         )
         packed_set_tokens = jnp.where(
-            selection_oh, packed_set_token, state.env.packed_set_tokens
+            selection_oh, packed_set_token, state.history.packed_set_tokens
         )
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=species_mask,
-                species_tokens=species_tokens,
-                packed_set_tokens=packed_set_tokens,
                 done=done,
                 ts=next_ts,
                 # Prevent reward hacking by choosing common species
@@ -232,5 +244,10 @@ class TeamBuilderEnvironment:
                 cum_species_reward=self._calculate_species_rewards(
                     species_tokens,
                 ),
-            )
+                metagame_token=state.env.metagame_token,
+            ),
+            history=BuilderHistoryOutput(
+                species_tokens=species_tokens,
+                packed_set_tokens=packed_set_tokens,
+            ),
         )

@@ -1,4 +1,5 @@
 import math
+from typing import NamedTuple
 
 import flax.linen as nn
 import jax
@@ -8,6 +9,11 @@ from ml_collections import ConfigDict
 from rl.environment.interfaces import HeadOutput
 from rl.model.modules import MLP, PointerLogits, Resnet
 from rl.model.utils import legal_log_policy, legal_policy
+
+
+class HeadParams(NamedTuple):
+    temp: float = 1.0
+    min_p: float = 0.0
 
 
 def sample_categorical(
@@ -34,8 +40,9 @@ class PolicyQKHead(nn.Module):
         self,
         query_embedding: jax.Array,
         key_embeddings: jax.Array,
-        valid_mask: jax.Array,
         head: HeadOutput,
+        valid_mask: jax.Array = None,
+        head_params: HeadParams = HeadParams(),
     ):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         qk_logits = PointerLogits(
@@ -43,9 +50,11 @@ class PolicyQKHead(nn.Module):
             **self.cfg.qk_logits.to_dict()
         )
 
-        temp = self.cfg.get("temp", 1.0)
         logits = qk_logits(resnet(query_embedding), key_embeddings)
-        logits = logits / temp
+        logits = logits / head_params.temp
+
+        if valid_mask is None:
+            valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
 
@@ -61,27 +70,43 @@ class PolicyQKHead(nn.Module):
                 log_policy,
                 valid_mask,
                 self.make_rng("sampling"),
-                self.cfg.get("min_p", 0.0),
+                min_p=head_params.min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
         return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
 
 
-class PolicyLogitHead(nn.Module):
+class PolicyLogitHeadInner(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, embedding: jax.Array, valid_mask: jax.Array, head: HeadOutput):
+    def __call__(self, embedding: jax.Array):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
             **self.cfg.logits.to_dict()
         )
-
-        temp = self.cfg.get("temp", 1.0)
         embedding = resnet(embedding)
-        logits = logits(embedding) / temp
+        return logits(embedding)
+
+
+class PolicyLogitHead(nn.Module):
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        embedding: jax.Array,
+        head: HeadOutput,
+        valid_mask: jax.Array = None,
+        head_params: HeadParams = HeadParams(),
+    ):
+        logits = PolicyLogitHeadInner(self.cfg)(embedding)
+        logits = logits / head_params.temp
+
+        if valid_mask is None:
+            valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
 
@@ -97,7 +122,7 @@ class PolicyLogitHead(nn.Module):
                 log_policy,
                 valid_mask,
                 self.make_rng("sampling"),
-                self.cfg.get("min_p", 0.0),
+                min_p=head_params.min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)

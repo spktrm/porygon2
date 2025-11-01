@@ -4,40 +4,6 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 
-def camel_case_path(path_list):
-    """Converts a list of path components to a CamelCase string."""
-    return "".join(
-        [
-            (
-                word.capitalize()
-                if len(word.split("_")) <= 1
-                else camel_case_path(word.split("_"))
-            )
-            for word in path_list
-        ]
-    )
-
-
-def add_name_recursive(cfg, path=None):
-    """Recursively creates a new ConfigDict with `name` attributes based on the path."""
-    if path is None:
-        path = []
-
-    new_cfg = ConfigDict()
-
-    if isinstance(cfg, ConfigDict):
-        new_cfg.name = camel_case_path(path)  # Set the name based on the current path
-
-        for key, value in cfg.items():
-            # Recursively add names to each nested ConfigDict
-            new_cfg[key] = add_name_recursive(value, path + [key])
-    else:
-        # For non-ConfigDict items, simply copy them over
-        new_cfg = cfg
-
-    return new_cfg
-
-
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
     """
     Sets multiple attributes on a ConfigDict object using keyword arguments.
@@ -54,19 +20,20 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
+def get_player_model_config(
+    generation: int = 3, train: bool = False, metagame_vocab_size: int = 32
+) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
     num_heads = 2
     scale = 1
 
+    num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
 
-    num_state_latents = 6
-    num_history_latents = 64
+    cfg.metagame_vocab_size = metagame_vocab_size
     cfg.num_state_latents = num_state_latents
-    cfg.num_history_latents = num_history_latents
 
     cfg.generation = generation
     cfg.entity_size = entity_size
@@ -77,7 +44,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
     cfg.encoder.num_state_latents = num_state_latents
-    cfg.encoder.num_history_latents = num_history_latents
+    cfg.encoder.metagame_vocab_size = metagame_vocab_size
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -153,11 +120,13 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.action_type_head = ConfigDict()
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
+    cfg.metagame_head = ConfigDict()
 
     for head, output_size in [
         (cfg.value_head, 1),
         (cfg.action_type_head, 3),
         (cfg.wildcard_head, 5),
+        (cfg.metagame_head, metagame_vocab_size),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
@@ -178,34 +147,34 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         cfg.move_head,
         cfg.switch_head,
         cfg.wildcard_head,
+        cfg.metagame_head,
     ]:
         head.resnet = ConfigDict()
         head.resnet.num_resblocks = 1
 
-    if head_params is not None:
-        for head in [
-            cfg.action_type_head,
-            cfg.move_head,
-            cfg.switch_head,
-            cfg.wildcard_head,
-        ]:
-            for param_name, param_value in head_params.items():
-                setattr(head, param_name, param_value)
+    for head in [
+        cfg.action_type_head,
+        cfg.move_head,
+        cfg.switch_head,
+        cfg.wildcard_head,
+    ]:
+        head.train = train
 
     return cfg
 
 
-def get_builder_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
+def get_builder_model_config(
+    generation: int = 3, train: bool = False, metagame_vocab_size: int = 32
+) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
     num_heads = 2
     scale = 1
 
-    num_latents = 3
     entity_size = int(scale * base_size * num_heads)
 
-    cfg.num_latents = num_latents
+    cfg.metagame_vocab_size = metagame_vocab_size
 
     cfg.entity_size = entity_size
     cfg.generation = generation
@@ -236,14 +205,10 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
     set_attributes(cfg.transformer, **transformer_kwargs)
     cfg.transformer.need_pos = True
 
-    for param_name, param_value in head_params.items():
-        setattr(cfg, param_name, param_value)
-
     for name in [
-        "continue_head",
-        "selection_head",
         "species_head",
         "packed_set_head",
+        "metagame_head",
         "value_head",
     ]:
         head_cfg = ConfigDict()
@@ -252,7 +217,7 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         setattr(cfg, name, head_cfg)
 
     for head, output_size in [
-        (cfg.continue_head, 2),
+        (cfg.metagame_head, metagame_vocab_size),
         (cfg.value_head, 1),
     ]:
         head.logits = ConfigDict()
@@ -260,7 +225,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         head.logits.use_layer_norm = True
 
     for head in [
-        cfg.selection_head,
         cfg.species_head,
         cfg.packed_set_head,
     ]:
@@ -268,16 +232,7 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         head.qk_logits.num_layers_query = 1
         head.qk_logits.num_layers_keys = 3
         head.qk_logits.use_layer_norm = True
-
-    if head_params is not None:
-        for head in [
-            cfg.continue_head,
-            cfg.selection_head,
-            cfg.species_head,
-            cfg.packed_set_head,
-        ]:
-            for param_name, param_value in head_params.items():
-                setattr(head, param_name, param_value)
+        head.train = train
 
     return cfg
 

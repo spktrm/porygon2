@@ -14,7 +14,6 @@ class GatNet(nn.Module):
     num_layers: int
     num_heads: int = 1
     max_edges: int = 2
-    dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: jax.Array, e: jax.Array, f: jax.Array, valid_mask: jax.Array):
@@ -25,7 +24,7 @@ class GatNet(nn.Module):
         valid_mask: (N,) bool
         returns: (N, out_dim)
         """
-        x = nn.Dense(self.out_dim, dtype=self.dtype)(x)
+        x = nn.Dense(self.out_dim, dtype=x.dtype)(x)
 
         valid_idx = jnp.where(valid_mask, size=self.max_edges, fill_value=-1)[0]
         take_mask = valid_idx != -1  # True only for real indices

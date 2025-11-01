@@ -97,7 +97,7 @@ class InferenceModel:
         rng_key = self.split_rng()
 
         builder_subkeys = jax.random.split(
-            rng_key, self.builder_env.max_trajectory_length + 1
+            rng_key, self.builder_env._max_trajectory_length + 1
         )
 
         build_traj = []

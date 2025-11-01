@@ -215,11 +215,6 @@ class Encoder(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (self.cfg.num_state_latents, entity_size),
         )
-        self.latent_history_embeddings = self.param(
-            "latent_history_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (self.cfg.num_history_latents, entity_size),
-        )
 
         # Timestep wise graph attention layers
         self.timestep_gat = GatNet(**self.cfg.timestep_gat.to_dict())
@@ -227,9 +222,6 @@ class Encoder(nn.Module):
         # Transformer encoders for processing sequences of entities and edges.
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
-        )
-        self.timestep_decoder = TransformerDecoder(
-            **self.cfg.timestep_decoder.to_dict()
         )
 
         # Transformer Decoders
@@ -836,53 +828,58 @@ class Encoder(nn.Module):
             history_request_count,
             jnp.iinfo(request_count.dtype).max,
         )
+        timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
         def _batched_forward(
             env_step: PlayerEnvOutput,
             timestep_mask: jax.Array,
             current_position: jax.Array,
         ):
-            entity_embeddings, entity_mask, move_embeddings = self._embed_entities(
-                env_step
+            entity_embeddings, entity_mask, entity_move_embeddings = (
+                self._embed_entities(env_step)
             )
             field_embedding, *_ = self._embed_field(env_step.field)
 
             expanded_entity_embeddings = jax.vmap(
                 jax.vmap(self.expanded_entity_merge, in_axes=(None, None, 0)),
                 in_axes=(0, None, 0),
-            )(entity_embeddings, field_embedding, move_embeddings)
+            )(entity_embeddings, field_embedding, entity_move_embeddings)
 
-            expanded_entity_embeddings = expanded_entity_embeddings.reshape(
+            expanded_entity_embeddings = (expanded_entity_embeddings).reshape(
                 -1, self.cfg.entity_size
             )
             expanded_entity_mask = jnp.broadcast_to(
-                entity_mask[..., None], move_embeddings.shape[:-1]
+                entity_mask[..., None], entity_move_embeddings.shape[:-1]
             ).reshape(-1)
 
-            latent_timestep_mask = jnp.ones(
-                (self.cfg.num_history_latents,), dtype=entity_mask.dtype
+            upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
+
+            latest_timestep_indices = upper_index - jnp.arange(32)
+
+            latest_timestep_embeddings = jnp.take(
+                timestep_embeddings, latest_timestep_indices, axis=0
             )
-            latent_history_embeddings = self.timestep_decoder(
-                self.latent_history_embeddings,
-                timestep_embeddings,
-                create_attention_mask(latent_timestep_mask, timestep_mask),
-                q_positions=jnp.broadcast_to(
-                    current_position, self.latent_history_embeddings.shape[0]
-                ),
-                kv_positions=history_request_count,
+            latest_timestep_mask = jnp.take(
+                timestep_mask, latest_timestep_indices, axis=0
+            ) & (latest_timestep_indices >= 0)
+            kv_positions = jnp.take(
+                history_request_count, latest_timestep_indices, axis=0
             )
 
             expanded_entity_embeddings = self.entity_timestep_transformer(
                 expanded_entity_embeddings,
-                latent_history_embeddings,
+                latest_timestep_embeddings,
                 encoder_attn_mask=create_attention_mask(
                     expanded_entity_mask, expanded_entity_mask
                 ),
                 decoder_attn_mask=create_attention_mask(
-                    expanded_entity_mask, latent_timestep_mask
+                    expanded_entity_mask, latest_timestep_mask
                 ),
-            ).reshape(*move_embeddings.shape)
-            contextual_entities = expanded_entity_embeddings.mean(axis=1)
+                q_positions=jnp.broadcast_to(
+                    current_position, expanded_entity_embeddings.shape[:-1]
+                ),
+                kv_positions=kv_positions,
+            )
 
             entity_idx = env_step.moveset[
                 ..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX
@@ -891,6 +888,9 @@ class Encoder(nn.Module):
                 env_step.moveset,
                 jnp.take(entity_embeddings[:6], entity_idx, axis=0),
             )
+            contextual_entities = expanded_entity_embeddings.reshape(
+                *entity_move_embeddings.shape
+            ).mean(axis=1)
             contextual_switches = contextual_entities[:6]
 
             move_mask = env_step.action_type_mask[0] * env_step.move_mask
@@ -899,15 +899,15 @@ class Encoder(nn.Module):
                 (self.cfg.num_state_latents,), dtype=entity_mask.dtype
             )
             state_embeddings = self.state_pool(
-                self.latent_state_embeddings,
-                contextual_entities,
-                create_attention_mask(latent_state_mask, entity_mask),
+                self.latent_state_embeddings.astype(self.cfg.dtype),
+                expanded_entity_embeddings,
+                create_attention_mask(latent_state_mask, expanded_entity_mask),
             )
 
             contextual_moves = self.move_entity_decoder(
                 move_embeddings,
-                contextual_entities,
-                create_attention_mask(move_mask, entity_mask),
+                expanded_entity_embeddings,
+                create_attention_mask(move_mask, expanded_entity_mask),
             )
 
             return state_embeddings.reshape(-1), contextual_moves, contextual_switches

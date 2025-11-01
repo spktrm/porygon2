@@ -1,5 +1,3 @@
-import random
-
 import jax
 import numpy as np
 
@@ -14,7 +12,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
-from rl.environment.utils import clip_history
+from rl.environment.utils import clip_history, split_rng
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
@@ -35,20 +33,24 @@ class Actor:
         unroll_length: int,
         learner: Learner,
         rng_seed: int = 42,
+        metagame_vocab_size: int = 32,
     ):
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(
-            env.generation, "ou_all_formats", initial_seed=random.randint(0, 2**31 - 1)
+            generation=env.generation,
+            smogon_format="ou_all_formats",
+            metagame_vocab_size=metagame_vocab_size,
         )
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
+        self._metagame_vocab_size = metagame_vocab_size
 
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
             env=timestep.env,
-            history=clip_history(timestep.history, resolution=64),
+            history=clip_history(timestep.history, resolution=128),
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
@@ -70,16 +72,18 @@ class Actor:
         builder_params: Params,
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
-        builder_key, player_key = jax.random.split(rng_key)
-        builder_unroll_length = self._builder_env.max_trajectory_length + 1
+        builder_key, player_key = split_rng(rng_key, 2)
+        builder_unroll_length = self._builder_env._max_trajectory_length + 1
 
-        builder_subkeys = jax.random.split(builder_key, builder_unroll_length)
-        player_subkeys = jax.random.split(player_key, self._unroll_length)
+        builder_subkeys = split_rng(builder_key, builder_unroll_length)
+        player_subkeys = split_rng(player_key, self._unroll_length)
 
         build_traj = []
 
         # Reset the builder environment.
         builder_actor_input = self._builder_env.reset()
+        metagame_token = builder_actor_input.env.metagame_token.item()
+
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
@@ -111,8 +115,9 @@ class Actor:
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_actor_input.env.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
+            metagame_token,
         )
         # Extract opponent hidden info to better inform builder value function.
         player_hidden = player_actor_input.hidden
@@ -149,8 +154,8 @@ class Actor:
 
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
+            builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
-            # builder_history=builder_actor_input.history,
             player_history=player_actor_input.history,
             player_hidden=player_hidden,
         )
@@ -158,7 +163,7 @@ class Actor:
         return promote_map(trajectory)
 
     def split_rng(self) -> jax.Array:
-        self._rng_key, subkey = jax.random.split(self._rng_key)
+        self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
     def set_current_ckpt(self, ckpt: int):

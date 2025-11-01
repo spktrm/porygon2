@@ -15,6 +15,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
     PlayerAgentOutput,
 )
+from rl.model.heads import HeadParams
 from rl.model.utils import Params
 
 
@@ -30,6 +31,7 @@ class Agent:
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
         gpu_lock: LockType | None = None,
+        head_params: HeadParams = HeadParams(),
     ):
         """Constructs an Agent object."""
         if player_apply_fn is None and builder_apply_fn is None:
@@ -37,8 +39,12 @@ class Agent:
                 "At least one of player_apply_fn or builder_apply_fn must be provided."
             )
 
-        self._player_apply_fn = player_apply_fn
-        self._builder_apply_fn = builder_apply_fn
+        self._player_apply_fn = functools.partial(
+            player_apply_fn, head_params=head_params
+        )
+        self._builder_apply_fn = functools.partial(
+            builder_apply_fn, head_params=head_params
+        )
         self._gpu_lock = gpu_lock or nullcontext()
 
     def step_builder(
@@ -55,19 +61,29 @@ class Agent:
 
     @overload
     def _step_builder(
-        self, rng_key, params: Params, actor_input: BuilderEnvOutput
+        self,
+        rng_key,
+        params: Params,
+        actor_input: BuilderEnvOutput,
     ) -> BuilderAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_builder(
-        self, rng_key: jax.Array, params: Params, actor_input: BuilderActorInput
+        self,
+        rng_key: jax.Array,
+        params: Params,
+        actor_input: BuilderActorInput,
     ) -> BuilderAgentOutput:
 
         actor_input: BuilderActorInput = BuilderActorInput(
             env=jax.tree.map(lambda x: x[None, ...], actor_input.env),
+            history=jax.tree.map(lambda x: x[:, ...], actor_input.history),
         )
 
         actor_output = self._builder_apply_fn(
-            params, actor_input, rngs={"sampling": rng_key}
+            params,
+            actor_input,
+            BuilderActorOutput(),
+            rngs={"sampling": rng_key},
         )
         # Remove the padding from above.
         actor_output: BuilderActorOutput = jax.tree.map(
@@ -78,11 +94,17 @@ class Agent:
 
     @overload
     def _step_player(
-        self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
+        self,
+        rng_key: jax.Array,
+        params: Params,
+        actor_input: PlayerActorInput,
     ) -> PlayerAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_player(
-        self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
+        self,
+        rng_key: jax.Array,
+        params: Params,
+        actor_input: PlayerActorInput,
     ) -> PlayerAgentOutput:
         """For a given single-step, unbatched timestep, output the chosen action."""
         # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
@@ -93,7 +115,10 @@ class Agent:
         )
 
         actor_output = self._player_apply_fn(
-            params, actor_input, PlayerActorOutput(), rngs={"sampling": rng_key}
+            params,
+            actor_input,
+            PlayerActorOutput(),
+            rngs={"sampling": rng_key},
         )
         # Remove the padding from above.
         actor_output: PlayerActorOutput = jax.tree.map(
