@@ -136,7 +136,7 @@ class ReplayBuffer:
         with self._lock:
             self._species_counts = calculate_tracking(
                 self._species_counts,
-                traj.builder_transitions.env_output.species_tokens[-1],
+                traj.builder_history.species_tokens.reshape(-1),
                 self._tau,
                 NUM_SPECIES,
             )

@@ -36,6 +36,7 @@ from rl.learner.config import (
 )
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
+from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
@@ -183,6 +184,7 @@ def player_train_step(
             player_state.target_params,
             player_actor_input,
             player_transitions.agent_output.actor_output,
+            HeadParams(),
         )
     )
 
@@ -251,7 +253,14 @@ def player_train_step(
         (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     )
 
-    rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
+    skill_reward = (
+        player_transitions.agent_output.actor_output.metagame_log_prob
+        + math.log(config.metagame_vocab_size)
+    )
+
+    rewards_tm1 = (
+        player_transitions.env_output.win_reward + shaped_reward + 1e-2 * skill_reward
+    )
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -288,6 +297,7 @@ def player_train_step(
                 params,
                 player_actor_input,
                 player_transitions.agent_output.actor_output,
+                HeadParams(),
             )
         )
 
@@ -351,11 +361,14 @@ def player_train_step(
             valid=valid,
         )
 
+        loss_disc = -player_pred.metagame_log_prob.mean(where=valid)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_kl
             - config.player_entropy_loss_coef * loss_entropy
+            + loss_disc
         )
 
         return loss, dict(
@@ -364,6 +377,7 @@ def player_train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_kl,
+            player_loss_disc=loss_disc,
             # Per head entropies
             player_action_type_entropy=action_type_head_entropy,
             player_move_entropy=move_head_entropy,
@@ -445,6 +459,7 @@ def builder_train_step(
             builder_state.target_params,
             builder_actor_input,
             builder_transitions.agent_output.actor_output,
+            HeadParams(),
         )
     )
 
@@ -482,9 +497,14 @@ def builder_train_step(
     #     (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     # )
 
+    skill_reward = (
+        builder_transitions.agent_output.actor_output.metagame_log_prob
+        + math.log(config.metagame_vocab_size)
+    )
+
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    )  # + shaped_reward
+    ) + 1e-2 * skill_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -521,6 +541,7 @@ def builder_train_step(
                 params,
                 builder_actor_input,
                 builder_transitions.agent_output.actor_output,
+                HeadParams(),
             )
         )
 
@@ -570,11 +591,14 @@ def builder_train_step(
             valid=valid,
         )
 
+        loss_disc = -builder_pred.metagame_log_prob.mean(where=valid)
+
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
+            + loss_disc
         )
 
         return loss, dict(
@@ -582,6 +606,7 @@ def builder_train_step(
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_disc=loss_disc,
             # Head entropies
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
@@ -729,8 +754,8 @@ class Learner:
     def stack_batch(
         self,
         batch: list[Trajectory],
-        player_transition_resolution: int = 32,
-        player_history_resolution: int = 64,
+        player_transition_resolution: int = 64,
+        player_history_resolution: int = 128,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
@@ -910,6 +935,8 @@ class Learner:
             except Exception as e:
                 logger.error(f"Learner train step failed: {e}")
                 traceback.print_exc()
+
+                raise e
 
         self.done = True
         # transfer_thread.join()

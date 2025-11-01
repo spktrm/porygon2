@@ -1,3 +1,4 @@
+import functools
 import os
 from pprint import pprint
 from typing import Any, Callable, Literal
@@ -22,6 +23,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner.league import League
+from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
 
@@ -42,8 +44,11 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 5
-    unroll_length: int = 64
+    unroll_length: int = 128
     replay_buffer_capacity: int = 512
+
+    # Num metagame tokens
+    metagame_vocab_size: int = 32
 
     # False for the beginning
     builder_start_step: int = 100_000
@@ -94,7 +99,7 @@ def get_learner_config():
 
 class Porygon2PlayerTrainState(train_state.TrainState):
     apply_fn: Callable[
-        [Params, PlayerActorInput, PlayerActorOutput], PlayerActorOutput
+        [Params, PlayerActorInput, PlayerActorOutput, HeadParams], PlayerActorOutput
     ] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
@@ -109,7 +114,7 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
-        [Params, BuilderActorInput, BuilderActorOutput], BuilderActorOutput
+        [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
@@ -134,15 +139,17 @@ def create_train_state(
         lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
     )
 
-    player_params_init_fn = lambda: player_network.init(
-        rng, ex_player_actor_inp, ex_player_actor_out
-    )
-    builder_params_init_fn = lambda: builder_network.init(
-        rng, ex_builder_actor_inp, ex_builder_actor_out
-    )
+    player_params_init_fn = lambda: functools.partial(
+        player_network.init,
+        head_params=HeadParams(),
+    )(rng, ex_player_actor_inp, ex_player_actor_out)
+    builder_params_init_fn = lambda: functools.partial(
+        builder_network.init,
+        head_params=HeadParams(),
+    )(rng, ex_builder_actor_inp, ex_builder_actor_out)
 
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1), out_axes=1),
+        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         params=player_params_init_fn(),
         target_params=player_params_init_fn(),
         tx=optax.chain(
@@ -164,7 +171,9 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
+        apply_fn=jax.vmap(
+            builder_network.apply, in_axes=(None, 1, 1, None), out_axes=1
+        ),
         params=builder_params_init_fn(),
         target_params=builder_params_init_fn(),
         tx=optax.chain(
