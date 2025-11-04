@@ -427,7 +427,7 @@ def main(debug: bool = False, generation: int = 9):
         build_traj = []
 
         with jax.disable_jit(debug):
-            builder_actor_input = builder_env.reset()
+            builder_actor_input = builder_env.reset(3)
         for builder_step_index in range(builder_subkeys.shape[0]):
             with jax.disable_jit(debug):
                 builder_agent_output = agent.step_builder(

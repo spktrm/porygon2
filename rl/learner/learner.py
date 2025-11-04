@@ -255,13 +255,14 @@ def player_train_step(
         (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     )
 
-    skill_reward = (
-        player_transitions.agent_output.actor_output.metagame_log_prob
-        + math.log(config.metagame_vocab_size)
-    )
+    # skill_reward = (
+    #     player_transitions.agent_output.actor_output.metagame_log_prob
+    #     + math.log(config.metagame_vocab_size)
+    # )
 
     rewards_tm1 = (
-        player_transitions.env_output.win_reward + shaped_reward + 1e-3 * skill_reward
+        player_transitions.env_output.win_reward
+        + shaped_reward  # + 1e-3 * skill_reward
     )
 
     v_tm1 = player_target_pred.v
@@ -503,14 +504,14 @@ def builder_train_step(
     #     (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     # )
 
-    skill_reward = (
-        builder_transitions.agent_output.actor_output.metagame_log_prob
-        + math.log(config.metagame_vocab_size)
-    )
+    # skill_reward = (
+    #     builder_transitions.agent_output.actor_output.metagame_log_prob
+    #     + math.log(config.metagame_vocab_size)
+    # )
 
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    ) + 1e-2 * skill_reward
+    )  # + 1e-3 * skill_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -851,6 +852,20 @@ class Learner:
             steps_passed >= self.learner_config.add_player_min_frames
         )
 
+    def get_skill_winrates(self, batch: Trajectory):
+        skill_winrates = {}
+        skill_indices = batch.player_transitions.env_output.metagame_token[0]
+        win_reward = batch.player_transitions.env_output.win_reward[-1]
+
+        for skill_idx in np.unique(skill_indices):
+            skill_mask = skill_indices == skill_idx
+            if np.sum(skill_mask) == 0:
+                continue
+            skill_winrate = win_reward[skill_mask].mean()
+            skill_winrates[f"skill_{skill_idx}_winrate"] = skill_winrate
+
+        return skill_winrates
+
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
@@ -914,6 +929,9 @@ class Learner:
                 if (num_steps % 100) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
+
+                    skill_winrates = self.get_skill_winrates(batch)
+                    training_logs.update(jax.device_get(skill_winrates))
 
                 # Update the tqdm progress bars.
                 self.train_progress.update(1)
