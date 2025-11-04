@@ -13,6 +13,7 @@ from rl.environment.interfaces import (
 from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history, split_rng
+from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
@@ -175,7 +176,7 @@ class Actor:
     def reset_ckpts(self):
         self._player_env._reset_ckpts()
 
-    def unroll_and_push(self, params_container: ParamsContainer):
+    def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
         player_params = jax.device_put(params_container.player_params)
         builder_params = jax.device_put(params_container.builder_params)
@@ -188,24 +189,40 @@ class Actor:
         )
         self.reset_ckpts()
 
-        if self._player_env.username.startswith("train"):
+        if self._player_env.username.startswith("train") and do_push:
             self._learner.enqueue_traj(act_out)
         return act_out
-
-    def pull_best_params(self) -> ParamsContainer:
-        return self._learner.league.get_best_player()
-
-    def pull_player(self) -> ParamsContainer:
-        league = self._learner.league
-        return league.sample_player()
 
     def pull_main_player(self) -> ParamsContainer:
         league = self._learner.league
         return league.get_main_player()
 
-    def pull_opponent(self, player: ParamsContainer) -> ParamsContainer:
-        league = self._learner.league
-        return league.sample_opponent(player)
+    def _pfsp_branch(self) -> ParamsContainer | None:
+        historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.step_count != MAIN_KEY
+        ]
+        if not historical:  # No historical players to play against
+            return None
+
+        main_player = self.pull_main_player()
+        win_rates = self._learner.league.get_winrate((main_player, historical))
+        pick_idx = np.random.choice(
+            len(historical), p=pfsp(win_rates, weighting="squared")
+        )
+        return historical[pick_idx]
+
+    def get_match(self) -> tuple[ParamsContainer, bool]:
+        coin_toss = np.random.random()
+
+        # Make sure you can beat the League (PFSP)
+        if coin_toss < 0.5:
+            opponent = self._pfsp_branch()
+            if opponent is not None:  # Found a historical opponent
+                return opponent, False
+
+        return self.pull_main_player(), True
 
     def update_player_league_stats(
         self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory
