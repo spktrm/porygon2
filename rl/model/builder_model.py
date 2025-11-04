@@ -1,9 +1,7 @@
-import functools
-
 from dotenv import load_dotenv
 
 load_dotenv()
-
+import functools
 import json
 from functools import partial
 from pprint import pprint
@@ -40,6 +38,7 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
+from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
     HeadParams,
@@ -259,7 +258,7 @@ class Porygon2BuilderModel(nn.Module):
         set_embeddings = jax.vmap(self._embed_packed_set)(packed_sets)
         set_embeddings = jnp.where(
             species_tokens[:, None] == SpeciesEnum.SPECIES_ENUM___UNK,
-            self.unk_embedding,
+            self.unk_embedding.astype(self.cfg.dtype),
             set_embeddings,
         )
 
@@ -372,11 +371,21 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 
 def main(debug: bool = False, generation: int = 9):
-    actor_network = get_builder_model(
-        get_builder_model_config(generation, train=False, min_p=0.05)
+    learner_config = get_learner_config()
+
+    actor_model_config = get_builder_model_config(
+        generation,
+        train=False,
+        metagame_vocab_size=learner_config.metagame_vocab_size,
     )
-    learner_config = get_builder_model_config(generation, train=True)
-    learner_network = get_builder_model(learner_config)
+    actor_network = get_builder_model(actor_model_config)
+
+    learner_model_config = get_builder_model_config(
+        generation,
+        train=True,
+        metagame_vocab_size=learner_config.metagame_vocab_size,
+    )
+    learner_network = get_builder_model(learner_model_config)
 
     ex_actor_input, ex_actor_output = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_builder_step())
@@ -397,7 +406,9 @@ def main(debug: bool = False, generation: int = 9):
     agent = Agent(builder_apply_fn=actor_network.apply)
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation, smogon_format="ou_all_formats"
+        generation=generation,
+        smogon_format="ou_all_formats",
+        metagame_vocab_size=learner_config.metagame_vocab_size,
     )
 
     with open(f"data/data/gen{generation}/{builder_env._smogon_format}.json", "r") as f:

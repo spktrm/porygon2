@@ -48,22 +48,22 @@ class Porygon2LearnerConfig:
     replay_buffer_capacity: int = 512
 
     # Num metagame tokens
-    metagame_vocab_size: int = 32
+    metagame_vocab_size: int = 16
 
     # False for the beginning
     builder_start_step: int = 100_000
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
-    new_player_interval: int = 10_000
+    add_player_min_frames: int = int(2e6)
     league_size: int = 16
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 2.5
+    target_replay_ratio: float = 4
 
     # Learning params
-    adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-6)
+    adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
     learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
@@ -74,6 +74,8 @@ class Porygon2LearnerConfig:
     builder_gamma: float = 1.0
 
     # Vtrace params
+    player_lambda: float = 0.99
+    builder_lambda: float = 0.99
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3
@@ -81,13 +83,15 @@ class Porygon2LearnerConfig:
     # Loss coefficients
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_entropy_loss_coef: float = 0.05
-    player_kl_loss_coef: float = 0.05
+    player_entropy_loss_coef: float = 0.025
+    player_kl_loss_coef: float = 0.025
+    player_disc_loss_coef: float = 1e-3
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.05
-    builder_kl_loss_coef: float = 0.05
+    builder_entropy_loss_coef: float = 0.025
+    builder_kl_loss_coef: float = 0.025
+    builder_disc_loss_coef: float = 1e-2
 
     # Smogon Generation
     generation: GenT = 9

@@ -1,3 +1,5 @@
+import functools
+import math
 from typing import Any, Dict
 
 import chex
@@ -6,6 +8,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.learner.config import Porygon2LearnerConfig
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -16,8 +19,10 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     return loss / (normalization + (normalization == 0.0))
 
 
-@jax.jit
-def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
+@functools.partial(jax.jit, static_argnames=("config"))
+def collect_batch_telemetry_data(
+    batch: Trajectory, config: Porygon2LearnerConfig
+) -> Dict[str, Any]:
     builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
     builder_lengths = builder_valid.sum(0)
 
@@ -53,6 +58,15 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
+    player_skill_reward = (
+        batch.player_transitions.agent_output.actor_output.metagame_log_prob
+        + math.log(config.metagame_vocab_size)
+    )
+    builder_skill_reward = (
+        batch.builder_transitions.agent_output.actor_output.metagame_log_prob
+        + math.log(config.metagame_vocab_size)
+    )
+
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
@@ -63,6 +77,8 @@ def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
         builder_species_reward_sum=batch.builder_transitions.env_output.cum_species_reward[
             -1
         ].mean(),
+        player_skill_reward_mean=player_skill_reward.sum(axis=0).mean(),
+        builder_skill_reward_mean=builder_skill_reward.sum(axis=0).mean(),
         builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
             -1
         ].mean(),

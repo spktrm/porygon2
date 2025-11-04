@@ -781,9 +781,7 @@ class Encoder(nn.Module):
         return contextual_timestep_embedding, valid_timestep_mask, history_request_count
 
     # Encode actions for the current environment step.
-    def _embed_action(
-        self, action: jax.Array, entity_embedding: jax.Array
-    ) -> jax.Array:
+    def _embed_action(self, action: jax.Array) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
         """
@@ -801,16 +799,13 @@ class Encoder(nn.Module):
         )
         embedding = self.move_sum(
             boolean_code,
-            entity_embedding,
             self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
         )
 
         return embedding
 
-    def _embed_moves(
-        self, moveset: jax.Array, active_embedding: jax.Array
-    ) -> jax.Array:
-        return jax.vmap(self._embed_action)(moveset, active_embedding)
+    def _embed_moves(self, moveset: jax.Array) -> jax.Array:
+        return jax.vmap(self._embed_action)(moveset)
 
     def __call__(self, env_step: PlayerEnvOutput, history_step: PlayerHistoryOutput):
         """
@@ -881,13 +876,7 @@ class Encoder(nn.Module):
                 kv_positions=kv_positions,
             )
 
-            entity_idx = env_step.moveset[
-                ..., MovesetFeature.MOVESET_FEATURE__ENTITY_IDX
-            ]
-            move_embeddings = self._embed_moves(
-                env_step.moveset,
-                jnp.take(entity_embeddings[:6], entity_idx, axis=0),
-            )
+            move_embeddings = self._embed_moves(env_step.moveset)
             contextual_entities = expanded_entity_embeddings.reshape(
                 *entity_move_embeddings.shape
             ).mean(axis=1)
@@ -900,14 +889,14 @@ class Encoder(nn.Module):
             )
             state_embeddings = self.state_pool(
                 self.latent_state_embeddings.astype(self.cfg.dtype),
-                expanded_entity_embeddings,
-                create_attention_mask(latent_state_mask, expanded_entity_mask),
+                contextual_entities,
+                create_attention_mask(latent_state_mask, entity_mask),
             )
 
             contextual_moves = self.move_entity_decoder(
                 move_embeddings,
-                expanded_entity_embeddings,
-                create_attention_mask(move_mask, expanded_entity_mask),
+                contextual_entities,
+                create_attention_mask(move_mask, entity_mask),
             )
 
             return state_embeddings.reshape(-1), contextual_moves, contextual_switches

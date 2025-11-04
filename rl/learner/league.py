@@ -86,6 +86,11 @@ class League:
         league.print_players()
         return league
 
+    def get_latest_player(self) -> ParamsContainer:
+        with self.lock:
+            latest_step = max(self.players.keys())
+            return self.players[latest_step]
+
     def get_winrate(
         self,
         match: tuple[
@@ -113,64 +118,13 @@ class League:
         if self.games[home, away] == 0:
             return 0.5
 
-        return (self.wins[home, away] + -0.5 * self.draws[home, away]) / self.games[
+        return (self.wins[home, away] + 0.5 * self.draws[home, away]) / self.games[
             home, away
         ]
 
     def add_player(self, player: ParamsContainer):
-        while len(self.players) >= self.league_size:
-            self.remove_weakest_player()
+        # self.remove_weakest_players()
         self.players[player.step_count] = player
-
-    def get_h2h_winrate(self):
-        num_players = len(self.players)
-        if num_players == 0:
-            return []
-
-        # Build the win-rate matrix efficiently
-        win_rates = np.full((num_players, num_players), 0.5)
-        player_to_idx = {player: idx for idx, player in enumerate(self.players.keys())}
-        idx_to_player = {idx: player for player, idx in player_to_idx.items()}
-
-        seen = set()
-        if len(self.games) > 0:
-            for (p1, p2), games_played in self.games.items():
-                seen_matchups = [(p1, p2), (p2, p1)]
-                if any(m in seen for m in seen_matchups):
-                    continue
-                seen.update(seen_matchups)
-
-                if games_played > 0:
-                    idx1 = player_to_idx.get(p1)
-                    idx2 = player_to_idx.get(p2)
-
-                    if idx1 is not None and idx2 is not None:
-                        winrate = (
-                            self.wins[p1, p2] + 0.5 * self.draws[p1, p2]
-                        ) / games_played
-                        win_rates[idx1, idx2] = winrate
-                        win_rates[idx2, idx1] = winrate
-
-        return win_rates, player_to_idx, idx_to_player
-
-    def get_player_rankings(self) -> tuple[np.ndarray, dict[int, int]]:
-        """
-        Calculates the average win rate for all players.
-
-        Returns:
-            A list of (score, player) tuples, sorted from strongest to weakest.
-        """
-        num_players = len(self.players)
-        winrates, _, idx_to_player = self.get_h2h_winrate()
-
-        # Calculate average scores
-        np.fill_diagonal(winrates, 0)
-        avg_scores = np.sum(winrates, axis=-1) / max(1, num_players - 1)
-
-        # Handle case where a player has played no games (avg_score will be NaN)
-        avg_scores = np.nan_to_num(avg_scores, nan=0.5)
-
-        return avg_scores, idx_to_player
 
     def update_player(self, key: int, player: ParamsContainer):
         with self.lock:
@@ -192,78 +146,47 @@ class League:
 
             for stats in (self.games, self.wins, self.draws, self.losses):
                 stats[home, away] *= 1 - self.decay
+                stats[away, home] *= 1 - self.decay
 
             self.games[home, away] += 1
+            self.games[away, home] += 1
 
             if payoff > 0:
-                self.wins[home, away] += payoff
+                self.wins[home, away] += 1
+                self.losses[away, home] += 1
             elif payoff == 0:
-                self.draws[home, away] += payoff
+                self.draws[home, away] += 1
+                self.draws[away, home] += 1
             else:
-                self.losses[home, away] += payoff
+                self.losses[home, away] += 1
+                self.wins[away, home] += 1
 
-    def remove_weakest_player(self) -> ParamsContainer:
+    def remove_weakest_players(self) -> ParamsContainer:
         with self.lock:
-            win_rates, player_to_idx, idx_to_player = self.get_h2h_winrate()
+            historical_players = [v for k, v in self.players.items() if k != MAIN_KEY]
+            win_rates = self.get_winrate((self.players[MAIN_KEY], historical_players))
 
-            while True:
-                # Remove player with worst win rate v main player
-                # This is the player that the main agent has the highest win rate against
-                weakest_idx = np.argmax(win_rates[player_to_idx[MAIN_KEY]]).item()
-                weakest_player = idx_to_player[weakest_idx]
-                if weakest_player == MAIN_KEY:
-                    win_rates[weakest_idx] = -np.inf
-                    continue
-                break
+            indices_to_remove = np.argwhere(win_rates >= 0.9).reshape(-1)
+            for idx in indices_to_remove:
+                weakest_player = historical_players[idx].step_count
+                print("Removing player with step count: ", weakest_player)
+                self.players.pop(weakest_player)
 
-            keys_to_pop = []
-            for home, away in self.wins.keys():
-                if weakest_player in (home, away):
-                    keys_to_pop.append((home, away))
-            for stats in (self.games, self.wins, self.draws, self.losses):
-                for key in keys_to_pop:
-                    stats.pop(key)
-
-            print("Removing player with step count: ", weakest_player)
-            return self.players.pop(weakest_player)
-
-    def get_player(self, key: int) -> ParamsContainer:
-        with self.lock:
-            return self.players[key]
+                keys_to_pop = []
+                for home, away in self.wins.keys():
+                    if weakest_player in (home, away):
+                        keys_to_pop.append((home, away))
+                for stats in (self.games, self.wins, self.draws, self.losses):
+                    for key in keys_to_pop:
+                        stats.pop(key)
 
     def get_main_player(self) -> ParamsContainer:
         with self.lock:
             return self.players[MAIN_KEY]
 
-    def get_best_player(self) -> ParamsContainer:
-        with self.lock:
-            scores, idx_to_player = self.get_player_rankings()
-            strongest_idx = np.argmax(scores).item()
-            strongest_player = idx_to_player[strongest_idx]
-            return self.players[strongest_player]
-
-    def sample_player(self) -> ParamsContainer:
-        with self.lock:
-            historical = list(self.players.keys())
-            # Sample a random player
-            return self.players[np.random.choice(historical)]
-
-    def sample_opponent(self, player: ParamsContainer) -> ParamsContainer:
-        with self.lock:
-            historical_keys = list(self.players.keys())
-            historical = [self.players[k] for k in historical_keys]
-            win_rates = self.get_winrate((player, historical))
-
-            # Sample the player with worst win rate against the given player
-            return self.players[
-                np.random.choice(
-                    historical_keys, p=pfsp(win_rates, weighting="squared")
-                )
-            ]
-
 
 def main():
-    print(pfsp(np.array([0.1, 0.5, 0.9]), weighting="linear_capped"))
+    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="linear_capped"))
 
 
 if __name__ == "__main__":

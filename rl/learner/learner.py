@@ -18,6 +18,8 @@ from tqdm import tqdm
 import wandb
 from rl.environment.data import MAX_RATIO_TOKEN, STOI
 from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
     PlayerHiddenInfo,
@@ -259,7 +261,7 @@ def player_train_step(
     )
 
     rewards_tm1 = (
-        player_transitions.env_output.win_reward + shaped_reward + 1e-2 * skill_reward
+        player_transitions.env_output.win_reward + shaped_reward + 1e-3 * skill_reward
     )
 
     v_tm1 = player_target_pred.v
@@ -271,6 +273,7 @@ def player_train_step(
     vtrace_td_error_and_advantage = jax.vmap(
         functools.partial(
             rlax.vtrace_td_error_and_advantage,
+            lambda_=config.player_lambda,
             clip_rho_threshold=config.clip_rho_threshold,
             clip_pg_rho_threshold=config.clip_pg_rho_threshold,
         ),
@@ -368,7 +371,7 @@ def player_train_step(
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_kl
             - config.player_entropy_loss_coef * loss_entropy
-            + loss_disc
+            + config.player_disc_loss_coef * loss_disc
         )
 
         return loss, dict(
@@ -445,14 +448,17 @@ def player_train_step(
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
     builder_transitions: BuilderTransition,
+    builder_history: BuilderHistoryOutput,
     player_hidden: PlayerHiddenInfo,
     final_reward: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
 
-    builder_actor_input = PlayerActorInput(
-        env=builder_transitions.env_output, hidden=player_hidden
+    builder_actor_input = BuilderActorInput(
+        env=builder_transitions.env_output,
+        hidden=player_hidden,
+        history=builder_history,
     )
     builder_target_pred = promote_map(
         builder_state.apply_fn(
@@ -515,6 +521,7 @@ def builder_train_step(
     vtrace_td_error_and_advantage = jax.vmap(
         functools.partial(
             rlax.vtrace_td_error_and_advantage,
+            lambda_=config.builder_lambda,
             clip_rho_threshold=config.clip_rho_threshold,
             clip_pg_rho_threshold=config.clip_pg_rho_threshold,
         ),
@@ -598,7 +605,7 @@ def builder_train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
-            + loss_disc
+            + config.builder_disc_loss_coef * loss_disc
         )
 
         return loss, dict(
@@ -771,6 +778,7 @@ class Learner:
 
         clipped_trajectory = Trajectory(
             builder_transitions=stacked_trajectory.builder_transitions,
+            builder_history=stacked_trajectory.builder_history,
             player_transitions=jax.tree.map(
                 lambda x: x[:num_valid], stacked_trajectory.player_transitions
             ),
@@ -825,11 +833,23 @@ class Learner:
         return usage_logs
 
     def get_league_winrates(self):
-        win_rates, player_to_idx, idx_to_player = self.league.get_h2h_winrate()
+        league = self.league
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
         return {
-            f"league_main_v_{idx_to_player[i]}_winrate": win_rate
-            for i, win_rate in enumerate(win_rates[player_to_idx[MAIN_KEY]])
+            f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
+            for i, win_rate in enumerate(win_rates)
         }
+
+    def ready_to_add_player(self):
+        league = self.league
+        latest_player = league.get_latest_player()
+        steps_passed = self.player_state.actor_steps.item() - latest_player.frame_count
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
+        return (win_rates.min() > 0.7) & (
+            steps_passed >= self.learner_config.add_player_min_frames
+        )
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
@@ -843,10 +863,11 @@ class Learner:
             try:
                 batch = self.device_q.get()
                 batch: Trajectory = jax.device_put(batch)
+                new_player_state: Porygon2PlayerTrainState
+                new_builder_state: Porygon2BuilderTrainState
 
                 num_steps = np.array(self.player_state.num_steps).item()
 
-                new_player_state: Porygon2PlayerTrainState
                 with self.gpu_lock:
                     new_player_state, player_logs = player_train_step_jit(
                         self.player_state,
@@ -855,20 +876,16 @@ class Learner:
                         self.learner_config,
                     )
 
-                if num_steps >= self.learner_config.builder_start_step:
-                    builder_final_reward = calculate_builder_final_reward(batch)
-                    new_builder_state: Porygon2BuilderTrainState
-                    with self.gpu_lock:
-                        new_builder_state, builder_logs = builder_train_step_jit(
-                            self.builder_state,
-                            batch.builder_transitions,
-                            batch.player_hidden,
-                            builder_final_reward,
-                            self.learner_config,
-                        )
-                else:
-                    new_builder_state = self.builder_state
-                    builder_logs = {}
+                builder_final_reward = calculate_builder_final_reward(batch)
+                with self.gpu_lock:
+                    new_builder_state, builder_logs = builder_train_step_jit(
+                        self.builder_state,
+                        batch.builder_transitions,
+                        batch.builder_history,
+                        batch.player_hidden,
+                        builder_final_reward,
+                        self.learner_config,
+                    )
 
                 # Safety check: only apply the update if the losses are finite.
                 if jnp.isfinite(player_logs["player_loss"]).item() and (
@@ -883,7 +900,9 @@ class Learner:
 
                 training_logs = {"step_idx": step_idx}
                 training_logs.update(
-                    jax.device_get(collect_batch_telemetry_data(batch))
+                    jax.device_get(
+                        collect_batch_telemetry_data(batch, self.learner_config)
+                    )
                 )
                 training_logs.update(jax.device_get(player_logs))
                 training_logs.update(jax.device_get(builder_logs))
@@ -892,7 +911,7 @@ class Learner:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)
                     training_logs.update(jax.device_get(usage_logs))
 
-                if (num_steps % 1000) == 0:
+                if (num_steps % 100) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
 
@@ -921,7 +940,8 @@ class Learner:
                         self.builder_state,
                         self.league,
                     )
-                if (num_steps % self.learner_config.new_player_interval) == 0:
+
+                if self.ready_to_add_player():
                     print("Adding new player to league @ step", num_steps)
                     self.league.add_player(
                         ParamsContainer(

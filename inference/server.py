@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import random
 
 import numpy as np
@@ -19,10 +22,8 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=random.randint(0, 2**32 - 1),
-    player_temp=1,
-    player_min_p=0.25,
-    builder_temp=1,
-    builder_min_p=0,
+    temp=0.1,
+    min_p=0.1,
 )
 
 

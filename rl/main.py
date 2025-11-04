@@ -1,7 +1,6 @@
 from dotenv import load_dotenv
 
 load_dotenv()
-
 import concurrent.futures
 import json
 import threading
@@ -21,6 +20,7 @@ from rl.learner.config import create_train_state, get_learner_config, load_train
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
+from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 
 
@@ -35,20 +35,22 @@ def run_training_actor_pair(
     while not stop_signal[0]:
         try:
             player_params = player.pull_main_player()
-            opponent_params = player.pull_opponent(player_params)
+            opponent_params, is_trainable = player.get_match()
 
+            # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)
-            future2 = executor.submit(opponent.unroll_and_push, opponent_params)
 
-            trajectory1 = future1.result()
-            trajectory2 = future2.result()
+            # Will only push if is_trainable is True
+            future2 = executor.submit(
+                opponent.unroll_and_push, opponent_params, is_trainable
+            )
+            trajectory = future1.result()
+            future2.result()
 
-            player.update_player_league_stats(
-                player_params, opponent_params, trajectory1
-            )
-            opponent.update_player_league_stats(
-                opponent_params, player_params, trajectory2
-            )
+            if not is_trainable:
+                player.update_player_league_stats(
+                    player_params, opponent_params, trajectory
+                )
         except Exception as e:
             traceback.print_exc()
             raise e
@@ -73,7 +75,7 @@ def run_eval_heuristic(
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = actor.pull_best_params()
+                player = actor.pull_main_player()
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -132,14 +134,20 @@ def main():
     )
 
     gpu_lock = None  # threading.Lock()
-    agent = Agent(
+    learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
     )
+    eval_agent = Agent(
+        actor_player_network.apply,
+        actor_builder_network.apply,
+        gpu_lock=gpu_lock,
+        head_params=HeadParams(temp=0.1, min_p=0.01),
+    )
 
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state
+        learner_config, player_state, builder_state  # , from_scratch=True
     )
 
     wandb_run = wandb.init(
@@ -173,7 +181,7 @@ def main():
         for game_id in range(learner_config.num_actors // 2):
             actors = [
                 Actor(
-                    agent=agent,
+                    agent=learning_agent,
                     env=SinglePlayerSyncEnvironment(
                         f"train:p{player_id}g{game_id:02d}",
                         generation=learner_config.generation,
@@ -196,7 +204,7 @@ def main():
 
         for eval_id in range(learner_config.num_eval_actors):
             actor = Actor(
-                agent=agent,
+                agent=eval_agent,
                 env=SinglePlayerSyncEnvironment(
                     f"eval-heuristic:{eval_id:04d}",
                     generation=learner_config.generation,

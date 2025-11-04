@@ -39,11 +39,12 @@ class Agent:
                 "At least one of player_apply_fn or builder_apply_fn must be provided."
             )
 
+        dummy_func = lambda *args, **kwargs: None
         self._player_apply_fn = functools.partial(
-            player_apply_fn, head_params=head_params
+            player_apply_fn or dummy_func, head_params=head_params
         )
         self._builder_apply_fn = functools.partial(
-            builder_apply_fn, head_params=head_params
+            builder_apply_fn or dummy_func, head_params=head_params
         )
         self._gpu_lock = gpu_lock or nullcontext()
 
