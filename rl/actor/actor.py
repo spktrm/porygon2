@@ -34,19 +34,15 @@ class Actor:
         unroll_length: int,
         learner: Learner,
         rng_seed: int = 42,
-        metagame_vocab_size: int = 32,
     ):
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(
-            generation=env.generation,
-            smogon_format="ou_all_formats",
-            metagame_vocab_size=metagame_vocab_size,
+            generation=env.generation, smogon_format="ou_all_formats"
         )
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
-        self._metagame_vocab_size = metagame_vocab_size
 
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
@@ -83,7 +79,6 @@ class Actor:
 
         # Reset the builder environment.
         builder_actor_input = self._builder_env.reset()
-        metagame_token = builder_actor_input.env.metagame_token.item()
 
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
@@ -118,7 +113,6 @@ class Actor:
         player_actor_input = self._player_env.reset(
             builder_actor_input.history.species_tokens.reshape(-1).tolist(),
             builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
-            metagame_token,
         )
         # Extract opponent hidden info to better inform builder value function.
         player_hidden = player_actor_input.hidden

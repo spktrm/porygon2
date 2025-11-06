@@ -120,7 +120,6 @@ def get_tera_mask(mask: jax.Array):
 def process_state(
     state: EnvironmentState,
     opponent_team: ResetRequest = None,
-    metagame_token: int = None,
     max_history: int = NUM_HISTORY,
 ) -> PlayerActorInput:
     history_length = state.history_length
@@ -180,11 +179,6 @@ def process_state(
 
     action_mask = get_action_mask(state)
 
-    if metagame_token is None:
-        metagame_token = np.array(0, dtype=np.int32)
-    else:
-        metagame_token = np.array(metagame_token, dtype=np.int32)
-
     env_step = PlayerEnvOutput(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
@@ -198,7 +192,6 @@ def process_state(
         move_mask=get_move_mask(action_mask),
         switch_mask=get_switch_mask(action_mask),
         wildcard_mask=get_tera_mask(action_mask),
-        metagame_token=metagame_token,
     )
     history_step = PlayerHistoryOutput(
         nodes=history_entity_nodes,
@@ -224,10 +217,10 @@ def process_state(
     return PlayerActorInput(env=env_step, history=history_step, hidden=hidden)
 
 
-def get_ex_trajectory(metagame_token: int = None) -> PlayerActorInput:
+def get_ex_trajectory() -> PlayerActorInput:
     states = []
     for state in EX_TRAJECTORY.states:
-        processed_state = process_state(state, metagame_token=metagame_token)
+        processed_state = process_state(state)
         states.append(processed_state.env)
     return PlayerActorInput(
         env=jax.tree.map(lambda *xs: np.stack(xs), *states),
@@ -236,10 +229,8 @@ def get_ex_trajectory(metagame_token: int = None) -> PlayerActorInput:
     )
 
 
-def get_ex_player_step(
-    metagame_token: int = None,
-) -> tuple[PlayerActorInput, PlayerActorOutput]:
-    ts = get_ex_trajectory(metagame_token=metagame_token)
+def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
+    ts = get_ex_trajectory()
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
     hidden: PlayerHiddenInfo = jax.tree.map(lambda x: x[:, None, ...], ts.hidden)
@@ -247,7 +238,6 @@ def get_ex_player_step(
         PlayerActorInput(env=env, history=history, hidden=hidden),
         PlayerActorOutput(
             v=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            metagame_log_prob=np.zeros_like(env.info[..., 0], dtype=np.float32),
             action_type_head=HeadOutput(action_index=env.action_type_mask.argmax(-1)),
             move_head=HeadOutput(action_index=env.move_mask.argmax(-1)),
             wildcard_head=HeadOutput(action_index=env.wildcard_mask.argmax(-1)),
@@ -270,7 +260,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 ),
                 ts=ts,
                 done=done,
-                metagame_token=np.zeros((trajectory_length, 1), dtype=np.int32),
             ),
             hidden=PlayerHiddenInfo(
                 species_tokens=np.zeros((6, 1), dtype=np.int32),

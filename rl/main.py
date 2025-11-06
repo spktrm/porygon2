@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 
 load_dotenv()
+
 import concurrent.futures
 import json
 import threading
@@ -98,24 +99,16 @@ def main():
     pprint(learner_config)
 
     learner_player_model_config = get_player_model_config(
-        learner_config.generation,
-        train=True,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
+        learner_config.generation, train=True
     )
     learner_builder_model_config = get_builder_model_config(
-        learner_config.generation,
-        train=True,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
+        learner_config.generation, train=True
     )
     actor_player_model_config = get_player_model_config(
-        learner_config.generation,
-        train=False,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
+        learner_config.generation, train=False
     )
     actor_builder_model_config = get_builder_model_config(
-        learner_config.generation,
-        train=False,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
+        learner_config.generation, train=False
     )
 
     learner_player_network = get_player_model(learner_player_model_config)
@@ -133,7 +126,7 @@ def main():
         learner_config,
     )
 
-    gpu_lock = None  # threading.Lock()
+    gpu_lock = threading.Lock()
     learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
@@ -143,11 +136,12 @@ def main():
         actor_player_network.apply,
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
-        head_params=HeadParams(temp=0.1, min_p=0.01),
+        player_head_params=HeadParams(temp=0.1, min_p=0.01),
+        builder_head_params=HeadParams(temp=0.1, min_p=0.01),
     )
 
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state  # , from_scratch=True
+        learner_config, player_state, builder_state
     )
 
     wandb_run = wandb.init(
@@ -189,7 +183,6 @@ def main():
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
                     rng_seed=len(actor_threads),
-                    metagame_vocab_size=learner_config.metagame_vocab_size,
                 )
                 for player_id in range(2)
             ]
@@ -212,7 +205,6 @@ def main():
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
                 rng_seed=len(actor_threads),
-                metagame_vocab_size=learner_config.metagame_vocab_size,
             )
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(

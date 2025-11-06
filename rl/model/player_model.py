@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-
-load_dotenv()
 import functools
 from pprint import pprint
 
@@ -18,15 +15,9 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import (
-    HeadParams,
-    PolicyLogitHead,
-    PolicyLogitHeadInner,
-    PolicyQKHead,
-    ValueLogitHead,
-)
+from rl.model.heads import HeadParams, PolicyLogitHead, PolicyQKHead, ValueLogitHead
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import get_most_recent_file, get_num_params, legal_log_policy
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -38,12 +29,6 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.metagame_embeddings = nn.Embed(
-            num_embeddings=self.cfg.metagame_vocab_size,
-            features=self.cfg.num_state_latents * self.cfg.entity_size * 2,
-            dtype=self.cfg.dtype,
-        )
-
         self.action_type_head = PolicyLogitHead(self.cfg.action_type_head)
         self.move_head = PolicyQKHead(self.cfg.move_head)
         self.switch_head = PolicyQKHead(self.cfg.switch_head)
@@ -52,15 +37,6 @@ class Porygon2PlayerModel(nn.Module):
         )
         self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
         self.value_head = ValueLogitHead(self.cfg.value_head)
-
-        self.metagame_head = PolicyLogitHeadInner(self.cfg.metagame_head)
-
-    def _forward_metagame_head(
-        self, my_embedding: jax.Array, metagame_token: jax.Array
-    ):
-        logits = self.metagame_head(my_embedding)
-        log_probs = legal_log_policy(logits, jnp.ones_like(logits, dtype=jnp.bool))
-        return jnp.take(log_probs, metagame_token, axis=-1)
 
     def get_head_outputs(
         self,
@@ -71,15 +47,6 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        metagame_log_prob = self._forward_metagame_head(
-            state_query, env_step.metagame_token
-        )
-
-        metagame_embedding = self.metagame_embeddings(env_step.metagame_token)
-        gamma, beta = jnp.split(metagame_embedding, 2, axis=-1)
-
-        state_query = state_query * gamma + beta
-
         action_type_head = self.action_type_head(
             state_query,
             actor_output.action_type_head,
@@ -118,7 +85,6 @@ class Porygon2PlayerModel(nn.Module):
             switch_head=switch_head,
             wildcard_head=wildcard_head,
             v=value,
-            metagame_log_prob=metagame_log_prob,
         )
 
     def __call__(

@@ -47,9 +47,6 @@ class Porygon2LearnerConfig:
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
 
-    # Num metagame tokens
-    metagame_vocab_size: int = 16
-
     # False for the beginning
     builder_start_step: int = 100_000
 
@@ -74,8 +71,8 @@ class Porygon2LearnerConfig:
     builder_gamma: float = 1.0
 
     # Vtrace params
-    player_lambda: float = 0.99
-    builder_lambda: float = 1.0
+    player_lambda: float = 0.95
+    builder_lambda: float = 0.95
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3
@@ -83,15 +80,13 @@ class Porygon2LearnerConfig:
     # Loss coefficients
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_entropy_loss_coef: float = 0.02
-    player_kl_loss_coef: float = 0.02
-    player_disc_loss_coef: float = 0
+    player_entropy_loss_coef: float = 0.01
+    player_kl_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.02
-    builder_kl_loss_coef: float = 0.02
-    builder_disc_loss_coef: float = 0
+    builder_entropy_loss_coef: float = 0.005
+    builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: GenT = 9

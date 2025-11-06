@@ -20,9 +20,7 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(
-    generation: int = 3, train: bool = False, metagame_vocab_size: int = 32
-) -> ConfigDict:
+def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
@@ -32,7 +30,6 @@ def get_player_model_config(
     num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
 
-    cfg.metagame_vocab_size = metagame_vocab_size
     cfg.num_state_latents = num_state_latents
 
     cfg.generation = generation
@@ -44,7 +41,6 @@ def get_player_model_config(
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
     cfg.encoder.num_state_latents = num_state_latents
-    cfg.encoder.metagame_vocab_size = metagame_vocab_size
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -120,13 +116,11 @@ def get_player_model_config(
     cfg.action_type_head = ConfigDict()
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
-    cfg.metagame_head = ConfigDict()
 
     for head, output_size in [
         (cfg.value_head, 1),
         (cfg.action_type_head, 3),
         (cfg.wildcard_head, 5),
-        (cfg.metagame_head, metagame_vocab_size),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
@@ -147,7 +141,6 @@ def get_player_model_config(
         cfg.move_head,
         cfg.switch_head,
         cfg.wildcard_head,
-        cfg.metagame_head,
     ]:
         head.resnet = ConfigDict()
         head.resnet.num_resblocks = 1
@@ -163,9 +156,7 @@ def get_player_model_config(
     return cfg
 
 
-def get_builder_model_config(
-    generation: int = 3, train: bool = False, metagame_vocab_size: int = 32
-) -> ConfigDict:
+def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
@@ -173,8 +164,6 @@ def get_builder_model_config(
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
-
-    cfg.metagame_vocab_size = metagame_vocab_size
 
     cfg.entity_size = entity_size
     cfg.generation = generation
@@ -201,28 +190,22 @@ def get_builder_model_config(
         qk_layer_norm=qk_layer_norm,
     )
 
-    cfg.transformer = ConfigDict()
-    set_attributes(cfg.transformer, **transformer_kwargs)
-    cfg.transformer.need_pos = True
+    cfg.encoder = ConfigDict()
+    set_attributes(cfg.encoder, **transformer_kwargs)
+    cfg.encoder.need_pos = True
 
-    for name in [
-        "species_head",
-        "packed_set_head",
-        "metagame_head",
-        "value_head",
-    ]:
+    cfg.decoder = ConfigDict()
+    set_attributes(cfg.decoder, **transformer_kwargs)
+
+    for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
         head_cfg.resnet = ConfigDict()
         head_cfg.resnet.num_resblocks = 1
         setattr(cfg, name, head_cfg)
 
-    for head, output_size in [
-        (cfg.metagame_head, metagame_vocab_size),
-        (cfg.value_head, 1),
-    ]:
-        head.logits = ConfigDict()
-        head.logits.layer_sizes = output_size
-        head.logits.use_layer_norm = True
+    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits.layer_sizes = (entity_size, entity_size, 1)
+    cfg.value_head.logits.use_layer_norm = True
 
     for head in [
         cfg.species_head,

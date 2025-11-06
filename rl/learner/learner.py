@@ -170,6 +170,13 @@ def shift_left_with_zeros(tensor: jax.Array):
     return jnp.concatenate((tensor[1:], jnp.zeros_like(tensor[-1:])), axis=0)
 
 
+def postprocess_log_prob(log_prob: jax.Array, min_p: float = 0.03):
+    """Postprocess log probabilities to avoid extremely small values."""
+    return jnp.where(
+        log_prob < math.log(min_p), jnp.finfo(log_prob.dtype).min, log_prob
+    )
+
+
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     player_transitions: PlayerTransition,
@@ -217,6 +224,9 @@ def player_train_step(
         switch_log_prob=target_switch_head.log_prob,
     )
 
+    # Zero out extremely small log probs to avoid large variance.
+    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
+
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -255,15 +265,7 @@ def player_train_step(
         (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     )
 
-    # skill_reward = (
-    #     player_transitions.agent_output.actor_output.metagame_log_prob
-    #     + math.log(config.metagame_vocab_size)
-    # )
-
-    rewards_tm1 = (
-        player_transitions.env_output.win_reward
-        + shaped_reward  # + 1e-3 * skill_reward
-    )
+    rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -365,14 +367,11 @@ def player_train_step(
             valid=valid,
         )
 
-        loss_disc = -player_pred.metagame_log_prob.mean(where=valid)
-
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_kl
             - config.player_entropy_loss_coef * loss_entropy
-            + config.player_disc_loss_coef * loss_disc
         )
 
         return loss, dict(
@@ -381,7 +380,6 @@ def player_train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_kl,
-            player_loss_disc=loss_disc,
             # Per head entropies
             player_action_type_entropy=action_type_head_entropy,
             player_move_entropy=move_head_entropy,
@@ -487,6 +485,9 @@ def builder_train_step(
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
+    # Zero out extremely small log probs to avoid large variance.
+    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
+
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -504,14 +505,13 @@ def builder_train_step(
     #     (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
     # )
 
-    # skill_reward = (
-    #     builder_transitions.agent_output.actor_output.metagame_log_prob
-    #     + math.log(config.metagame_vocab_size)
-    # )
-
+    teammate_reward = builder_transitions.env_output.cum_teammate_reward / 10
+    final_reward = final_reward - shift_left_with_zeros(teammate_reward).sum(
+        where=valid, axis=0
+    )
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    )  # + 1e-3 * skill_reward
+    ) + teammate_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -599,14 +599,11 @@ def builder_train_step(
             valid=valid,
         )
 
-        loss_disc = -builder_pred.metagame_log_prob.mean(where=valid)
-
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
-            + config.builder_disc_loss_coef * loss_disc
         )
 
         return loss, dict(
@@ -614,7 +611,6 @@ def builder_train_step(
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
-            builder_loss_disc=loss_disc,
             # Head entropies
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
@@ -852,20 +848,6 @@ class Learner:
             steps_passed >= self.learner_config.add_player_min_frames
         )
 
-    def get_skill_winrates(self, batch: Trajectory):
-        skill_winrates = {}
-        skill_indices = batch.player_transitions.env_output.metagame_token[0]
-        win_reward = batch.player_transitions.env_output.win_reward[-1]
-
-        for skill_idx in np.unique(skill_indices):
-            skill_mask = skill_indices == skill_idx
-            if np.sum(skill_mask) == 0:
-                continue
-            skill_winrate = win_reward[skill_mask].mean()
-            skill_winrates[f"skill_{skill_idx}_winrate"] = skill_winrate
-
-        return skill_winrates
-
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
@@ -903,9 +885,9 @@ class Learner:
                     )
 
                 # Safety check: only apply the update if the losses are finite.
-                if jnp.isfinite(player_logs["player_loss"]).item() and (
-                    not builder_logs
-                    or jnp.isfinite(builder_logs["builder_loss"]).item()
+                if (
+                    jnp.isfinite(player_logs["player_loss"]).item()
+                    and jnp.isfinite(builder_logs["builder_loss"]).item()
                 ):
                     self.player_state = new_player_state
                     self.builder_state = new_builder_state
@@ -929,9 +911,6 @@ class Learner:
                 if (num_steps % 100) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
-
-                    skill_winrates = self.get_skill_winrates(batch)
-                    training_logs.update(jax.device_get(skill_winrates))
 
                 # Update the tqdm progress bars.
                 self.train_progress.update(1)

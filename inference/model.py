@@ -1,8 +1,3 @@
-from dotenv import load_dotenv
-
-from rl.model.heads import HeadParams
-
-load_dotenv()
 import cloudpickle as pickle
 import jax
 import jax.numpy as jnp
@@ -17,6 +12,7 @@ from rl.environment.utils import get_ex_player_step
 from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
+from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import get_most_recent_file
 
@@ -38,19 +34,15 @@ class InferenceModel:
         generation: int,
         fpath: str = None,
         seed: int = 42,
-        temp: float = 1.0,
-        min_p: float = 0.0,
+        player_head_params: HeadParams = HeadParams(),
+        builder_head_params: HeadParams = HeadParams(),
     ):
         self._learner_config = get_learner_config()
         self._player_model_config = get_player_model_config(
-            self._learner_config.generation,
-            train=False,
-            metagame_vocab_size=self._learner_config.metagame_vocab_size,
+            self._learner_config.generation, train=False
         )
         self._builder_model_config = get_builder_model_config(
-            self._learner_config.generation,
-            train=False,
-            metagame_vocab_size=self._learner_config.metagame_vocab_size,
+            self._learner_config.generation, train=False
         )
 
         self._player_network = get_player_model(self._player_model_config)
@@ -59,7 +51,8 @@ class InferenceModel:
         self._agent = Agent(
             player_apply_fn=self._player_network.apply,
             builder_apply_fn=self._builder_network.apply,
-            head_params=HeadParams(temp=temp, min_p=min_p),
+            player_head_params=player_head_params,
+            builder_head_params=builder_head_params,
         )
         self._rng_key = jax.random.key(seed)
 
@@ -74,9 +67,7 @@ class InferenceModel:
 
         print("initializing...")
         self._builder_env = TeamBuilderEnvironment(
-            generation=self._learner_config.generation,
-            smogon_format="ou_all_formats",
-            metagame_vocab_size=self._learner_config.metagame_vocab_size,
+            generation=self._learner_config.generation, smogon_format="ou_all_formats"
         )
         self.reset()  # warm up the model
 

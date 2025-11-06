@@ -31,7 +31,8 @@ class Agent:
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
         gpu_lock: LockType | None = None,
-        head_params: HeadParams = HeadParams(),
+        player_head_params: HeadParams = HeadParams(),
+        builder_head_params: HeadParams = HeadParams(),
     ):
         """Constructs an Agent object."""
         if player_apply_fn is None and builder_apply_fn is None:
@@ -41,10 +42,10 @@ class Agent:
 
         dummy_func = lambda *args, **kwargs: None
         self._player_apply_fn = functools.partial(
-            player_apply_fn or dummy_func, head_params=head_params
+            player_apply_fn or dummy_func, head_params=player_head_params
         )
         self._builder_apply_fn = functools.partial(
-            builder_apply_fn or dummy_func, head_params=head_params
+            builder_apply_fn or dummy_func, head_params=builder_head_params
         )
         self._gpu_lock = gpu_lock or nullcontext()
 

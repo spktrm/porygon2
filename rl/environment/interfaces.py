@@ -15,7 +15,6 @@ class PlayerEnvOutput(NamedTuple):
     # Private Info
     moveset: ArrayLike = ()
     private_team: ArrayLike = ()
-    metagame_token: ArrayLike = ()
 
     action_type_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
@@ -48,7 +47,6 @@ class HeadOutput(NamedTuple):
 
 class PlayerActorOutput(NamedTuple):
     v: ArrayLike = ()
-    metagame_log_prob: ArrayLike = ()
 
     action_type_head: HeadOutput = HeadOutput()
     move_head: HeadOutput = HeadOutput()
@@ -70,7 +68,6 @@ class BuilderEnvOutput(NamedTuple):
 
     ts: ArrayLike = ()
     done: ArrayLike = ()
-    metagame_token: ArrayLike = ()
 
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
@@ -89,7 +86,6 @@ class BuilderActorInput(NamedTuple):
 
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
-    metagame_log_prob: ArrayLike = ()
 
     species_head: HeadOutput = HeadOutput()
     packed_set_head: HeadOutput = HeadOutput()
