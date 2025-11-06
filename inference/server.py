@@ -23,8 +23,8 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=random.randint(0, 2**32 - 1),
-    player_head_params=HeadParams(temp=0.5, min_p=0.1),
-    builder_head_params=HeadParams(temp=0.5, min_p=0.1),
+    player_head_params=HeadParams(temp=0.8, min_p=0.1),
+    builder_head_params=HeadParams(temp=0.8, min_p=0.1),
 )
 
 

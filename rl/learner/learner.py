@@ -345,7 +345,7 @@ def player_train_step(
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
         loss_entropy = (
-            action_type_head_entropy
+            2 * action_type_head_entropy
             + move_head_entropy
             + switch_head_entropy
             + wildcard_head_entropy
@@ -496,22 +496,9 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    # phi_t = (
-    #     builder_transitions.env_output.cum_species_reward / 0.5
-    #     + builder_transitions.env_output.cum_teammate_reward / 5
-    # ) / 20
-    # shaped_reward = phi_t[1:] - phi_t[:-1]
-    # shaped_reward = jnp.concatenate(
-    #     (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
-    # )
-
-    teammate_reward = builder_transitions.env_output.cum_teammate_reward / 10
-    final_reward = final_reward - shift_left_with_zeros(teammate_reward).sum(
-        where=valid, axis=0
-    )
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    ) + teammate_reward
+    )
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
