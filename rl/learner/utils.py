@@ -1,5 +1,4 @@
 import functools
-import math
 from typing import Any, Dict
 
 import chex
@@ -58,15 +57,6 @@ def collect_batch_telemetry_data(
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
-    player_skill_reward = (
-        batch.player_transitions.agent_output.actor_output.metagame_log_prob
-        + math.log(config.metagame_vocab_size)
-    )
-    builder_skill_reward = (
-        batch.builder_transitions.agent_output.actor_output.metagame_log_prob
-        + math.log(config.metagame_vocab_size)
-    )
-
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
@@ -77,8 +67,6 @@ def collect_batch_telemetry_data(
         builder_species_reward_sum=batch.builder_transitions.env_output.cum_species_reward[
             -1
         ].mean(),
-        player_skill_reward_mean=player_skill_reward.sum(axis=0).mean(),
-        builder_skill_reward_mean=builder_skill_reward.sum(axis=0).mean(),
         builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
             -1
         ].mean(),

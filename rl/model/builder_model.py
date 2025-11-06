@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-
-load_dotenv()
 import functools
 import json
 from functools import partial
@@ -40,19 +37,14 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import (
-    HeadParams,
-    PolicyLogitHeadInner,
-    PolicyQKHead,
-    ValueLogitHead,
-)
+from rl.model.heads import HeadParams, PolicyQKHead, ValueLogitHead
 from rl.model.modules import (
     SumEmbeddings,
     TransformerEncoder,
     create_attention_mask,
     one_hot_concat_jax,
 )
-from rl.model.utils import get_most_recent_file, get_num_params, legal_log_policy
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 def _encode_one_hot(
@@ -93,16 +85,9 @@ class Porygon2BuilderModel(nn.Module):
         self.moves_linear = nn.Dense(
             name="moves_linear", use_bias=False, **dense_kwargs
         )
-        self.metagame_embeddings = nn.Embed(
-            num_embeddings=self.cfg.metagame_vocab_size,
-            features=2 * entity_size,
-            dtype=self.cfg.dtype,
-        )
 
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_query_merge = SumEmbeddings(entity_size, dtype=dtype)
-
-        transformer_config = self.cfg.transformer.to_dict()
 
         self.unk_embedding = self.param(
             "unk_embedding",
@@ -110,15 +95,12 @@ class Porygon2BuilderModel(nn.Module):
             (1, entity_size),
         )
 
-        self.encoder = TransformerEncoder(**transformer_config)
+        self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
 
         self.species_head = PolicyQKHead(self.cfg.species_head)
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
 
-        self.value_merge = SumEmbeddings(output_size=2 * entity_size, dtype=dtype)
         self.value_head = ValueLogitHead(self.cfg.value_head)
-
-        self.metagame_head = PolicyLogitHeadInner(self.cfg.metagame_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -224,15 +206,8 @@ class Porygon2BuilderModel(nn.Module):
         return embedding
 
     def _forward_value_head(self, my_embedding: jax.Array, opp_embedding: jax.Array):
-        hidden = self.value_merge(my_embedding, opp_embedding)
+        hidden = jnp.concatenate([my_embedding, opp_embedding], axis=-1)
         return self.value_head(hidden)
-
-    def _forward_metagame_head(
-        self, my_embedding: jax.Array, metagame_token: jax.Array
-    ):
-        logits = self.metagame_head(my_embedding)
-        log_probs = legal_log_policy(logits, jnp.ones_like(logits, dtype=jnp.bool))
-        return jnp.take(log_probs, metagame_token, axis=-1)
 
     def _encode_team(
         self,
@@ -282,13 +257,7 @@ class Porygon2BuilderModel(nn.Module):
 
         value = self._forward_value_head(current_embedding, opp_embedding)
 
-        metagame_log_prob = self._forward_metagame_head(
-            current_embedding, actor_env.metagame_token
-        )
-
-        metagame_embedding = self.metagame_embeddings(actor_env.metagame_token)
-        gamma, beta = jnp.split(metagame_embedding, 2, axis=-1)
-        species_query = gamma * current_embedding + beta
+        species_query = current_embedding
 
         species_head = self.species_head(
             species_query,
@@ -311,7 +280,6 @@ class Porygon2BuilderModel(nn.Module):
 
         species_embedding = jnp.take(species_keys, species_head.action_index, axis=0)
         packed_set_query = self.packed_set_query_merge(species_query, species_embedding)
-        packed_set_query = gamma * packed_set_query + beta
 
         packed_set_head = self.packed_set_head(
             packed_set_query,
@@ -322,10 +290,7 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         return BuilderActorOutput(
-            species_head=species_head,
-            packed_set_head=packed_set_head,
-            metagame_log_prob=metagame_log_prob,
-            v=value,
+            species_head=species_head, packed_set_head=packed_set_head, v=value
         )
 
     def __call__(
@@ -349,13 +314,14 @@ class Porygon2BuilderModel(nn.Module):
                 actor_input.hidden.packed_set_tokens,
                 use_casual_mask=False,
             )
-            opp_embedding = jnp.mean(opp_embeddings, axis=0)
+            opp_embedding = opp_embeddings[-1]
         else:
-            opp_embedding = jnp.zeros((self.cfg.entity_size,), dtype=self.cfg.dtype)
+            opp_embedding = jnp.zeros_like(my_embeddings[0], dtype=my_embeddings.dtype)
 
+        ts_m1 = actor_input.env.ts - 1
         hidden_states = jnp.take(
             my_embeddings,
-            actor_input.env.ts.reshape(-1).clip(min=0, max=my_embeddings.shape[0] - 1),
+            ts_m1.reshape(-1).clip(min=0, max=my_embeddings.shape[0] - 1),
             axis=0,
         )
         return jax.vmap(
@@ -371,20 +337,12 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 
 def main(debug: bool = False, generation: int = 9):
-    learner_config = get_learner_config()
+    get_learner_config()
 
-    actor_model_config = get_builder_model_config(
-        generation,
-        train=False,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
-    )
+    actor_model_config = get_builder_model_config(generation, train=False)
     actor_network = get_builder_model(actor_model_config)
 
-    learner_model_config = get_builder_model_config(
-        generation,
-        train=True,
-        metagame_vocab_size=learner_config.metagame_vocab_size,
-    )
+    learner_model_config = get_builder_model_config(generation, train=True)
     learner_network = get_builder_model(learner_model_config)
 
     ex_actor_input, ex_actor_output = jax.device_put(
@@ -399,16 +357,19 @@ def main(debug: bool = False, generation: int = 9):
             step = pickle.load(f)
         builder_params = step["builder_state"]["params"]
     else:
-        builder_params = learner_network.init(key, ex_actor_input, ex_actor_output)
+        builder_params = functools.partial(
+            learner_network.init, head_params=HeadParams()
+        )(key, ex_actor_input, ex_actor_output)
 
     pprint(get_num_params(builder_params))
 
-    agent = Agent(builder_apply_fn=actor_network.apply)
+    agent = Agent(
+        builder_apply_fn=actor_network.apply,
+        # builder_head_params=HeadParams(temp=0.1),
+    )
 
     builder_env = TeamBuilderEnvironment(
-        generation=generation,
-        smogon_format="ou_all_formats",
-        metagame_vocab_size=learner_config.metagame_vocab_size,
+        generation=generation, smogon_format="ou_all_formats"
     )
 
     with open(f"data/data/gen{generation}/{builder_env._smogon_format}.json", "r") as f:
@@ -427,7 +388,7 @@ def main(debug: bool = False, generation: int = 9):
         build_traj = []
 
         with jax.disable_jit(debug):
-            builder_actor_input = builder_env.reset(3)
+            builder_actor_input = builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             with jax.disable_jit(debug):
                 builder_agent_output = agent.step_builder(
@@ -460,10 +421,7 @@ def main(debug: bool = False, generation: int = 9):
         if new_species_reward_bounds != species_reward_bounds:
             species_reward_bounds = new_species_reward_bounds
 
-        teammate_reward_sum = (
-            builder_trajectory.env_output.cum_teammate_reward[1:]
-            - builder_trajectory.env_output.cum_teammate_reward[:-1]
-        ).sum()
+        teammate_reward_sum = builder_trajectory.env_output.cum_teammate_reward.sum()
         new_teammate_reward_bounds = (
             min(teammate_reward_sum.item(), teammate_reward_bounds[0]),
             max(teammate_reward_sum.item(), teammate_reward_bounds[1]),

@@ -19,7 +19,7 @@
         "preprocess-replays": "ts-node src/replays/main.ts"
     },
     "dependencies": {
-        "@pkmn/client": "^0.7.0",
+        "@pkmn/client": "^0.7.2",
         "@pkmn/dex": "^0.9.36",
         "@pkmn/login": "^0.2.0",
         "@pkmn/randoms": "^0.9.36",

@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from rl.model.heads import HeadParams
+
 load_dotenv()
 import random
 
@@ -22,8 +24,8 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=random.randint(0, 2**32 - 1),
-    temp=0.2,
-    min_p=0,
+    player_head_params=HeadParams(temp=0.5, min_p=0.1),
+    builder_head_params=HeadParams(temp=0.5, min_p=0.1),
 )
 
 
