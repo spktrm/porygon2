@@ -213,9 +213,27 @@ class MultiHeadAttention(nn.Module):
                 raise ValueError(
                     "Rotary position embeddings require positions argument."
                 )
+            if len(q_positions.shape) == 1:
+                q_positions = q_positions[..., jnp.newaxis]
+            if len(kv_positions.shape) == 1:
+                kv_positions = kv_positions[..., jnp.newaxis]
+
+            _apply_rope = jax.vmap(apply_rope, in_axes=(-1, -1), out_axes=-1)
+
             # Get the positions for the sequence.
-            query_heads = apply_rope(query_heads, q_positions)
-            key_heads = apply_rope(key_heads, kv_positions)
+            axial_query_heads = query_heads.reshape(
+                *query_heads.shape[:-1], -1, q_positions.shape[-1]
+            )
+            query_heads = _apply_rope(axial_query_heads, q_positions).reshape(
+                *query_heads.shape
+            )
+
+            axial_key_heads = key_heads.reshape(
+                *key_heads.shape[:-1], -1, kv_positions.shape[-1]
+            )
+            key_heads = _apply_rope(axial_key_heads, kv_positions).reshape(
+                *key_heads.shape
+            )
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
@@ -538,13 +556,7 @@ class Transformer(nn.Module):
     def __call__(
         self,
         q: jax.Array,
-        contexts: Sequence[
-            Tuple[
-                jax.Array,
-                jax.Array | None,
-                jax.Array | None,
-            ]
-        ],
+        contexts: Sequence[Tuple[jax.Array, jax.Array, jax.Array]],
         encoder_attn_mask: jax.Array | None = None,
         q_positions: jax.Array | None = None,
     ):
@@ -552,32 +564,15 @@ class Transformer(nn.Module):
             qkv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
             encoder_attn_mask = create_attention_mask(qkv_mask, qkv_mask)
 
-        decoder_attn_masks = []
-        for kv, decoder_attn_mask, _ in contexts:
-            if decoder_attn_mask is None:
-                q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-                kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
-                decoder_attn_mask = create_attention_mask(q_mask, kv_mask)
-            decoder_attn_masks.append(decoder_attn_mask)
-
         positionwise_mask = encoder_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
-        kv_positions_per_context = []
-        if self.encoder_need_pos or self.decoder_need_pos:
-            if q_positions is None:
-                q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
-
-            for _, _, kv_positions in contexts:
-                if kv_positions is None:
-                    kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
-                kv_positions_per_context.append(kv_positions)
+        if q_positions is None and self.encoder_need_pos:
+            q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
 
         for _ in range(self.num_layers):
             q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
             res = []
-            for decoder_attn_mask, kv_position in zip(
-                decoder_attn_masks, kv_positions_per_context
-            ):
+            for kv, decoder_attn_mask, kv_position in contexts:
                 res.append(
                     self.decoder_layer(
                         q,

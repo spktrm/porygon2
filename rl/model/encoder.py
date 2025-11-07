@@ -41,6 +41,7 @@ from rl.environment.protos.features_pb2 import (
 from rl.model.modules import (
     GLU,
     GatNet,
+    Resnet,
     SumEmbeddings,
     Transformer,
     TransformerDecoder,
@@ -247,11 +248,14 @@ class Encoder(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (self.cfg.num_state_latents, entity_size),
         )
+        self.state_resnet = Resnet(num_resblocks=1)
 
         # Timestep wise graph attention layers
         self.timestep_gat = GatNet(**self.cfg.timestep_gat.to_dict())
 
         # Transformer encoders for processing sequences of entities and edges.
+        self.move_encoder = TransformerEncoder(**self.cfg.move_encoder.to_dict())
+        self.switch_encoder = TransformerEncoder(**self.cfg.switch_encoder.to_dict())
         self.timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
@@ -767,29 +771,32 @@ class Encoder(nn.Module):
         )
 
         embedding = self.field_sum(
-            boolean_code,
-            my_side_condition_encoding,
-            opp_side_condition_encoding,
-            _binary_scale_encoding(
-                to_encode=edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE],
-                world_dim=32,
-                dtype=self.cfg.dtype,
-            ),
+            boolean_code, my_side_condition_encoding, opp_side_condition_encoding
         )
+        turn_order_value = edge[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE]
 
         # Apply mask to filter out invalid edges.
         mask = edge[FieldFeature.FIELD_FEATURE__VALID].astype(jnp.bool)
         embedding = mask * embedding
 
-        return embedding, mask, request_count
+        return embedding, mask, request_count, turn_order_value
 
     def _embed_public_entities(self, env_step: PlayerEnvOutput):
         return jax.vmap(self._embed_public_entity)(
             env_step.public_team, env_step.revealed_team
         )
 
-    def _embed_private_entities(self, env_step: PlayerEnvOutput):
-        return jax.vmap(self._embed_private_entity)(env_step.private_team)
+    def _embed_private_entities(
+        self, env_step: PlayerEnvOutput, switch_mask: jax.Array
+    ):
+        entity_embeddings, entity_mask = jax.vmap(self._embed_private_entity)(
+            env_step.private_team
+        )
+        entity_mask = switch_mask & entity_mask
+        entity_embeddings = self.switch_encoder(
+            entity_embeddings, create_attention_mask(entity_mask)
+        )
+        return entity_embeddings, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
     def _embed_timestep(self, history: PlayerHistoryOutput):
@@ -806,9 +813,12 @@ class Encoder(nn.Module):
         history_edge_embedding, edge_mask = jax.vmap(self._embed_edge)(history.edges)
 
         # Encode field
-        field_embedding, valid_timestep_mask, history_request_count = self._embed_field(
-            history.field
-        )
+        (
+            field_embedding,
+            valid_timestep_mask,
+            history_request_count,
+            history_turn_order_value,
+        ) = self._embed_field(history.field)
 
         node_edge_mask = node_mask & edge_mask
         side_token = history.public[
@@ -842,12 +852,16 @@ class Encoder(nn.Module):
             timestep_embedding,
             valid_timestep_mask & edge_mask.any(),
             history_request_count,
+            history_turn_order_value,
         )
 
     def _embed_timesteps(self, history: PlayerHistoryOutput):
-        timestep_embedding, valid_timestep_mask, history_request_count = jax.vmap(
-            self._embed_timestep
-        )(history)
+        (
+            timestep_embedding,
+            valid_timestep_mask,
+            history_request_count,
+            history_turn_order_value,
+        ) = jax.vmap(self._embed_timestep)(history)
 
         # Apply mask to the timestep embeddings.
         timestep_embedding = jnp.where(
@@ -856,14 +870,24 @@ class Encoder(nn.Module):
 
         seq_len = timestep_embedding.shape[0]
 
+        timestep_positions = jnp.stack(
+            [history_request_count, history_turn_order_value], axis=-1
+        )
+
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
         contextual_timestep_embedding = self.timestep_encoder(
             timestep_embedding,
-            create_attention_mask(valid_timestep_mask)
+            attn_mask=create_attention_mask(valid_timestep_mask)
             & jnp.expand_dims(causal_mask, axis=0),
+            qkv_positions=timestep_positions,
         )
 
-        return contextual_timestep_embedding, valid_timestep_mask, history_request_count
+        return (
+            contextual_timestep_embedding,
+            valid_timestep_mask,
+            history_request_count,
+            timestep_positions,
+        )
 
     # Encode actions for the current environment step.
     def _embed_action(self, action: jax.Array) -> jax.Array:
@@ -889,8 +913,9 @@ class Encoder(nn.Module):
 
         return embedding
 
-    def _embed_moves(self, moveset: jax.Array) -> jax.Array:
-        return jax.vmap(self._embed_action)(moveset)
+    def _embed_moves(self, moveset: jax.Array, move_mask: jax.Array) -> jax.Array:
+        moves = jax.vmap(self._embed_action)(moveset)
+        return self.move_encoder(moves, create_attention_mask(move_mask))
 
     def __call__(self, env_step: PlayerEnvOutput, history_step: PlayerHistoryOutput):
         """
@@ -898,9 +923,12 @@ class Encoder(nn.Module):
         contextual embeddings for actions.
         """
 
-        timestep_embeddings, history_valid_mask, history_request_count = (
-            self._embed_timesteps(history_step)
-        )
+        (
+            timestep_embeddings,
+            history_valid_mask,
+            history_request_count,
+            timestep_positions,
+        ) = self._embed_timesteps(history_step)
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         # For padded timesteps, request count is 0, so we use a large bias value.
         timestep_mask = request_count[..., None] >= jnp.where(
@@ -908,7 +936,6 @@ class Encoder(nn.Module):
             history_request_count,
             jnp.iinfo(request_count.dtype).max,
         )
-        timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
         def _batched_forward(
             env_step: PlayerEnvOutput,
@@ -918,23 +945,13 @@ class Encoder(nn.Module):
             entity_embeddings, entity_mask = self._embed_public_entities(env_step)
             field_embedding, *_ = self._embed_field(env_step.field)
 
-            upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
-
-            latest_timestep_indices = upper_index - jnp.arange(32)
-
-            kv_positions = jnp.take(
-                history_request_count, latest_timestep_indices, axis=0
-            )
-
             move_mask = env_step.action_type_mask[0] * env_step.move_mask
             switch_mask = env_step.action_type_mask[1] * env_step.switch_mask
 
-            move_embeddings = self._embed_moves(env_step.moveset)
-            switch_embeddings, valid_switch_mask = self._embed_private_entities(
-                env_step.private_team
+            move_embeddings = self._embed_moves(env_step.moveset, move_mask)
+            switch_embeddings, switch_mask = self._embed_private_entities(
+                env_step, switch_mask
             )
-
-            switch_mask = switch_mask * valid_switch_mask
 
             contextual_entity_embeddings = self.entity_everything_transformer(
                 entity_embeddings + field_embedding[None],
@@ -942,7 +959,7 @@ class Encoder(nn.Module):
                     (
                         timestep_embeddings,
                         create_attention_mask(entity_mask, timestep_mask),
-                        kv_positions,
+                        timestep_positions,
                     ),
                     (
                         move_embeddings,
@@ -984,7 +1001,9 @@ class Encoder(nn.Module):
                 create_attention_mask(switch_mask, entity_mask),
             )
 
-            return state_embeddings.reshape(-1), contextual_moves, contextual_switches
+            state_query = self.state_resnet(state_embeddings.reshape(-1))
+
+            return state_query, contextual_moves, contextual_switches
 
         state_query, contextual_moves, contextual_switches = jax.vmap(_batched_forward)(
             env_step, timestep_mask, jnp.expand_dims(request_count, -1)

@@ -9,7 +9,9 @@ from rl.environment.data import (
     MAX_RATIO_TOKEN,
     NUM_ACTION_MASK_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
-    NUM_ENTITY_NODE_FEATURES,
+    NUM_ENTITY_PRIVATE_FEATURES,
+    NUM_ENTITY_PUBLIC_FEATURES,
+    NUM_ENTITY_REVEALED_FEATURES,
     NUM_FIELD_FEATURES,
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
@@ -126,20 +128,24 @@ def process_state(
 
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
 
-    history_entity_nodes = padnstack(
-        np.frombuffer(state.history_entity_nodes, dtype=np.int16).reshape(
-            (history_length, 12, NUM_ENTITY_NODE_FEATURES)
+    history_entity_public = padnstack(
+        np.frombuffer(state.history_entity_public, dtype=np.int16).reshape(
+            (history_length, 12, NUM_ENTITY_PUBLIC_FEATURES)
         ),
         max_history,
     ).astype(np.int32)
-
+    history_entity_revealed = padnstack(
+        np.frombuffer(state.history_entity_revealed, dtype=np.int16).reshape(
+            (history_length, 12, NUM_ENTITY_REVEALED_FEATURES)
+        ),
+        max_history,
+    ).astype(np.int32)
     history_entity_edges = padnstack(
         np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
             (history_length, 12, NUM_ENTITY_EDGE_FEATURES)
         ),
         max_history,
     ).astype(np.int32)
-
     history_field = padnstack(
         np.frombuffer(state.history_field, dtype=np.int16).reshape(
             (history_length, NUM_FIELD_FEATURES)
@@ -154,12 +160,17 @@ def process_state(
     )
     private_team = (
         np.frombuffer(state.private_team, dtype=np.int16)
-        .reshape(6, NUM_ENTITY_NODE_FEATURES)
+        .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
+        .astype(np.int32)
+    )
+    revealed_team = (
+        np.frombuffer(state.revealed_team, dtype=np.int16)
+        .reshape(12, NUM_ENTITY_REVEALED_FEATURES)
         .astype(np.int32)
     )
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
-        .reshape(12, NUM_ENTITY_NODE_FEATURES)
+        .reshape(12, NUM_ENTITY_PUBLIC_FEATURES)
         .astype(np.int32)
     )
 
@@ -186,6 +197,7 @@ def process_state(
         fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
+        revealed_team=revealed_team,
         field=field,
         moveset=moveset,
         action_type_mask=get_action_type_mask(action_mask),
@@ -194,7 +206,8 @@ def process_state(
         wildcard_mask=get_tera_mask(action_mask),
     )
     history_step = PlayerHistoryOutput(
-        nodes=history_entity_nodes,
+        public=history_entity_public,
+        revealed=history_entity_revealed,
         edges=history_entity_edges,
         field=history_field,
     )

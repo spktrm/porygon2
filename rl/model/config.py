@@ -25,7 +25,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     base_size = 128
     num_heads = 2
-    scale = 2
+    scale = 1
 
     num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
@@ -88,6 +88,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.timestep_gat.num_heads = num_heads
     cfg.encoder.timestep_gat.max_edges = 4
 
+    cfg.encoder.move_encoder = ConfigDict()
+    set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
+
+    cfg.encoder.switch_encoder = ConfigDict()
+    set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
+
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
@@ -101,6 +107,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
     )
     cfg.encoder.entity_timestep_transformer.num_layers = 4
+    cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
+    cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
 
     cfg.encoder.query_pool = ConfigDict()
     set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
@@ -193,9 +201,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.encoder = ConfigDict()
     set_attributes(cfg.encoder, **transformer_kwargs)
     cfg.encoder.need_pos = True
-
-    cfg.decoder = ConfigDict()
-    set_attributes(cfg.decoder, **transformer_kwargs)
 
     for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
