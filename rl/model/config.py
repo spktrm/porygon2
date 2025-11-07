@@ -101,6 +101,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
     )
     cfg.encoder.entity_timestep_transformer.num_layers = 4
+    cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
+    cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
 
     cfg.encoder.query_pool = ConfigDict()
     set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
