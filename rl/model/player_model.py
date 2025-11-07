@@ -97,14 +97,14 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_query, contextual_moves, contextual_switches = self.encoder(
+        state_queries, contextual_moves, contextual_switches = self.encoder(
             actor_input.env, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            state_query,
+            state_queries,
             contextual_moves,
             contextual_switches,
             actor_input.env,

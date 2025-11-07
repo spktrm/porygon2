@@ -78,15 +78,13 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
 
     # Loss coefficients
+    reg_eta: float = 0.1
+
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_entropy_loss_coef: float = 0.01
-    player_kl_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.005
-    builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: GenT = 9

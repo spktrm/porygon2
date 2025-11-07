@@ -33,10 +33,12 @@ import { OneDBoolean } from "./utils";
 import {
     MovesetFeature,
     InfoFeature,
-    EntityNodeFeature,
     EntityEdgeFeature,
     FieldFeature,
     ActionMaskFeature,
+    EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
+    EntityRevealedNodeFeature,
 } from "../../protos/features_pb";
 
 export type EnumMappings =
@@ -93,7 +95,15 @@ export const sideIdMapping: {
     p2: 1,
 };
 
-export const numEntityNodeFeatures = Object.keys(EntityNodeFeature).length;
+export const numPrivateEntityNodeFeatures = Object.keys(
+    EntityPrivateNodeFeature,
+).length;
+export const numPublicEntityNodeFeatures = Object.keys(
+    EntityPublicNodeFeature,
+).length;
+export const numRevealedEntityNodeFeatures = Object.keys(
+    EntityRevealedNodeFeature,
+).length;
 export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
 export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;

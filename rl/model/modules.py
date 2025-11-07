@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 import flax.linen as nn
 import jax
@@ -538,34 +538,57 @@ class Transformer(nn.Module):
     def __call__(
         self,
         q: jax.Array,
-        kv: jax.Array,
+        contexts: Sequence[
+            Tuple[
+                jax.Array,
+                jax.Array | None,
+                jax.Array | None,
+            ]
+        ],
         encoder_attn_mask: jax.Array | None = None,
-        decoder_attn_mask: jax.Array | None = None,
         q_positions: jax.Array | None = None,
-        kv_positions: jax.Array | None = None,
     ):
         if encoder_attn_mask is None:
             qkv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
             encoder_attn_mask = create_attention_mask(qkv_mask, qkv_mask)
 
-        if decoder_attn_mask is None:
-            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
-            decoder_attn_mask = create_attention_mask(q_mask, kv_mask)
+        decoder_attn_masks = []
+        for kv, decoder_attn_mask, _ in contexts:
+            if decoder_attn_mask is None:
+                q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+                kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+                decoder_attn_mask = create_attention_mask(q_mask, kv_mask)
+            decoder_attn_masks.append(decoder_attn_mask)
 
         positionwise_mask = encoder_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
+        kv_positions_per_context = []
         if self.encoder_need_pos or self.decoder_need_pos:
             if q_positions is None:
                 q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
-            if kv_positions is None:
-                kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
+
+            for _, _, kv_positions in contexts:
+                if kv_positions is None:
+                    kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
+                kv_positions_per_context.append(kv_positions)
 
         for _ in range(self.num_layers):
             q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
-            q = self.decoder_layer(
-                q, kv, decoder_attn_mask, positionwise_mask, q_positions, kv_positions
-            )
+            res = []
+            for decoder_attn_mask, kv_position in zip(
+                decoder_attn_masks, kv_positions_per_context
+            ):
+                res.append(
+                    self.decoder_layer(
+                        q,
+                        kv,
+                        decoder_attn_mask,
+                        positionwise_mask,
+                        q_positions,
+                        kv_position,
+                    )
+                )
+            q = q + sum(res)
 
         return q
 
@@ -604,6 +627,25 @@ class MLP(nn.Module):
                 dense_kwargs["kernel_init"] = self.final_kernel_init
             x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
+
+
+class GLU(nn.Module):
+
+    @nn.compact
+    def __call__(self, value: jax.Array, gate: jax.Array) -> jax.Array:
+        """
+        Apply Gated Linear Unit (GLU) to the inputs.
+
+        Args:
+            x (jax.Array): Input array.
+            y (jax.Array): Input array.
+
+        Returns:
+            jax.Array: Output array.
+        """
+        gate = nn.sigmoid(nn.Dense(gate.shape[-1], dtype=gate.dtype)(gate))
+        value = nn.Dense(gate.shape[-1], dtype=gate.dtype)(value)
+        return value * gate
 
 
 class PretrainedEmbedding:
