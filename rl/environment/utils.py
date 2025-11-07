@@ -2,6 +2,7 @@ from typing import Sequence, TypeVar
 
 import jax
 import numpy as np
+import rlax
 
 from rl.environment.data import (
     EX_TRAJECTORY,
@@ -18,6 +19,7 @@ from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
     BuilderEnvOutput,
+    BuilderHistoryOutput,
     HeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
@@ -33,6 +35,10 @@ from rl.environment.protos.features_pb2 import (
 from rl.environment.protos.service_pb2 import EnvironmentState, ResetRequest
 
 T = TypeVar("T")
+
+
+def split_rng(key: jax.Array, num_splits: int = 2) -> tuple[jax.Array, jax.Array]:
+    return jax.random.split(key, num_splits)
 
 
 def stack_steps(steps: Sequence[T], axis: int = 0) -> T:
@@ -112,7 +118,9 @@ def get_tera_mask(mask: jax.Array):
 
 
 def process_state(
-    state: EnvironmentState, opponent_team: ResetRequest = None
+    state: EnvironmentState,
+    opponent_team: ResetRequest = None,
+    max_history: int = NUM_HISTORY,
 ) -> PlayerActorInput:
     history_length = state.history_length
 
@@ -122,21 +130,21 @@ def process_state(
         np.frombuffer(state.history_entity_nodes, dtype=np.int16).reshape(
             (history_length, 12, NUM_ENTITY_NODE_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     history_entity_edges = padnstack(
         np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
             (history_length, 12, NUM_ENTITY_EDGE_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     history_field = padnstack(
         np.frombuffer(state.history_field, dtype=np.int16).reshape(
             (history_length, NUM_FIELD_FEATURES)
         ),
-        NUM_HISTORY,
+        max_history,
     ).astype(np.int32)
 
     moveset = (
@@ -239,37 +247,85 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
-    trajectory_length = 33
+    trajectory_length = 7
+    history_length = 6
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
     ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
-                continue_mask=np.ones((trajectory_length, 1, 2), dtype=np.bool_),
                 species_mask=np.ones(
-                    (trajectory_length, 1, NUM_SPECIES), dtype=np.bool_
+                    (trajectory_length, 1, NUM_SPECIES), dtype=np.bool
                 ),
-                species_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
-                packed_set_tokens=np.zeros((trajectory_length, 1, 6), dtype=np.int32),
                 ts=ts,
                 done=done,
-                metagame_token=np.zeros_like(ts, dtype=np.int32),
-                metagame_mask=np.ones((trajectory_length, 1, 32), dtype=np.bool),
             ),
             hidden=PlayerHiddenInfo(
                 species_tokens=np.zeros((6, 1), dtype=np.int32),
                 packed_set_tokens=np.zeros((6, 1), dtype=np.int32),
             ),
+            history=BuilderHistoryOutput(
+                species_tokens=np.zeros((history_length, 1), dtype=np.int32),
+                packed_set_tokens=np.zeros((history_length, 1), dtype=np.int32),
+            ),
         ),
         BuilderActorOutput(
             v=np.zeros_like(done, dtype=np.float32),
-            metagame_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            continue_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            selection_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
             packed_set_head=HeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),
     )
+
+
+def main():
+    """Main function for testing the utilities."""
+    ex_player_input, ex_player_output = get_ex_player_step()
+    ex_builder_input, ex_builder_output = get_ex_builder_step()
+
+    my_fainted_count = ex_player_input.env.info[
+        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    ]
+    opp_fainted_count = ex_player_input.env.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    ]
+    my_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__MY_HP_COUNT]
+    opp_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT]
+    phi_t = (
+        (opp_fainted_count - my_fainted_count) + 0.2 * (my_hp_count - opp_hp_count)
+    ) / MAX_RATIO_TOKEN
+
+    shaped_reward = phi_t[1:] - phi_t[:-1]
+    shaped_reward = np.concatenate(
+        (np.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
+    )
+
+    rewards_tm1 = (shaped_reward).squeeze(-1)
+    valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
+
+    rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
+
+    oracle_value = rewards[::-1].cumsum()[::-1]
+    perturbed_oracle_value = oracle_value + np.random.normal(
+        scale=1e-2, size=oracle_value.shape
+    )
+
+    v_tm1 = valid * perturbed_oracle_value
+    v_t = np.concatenate((v_tm1[1:], v_tm1[-1:]))
+    discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
+        v_t.dtype
+    )
+    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
+
+    vtrace = rlax.vtrace_td_error_and_advantage(
+        v_tm1, v_t, rewards, discounts, valid, lambdas
+    )
+    errors = vtrace.errors
+    errors + v_tm1
+    print(vtrace)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,6 @@
 import functools
-import pickle
 
+import cloudpickle as pickle
 import jax
 
 from rl.environment.utils import get_ex_player_step

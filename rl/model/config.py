@@ -4,40 +4,6 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 
-def camel_case_path(path_list):
-    """Converts a list of path components to a CamelCase string."""
-    return "".join(
-        [
-            (
-                word.capitalize()
-                if len(word.split("_")) <= 1
-                else camel_case_path(word.split("_"))
-            )
-            for word in path_list
-        ]
-    )
-
-
-def add_name_recursive(cfg, path=None):
-    """Recursively creates a new ConfigDict with `name` attributes based on the path."""
-    if path is None:
-        path = []
-
-    new_cfg = ConfigDict()
-
-    if isinstance(cfg, ConfigDict):
-        new_cfg.name = camel_case_path(path)  # Set the name based on the current path
-
-        for key, value in cfg.items():
-            # Recursively add names to each nested ConfigDict
-            new_cfg[key] = add_name_recursive(value, path + [key])
-    else:
-        # For non-ConfigDict items, simply copy them over
-        new_cfg = cfg
-
-    return new_cfg
-
-
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
     """
     Sets multiple attributes on a ConfigDict object using keyword arguments.
@@ -54,14 +20,17 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
+def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
     num_heads = 2
     scale = 1
 
+    num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
+
+    cfg.num_state_latents = num_state_latents
 
     cfg.generation = generation
     cfg.entity_size = entity_size
@@ -71,6 +40,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
+    cfg.encoder.num_state_latents = num_state_latents
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -112,33 +82,25 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         qk_layer_norm=decoder_qk_layer_norm,
     )
 
-    cfg.encoder.entity_encoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.entity_encoder.need_pos = False
-
     cfg.encoder.timestep_gat = ConfigDict()
     cfg.encoder.timestep_gat.out_dim = entity_size
-    cfg.encoder.timestep_gat.num_layers = 2
+    cfg.encoder.timestep_gat.num_layers = 1
     cfg.encoder.timestep_gat.num_heads = num_heads
-    cfg.encoder.timestep_gat.max_edges = 2
+    cfg.encoder.timestep_gat.max_edges = 4
 
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
-    cfg.encoder.action_encoder = ConfigDict()
-    set_attributes(cfg.encoder.action_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.action_encoder.need_pos = False
+    cfg.encoder.timestep_decoder = ConfigDict()
+    set_attributes(cfg.encoder.timestep_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.timestep_decoder.need_pos = True
 
-    cfg.encoder.entity_timestep_decoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_timestep_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_timestep_decoder.num_layers = 2
-    cfg.encoder.entity_timestep_decoder.need_pos = True
-
-    cfg.encoder.entity_action_decoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_action_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_action_decoder.num_layers = 2
-    cfg.encoder.entity_action_decoder.need_pos = False
+    cfg.encoder.entity_timestep_transformer = ConfigDict()
+    set_attributes(
+        cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
+    )
+    cfg.encoder.entity_timestep_transformer.num_layers = 4
 
     cfg.encoder.query_pool = ConfigDict()
     set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
@@ -147,7 +109,7 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
 
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.action_entity_decoder.num_layers = 2
+    cfg.encoder.action_entity_decoder.num_layers = 1
     cfg.encoder.action_entity_decoder.need_pos = False
 
     # Policy Head Configuration
@@ -183,20 +145,18 @@ def get_player_model_config(generation: int = 3, **head_params: dict) -> ConfigD
         head.resnet = ConfigDict()
         head.resnet.num_resblocks = 1
 
-    if head_params is not None:
-        for head in [
-            cfg.action_type_head,
-            cfg.move_head,
-            cfg.switch_head,
-            cfg.wildcard_head,
-        ]:
-            for param_name, param_value in head_params.items():
-                setattr(head, param_name, param_value)
+    for head in [
+        cfg.action_type_head,
+        cfg.move_head,
+        cfg.switch_head,
+        cfg.wildcard_head,
+    ]:
+        head.train = train
 
     return cfg
 
 
-def get_builder_model_config(generation: int = 3, **head_params: dict) -> ConfigDict:
+def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 128
@@ -205,7 +165,6 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
 
     entity_size = int(scale * base_size * num_heads)
 
-    cfg.num_metagame_slots = 32
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
@@ -231,37 +190,24 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         qk_layer_norm=qk_layer_norm,
     )
 
-    cfg.transformer = ConfigDict()
-    set_attributes(cfg.transformer, **transformer_kwargs)
-    cfg.transformer.need_pos = True
+    cfg.encoder = ConfigDict()
+    set_attributes(cfg.encoder, **transformer_kwargs)
+    cfg.encoder.need_pos = True
 
-    for param_name, param_value in head_params.items():
-        setattr(cfg, param_name, param_value)
+    cfg.decoder = ConfigDict()
+    set_attributes(cfg.decoder, **transformer_kwargs)
 
-    for name in [
-        "continue_head",
-        "metagame_head",
-        "selection_head",
-        "species_head",
-        "packed_set_head",
-        "value_head",
-    ]:
+    for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
         head_cfg.resnet = ConfigDict()
         head_cfg.resnet.num_resblocks = 1
         setattr(cfg, name, head_cfg)
 
-    for head, output_size in [
-        (cfg.continue_head, 2),
-        (cfg.metagame_head, cfg.num_metagame_slots),
-        (cfg.value_head, 1),
-    ]:
-        head.logits = ConfigDict()
-        head.logits.layer_sizes = output_size
-        head.logits.use_layer_norm = True
+    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits.layer_sizes = (entity_size, entity_size, 1)
+    cfg.value_head.logits.use_layer_norm = True
 
     for head in [
-        cfg.selection_head,
         cfg.species_head,
         cfg.packed_set_head,
     ]:
@@ -269,17 +215,7 @@ def get_builder_model_config(generation: int = 3, **head_params: dict) -> Config
         head.qk_logits.num_layers_query = 1
         head.qk_logits.num_layers_keys = 3
         head.qk_logits.use_layer_norm = True
-
-    if head_params is not None:
-        for head in [
-            cfg.continue_head,
-            cfg.metagame_head,
-            cfg.selection_head,
-            cfg.species_head,
-            cfg.packed_set_head,
-        ]:
-            for param_name, param_value in head_params.items():
-                setattr(head, param_name, param_value)
+        head.train = train
 
     return cfg
 

@@ -3335,24 +3335,8 @@ export class StateHandler {
     getWinReward() {
         if (this.player.done) {
             if (this.player.finishedEarly) {
-                const playerIndex = this.player.getPlayerIndex()!;
-                const sideHpSquares = this.player.privateBattle.sides.map(
-                    (side) => {
-                        const knownHpTotal = side.team.reduce(
-                            (acc, pokemon) =>
-                                acc + (pokemon.hp / pokemon.maxhp) ** 2,
-                            0,
-                        );
-                        const unknownHpTotal =
-                            side.totalPokemon - side.team.length;
-                        return (
-                            (knownHpTotal + unknownHpTotal) / side.totalPokemon
-                        );
-                    },
-                );
-                const ratioDiff =
-                    sideHpSquares[playerIndex] - sideHpSquares[1 - playerIndex];
-                return Math.floor((MAX_RATIO_TOKEN * ratioDiff) / 2);
+                // Prevent reward hacking by stalling
+                return Math.floor(MAX_RATIO_TOKEN * -0.5);
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";

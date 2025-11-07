@@ -27,6 +27,8 @@ message ResetRequest {
   repeated int32 species_indices = 2;
   repeated int32 packed_set_indices = 3;
   string smogon_format = 4;
+  int32 current_ckpt = 5;
+  int32 opponent_ckpt = 6;
 }
 
 message EnvironmentState {

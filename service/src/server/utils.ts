@@ -184,12 +184,13 @@ export function generateRandomString(length: number): string {
 }
 
 export function isEvalUser(userName: string) {
-    return userName.startsWith("eval");
+    return userName.startsWith("eval-heuristic");
 }
 
 export function isBaselineUser(userName: string) {
     return userName.startsWith("baseline");
 }
+
 export class AsyncQueue<T> {
     private queue: T[] = [];
     private maxSize: number;

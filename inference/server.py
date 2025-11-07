@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import random
 
 import numpy as np
@@ -5,19 +8,23 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
-from model import InferenceModel
 from rich.pretty import pprint
 
 from inference.interfaces import ResetResponse, StepResponse
+from inference.model import InferenceModel
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.model.heads import HeadParams
 
 app = FastAPI()
 
 
 # Initialize the model
 model = InferenceModel(
-    generation=1, seed=random.randint(0, 2**32 - 1), temp=1, min_p=0.01
+    generation=9,
+    seed=random.randint(0, 2**32 - 1),
+    player_head_params=HeadParams(temp=0.8, min_p=0.1),
+    builder_head_params=HeadParams(temp=0.8, min_p=0.1),
 )
 
 
@@ -46,7 +53,7 @@ async def step(request: Request):
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
-    ts = process_state(state)
+    ts = process_state(state, None, max_history=512)
     response = await run_in_threadpool(model.step, ts)
     pprint(response)
 

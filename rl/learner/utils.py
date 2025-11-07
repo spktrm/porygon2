@@ -1,3 +1,4 @@
+import functools
 from typing import Any, Dict
 
 import chex
@@ -6,6 +7,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.learner.config import Porygon2LearnerConfig
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -16,8 +18,10 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     return loss / (normalization + (normalization == 0.0))
 
 
-@jax.jit
-def collect_batch_telemetry_data(batch: Trajectory) -> Dict[str, Any]:
+@functools.partial(jax.jit, static_argnames=("config"))
+def collect_batch_telemetry_data(
+    batch: Trajectory, config: Porygon2LearnerConfig
+) -> Dict[str, Any]:
     builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
     builder_lengths = builder_valid.sum(0)
 
