@@ -25,7 +25,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     base_size = 128
     num_heads = 2
-    scale = 1
+    scale = 2
 
     num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
@@ -109,7 +109,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.action_entity_decoder.num_layers = 1
+    cfg.encoder.action_entity_decoder.num_layers = 2
     cfg.encoder.action_entity_decoder.need_pos = False
 
     # Policy Head Configuration
@@ -132,7 +132,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     for head in [cfg.move_head, cfg.switch_head]:
         head.qk_logits = ConfigDict()
         head.qk_logits.num_layers_query = 1
-        head.qk_logits.num_layers_keys = 3
+        head.qk_logits.num_layers_keys = 2
         head.qk_logits.use_layer_norm = True
 
     for head in [

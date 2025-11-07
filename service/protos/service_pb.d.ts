@@ -155,10 +155,15 @@ export class EnvironmentState extends jspb.Message {
   getActionMask_asB64(): string;
   setActionMask(value: Uint8Array | string): void;
 
-  getHistoryEntityNodes(): Uint8Array | string;
-  getHistoryEntityNodes_asU8(): Uint8Array;
-  getHistoryEntityNodes_asB64(): string;
-  setHistoryEntityNodes(value: Uint8Array | string): void;
+  getHistoryEntityPublic(): Uint8Array | string;
+  getHistoryEntityPublic_asU8(): Uint8Array;
+  getHistoryEntityPublic_asB64(): string;
+  setHistoryEntityPublic(value: Uint8Array | string): void;
+
+  getHistoryEntityRevealed(): Uint8Array | string;
+  getHistoryEntityRevealed_asU8(): Uint8Array;
+  getHistoryEntityRevealed_asB64(): string;
+  setHistoryEntityRevealed(value: Uint8Array | string): void;
 
   getHistoryEntityEdges(): Uint8Array | string;
   getHistoryEntityEdges_asU8(): Uint8Array;
@@ -182,6 +187,11 @@ export class EnvironmentState extends jspb.Message {
   getPublicTeam_asU8(): Uint8Array;
   getPublicTeam_asB64(): string;
   setPublicTeam(value: Uint8Array | string): void;
+
+  getRevealedTeam(): Uint8Array | string;
+  getRevealedTeam_asU8(): Uint8Array;
+  getRevealedTeam_asB64(): string;
+  setRevealedTeam(value: Uint8Array | string): void;
 
   getPrivateTeam(): Uint8Array | string;
   getPrivateTeam_asU8(): Uint8Array;
@@ -210,12 +220,14 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     actionMask: Uint8Array | string,
-    historyEntityNodes: Uint8Array | string,
+    historyEntityPublic: Uint8Array | string,
+    historyEntityRevealed: Uint8Array | string,
     historyEntityEdges: Uint8Array | string,
     historyField: Uint8Array | string,
     historyLength: number,
     moveset: Uint8Array | string,
     publicTeam: Uint8Array | string,
+    revealedTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,
     field: Uint8Array | string,
     rqid: number,
