@@ -570,8 +570,6 @@ def builder_train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + config.builder_kl_loss_coef * loss_kl
-            - config.builder_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
