@@ -754,20 +754,26 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = 0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -819,17 +825,52 @@ function getNullPokemon() {
 
 const nullPokemon = getNullPokemon();
 
-function getArrayFromPrivatePokemon(pokemonSet: PokemonSet) {
+function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
+    for (const key of keys) {
+        try {
+            return IndexValueFromEnum(enumDatum, key);
+        } catch (err) {
+            console.log(err);
+            continue;
+        }
+    }
+    throw new Error(`None of the keys ${keys} found in enum mapping`);
+}
+
+function getArrayFromPrivatePokemon(
+    candidate: Pokemon | null | undefined,
+    pokemonSet: PokemonSet,
+) {
     const dataArr = getBlankPrivatePokemonArr();
+
+    if (candidate === null || candidate === undefined) {
+        return dataArr;
+    }
+
+    let pokemon: Pokemon;
+    if (
+        candidate.volatiles.transform !== undefined &&
+        candidate.volatiles.transform.pokemon !== undefined
+    ) {
+        pokemon = candidate.volatiles.transform.pokemon as Pokemon;
+    } else {
+        pokemon = candidate;
+    }
 
     if (pokemonSet === null || pokemonSet === undefined) {
         throw new Error("Private data requested for null or undefined set");
     }
 
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES] =
-        IndexValueFromEnum(SpeciesEnum, pokemonSet.species);
+        tryFindIndex(SpeciesEnum, [
+            pokemon.baseSpecies.id,
+            pokemon.baseSpecies.baseSpecies.toLowerCase(),
+        ]);
+
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ITEM] =
-        IndexValueFromEnum(ItemsEnum, pokemonSet.item);
+        !!pokemonSet.item
+            ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
+            : ItemsEnum.ITEMS_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ABILITY] =
         IndexValueFromEnum(AbilitiesEnum, pokemonSet.ability);
 
@@ -923,7 +964,6 @@ function getArrayFromPublicPokemon(
         ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
         : TypechartEnum.TYPECHART_ENUM___UNK;
 
-    const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;
 
     // We take candidate item here instead of pokemons since
@@ -974,7 +1014,10 @@ function getArrayFromPublicPokemon(
 
     revealedData[
         EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
-    ] = IndexValueFromEnum<typeof SpeciesEnum>(SpeciesEnum, baseSpecies);
+    ] = tryFindIndex(SpeciesEnum, [
+        pokemon.baseSpecies.id,
+        pokemon.baseSpecies.baseSpecies.toLowerCase(),
+    ]);
     revealedData[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM] =
         item
             ? IndexValueFromEnum<typeof ItemsEnum>(ItemsEnum, item)
@@ -3524,21 +3567,38 @@ export class StateHandler {
         const buffer = new Int16Array(6 * numPrivateEntityNodeFeatures);
 
         if (requestPokemon === undefined) {
-            for (const member of sets) {
-                buffer.set(getArrayFromPrivatePokemon(member), offset);
-                offset += numPrivateEntityNodeFeatures;
-            }
+            throw new Error("Request pokemon is undefined");
         } else {
             for (const member of requestPokemon) {
                 const name = toID(member.speciesForme);
-                const matchedSet = sets.find(
-                    (set) => toID(set.species) === name,
-                );
+                const matchedSet = sets.find((set) => {
+                    const setSpecies = toID(set.species);
+                    return (
+                        setSpecies === name ||
+                        setSpecies.includes(name) ||
+                        name.includes(setSpecies)
+                    );
+                });
+                const matchedTeamMate = this.player.privateBattle.sides[
+                    playerIndex
+                ].team.find((teamMate) => {
+                    const setSpecies = toID(
+                        teamMate.baseSpecies.baseSpecies.toLowerCase(),
+                    );
+                    return (
+                        setSpecies === name ||
+                        setSpecies.includes(name) ||
+                        name.includes(setSpecies)
+                    );
+                });
                 if (matchedSet === undefined) {
                     throw new Error(`Pokemon ${name} not found in team`);
                 }
 
-                buffer.set(getArrayFromPrivatePokemon(matchedSet), offset);
+                buffer.set(
+                    getArrayFromPrivatePokemon(matchedTeamMate, matchedSet),
+                    offset,
+                );
                 offset += numPrivateEntityNodeFeatures;
             }
         }
