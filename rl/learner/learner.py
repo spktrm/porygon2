@@ -1,18 +1,25 @@
+import functools
 import math
 import queue
 import threading
+import traceback
+from _thread import LockType
+from contextlib import nullcontext
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import rlax
 import wandb.wandb_run
 from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import STOI
+from rl.environment.data import MAX_RATIO_TOKEN, STOI
 from rl.environment.interfaces import (
+    BuilderActorInput,
+    BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
     PlayerHiddenInfo,
@@ -20,17 +27,19 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
+from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.utils import clip_history
-from rl.learner.buffer import ReplayBuffer, ReplayRatioTokenBucket
+from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.returns import compute_returns
+from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
-from rl.model.utils import Params, promote_map
+from rl.model.heads import HeadParams
+from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
 
@@ -54,16 +63,10 @@ def calculate_player_log_prob(
 
 def calculate_builder_log_prob(
     *,
-    metagame_log_prob: jax.Array,
-    continue_log_prob: jax.Array,
-    continue_index: jax.Array,
-    selection_log_prob: jax.Array,
     species_log_prob: jax.Array,
     packed_set_log_prob: jax.Array,
 ):
-    return continue_log_prob + (continue_index == 0) * (
-        selection_log_prob + species_log_prob + packed_set_log_prob + metagame_log_prob
-    )
+    return species_log_prob + packed_set_log_prob
 
 
 def spo_objective(
@@ -97,7 +100,7 @@ def policy_gradient_loss(
     valid: jax.Array,
     clip_ppo: float,
 ):
-    pg_loss = ppo_objective(
+    pg_loss = spo_objective(
         policy_ratios=policy_ratios, advantages=advantages, clip_ppo=clip_ppo
     )
     return -average(pg_loss, valid)
@@ -163,6 +166,17 @@ def clip_log_ratio(log_ratio: jax.Array, eps: float = 0.2):
     return jnp.clip(log_ratio, a_min=math.log1p(-eps), a_max=math.log1p(eps))
 
 
+def shift_left_with_zeros(tensor: jax.Array):
+    return jnp.concatenate((tensor[1:], jnp.zeros_like(tensor[-1:])), axis=0)
+
+
+def postprocess_log_prob(log_prob: jax.Array, min_p: float = 0.03):
+    """Postprocess log probabilities to avoid extremely small values."""
+    return jnp.where(
+        log_prob < math.log(min_p), jnp.finfo(log_prob.dtype).min, log_prob
+    )
+
+
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     player_transitions: PlayerTransition,
@@ -170,6 +184,7 @@ def player_train_step(
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
+
     player_actor_input = PlayerActorInput(
         env=player_transitions.env_output, history=player_history
     )
@@ -178,6 +193,7 @@ def player_train_step(
             player_state.target_params,
             player_actor_input,
             player_transitions.agent_output.actor_output,
+            HeadParams(),
         )
     )
 
@@ -208,51 +224,77 @@ def player_train_step(
         switch_log_prob=target_switch_head.log_prob,
     )
 
+    # Zero out extremely small log probs to avoid large variance.
+    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
+
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
 
-    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    move_valid = player_valid & (actor_action_type_head.action_index == 0)
-    switch_valid = player_valid & (actor_action_type_head.action_index == 1)
+    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+
+    valid = jnp.bitwise_not(player_transitions.env_output.done)
+    move_valid = valid & (actor_action_type_head.action_index == 0)
+    switch_valid = valid & (actor_action_type_head.action_index == 1)
     wildcard_valid = move_valid & (
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    # my_fainted_count = player_transitions.env_output.info[
-    #     ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    # ]
-    # opp_fainted_count = player_transitions.env_output.info[
-    #     ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    # ]
-    # phi_t = (opp_fainted_count - my_fainted_count) / MAX_RATIO_TOKEN
-    # phi_tp1 = jnp.concatenate((phi_t[1:], jnp.zeros_like(phi_t[:1])), axis=0)
-    # shaped_reward = phi_tp1 - phi_t
+    my_fainted_count = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    ]
+    opp_fainted_count = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    ]
+    my_hp_count = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__MY_HP_COUNT
+    ]
+    opp_hp_count = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
+    ]
 
-    # Accounting for revival blessing
-    rewards = player_transitions.env_output.win_reward  # + (6 / 7) * shaped_reward
+    mult = 0.1
+    phi_t = (
+        mult
+        * ((opp_fainted_count - my_fainted_count) + mult * (my_hp_count - opp_hp_count))
+        / MAX_RATIO_TOKEN
+    )
+
+    shaped_reward = phi_t[1:] - phi_t[:-1]
+    shaped_reward = jnp.concatenate(
+        (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
+    )
+
+    rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
+
+    v_tm1 = player_target_pred.v
+    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
+    rewards = shift_left_with_zeros(rewards_tm1)
+    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-    player_vtrace = compute_returns(
-        player_target_pred.v,
-        jnp.concatenate((player_target_pred.v[1:], player_target_pred.v[-1:])),
-        jnp.concatenate((rewards[1:], rewards[-1:])),
-        jnp.concatenate((player_valid[1:], jnp.zeros_like(player_valid[-1:])))
-        * config.player_gamma,
-        target_actor_ratio,
-        lambda_=config.player_lambda_,
-        clip_rho_threshold=config.clip_rho_threshold,
-        clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+    vtrace_td_error_and_advantage = jax.vmap(
+        functools.partial(
+            rlax.vtrace_td_error_and_advantage,
+            lambda_=config.player_lambda,
+            clip_rho_threshold=config.clip_rho_threshold,
+            clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+        ),
+        in_axes=1,
+        out_axes=1,
     )
-    player_adv_mean = average(player_vtrace.pg_advantage, player_valid)
-    player_adv_std = player_vtrace.pg_advantage.std(where=player_valid)
+    vtrace = vtrace_td_error_and_advantage(
+        v_tm1, v_t, rewards, discounts, target_actor_ratio
+    )
+    target_v = vtrace.errors + v_tm1
+
+    player_adv_mean = average(vtrace.pg_advantage, valid)
+    player_adv_std = vtrace.pg_advantage.std(where=valid)
 
     # Normalize by the ema mean and std of the advantages.
-    player_norm_advantages = (
-        player_vtrace.pg_advantage - player_state.target_adv_mean
-    ) / (player_state.target_adv_std + 1e-8)
-
-    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
+    player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
+        player_state.target_adv_std + 1e-8
+    )
 
     def player_loss_fn(params: Params):
 
@@ -261,6 +303,7 @@ def player_train_step(
                 params,
                 player_actor_input,
                 player_transitions.agent_output.actor_output,
+                HeadParams(),
             )
         )
 
@@ -290,21 +333,19 @@ def player_train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=player_norm_advantages,
-            valid=player_valid,
+            valid=valid,
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = value_loss(
-            pred_v=player_pred.v, target_v=player_vtrace.returns, valid=player_valid
-        )
+        loss_v = value_loss(pred_v=player_pred.v, target_v=target_v, valid=valid)
 
-        action_type_head_entropy = average(pred_action_type_head.entropy, player_valid)
+        action_type_head_entropy = average(pred_action_type_head.entropy, valid)
         move_head_entropy = average(pred_move_head.entropy, move_valid)
         switch_head_entropy = average(pred_switch_head.entropy, switch_valid)
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
         loss_entropy = (
-            action_type_head_entropy
+            2 * action_type_head_entropy
             + move_head_entropy
             + switch_head_entropy
             + wildcard_head_entropy
@@ -313,17 +354,17 @@ def player_train_step(
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=player_valid,
+            valid=valid,
         )
         learner_target_approx_kl = forward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=player_valid,
+            valid=valid,
         )
         loss_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=player_valid,
+            valid=valid,
         )
 
         loss = (
@@ -346,18 +387,16 @@ def player_train_step(
             player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo
+                policy_ratios=ratio, valid=valid, clip_ppo=config.clip_ppo
             ),
-            player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
-            player_learner_target_ratio=average(learner_target_ratio, player_valid),
+            player_learner_actor_ratio=average(learner_actor_ratio, valid),
+            player_learner_target_ratio=average(learner_target_ratio, valid),
             # Approx KL values
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
-                value_prediction=player_pred.v,
-                value_target=player_vtrace.returns,
-                mask=player_valid,
+                value_prediction=player_pred.v, value_target=target_v, mask=valid
             ),
         )
 
@@ -371,11 +410,11 @@ def player_train_step(
             player_gradient_norm=optax.global_norm(player_grads),
             player_adv_mean=player_adv_mean,
             player_adv_std=player_adv_std,
-            player_is_ratio=average(actor_target_clipped_ratio, player_valid),
-            player_norm_adv_mean=average(player_norm_advantages, player_valid),
-            player_norm_adv_std=player_norm_advantages.std(where=player_valid),
-            player_value_target_mean=average(player_vtrace.returns, player_valid),
-            player_value_target_std=player_vtrace.returns.std(where=player_valid),
+            player_is_ratio=average(actor_target_clipped_ratio, valid),
+            player_norm_adv_mean=average(player_norm_advantages, valid),
+            player_norm_adv_std=player_norm_advantages.std(where=valid),
+            player_value_target_mean=average(target_v, valid),
+            player_value_target_std=target_v.std(where=valid),
         )
     )
 
@@ -392,7 +431,7 @@ def player_train_step(
         # Update num steps sampled.
         num_steps=player_state.num_steps + 1,
         # Add 1 for the final step in each trajectory
-        actor_steps=player_state.actor_steps + player_valid.sum(),
+        actor_steps=player_state.actor_steps + valid.sum(),
     )
 
     training_logs = dict(
@@ -408,124 +447,111 @@ def player_train_step(
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
     builder_transitions: BuilderTransition,
+    builder_history: BuilderHistoryOutput,
     player_hidden: PlayerHiddenInfo,
     final_reward: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
 
-    builder_actor_input = PlayerActorInput(
-        env=builder_transitions.env_output, hidden=player_hidden
+    builder_actor_input = BuilderActorInput(
+        env=builder_transitions.env_output,
+        hidden=player_hidden,
+        history=builder_history,
     )
     builder_target_pred = promote_map(
         builder_state.apply_fn(
             builder_state.target_params,
             builder_actor_input,
             builder_transitions.agent_output.actor_output,
+            HeadParams(),
         )
     )
 
-    actor_metagame_head = builder_transitions.agent_output.actor_output.metagame_head
-    actor_continue_head = builder_transitions.agent_output.actor_output.continue_head
-    actor_selection_head = builder_transitions.agent_output.actor_output.selection_head
     actor_species_head = builder_transitions.agent_output.actor_output.species_head
     actor_packed_set_head = (
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
-    target_metagame_head = builder_target_pred.metagame_head
-    target_continue_head = builder_target_pred.continue_head
-    target_selection_head = builder_target_pred.selection_head
     target_species_head = builder_target_pred.species_head
     target_packed_set_head = builder_target_pred.packed_set_head
 
-    actor_builder_log_prob = calculate_builder_log_prob(
-        metagame_log_prob=actor_metagame_head.log_prob,
-        continue_log_prob=actor_continue_head.log_prob,
-        continue_index=actor_continue_head.action_index,
-        selection_log_prob=actor_selection_head.log_prob,
+    actor_log_prob = calculate_builder_log_prob(
         species_log_prob=actor_species_head.log_prob,
         packed_set_log_prob=actor_packed_set_head.log_prob,
     )
-    target_builder_log_prob = calculate_builder_log_prob(
-        metagame_log_prob=target_metagame_head.log_prob,
-        continue_log_prob=target_continue_head.log_prob,
-        continue_index=target_continue_head.action_index,
-        selection_log_prob=target_selection_head.log_prob,
+    target_log_prob = calculate_builder_log_prob(
         species_log_prob=target_species_head.log_prob,
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
-    actor_target_builder_log_ratio = actor_builder_log_prob - target_builder_log_prob
-    actor_target_builder_ratio = jnp.exp(actor_target_builder_log_ratio)
-    target_actor_builder_ratio = jnp.exp(-actor_target_builder_log_ratio)
+    # Zero out extremely small log probs to avoid large variance.
+    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
 
-    actor_target_clipped_ratio = jnp.clip(actor_target_builder_ratio, min=0.0, max=2.0)
+    actor_target_log_ratio = actor_log_prob - target_log_prob
+    actor_target_ratio = jnp.exp(actor_target_log_ratio)
+    target_actor_ratio = jnp.exp(-actor_target_log_ratio)
 
-    builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
-    potential_reward = (
-        jnp.concatenate(
-            (
-                builder_transitions.env_output.cum_teammate_reward[1:],
-                builder_transitions.env_output.cum_teammate_reward[-1:],
-            ),
-            axis=0,
-        )
-        - builder_transitions.env_output.cum_teammate_reward
-    )
-    builder_rewards = (
-        jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)
-        * final_reward[None]
-    ) + potential_reward / 30
+    valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    builder_vtrace = compute_returns(
-        builder_target_pred.v,
-        jnp.concatenate((builder_target_pred.v[1:], builder_target_pred.v[-1:])),
-        jnp.concatenate((builder_rewards[1:], builder_rewards[-1:])),
-        jnp.concatenate((builder_valid[1:], jnp.zeros_like(builder_valid[-1:])))
-        * config.builder_gamma,
-        target_actor_builder_ratio,
-        lambda_=config.builder_lambda_,
-        clip_rho_threshold=config.clip_rho_threshold,
-        clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+    rewards_tm1 = (
+        jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
     )
 
-    builder_adv_mean = average(builder_vtrace.pg_advantage, builder_valid)
-    builder_adv_std = builder_vtrace.pg_advantage.std(where=builder_valid)
-    builder_norm_advantages = (
-        builder_vtrace.pg_advantage - builder_state.target_adv_mean
-    ) / (builder_state.target_adv_std + 1e-8)
+    v_tm1 = builder_target_pred.v
+    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
+    rewards_t = shift_left_with_zeros(rewards_tm1)
+    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
+
+    # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
+    vtrace_td_error_and_advantage = jax.vmap(
+        functools.partial(
+            rlax.vtrace_td_error_and_advantage,
+            lambda_=config.builder_lambda,
+            clip_rho_threshold=config.clip_rho_threshold,
+            clip_pg_rho_threshold=config.clip_pg_rho_threshold,
+        ),
+        in_axes=1,
+        out_axes=1,
+    )
+    vtrace = vtrace_td_error_and_advantage(
+        v_tm1, v_t, rewards_t, discounts, target_actor_ratio
+    )
+    target_v = vtrace.errors + v_tm1
+
+    builder_adv_mean = average(vtrace.pg_advantage, valid)
+    builder_adv_std = vtrace.pg_advantage.std(where=valid)
+
+    # Normalize by the ema mean and std of the advantages.
+    builder_norm_advantages = (vtrace.pg_advantage - builder_state.target_adv_mean) / (
+        builder_state.target_adv_std + 1e-8
+    )
 
     def builder_loss_fn(params: Params):
-        """Builder loss function."""
+
         builder_pred = promote_map(
             builder_state.apply_fn(
                 params,
                 builder_actor_input,
                 builder_transitions.agent_output.actor_output,
+                HeadParams(),
             )
         )
 
-        learner_metagame_head = builder_pred.metagame_head
-        learner_continue_head = builder_pred.continue_head
-        learner_selection_head = builder_pred.selection_head
         learner_species_head = builder_pred.species_head
         learner_packed_set_head = builder_pred.packed_set_head
 
-        learner_builder_log_prob = calculate_builder_log_prob(
-            metagame_log_prob=learner_metagame_head.log_prob,
-            continue_log_prob=learner_continue_head.log_prob,
-            continue_index=learner_continue_head.action_index,
-            selection_log_prob=learner_selection_head.log_prob,
+        learner_log_prob = calculate_builder_log_prob(
             species_log_prob=learner_species_head.log_prob,
             packed_set_log_prob=learner_packed_set_head.log_prob,
         )
 
-        learner_actor_log_ratio = learner_builder_log_prob - actor_builder_log_prob
+        learner_actor_log_ratio = learner_log_prob - actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        learner_target_log_ratio = learner_builder_log_prob - target_builder_log_prob
+        learner_target_log_ratio = learner_log_prob - target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = actor_target_clipped_ratio * learner_actor_ratio
@@ -534,54 +560,37 @@ def builder_train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=builder_norm_advantages,
-            valid=builder_valid,
+            valid=valid,
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = value_loss(
-            pred_v=builder_pred.v, target_v=builder_vtrace.returns, valid=builder_valid
-        )
+        loss_v = value_loss(pred_v=builder_pred.v, target_v=target_v, valid=valid)
 
-        continue_entropy = average(learner_continue_head.entropy, builder_valid)
-        metagame_entropy = average(learner_metagame_head.entropy, builder_valid)
-        selection_entropy = average(learner_selection_head.entropy, builder_valid)
-        species_entropy = average(learner_species_head.entropy, builder_valid)
-        packed_set_entropy = average(learner_packed_set_head.entropy, builder_valid)
-        loss_entropy = (
-            continue_entropy
-            + metagame_entropy
-            + selection_entropy
-            + species_entropy
-            + packed_set_entropy
-        )
+        species_entropy = average(learner_species_head.entropy, valid)
+        packed_set_entropy = average(learner_packed_set_head.entropy, valid)
+        loss_entropy = species_entropy + packed_set_entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=builder_valid,
+            valid=valid,
         )
         learner_target_approx_kl = forward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=builder_valid,
+            valid=valid,
         )
         loss_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=builder_valid,
+            valid=valid,
         )
-
-        loss_info_ce = optax.softmax_cross_entropy(
-            logits=builder_pred.metagame_pred_logits[1:],
-            labels=builder_transitions.env_output.metagame_mask[1:].astype(jnp.float32),
-        ).sum(where=builder_valid[1:]) / builder_valid[1:].sum().clip(min=1)
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
-            + loss_info_ce
         )
 
         return loss, dict(
@@ -589,27 +598,21 @@ def builder_train_step(
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
-            builder_loss_info_ce=loss_info_ce,
             # Head entropies
-            builder_continue_entropy=continue_entropy,
-            builder_metagame_entropy=metagame_entropy,
-            builder_selection_entropy=selection_entropy,
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
             # Ratios
             builder_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=builder_valid, clip_ppo=config.clip_ppo
+                policy_ratios=ratio, valid=valid, clip_ppo=config.clip_ppo
             ),
-            builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
-            builder_learner_target_ratio=average(learner_target_ratio, builder_valid),
+            builder_learner_actor_ratio=average(learner_actor_ratio, valid),
+            builder_learner_target_ratio=average(learner_target_ratio, valid),
             # Approx KL values
             builder_learner_actor_approx_kl=learner_actor_approx_kl,
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             builder_value_function_r2=calculate_r2(
-                value_prediction=builder_pred.v,
-                value_target=builder_vtrace.returns,
-                mask=builder_valid,
+                value_prediction=builder_pred.v, value_target=target_v, mask=valid
             ),
         )
 
@@ -625,11 +628,11 @@ def builder_train_step(
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_adv_mean=builder_adv_mean,
             builder_adv_std=builder_adv_std,
-            builder_is_ratio=average(actor_target_clipped_ratio, builder_valid),
-            builder_norm_adv_mean=average(builder_norm_advantages, builder_valid),
-            builder_norm_adv_std=builder_norm_advantages.std(where=builder_valid),
-            builder_value_target_mean=average(builder_vtrace.returns, builder_valid),
-            builder_value_target_std=builder_vtrace.returns.std(where=builder_valid),
+            builder_is_ratio=average(actor_target_clipped_ratio, valid),
+            builder_norm_adv_mean=average(builder_norm_advantages, valid),
+            builder_norm_adv_std=builder_norm_advantages.std(where=valid),
+            builder_value_target_mean=average(target_v, valid),
+            builder_value_target_std=target_v.std(where=valid),
         )
     )
 
@@ -643,7 +646,7 @@ def builder_train_step(
         + builder_adv_mean * config.tau,
         target_adv_std=builder_state.target_adv_std * (1 - config.tau)
         + builder_adv_std * config.tau,
-        actor_steps=builder_state.actor_steps + builder_valid.sum(),
+        actor_steps=builder_state.actor_steps + valid.sum(),
     )
 
     return builder_state, training_logs
@@ -671,27 +674,26 @@ class Learner:
         builder_state: Porygon2BuilderTrainState,
         learner_config: Porygon2LearnerConfig,
         wandb_run: wandb.wandb_run.Run,
+        league: League | None = None,
+        gpu_lock: LockType | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
         self.learner_config = learner_config
 
         self.wandb_run = wandb_run
-
-        # Replay ratio bookkeeping.
-        self.target_replay_ratio = self.learner_config.target_replay_ratio
-        self.min_replay_size = 8 * self.learner_config.batch_size
-        self.cv = threading.Condition()
+        self.gpu_lock = gpu_lock or nullcontext()
 
         self.done = False
         self.replay = ReplayBuffer(self.learner_config.replay_buffer_capacity)
-        self.controller = ReplayRatioTokenBucket(
+
+        self.controller = DirectRatioLimiter(
             target_rr=self.learner_config.target_replay_ratio,
-            capacity=int(
-                self.target_replay_ratio * self.learner_config.batch_size * 64
-            ),
-            headroom=0.05,
+            batch_size=self.learner_config.batch_size,
+            warmup_trajectories=self.learner_config.batch_size * 16,
         )
+        self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
+
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
 
         self.wandb_run.log_code("rl/")
@@ -701,36 +703,44 @@ class Learner:
         )
 
         try:
-            init_steps = player_state.num_steps.item()
+            init_frame_count = player_state.actor_steps.item()
+            init_step_count = player_state.num_steps.item()
         except:
-            init_steps = int(player_state.num_steps)
+            init_frame_count = int(player_state.actor_steps)
+            init_step_count = int(player_state.num_steps)
 
-        self.params_for_actor: tuple[int, Params, Params] = (
-            init_steps,
-            jax.device_get(self.player_state.params),
-            jax.device_get(self.builder_state.params),
-        )
+        if league is not None:
+            self.league = league
+        else:
+            init_params: ParamsContainer = ParamsContainer(
+                frame_count=init_frame_count,
+                step_count=init_step_count,
+                player_params=jax.device_get(self.player_state.params),
+                builder_params=jax.device_get(self.builder_state.params),
+            )
+            self.league = League(
+                main_player=init_params,
+                players=[init_params],
+                league_size=self.learner_config.league_size,
+            )
 
         # progress bars
         self.producer_progress = tqdm(desc="producer", smoothing=0.1)
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
-    def enqueue_traj(self, traj):
-        # Block if minting this trajectory would overflow capacity.
-        with self.cv:
-            self.cv.wait_for(
-                lambda: self.done
-                or (self.controller.tokens + self.target_replay_ratio)
-                <= self.controller.capacity
-            )
-            if self.done:
-                return
-            # Mint tokens and ingest ONE trajectory (trajectory-based RR)
-            self.controller.on_trajectories(1)
-            self.producer_progress.update(1)
-            self.replay.add(traj)
-            self.cv.notify_all()  # wake learner
+    def enqueue_traj(self, traj: Trajectory):
+        # Block if the ratio is too low (we are too far ahead)
+        self.controller.wait_for_produce_permission()
+
+        if self.done:
+            return
+
+        self.producer_progress.update(1)
+        self.replay.add(traj)
+
+        # Notify the controller that we have produced one trajectory
+        self.controller.notify_produced(n_trajectories=1)
 
     def stack_batch(
         self,
@@ -752,6 +762,7 @@ class Learner:
 
         clipped_trajectory = Trajectory(
             builder_transitions=stacked_trajectory.builder_transitions,
+            builder_history=stacked_trajectory.builder_history,
             player_transitions=jax.tree.map(
                 lambda x: x[:num_valid], stacked_trajectory.player_transitions
             ),
@@ -769,57 +780,62 @@ class Learner:
         batch_size = self.learner_config.batch_size
 
         while not self.done:
-            # --- Warmup: need min replay size AND at least one env frame counted.
-            with self.cv:
-                self.cv.wait_for(lambda: self.done or (len(self.replay) >= batch_size))
-                if self.done:
-                    break
-
             taken = 0
 
             while not self.done and taken < max_burst:
-                # Pre-check under the CV to sleep efficiently if we lack tokens/data.
-                with self.cv:
-                    ready = len(
-                        self.replay
-                    ) >= batch_size and self.controller.can_consume(batch_size)
-                    if not ready and not self.done:
-                        self.cv.wait()  # wait for more frames/tokens (enqueue_traj notifies)
-                        continue
-                    if self.done:
-                        break
+
+                # Wait for permission from the controller
+                # This checks both data availability AND the ratio
+                self.controller.wait_for_consume_permission()
+
+                if self.done:
+                    break
 
                 # Sample & execute one update outside the lock.
                 batch = self.replay.sample(self.learner_config.batch_size)
+                self.consumer_progress.update(batch_size)
+
                 stacked = self.stack_batch(batch)
                 self.device_q.put(stacked)
 
-                self.controller.consume(batch_size)
-                taken += 1
+                # Notify the controller that we have consumed a batch
+                self.controller.notify_consumed(n_trajectories=batch_size)
 
-                with self.cv:
-                    self.cv.notify_all()
+                taken += 1
 
         logger.info("host_to_device_worker exiting.")
 
     def get_usage_counts(self, usage_counts: np.ndarray):
         usage_logs = {}
+        names = list(STOI["species"])
 
-        if self.player_state.num_steps % 200 == 0:
-            names = list(STOI["species"])
+        table = wandb.Table(columns=["species", "usage"])
+        for name, count in zip(names, usage_counts):
+            table.add_data(name, count)
 
-            table = wandb.Table(columns=["species", "usage"])
-            for name, count in zip(names, usage_counts):
-                table.add_data(name, count)
-
-            usage_logs["species_usage"] = table
-
+        usage_logs["species_usage"] = table
         return usage_logs
 
+    def get_league_winrates(self):
+        league = self.league
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
+        return {
+            f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
+            for i, win_rate in enumerate(win_rates)
+        }
+
+    def ready_to_add_player(self):
+        league = self.league
+        latest_player = league.get_latest_player()
+        steps_passed = self.player_state.actor_steps.item() - latest_player.frame_count
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
+        return (win_rates.min() > 0.7) & (
+            steps_passed >= self.learner_config.add_player_min_frames
+        )
+
     def train(self):
-
-        batch_size = self.learner_config.batch_size
-
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
 
@@ -827,66 +843,104 @@ class Learner:
         builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
 
         for step_idx in range(1, self.learner_config.num_steps + 1):
-            batch = self.device_q.get()
-            batch: Trajectory = jax.device_put(batch)
 
-            new_player_state, player_logs = player_train_step_jit(
-                self.player_state,
-                batch.player_transitions,
-                batch.player_history,
-                self.learner_config,
-            )
+            try:
+                batch = self.device_q.get()
+                batch: Trajectory = jax.device_put(batch)
+                new_player_state: Porygon2PlayerTrainState
+                new_builder_state: Porygon2BuilderTrainState
 
-            builder_final_reward = calculate_builder_final_reward(batch)
-            new_builder_state, builder_logs = builder_train_step_jit(
-                self.builder_state,
-                batch.builder_transitions,
-                batch.player_hidden,
-                builder_final_reward,
-                self.learner_config,
-            )
+                num_steps = np.array(self.player_state.num_steps).item()
 
-            # Safety check: only apply the update if the losses are finite.
-            if (
-                jnp.isfinite(player_logs["player_loss"]).item()
-                and jnp.isfinite(builder_logs["builder_loss"]).item()
-            ):
-                self.player_state = new_player_state
-                self.builder_state = new_builder_state
-            else:
-                continue
+                with self.gpu_lock:
+                    new_player_state, player_logs = player_train_step_jit(
+                        self.player_state,
+                        batch.player_transitions,
+                        batch.player_history,
+                        self.learner_config,
+                    )
 
-            training_logs = {"step_idx": step_idx}
-            training_logs.update(jax.device_get(collect_batch_telemetry_data(batch)))
-            training_logs.update(jax.device_get(player_logs))
-            training_logs.update(jax.device_get(builder_logs))
+                builder_final_reward = calculate_builder_final_reward(batch)
+                with self.gpu_lock:
+                    new_builder_state, builder_logs = builder_train_step_jit(
+                        self.builder_state,
+                        batch.builder_transitions,
+                        batch.builder_history,
+                        batch.player_hidden,
+                        builder_final_reward,
+                        self.learner_config,
+                    )
 
-            usage_logs = self.get_usage_counts(self.replay._species_counts)
-            training_logs.update(jax.device_get(usage_logs))
+                # Safety check: only apply the update if the losses are finite.
+                if (
+                    jnp.isfinite(player_logs["player_loss"]).item()
+                    and jnp.isfinite(builder_logs["builder_loss"]).item()
+                ):
+                    self.player_state = new_player_state
+                    self.builder_state = new_builder_state
+                else:
+                    print("Non-finite loss detected @ step", step_idx)
+                    continue
 
-            self.params_for_actor = (
-                self.player_state.num_steps.item(),
-                jax.device_get(self.player_state.params),
-                jax.device_get(self.builder_state.params),
-            )
-
-            # Update the tqdm progress bars.
-            self.consumer_progress.update(batch_size)
-            self.train_progress.update(1)
-            rr = self.consumer_progress.n / max(self.producer_progress.n, 1)
-            self.train_progress.set_description(f"batches - rr: {rr:.2f}")
-
-            training_logs["replay_ratio"] = rr
-
-            self.wandb_run.log(training_logs)
-
-            if (self.player_state.num_steps % 5000) == 0:
-                save_train_state(
-                    self.wandb_run,
-                    self.learner_config,
-                    self.player_state,
-                    self.builder_state,
+                training_logs = {"step_idx": step_idx}
+                training_logs.update(
+                    jax.device_get(
+                        collect_batch_telemetry_data(batch, self.learner_config)
+                    )
                 )
+                training_logs.update(jax.device_get(player_logs))
+                training_logs.update(jax.device_get(builder_logs))
+
+                if (num_steps % self.learner_config.save_interval_steps) == 0:
+                    usage_logs = self.get_usage_counts(self.replay._species_counts)
+                    training_logs.update(jax.device_get(usage_logs))
+
+                if (num_steps % 100) == 0:
+                    league_winrates = self.get_league_winrates()
+                    training_logs.update(jax.device_get(league_winrates))
+
+                # Update the tqdm progress bars.
+                self.train_progress.update(1)
+                rr = self.controller._get_current_rr()
+                self.train_progress.set_description(f"batches - rr: {rr:.2f}")
+
+                training_logs["replay_ratio"] = rr
+
+                self.wandb_run.log(training_logs)
+
+                new_params = ParamsContainer(
+                    frame_count=self.player_state.actor_steps.item(),
+                    step_count=MAIN_KEY,  # For main agent
+                    player_params=self.player_state.params,
+                    builder_params=self.builder_state.params,
+                )
+                self.league.update_main_player(new_params)
+
+                if (num_steps % self.learner_config.save_interval_steps) == 0:
+                    save_train_state(
+                        self.wandb_run,
+                        self.learner_config,
+                        self.player_state,
+                        self.builder_state,
+                        self.league,
+                    )
+
+                if self.ready_to_add_player():
+                    print("Adding new player to league @ step", num_steps)
+                    self.league.add_player(
+                        ParamsContainer(
+                            frame_count=self.player_state.actor_steps.item(),
+                            step_count=num_steps,
+                            player_params=self.player_state.params,
+                            builder_params=self.builder_state.params,
+                        )
+                    )
+
+            except Exception as e:
+                logger.error(f"Learner train step failed: {e}")
+                traceback.print_exc()
+
+                raise e
 
         self.done = True
         # transfer_thread.join()

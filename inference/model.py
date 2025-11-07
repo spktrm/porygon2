@@ -1,9 +1,4 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
-import pickle
-
+import cloudpickle as pickle
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +12,7 @@ from rl.environment.utils import get_ex_player_step
 from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
+from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import get_most_recent_file
 
@@ -35,28 +31,30 @@ def restrict_values(arr: np.ndarray):
 class InferenceModel:
     def __init__(
         self,
+        generation: int,
         fpath: str = None,
-        generation: int = 1,
         seed: int = 42,
-        temp: float = 0.8,
-        min_p: float = 0.01,
+        player_head_params: HeadParams = HeadParams(),
+        builder_head_params: HeadParams = HeadParams(),
     ):
-        self.learner_config = get_learner_config()
-        self.player_model_config = get_player_model_config(
-            self.learner_config.generation, train=False, temp=temp, min_p=min_p
+        self._learner_config = get_learner_config()
+        self._player_model_config = get_player_model_config(
+            self._learner_config.generation, train=False
         )
-        self.builder_model_config = get_builder_model_config(
-            self.learner_config.generation, train=False, temp=temp, min_p=min_p
+        self._builder_model_config = get_builder_model_config(
+            self._learner_config.generation, train=False
         )
 
-        self.player_network = get_player_model(self.player_model_config)
-        self.builder_network = get_builder_model(self.builder_model_config)
+        self._player_network = get_player_model(self._player_model_config)
+        self._builder_network = get_builder_model(self._builder_model_config)
 
         self._agent = Agent(
-            player_apply_fn=self.player_network.apply,
-            builder_apply_fn=self.builder_network.apply,
+            player_apply_fn=self._player_network.apply,
+            builder_apply_fn=self._builder_network.apply,
+            player_head_params=player_head_params,
+            builder_head_params=builder_head_params,
         )
-        self.rng_key = jax.random.key(seed)
+        self._rng_key = jax.random.key(seed)
 
         if not fpath:
             fpath = get_most_recent_file(f"./ckpts/gen{generation}")
@@ -64,12 +62,12 @@ class InferenceModel:
         with open(fpath, "rb") as f:
             step = pickle.load(f)
 
-        self.player_params = step["player_state"]["params"]
-        self.builder_params = step["builder_state"]["params"]
+        self._player_params = step["player_state"]["params"]
+        self._builder_params = step["builder_state"]["params"]
 
         print("initializing...")
-        self.builder_env = TeamBuilderEnvironment(
-            self.learner_config.generation, "ou_all_formats"
+        self._builder_env = TeamBuilderEnvironment(
+            generation=self._learner_config.generation, smogon_format="ou_all_formats"
         )
         self.reset()  # warm up the model
 
@@ -83,7 +81,7 @@ class InferenceModel:
         print("model initialized!")
 
     def split_rng(self) -> jax.Array:
-        self.rng_key, subkey = jax.random.split(self.rng_key)
+        self._rng_key, subkey = jax.random.split(self._rng_key)
         return subkey
 
     def reset(self):
@@ -91,16 +89,16 @@ class InferenceModel:
         rng_key = self.split_rng()
 
         builder_subkeys = jax.random.split(
-            rng_key, self.builder_env.max_trajectory_length + 1
+            rng_key, self._builder_env._max_trajectory_length + 1
         )
 
         build_traj = []
 
-        builder_actor_input = self.builder_env.reset()
+        builder_actor_input = self._builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
-                self.builder_params,
+                self._builder_params,
                 builder_actor_input,
             )
             builder_transition = BuilderTransition(
@@ -110,12 +108,14 @@ class InferenceModel:
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = self.builder_env.step(builder_agent_output)
+            builder_actor_input = self._builder_env.step(builder_agent_output)
 
         # Send set tokens to the player environment.
         return ResetResponse(
-            species_indices=builder_actor_input.env.species_tokens.reshape(-1).tolist(),
-            packed_set_indices=builder_actor_input.env.packed_set_tokens.reshape(
+            species_indices=builder_actor_input.history.species_tokens.reshape(
+                -1
+            ).tolist(),
+            packed_set_indices=builder_actor_input.history.packed_set_tokens.reshape(
                 -1
             ).tolist(),
             v=builder_agent_output.actor_output.v.item(),
@@ -124,7 +124,7 @@ class InferenceModel:
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
 
-        agent_output = self._agent.step_player(rng_key, self.player_params, timestep)
+        agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
             v=actor_output.v.item(),

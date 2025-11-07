@@ -1,10 +1,7 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
-import pickle
+import functools
 from pprint import pprint
 
+import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -18,9 +15,9 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import PolicyLogitHead, PolicyQKHead, ValueLogitHead
+from rl.model.heads import HeadParams, PolicyLogitHead, PolicyQKHead, ValueLogitHead
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import get_num_params
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -31,6 +28,7 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
+
         self.action_type_head = PolicyLogitHead(self.cfg.action_type_head)
         self.move_head = PolicyQKHead(self.cfg.move_head)
         self.switch_head = PolicyQKHead(self.cfg.switch_head)
@@ -47,15 +45,20 @@ class Porygon2PlayerModel(nn.Module):
         contextual_switches: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
+        head_params: HeadParams,
     ):
         action_type_head = self.action_type_head(
-            state_query, env_step.action_type_mask, actor_output.action_type_head
+            state_query,
+            actor_output.action_type_head,
+            env_step.action_type_mask,
+            head_params,
         )
         move_head = self.move_head(
             state_query,
             contextual_moves,
-            env_step.move_mask,
             actor_output.move_head,
+            env_step.move_mask,
+            head_params,
         )
         selected_move_embedding = jnp.take(
             contextual_moves, move_head.action_index, axis=0
@@ -63,16 +66,18 @@ class Porygon2PlayerModel(nn.Module):
         wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
         wildcard_head = self.wildcard_head(
             wildcard_merge,
-            env_step.wildcard_mask,
             actor_output.wildcard_head,
+            env_step.wildcard_mask,
+            head_params,
         )
         switch_head = self.switch_head(
             state_query,
             contextual_switches,
-            env_step.switch_mask,
             actor_output.switch_head,
+            env_step.switch_mask,
+            head_params,
         )
-        value = jnp.tanh(self.value_head(state_query))
+        value = self.value_head(state_query)
 
         return PlayerActorOutput(
             action_type_head=action_type_head,
@@ -82,7 +87,12 @@ class Porygon2PlayerModel(nn.Module):
             v=value,
         )
 
-    def __call__(self, actor_input: PlayerActorInput, actor_output: PlayerActorOutput):
+    def __call__(
+        self,
+        actor_input: PlayerActorInput,
+        actor_output: PlayerActorOutput,
+        head_params: HeadParams,
+    ):
         """
         Shared forward pass for encoder and policy head.
         """
@@ -91,7 +101,9 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.history
         )
 
-        return jax.vmap(self.get_head_outputs)(
+        return jax.vmap(
+            functools.partial(self.get_head_outputs, head_params=head_params)
+        )(
             state_query,
             contextual_moves,
             contextual_switches,
@@ -106,7 +118,7 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def main(generation: int = 1):
+def main(generation: int = 9):
     actor_network = get_player_model(get_player_model_config(generation, train=False))
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 
@@ -115,22 +127,29 @@ def main(generation: int = 1):
     )
     key = jax.random.key(42)
 
-    # latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
-    latest_ckpt = "ckpts/gen1/ckpt_00035000"
+    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
             step = pickle.load(f)
         params = step["player_state"]["params"]
     else:
-        params = learner_network.init(key, ex_actor_input, ex_actor_output)
+        params = learner_network.init(
+            key, ex_actor_input, ex_actor_output, HeadParams()
+        )
 
     actor_output = actor_network.apply(
-        params, ex_actor_input, PlayerActorOutput(), rngs={"sampling": key}
+        params,
+        ex_actor_input,
+        PlayerActorOutput(),
+        HeadParams(),
+        rngs={"sampling": key},
     )
     pprint(actor_output)
 
-    learner_output = learner_network.apply(params, ex_actor_input, actor_output)
+    learner_output = learner_network.apply(
+        params, ex_actor_input, actor_output, HeadParams()
+    )
     pprint(learner_output)
 
     pprint(get_num_params(params))

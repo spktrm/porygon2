@@ -1,12 +1,14 @@
+import functools
 import os
-import pickle
 from pprint import pprint
 from typing import Any, Callable, Literal
 
 import chex
+import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import wandb.wandb_run
 from flax import core, struct
@@ -20,7 +22,9 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.model.utils import Params, get_most_recent_file
+from rl.learner.league import League
+from rl.model.heads import HeadParams
+from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
 
 @chex.dataclass(frozen=True)
@@ -40,28 +44,35 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 5
-    unroll_length: int = 64 * 2
+    unroll_length: int = 128
     replay_buffer_capacity: int = 512
+
+    # False for the beginning
+    builder_start_step: int = 100_000
+
+    # Self-play evaluation params
+    save_interval_steps: int = 20_000
+    add_player_min_frames: int = int(2e6)
+    league_size: int = 16
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 2.5
+    target_replay_ratio: float = 4
 
     # Learning params
-    adam: AdamConfig = AdamConfig(b1=0.9, b2=0.999, eps=1e-6)
-    learning_rate: float = 2.5e-5
+    adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
+    learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     tau: float = 1e-3
 
     # Discount params
-    player_lambda_: float = 0.95
     player_gamma: float = 1.0
-
-    builder_lambda_: float = 0.95
     builder_gamma: float = 1.0
 
     # Vtrace params
+    player_lambda: float = 0.95
+    builder_lambda: float = 0.95
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3
@@ -69,16 +80,16 @@ class Porygon2LearnerConfig:
     # Loss coefficients
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_entropy_loss_coef: float = 0.05
+    player_entropy_loss_coef: float = 0.01
     player_kl_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_entropy_loss_coef: float = 0.01
+    builder_entropy_loss_coef: float = 0.005
     builder_kl_loss_coef: float = 0.05
 
     # Smogon Generation
-    generation: GenT = 1
+    generation: GenT = 9
 
 
 def get_learner_config():
@@ -87,7 +98,7 @@ def get_learner_config():
 
 class Porygon2PlayerTrainState(train_state.TrainState):
     apply_fn: Callable[
-        [Params, PlayerActorInput, PlayerActorOutput], PlayerActorOutput
+        [Params, PlayerActorInput, PlayerActorOutput, HeadParams], PlayerActorOutput
     ] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
@@ -102,8 +113,9 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
-        [Params, BuilderActorInput, BuilderActorOutput], BuilderActorOutput
+        [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
+
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     actor_steps: int = 0
@@ -126,15 +138,17 @@ def create_train_state(
         lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
     )
 
-    player_params_init_fn = lambda: player_network.init(
-        rng, ex_player_actor_inp, ex_player_actor_out
-    )
-    builder_params_init_fn = lambda: builder_network.init(
-        rng, ex_builder_actor_inp, ex_builder_actor_out
-    )
+    player_params_init_fn = lambda: functools.partial(
+        player_network.init,
+        head_params=HeadParams(),
+    )(rng, ex_player_actor_inp, ex_player_actor_out)
+    builder_params_init_fn = lambda: functools.partial(
+        builder_network.init,
+        head_params=HeadParams(),
+    )(rng, ex_builder_actor_inp, ex_builder_actor_out)
 
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1), out_axes=1),
+        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         params=player_params_init_fn(),
         target_params=player_params_init_fn(),
         tx=optax.chain(
@@ -156,7 +170,9 @@ def create_train_state(
     )
 
     builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(builder_network.apply, in_axes=(None, 1, 1), out_axes=1),
+        apply_fn=jax.vmap(
+            builder_network.apply, in_axes=(None, 1, 1, None), out_axes=1
+        ),
         params=builder_params_init_fn(),
         target_params=builder_params_init_fn(),
         tx=optax.chain(
@@ -185,8 +201,11 @@ def save_train_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
+    league: League,
 ):
-    save_path = save_train_state_locally(learner_config, player_state, builder_state)
+    save_path = save_train_state_locally(
+        learner_config, player_state, builder_state, league
+    )
     wandb_run.log_artifact(
         artifact_or_path=save_path,
         name=f"latest-gen{learner_config.generation}",
@@ -198,13 +217,15 @@ def save_train_state_locally(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
+    league: League = None,
     batch: Trajectory = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
     )
-
-    return save_state(save_path, learner_config, player_state, builder_state, batch)
+    return save_state(
+        save_path, learner_config, player_state, builder_state, league, batch
+    )
 
 
 def save_state(
@@ -212,6 +233,7 @@ def save_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
+    league: League = None,
     batch: Trajectory = None,
 ):
     if not os.path.exists(os.path.dirname(save_path)):
@@ -237,6 +259,8 @@ def save_state(
             target_adv_mean=builder_state.target_adv_mean,
             target_adv_std=builder_state.target_adv_std,
         )
+    if league is not None:
+        data["league"] = league.serialize()
     if batch is not None:
         data["batch"] = batch
     with open(save_path, "wb") as f:
@@ -248,14 +272,28 @@ def load_train_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
+    from_scratch: bool = False,
 ):
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     latest_ckpt = get_most_recent_file(save_path)
-    if not latest_ckpt:
-        return player_state, builder_state
+    if not latest_ckpt or from_scratch:
+        if from_scratch:
+            print("Starting training from scratch.")
+        initial_params = ParamsContainer(
+            frame_count=np.array(player_state.actor_steps).item(),
+            step_count=np.array(player_state.num_steps).item(),
+            player_params=player_state.params,
+            builder_params=builder_state.params,
+        )
+        league = League(
+            main_player=initial_params,
+            players=[initial_params],
+            league_size=learner_config.league_size,
+        )
+        return player_state, builder_state, league
 
     print(f"loading checkpoint from {latest_ckpt}")
     with open(latest_ckpt, "rb") as f:
@@ -264,6 +302,22 @@ def load_train_state(
     print("Checkpoint data:")
     ckpt_player_state = ckpt_data.get("player_state", {})
     ckpt_builder_state = ckpt_data.get("builder_state", {})
+    ckpt_league_bytes = ckpt_data.get("league", None)
+
+    if ckpt_league_bytes is not None:
+        league = League.deserialize(ckpt_league_bytes)
+    else:
+        initial_params = ParamsContainer(
+            frame_count=np.array(player_state.actor_steps).item(),
+            step_count=np.array(player_state.num_steps).item(),
+            player_params=player_state.params,
+            builder_params=builder_state.params,
+        )
+        league = League(
+            main_player=initial_params,
+            players=[initial_params],
+            league_size=learner_config.league_size,
+        )
 
     pprint(
         {
@@ -300,4 +354,4 @@ def load_train_state(
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
 
-    return player_state, builder_state
+    return player_state, builder_state, league

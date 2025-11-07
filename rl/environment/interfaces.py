@@ -64,41 +64,31 @@ class PlayerTransition(NamedTuple):
 
 
 class BuilderEnvOutput(NamedTuple):
-    continue_mask: ArrayLike = ()
-
     species_mask: ArrayLike = ()
-
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
 
     ts: ArrayLike = ()
     done: ArrayLike = ()
-    metagame_token: ArrayLike = ()
-    metagame_mask: ArrayLike = ()
 
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
 
 
 class BuilderHistoryOutput(NamedTuple):
-    placeholder: ArrayLike = ()
+    species_tokens: ArrayLike = ()
+    packed_set_tokens: ArrayLike = ()
 
 
 class BuilderActorInput(NamedTuple):
     env: BuilderEnvOutput = BuilderEnvOutput()
+    history: BuilderHistoryOutput = BuilderHistoryOutput()
     hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
 
-    metagame_head: HeadOutput = HeadOutput()
-    continue_head: HeadOutput = HeadOutput()
-    selection_head: HeadOutput = HeadOutput()
     species_head: HeadOutput = HeadOutput()
     packed_set_head: HeadOutput = HeadOutput()
-
-    metagame_pred_logits: ArrayLike = ()
 
 
 class BuilderAgentOutput(NamedTuple):
@@ -112,7 +102,7 @@ class BuilderTransition(NamedTuple):
 
 class Trajectory(NamedTuple):
     builder_transitions: BuilderTransition = BuilderTransition()
-    # builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+    builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
 
     player_transitions: PlayerTransition = PlayerTransition()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()

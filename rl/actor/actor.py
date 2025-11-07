@@ -1,5 +1,3 @@
-import random
-
 import jax
 import numpy as np
 
@@ -14,9 +12,10 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import ActionType
 from rl.environment.protos.service_pb2 import Action
-from rl.environment.utils import clip_history
+from rl.environment.utils import clip_history, split_rng
+from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
-from rl.model.utils import Params, promote_map
+from rl.model.utils import Params, ParamsContainer, promote_map
 
 ACTION_TYPE_MAPPING = {
     0: ActionType.ACTION_TYPE__MOVE,
@@ -39,7 +38,7 @@ class Actor:
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(
-            env.generation, "ou_all_formats", initial_seed=random.randint(0, 2**31 - 1)
+            generation=env.generation, smogon_format="ou_all_formats"
         )
         self._unroll_length = unroll_length
         self._learner = learner
@@ -70,16 +69,17 @@ class Actor:
         builder_params: Params,
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
-        builder_key, player_key = jax.random.split(rng_key)
-        builder_unroll_length = self._builder_env.max_trajectory_length + 1
+        builder_key, player_key = split_rng(rng_key, 2)
+        builder_unroll_length = self._builder_env._max_trajectory_length + 1
 
-        builder_subkeys = jax.random.split(builder_key, builder_unroll_length)
-        player_subkeys = jax.random.split(player_key, self._unroll_length)
+        builder_subkeys = split_rng(builder_key, builder_unroll_length)
+        player_subkeys = split_rng(player_key, self._unroll_length)
 
         build_traj = []
 
         # Reset the builder environment.
         builder_actor_input = self._builder_env.reset()
+
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
@@ -111,8 +111,8 @@ class Actor:
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_actor_input.env.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.env.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
         )
         # Extract opponent hidden info to better inform builder value function.
         player_hidden = player_actor_input.hidden
@@ -149,8 +149,8 @@ class Actor:
 
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
+            builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
-            # builder_history=builder_actor_input.history,
             player_history=player_actor_input.history,
             player_hidden=player_hidden,
         )
@@ -158,24 +158,69 @@ class Actor:
         return promote_map(trajectory)
 
     def split_rng(self) -> jax.Array:
-        self._rng_key, subkey = jax.random.split(self._rng_key)
+        self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
-    def unroll_and_push(
-        self, frame_count: int, player_params: Params, builder_params: Params
-    ):
+    def set_current_ckpt(self, ckpt: int):
+        self._player_env._set_current_ckpt(ckpt)
+
+    def set_opponent_ckpt(self, ckpt: int):
+        self._player_env._set_opponent_ckpt(ckpt)
+
+    def reset_ckpts(self):
+        self._player_env._reset_ckpts()
+
+    def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
-        player_params = jax.device_put(player_params)
-        builder_params = jax.device_put(builder_params)
+        player_params = jax.device_put(params_container.player_params)
+        builder_params = jax.device_put(params_container.builder_params)
         subkey = self.split_rng()
         act_out = self.unroll(
             rng_key=subkey,
-            frame_count=frame_count,
+            frame_count=params_container.frame_count,
             player_params=player_params,
             builder_params=builder_params,
         )
-        if self._player_env.username.startswith("train-"):
-            self._learner.enqueue_traj(act_out)
+        self.reset_ckpts()
 
-    def pull_params(self):
-        return self._learner.params_for_actor
+        if self._player_env.username.startswith("train") and do_push:
+            self._learner.enqueue_traj(act_out)
+        return act_out
+
+    def pull_main_player(self) -> ParamsContainer:
+        league = self._learner.league
+        return league.get_main_player()
+
+    def _pfsp_branch(self) -> ParamsContainer | None:
+        historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.step_count != MAIN_KEY
+        ]
+        if not historical:  # No historical players to play against
+            return None
+
+        main_player = self.pull_main_player()
+        win_rates = self._learner.league.get_winrate((main_player, historical))
+        pick_idx = np.random.choice(
+            len(historical), p=pfsp(win_rates, weighting="squared")
+        )
+        return historical[pick_idx]
+
+    def get_match(self) -> tuple[ParamsContainer, bool]:
+        coin_toss = np.random.random()
+
+        # Make sure you can beat the League (PFSP)
+        if coin_toss < 0.5:
+            opponent = self._pfsp_branch()
+            if opponent is not None:  # Found a historical opponent
+                return opponent, False
+
+        return self.pull_main_player(), True
+
+    def update_player_league_stats(
+        self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory
+    ):
+        """Update league stats based on trajectory outcome."""
+        payoff = trajectory.player_transitions.env_output.win_reward[-1]
+        self._learner.league.update_payoff(sender, receiver, payoff)
