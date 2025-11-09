@@ -243,11 +243,6 @@ class Encoder(nn.Module):
         )
 
         # Latent embeddings for global state representation.
-        self.latent_state_embeddings = self.param(
-            "latent_state_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (self.cfg.num_state_latents, entity_size),
-        )
         self.state_resnet = Resnet(num_resblocks=1)
 
         # Timestep wise graph attention layers
@@ -936,6 +931,7 @@ class Encoder(nn.Module):
             history_request_count,
             jnp.iinfo(request_count.dtype).max,
         )
+        timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
         def _batched_forward(
             env_step: PlayerEnvOutput,
@@ -953,13 +949,25 @@ class Encoder(nn.Module):
                 env_step, switch_mask
             )
 
+            upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
+            latest_timestep_indices = upper_index - jnp.arange(32)
+            latest_timestep_embeddings = jnp.take(
+                timestep_embeddings, latest_timestep_indices, axis=0
+            )
+            latest_timestep_mask = jnp.take(
+                timestep_mask, latest_timestep_indices, axis=0
+            ) & (latest_timestep_indices >= 0)
+            latest_timestep_positions = jnp.take(
+                timestep_positions, latest_timestep_indices, axis=0
+            )
+
             contextual_entity_embeddings = self.entity_everything_transformer(
                 entity_embeddings + field_embedding[None],
                 contexts=[
                     (
-                        timestep_embeddings,
-                        create_attention_mask(entity_mask, timestep_mask),
-                        timestep_positions,
+                        latest_timestep_embeddings,
+                        create_attention_mask(entity_mask, latest_timestep_mask),
+                        latest_timestep_positions,
                     ),
                     (
                         move_embeddings,
@@ -980,13 +988,59 @@ class Encoder(nn.Module):
                 ),
             )
 
-            latent_state_mask = jnp.ones(
-                (self.cfg.num_state_latents,), dtype=entity_mask.dtype
+            entity_mask_expanded = entity_mask[..., None]
+
+            mean_pool_query = jnp.where(
+                entity_mask_expanded, contextual_entity_embeddings, 0
+            ).sum(axis=0, keepdims=True)
+
+            dtype_finfo = jnp.finfo(contextual_entity_embeddings.dtype)
+            max_pool_query = jnp.where(
+                entity_mask_expanded, contextual_entity_embeddings, dtype_finfo.min
+            ).max(axis=0, keepdims=True)
+            min_pool_query = jnp.where(
+                entity_mask_expanded, contextual_entity_embeddings, dtype_finfo.max
+            ).min(axis=0, keepdims=True)
+
+            side_token = env_step.public_team[
+                ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+            ].astype(jnp.bool)[..., None]
+            side0_pool_query = jnp.where(
+                side_token, contextual_entity_embeddings, 0
+            ).sum(axis=0, keepdims=True)
+            side1_pool_query = jnp.where(
+                ~side_token, contextual_entity_embeddings, 0
+            ).sum(axis=0, keepdims=True)
+
+            active_token = env_step.public_team[
+                ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+            ].astype(jnp.bool)[..., None]
+            active_pool_query = jnp.where(
+                active_token, contextual_entity_embeddings, 0
+            ).sum(axis=0, keepdims=True)
+            inactive_pool_query = jnp.where(
+                ~active_token, contextual_entity_embeddings, 0
+            ).sum(axis=0, keepdims=True)
+
+            state_queries = jnp.concatenate(
+                (
+                    mean_pool_query,
+                    max_pool_query,
+                    min_pool_query,
+                    side0_pool_query,
+                    side1_pool_query,
+                    active_pool_query,
+                    inactive_pool_query,
+                ),
             )
+
             state_embeddings = self.state_pool(
-                self.latent_state_embeddings.astype(self.cfg.dtype),
+                state_queries,
                 contextual_entity_embeddings,
-                create_attention_mask(latent_state_mask, entity_mask),
+                create_attention_mask(
+                    jnp.ones_like(state_queries[..., 0], dtype=entity_mask.dtype),
+                    entity_mask,
+                ),
             )
 
             contextual_moves = self.move_entity_decoder(
