@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
 
 load_dotenv()
-
 import concurrent.futures
+import functools
 import json
 import threading
 import time
@@ -10,6 +10,7 @@ import traceback
 from pprint import pprint
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import wandb.wandb_run
 
@@ -17,6 +18,7 @@ import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
+from rl.environment.utils import get_ex_player_step
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
@@ -37,6 +39,12 @@ def run_training_actor_pair(
         try:
             player_params = player.pull_main_player()
             opponent_params, is_trainable = player.get_match()
+
+            player.set_current_ckpt(np.array(player_params.step_count).item())
+            player.set_opponent_ckpt(np.array(opponent_params.step_count).item())
+
+            opponent.set_current_ckpt(np.array(opponent_params.step_count).item())
+            opponent.set_opponent_ckpt(np.array(player_params.step_count).item())
 
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)
@@ -136,13 +144,49 @@ def main():
         actor_player_network.apply,
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
-        player_head_params=HeadParams(temp=0.1, min_p=0.01),
-        builder_head_params=HeadParams(temp=0.1, min_p=0.01),
+        player_head_params=HeadParams(temp=0.8, min_p=0.1),
+        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state
     )
+
+    partial_reset = False
+    if partial_reset:
+        rng = jax.random.key(69)
+
+        ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
+            lambda x: jnp.asarray(x[:, 0]), get_ex_player_step()
+        )
+        random_player_params = functools.partial(
+            learner_player_network.init,
+            head_params=HeadParams(),
+        )(rng, ex_player_actor_inp, ex_player_actor_out)
+        new_params = player_state.params.copy()
+        new_target_params = player_state.target_params.copy()
+        for head in ["action_type_head"]:
+            new_params["params"][head] = random_player_params["params"][head]
+            new_target_params["params"][head] = random_player_params["params"][head]
+        player_state = player_state.replace(
+            params=new_params, target_params=new_target_params
+        )
+
+        # ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
+        #     lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
+        # )
+        # random_builder_params = functools.partial(
+        #     learner_builder_network.init,
+        #     head_params=HeadParams(),
+        # )(rng, ex_builder_actor_inp, ex_builder_actor_out)
+        # new_params = builder_state.params.copy()
+        # new_target_params = builder_state.target_params.copy()
+        # for head in ["value_head"]:
+        #     new_params["params"][head] = random_builder_params["params"][head]
+        #     new_target_params["params"][head] = random_builder_params["params"][head]
+        # builder_state = builder_state.replace(
+        #     params=new_params, target_params=new_target_params
+        # )
 
     wandb_run = wandb.init(
         project="pokemon-rl",

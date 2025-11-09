@@ -89,7 +89,7 @@ export class WorkerHandler {
         if (opponent !== undefined) {
             // --- CASE 1: Opponent was found ---
             console.log(
-                `Pairing ${userName} vs ${opponent.playerDetails.userName}`,
+                `Pairing ${userName}:${currentCkpt} vs ${opponent.playerDetails.userName}:${opponentCkpt}`,
             );
 
             // Check for format mismatch (same logic as your original code)
