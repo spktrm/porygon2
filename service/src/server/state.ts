@@ -754,20 +754,26 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = 0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -933,7 +939,7 @@ function getArrayFromPublicPokemon(
     revealedData: Int16Array;
 } {
     const { publicData, revealedData } =
-        relativeSide === 0 ? unkPokemon0 : unkPokemon1;
+        relativeSide === 0 ? getUnkPokemon(0) : getUnkPokemon(1);
 
     if (candidate === null || candidate === undefined) {
         return { publicData, revealedData: nullPokemon };
@@ -1066,9 +1072,9 @@ function getArrayFromPublicPokemon(
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
         IndexValueFromEnum(GendernameEnum, pokemon.gender);
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-        candidate.isActive() ? 1 : 0;
+        +candidate.isActive();
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
-        candidate.fainted ? 1 : 0;
+        +candidate.fainted;
 
     // We take candidate HP here instead of pokemons since
     // transformed does not copy HP

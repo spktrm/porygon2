@@ -17,7 +17,7 @@ from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams, PolicyLogitHead, PolicyQKHead, ValueLogitHead
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import get_num_params
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -127,7 +127,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

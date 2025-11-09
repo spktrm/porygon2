@@ -40,6 +40,7 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.model.modules import (
     GLU,
+    MLP,
     GatNet,
     Resnet,
     SumEmbeddings,
@@ -243,6 +244,7 @@ class Encoder(nn.Module):
         )
 
         # Latent embeddings for global state representation.
+        self.state_proj = MLP(4 * entity_size)
         self.state_resnet = Resnet(num_resblocks=1)
 
         # Timestep wise graph attention layers
@@ -951,14 +953,15 @@ class Encoder(nn.Module):
 
             upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
             latest_timestep_indices = upper_index - jnp.arange(32)
+            latest_timestep_indices_clipped = latest_timestep_indices.clip(min=0)
             latest_timestep_embeddings = jnp.take(
-                timestep_embeddings, latest_timestep_indices, axis=0
+                timestep_embeddings, latest_timestep_indices_clipped, axis=0
             )
             latest_timestep_mask = jnp.take(
-                timestep_mask, latest_timestep_indices, axis=0
+                timestep_mask, latest_timestep_indices_clipped, axis=0
             ) & (latest_timestep_indices >= 0)
             latest_timestep_positions = jnp.take(
-                timestep_positions, latest_timestep_indices, axis=0
+                timestep_positions, latest_timestep_indices_clipped, axis=0
             )
 
             contextual_entity_embeddings = self.entity_everything_transformer(
@@ -990,47 +993,67 @@ class Encoder(nn.Module):
 
             entity_mask_expanded = entity_mask[..., None]
 
-            mean_pool_query = jnp.where(
-                entity_mask_expanded, contextual_entity_embeddings, 0
-            ).sum(axis=0, keepdims=True)
-
+            _mean_pool = lambda x, m: jnp.where(m, x, 0).sum(
+                axis=0, keepdims=True
+            ) / m.sum(axis=0, keepdims=True).clip(min=1)
             dtype_finfo = jnp.finfo(contextual_entity_embeddings.dtype)
-            max_pool_query = jnp.where(
-                entity_mask_expanded, contextual_entity_embeddings, dtype_finfo.min
+            _max_pool = lambda x, m: m.any(axis=0, keepdims=True) * jnp.where(
+                m, x, dtype_finfo.min
             ).max(axis=0, keepdims=True)
-            min_pool_query = jnp.where(
-                entity_mask_expanded, contextual_entity_embeddings, dtype_finfo.max
+            _min_pool = lambda x, m: m.any(axis=0, keepdims=True) * jnp.where(
+                m, x, dtype_finfo.max
             ).min(axis=0, keepdims=True)
+
+            mean_pool_query = _mean_pool(
+                contextual_entity_embeddings, entity_mask_expanded
+            )
+
+            max_pool_query = _max_pool(
+                contextual_entity_embeddings, entity_mask_expanded
+            )
+            min_pool_query = _min_pool(
+                contextual_entity_embeddings, entity_mask_expanded
+            )
 
             side_token = env_step.public_team[
                 ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
             ].astype(jnp.bool)[..., None]
-            side0_pool_query = jnp.where(
-                side_token, contextual_entity_embeddings, 0
-            ).sum(axis=0, keepdims=True)
-            side1_pool_query = jnp.where(
-                ~side_token, contextual_entity_embeddings, 0
-            ).sum(axis=0, keepdims=True)
+            side0_mean_pool_query = _mean_pool(contextual_entity_embeddings, side_token)
+            side1_mean_pool_query = _mean_pool(
+                contextual_entity_embeddings, ~side_token
+            )
+            side0_max_pool_query = _max_pool(contextual_entity_embeddings, side_token)
+            side1_max_pool_query = _max_pool(contextual_entity_embeddings, ~side_token)
 
             active_token = env_step.public_team[
                 ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
             ].astype(jnp.bool)[..., None]
-            active_pool_query = jnp.where(
-                active_token, contextual_entity_embeddings, 0
-            ).sum(axis=0, keepdims=True)
-            inactive_pool_query = jnp.where(
-                ~active_token, contextual_entity_embeddings, 0
-            ).sum(axis=0, keepdims=True)
+            active_mean_pool_query = _mean_pool(
+                contextual_entity_embeddings, active_token
+            )
+            inactive_mean_pool_query = _mean_pool(
+                contextual_entity_embeddings, ~active_token
+            )
+            active_max_pool_query = _max_pool(
+                contextual_entity_embeddings, active_token
+            )
+            inactive_max_pool_query = _max_pool(
+                contextual_entity_embeddings, ~active_token
+            )
 
             state_queries = jnp.concatenate(
                 (
                     mean_pool_query,
                     max_pool_query,
                     min_pool_query,
-                    side0_pool_query,
-                    side1_pool_query,
-                    active_pool_query,
-                    inactive_pool_query,
+                    side0_mean_pool_query,
+                    side1_mean_pool_query,
+                    side0_max_pool_query,
+                    side1_max_pool_query,
+                    active_mean_pool_query,
+                    inactive_mean_pool_query,
+                    active_max_pool_query,
+                    inactive_max_pool_query,
                 ),
             )
 
@@ -1055,7 +1078,8 @@ class Encoder(nn.Module):
                 create_attention_mask(switch_mask, entity_mask),
             )
 
-            state_query = self.state_resnet(state_embeddings.reshape(-1))
+            state_query = self.state_proj(state_embeddings.reshape(-1))
+            state_query = self.state_resnet(state_query)
 
             return state_query, contextual_moves, contextual_switches
 
