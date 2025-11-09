@@ -16,7 +16,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import MAX_RATIO_TOKEN, STOI
+from rl.environment.data import STOI
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderHistoryOutput,
@@ -27,7 +27,6 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.utils import clip_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
@@ -224,9 +223,6 @@ def player_train_step(
         switch_log_prob=target_switch_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -240,32 +236,12 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    my_fainted_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    ]
-    opp_fainted_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    ]
-    my_hp_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_HP_COUNT
-    ]
-    opp_hp_count = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
-    ]
-
-    mult = 0.1
-    phi_t = (
-        mult
-        * ((opp_fainted_count - my_fainted_count) + mult * (my_hp_count - opp_hp_count))
-        / MAX_RATIO_TOKEN
+    reg_reward = approx_backward_kl(
+        policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
     )
-
-    shaped_reward = phi_t[1:] - phi_t[:-1]
-    shaped_reward = jnp.concatenate(
-        (jnp.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
+    rewards_tm1 = (
+        player_transitions.env_output.win_reward - config.player_eta * reg_reward
     )
-
-    rewards_tm1 = player_transitions.env_output.win_reward + shaped_reward
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -345,7 +321,7 @@ def player_train_step(
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
         loss_entropy = (
-            2 * action_type_head_entropy
+            action_type_head_entropy
             + move_head_entropy
             + switch_head_entropy
             + wildcard_head_entropy
@@ -370,8 +346,6 @@ def player_train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
-            + config.player_kl_loss_coef * loss_kl
-            - config.player_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
@@ -405,6 +379,7 @@ def player_train_step(
 
     player_logs.update(
         dict(
+            player_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
@@ -485,9 +460,6 @@ def builder_train_step(
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -496,9 +468,12 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
+    reg_reward = approx_backward_kl(
+        policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
+    )
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    )
+    ) - config.builder_eta * reg_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -589,8 +564,6 @@ def builder_train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + config.builder_kl_loss_coef * loss_kl
-            - config.builder_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
@@ -623,6 +596,7 @@ def builder_train_step(
 
     training_logs.update(
         dict(
+            builder_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
