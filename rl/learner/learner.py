@@ -223,9 +223,6 @@ def player_train_step(
         switch_log_prob=target_switch_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -239,10 +236,12 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    reg_reward = approx_forward_kl(
+    reg_reward = approx_backward_kl(
         policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
     )
-    rewards_tm1 = player_transitions.env_output.win_reward - config.reg_eta * reg_reward
+    rewards_tm1 = (
+        player_transitions.env_output.win_reward - config.player_eta * reg_reward
+    )
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -322,7 +321,7 @@ def player_train_step(
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
         loss_entropy = (
-            2 * action_type_head_entropy
+            action_type_head_entropy
             + move_head_entropy
             + switch_head_entropy
             + wildcard_head_entropy
@@ -380,6 +379,7 @@ def player_train_step(
 
     player_logs.update(
         dict(
+            player_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
@@ -460,9 +460,6 @@ def builder_train_step(
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -471,12 +468,12 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    reg_reward = approx_forward_kl(
+    reg_reward = approx_backward_kl(
         policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
     )
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    ) - config.reg_eta * reg_reward
+    ) - config.builder_eta * reg_reward
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -599,6 +596,7 @@ def builder_train_step(
 
     training_logs.update(
         dict(
+            builder_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
