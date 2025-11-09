@@ -51,7 +51,7 @@ class Porygon2LearnerConfig:
     builder_start_step: int = 100_000
 
     # Self-play evaluation params
-    save_interval_steps: int = 1_000
+    save_interval_steps: int = 20_000
     add_player_min_frames: int = int(2e6)
     league_size: int = 16
 
