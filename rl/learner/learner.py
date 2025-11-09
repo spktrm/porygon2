@@ -16,7 +16,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import MAX_RATIO_TOKEN, STOI
+from rl.environment.data import STOI
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderHistoryOutput,
@@ -27,7 +27,6 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.utils import clip_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
@@ -224,9 +223,6 @@ def player_train_step(
         switch_log_prob=target_switch_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -240,7 +236,7 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    reg_reward = approx_forward_kl(
+    reg_reward = approx_backward_kl(
         policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
     )
     rewards_tm1 = (
@@ -383,6 +379,7 @@ def player_train_step(
 
     player_logs.update(
         dict(
+            player_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
@@ -463,9 +460,6 @@ def builder_train_step(
         packed_set_log_prob=target_packed_set_head.log_prob,
     )
 
-    # Zero out extremely small log probs to avoid large variance.
-    # target_log_prob = postprocess_log_prob(target_log_prob, min_p=0.01)
-
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
@@ -474,7 +468,7 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    reg_reward = approx_forward_kl(
+    reg_reward = approx_backward_kl(
         policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
     )
     rewards_tm1 = (
@@ -602,6 +596,7 @@ def builder_train_step(
 
     training_logs.update(
         dict(
+            builder_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
