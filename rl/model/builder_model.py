@@ -38,12 +38,7 @@ from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams, PolicyQKHead, ValueLogitHead
-from rl.model.modules import (
-    SumEmbeddings,
-    TransformerEncoder,
-    create_attention_mask,
-    one_hot_concat_jax,
-)
+from rl.model.modules import SumEmbeddings, TransformerEncoder, one_hot_concat_jax
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
@@ -213,16 +208,10 @@ class Porygon2BuilderModel(nn.Module):
         self,
         species_tokens: jax.Array,
         packed_set_tokens: jax.Array,
-        use_casual_mask: bool,
     ):
-        if use_casual_mask:
-            seq_len = species_tokens.shape[0]
-            causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
-            causal_mask = jnp.expand_dims(causal_mask, axis=0)
-        else:
-            causal_mask = create_attention_mask(
-                jnp.ones_like(species_tokens, dtype=jnp.bool)
-            )
+        seq_len = species_tokens.shape[0]
+        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
+        causal_mask = jnp.expand_dims(causal_mask, axis=0)
 
         valid_packed_sets = jnp.take(
             SET_TOKENS[self.cfg.generation]["ou_all_formats"], species_tokens, axis=0
@@ -239,11 +228,7 @@ class Porygon2BuilderModel(nn.Module):
 
         positions = jnp.arange(set_embeddings.shape[0], dtype=jnp.int32)
 
-        return self.encoder(
-            set_embeddings,
-            causal_mask,
-            qkv_positions=positions,
-        )
+        return self.encoder(set_embeddings, causal_mask, qkv_positions=positions)
 
     def _forward(
         self,
@@ -302,17 +287,13 @@ class Porygon2BuilderModel(nn.Module):
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
 
         my_embeddings = self._encode_team(
-            actor_input.history.species_tokens,
-            actor_input.history.packed_set_tokens,
-            use_casual_mask=True,
+            actor_input.history.species_tokens, actor_input.history.packed_set_tokens
         )
 
         train = self.cfg.get("train", False)
         if train:
             opp_embeddings = self._encode_team(
-                actor_input.hidden.species_tokens,
-                actor_input.hidden.packed_set_tokens,
-                use_casual_mask=False,
+                actor_input.hidden.species_tokens, actor_input.hidden.packed_set_tokens
             )
             opp_embedding = opp_embeddings[-1]
         else:

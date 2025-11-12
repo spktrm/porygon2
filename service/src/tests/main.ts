@@ -31,7 +31,9 @@ async function playerController(player: TrainablePlayerAI) {
 
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableHistory = EdgeBuffer.toReadableHistory({
-                historyEntityNodesBuffer: state.getHistoryEntityNodes_asU8(),
+                historyEntityPublicBuffer: state.getHistoryEntityPublic_asU8(),
+                historyEntityRevealedBuffer:
+                    state.getHistoryEntityRevealed_asU8(),
                 historyEntityEdgesBuffer: state.getHistoryEntityEdges_asU8(),
                 historyFieldBuffer: state.getHistoryField_asU8(),
                 historyLength: state.getHistoryLength(),
@@ -39,14 +41,17 @@ async function playerController(player: TrainablePlayerAI) {
             historyLength = Math.max(historyLength, state.getHistoryLength());
 
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const readablePrivateTeam = StateHandler.toReadableTeam(
+            const readablePrivateTeam = StateHandler.toReadablePrivate(
                 state.getPrivateTeam_asU8(),
             );
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const readablePublicTeam = StateHandler.toReadableTeam(
+            const readablePublicTeam = StateHandler.toReadablePublic(
                 state.getPublicTeam_asU8(),
             );
-
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const readableRevealedTeam = StateHandler.toReadableRevealed(
+                state.getRevealedTeam_asU8(),
+            );
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableMoveset = StateHandler.toReadableMoveset(
                 state.getMoveset_asU8(),
@@ -86,7 +91,7 @@ async function runBattle() {
         p2team: getSampleTeam("gen9ou"),
         smogonFormat: "gen9ou",
     };
-    const { p1, p2 } = createBattle(battleOptions, true);
+    const { p1, p2 } = createBattle(battleOptions, false);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);

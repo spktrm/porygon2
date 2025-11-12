@@ -32,7 +32,9 @@ from rl.environment.protos.features_pb2 import (
     ActionMaskFeature,
     ActionType,
     EntityEdgeFeature,
-    EntityNodeFeature,
+    EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
+    EntityRevealedNodeFeature,
     FieldFeature,
     MovesetFeature,
     MovesetHasPP,
@@ -67,7 +69,9 @@ NUM_EFFECTS = len(EffectEnum.keys())
 NUM_MOVE_FEATURES = len(MovesetFeature.keys())
 NUM_ENTITY_EDGE_FEATURES = len(EntityEdgeFeature.keys())
 NUM_FIELD_FEATURES = len(FieldFeature.keys())
-NUM_ENTITY_NODE_FEATURES = len(EntityNodeFeature.keys())
+NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
+NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
+NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_MASK_FEATURES = len(ActionMaskFeature.keys())
 
 NUM_HISTORY = 128 * 3
@@ -75,50 +79,32 @@ NUM_HISTORY = 128 * 3
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
 
-MOVESET_ID_FEATURE_IDXS = jnp.array(
-    [
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID0,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID1,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID2,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID3,
-    ],
-    dtype=jnp.int32,
-)
-
-MOVESET_PP_FEATURE_IDXS = jnp.array(
-    [
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP0,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP1,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP2,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP3,
-    ],
-    dtype=jnp.int32,
-)
-
 
 MAX_RATIO_TOKEN = 16384
 MAX_BOOST_VALUE = 13
 
 
-ENTITY_NODE_MAX_VALUES = {
-    EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL: 100,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__IS_PUBLIC: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO: MAX_RATIO_TOKEN,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__GENDER: NUM_GENDERS,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS: NUM_STATUS,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM_EFFECT: NUM_ITEM_EFFECTS,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__BEING_CALLED_BACK: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__TRAPPED: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__NEWLY_SWITCHED: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__TOXIC_TURNS: 8,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__SLEEP_TURNS: 4,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED: 2,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE: NUM_NATURES,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE: NUM_TYPECHART,
-    EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED: 2,
+ENTITY_PUBLIC_MAX_VALUES = {
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL: 100,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO: MAX_RATIO_TOKEN,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER: NUM_GENDERS,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS: NUM_STATUS,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT: NUM_ITEM_EFFECTS,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS: 8,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS: 4,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED: 2,
 }
+
+ENTITY_PRIVATE_MAX_VALUES = {
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__NATURE: NUM_NATURES,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: NUM_TYPECHART,
+}
+
 
 ENTITY_EDGE_MAX_VALUES = {
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG: NUM_MAJOR_ARGS,

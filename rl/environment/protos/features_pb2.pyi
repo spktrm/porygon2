@@ -4,74 +4,88 @@ from typing import ClassVar as _ClassVar
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
-class EntityNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class EntityPublicNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    ENTITY_NODE_FEATURE___UNSPECIFIED: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__SPECIES: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__ITEM: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__ITEM_EFFECT: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__ABILITY: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__GENDER: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__ACTIVE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__FAINTED: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__HP: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MAXHP: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__HP_RATIO: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__STATUS: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TOXIC_TURNS: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__SLEEP_TURNS: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BEING_CALLED_BACK: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TRAPPED: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__NEWLY_SWITCHED: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__LEVEL: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEID0: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEID1: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEID2: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEID3: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEPP0: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEPP1: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEPP2: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MOVEPP3: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__HAS_STATUS: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_ATK_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_DEF_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_SPA_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_SPD_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_SPE_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES0: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES1: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES2: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES3: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES4: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES5: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES6: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES7: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__VOLATILES8: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__SIDE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TYPECHANGE0: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TYPECHANGE1: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__NUM_MOVES: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IS_PUBLIC: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__LAST_MOVE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_HP: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_ATK: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_DEF: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_SPA: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_SPD: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__EV_SPE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_HP: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_ATK: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_DEF: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_SPA: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_SPD: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__IV_SPE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__NATURE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__TERASTALLIZED: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__MEGA: _ClassVar[EntityNodeFeature]
-    ENTITY_NODE_FEATURE__PRIMAL: _ClassVar[EntityNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE___UNSPECIFIED: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__GENDER: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__FAINTED: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__HP: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MAXHP: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__STATUS: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__TRAPPED: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__LEVEL: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__BOOST_EVASION_VALUE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES1: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES2: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES3: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES4: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES5: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES6: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES7: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__SIDE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__NUM_MOVES: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MEGA: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__PRIMAL: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MOVEPP0: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: _ClassVar[EntityPublicNodeFeature]
+
+class EntityRevealedNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ENTITY_REVEALED_NODE_FEATURE___UNSPECIFIED: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__SPECIES: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__ITEM: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__ABILITY: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__MOVEID0: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__MOVEID1: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__MOVEID2: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__MOVEID3: _ClassVar[EntityRevealedNodeFeature]
+    ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityRevealedNodeFeature]
+
+class EntityPrivateNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ENTITY_PRIVATE_NODE_FEATURE___UNSPECIFIED: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__SPECIES: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__ITEM: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__ABILITY: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__MOVEID0: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__MOVEID1: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__MOVEID2: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__MOVEID3: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_HP: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_ATK: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_DEF: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_SPA: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_SPD: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__EV_SPE: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_HP: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_ATK: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_DEF: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_SPA: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_SPD: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__NATURE: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityPrivateNodeFeature]
 
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -225,72 +239,80 @@ class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PACKED_SET_FEATURE__TERATYPE: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__LEVEL: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__HAPPINESS: _ClassVar[PackedSetFeature]
-ENTITY_NODE_FEATURE___UNSPECIFIED: EntityNodeFeature
-ENTITY_NODE_FEATURE__SPECIES: EntityNodeFeature
-ENTITY_NODE_FEATURE__ITEM: EntityNodeFeature
-ENTITY_NODE_FEATURE__ITEM_EFFECT: EntityNodeFeature
-ENTITY_NODE_FEATURE__ABILITY: EntityNodeFeature
-ENTITY_NODE_FEATURE__GENDER: EntityNodeFeature
-ENTITY_NODE_FEATURE__ACTIVE: EntityNodeFeature
-ENTITY_NODE_FEATURE__FAINTED: EntityNodeFeature
-ENTITY_NODE_FEATURE__HP: EntityNodeFeature
-ENTITY_NODE_FEATURE__MAXHP: EntityNodeFeature
-ENTITY_NODE_FEATURE__HP_RATIO: EntityNodeFeature
-ENTITY_NODE_FEATURE__STATUS: EntityNodeFeature
-ENTITY_NODE_FEATURE__TOXIC_TURNS: EntityNodeFeature
-ENTITY_NODE_FEATURE__SLEEP_TURNS: EntityNodeFeature
-ENTITY_NODE_FEATURE__BEING_CALLED_BACK: EntityNodeFeature
-ENTITY_NODE_FEATURE__TRAPPED: EntityNodeFeature
-ENTITY_NODE_FEATURE__NEWLY_SWITCHED: EntityNodeFeature
-ENTITY_NODE_FEATURE__LEVEL: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEID0: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEID1: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEID2: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEID3: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEPP0: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEPP1: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEPP2: EntityNodeFeature
-ENTITY_NODE_FEATURE__MOVEPP3: EntityNodeFeature
-ENTITY_NODE_FEATURE__HAS_STATUS: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_ATK_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_DEF_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_SPA_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_SPD_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_SPE_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES0: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES1: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES2: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES3: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES4: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES5: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES6: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES7: EntityNodeFeature
-ENTITY_NODE_FEATURE__VOLATILES8: EntityNodeFeature
-ENTITY_NODE_FEATURE__SIDE: EntityNodeFeature
-ENTITY_NODE_FEATURE__TYPECHANGE0: EntityNodeFeature
-ENTITY_NODE_FEATURE__TYPECHANGE1: EntityNodeFeature
-ENTITY_NODE_FEATURE__NUM_MOVES: EntityNodeFeature
-ENTITY_NODE_FEATURE__IS_PUBLIC: EntityNodeFeature
-ENTITY_NODE_FEATURE__LAST_MOVE: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_HP: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_ATK: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_DEF: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_SPA: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_SPD: EntityNodeFeature
-ENTITY_NODE_FEATURE__EV_SPE: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_HP: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_ATK: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_DEF: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_SPA: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_SPD: EntityNodeFeature
-ENTITY_NODE_FEATURE__IV_SPE: EntityNodeFeature
-ENTITY_NODE_FEATURE__NATURE: EntityNodeFeature
-ENTITY_NODE_FEATURE__TERA_TYPE: EntityNodeFeature
-ENTITY_NODE_FEATURE__TERASTALLIZED: EntityNodeFeature
-ENTITY_NODE_FEATURE__MEGA: EntityNodeFeature
-ENTITY_NODE_FEATURE__PRIMAL: EntityNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE___UNSPECIFIED: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__GENDER: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__FAINTED: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__HP: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MAXHP: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__STATUS: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__TRAPPED: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__LEVEL: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__BOOST_EVASION_VALUE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES1: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES2: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES3: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES4: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES5: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES6: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES7: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__SIDE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__NUM_MOVES: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MEGA: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__PRIMAL: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MOVEPP0: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: EntityPublicNodeFeature
+ENTITY_REVEALED_NODE_FEATURE___UNSPECIFIED: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__SPECIES: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__ITEM: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__ABILITY: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__MOVEID0: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__MOVEID1: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__MOVEID2: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__MOVEID3: EntityRevealedNodeFeature
+ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE: EntityRevealedNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE___UNSPECIFIED: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__SPECIES: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__ITEM: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__ABILITY: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__MOVEID0: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__MOVEID1: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__MOVEID2: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__MOVEID3: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_HP: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_ATK: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_DEF: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_SPA: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_SPD: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__EV_SPE: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_HP: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_ATK: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_DEF: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_SPA: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_SPD: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__NATURE: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: EntityPrivateNodeFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP
 MOVESET_HAS_PP__NO: MovesetHasPP
