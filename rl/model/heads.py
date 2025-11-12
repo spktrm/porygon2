@@ -139,4 +139,4 @@ class ValueLogitHead(nn.Module):
 
         embedding = resnet(embedding)
         logits = logits(embedding)
-        return logits.squeeze(-1)
+        return jnp.tanh(logits.squeeze(-1))

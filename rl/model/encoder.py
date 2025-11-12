@@ -244,7 +244,7 @@ class Encoder(nn.Module):
         )
 
         # Latent embeddings for global state representation.
-        self.state_proj = MLP(4 * entity_size)
+        self.state_proj = nn.Dense(4 * entity_size)
         self.state_resnet = Resnet(num_resblocks=1)
 
         # Timestep wise graph attention layers
@@ -1003,18 +1003,11 @@ class Encoder(nn.Module):
             _max_pool = lambda x, m: m.any(axis=0, keepdims=True) * jnp.where(
                 m, x, dtype_finfo.min
             ).max(axis=0, keepdims=True)
-            _min_pool = lambda x, m: m.any(axis=0, keepdims=True) * jnp.where(
-                m, x, dtype_finfo.max
-            ).min(axis=0, keepdims=True)
 
             mean_pool_query = _mean_pool(
                 contextual_entity_embeddings, entity_mask_expanded
             )
-
             max_pool_query = _max_pool(
-                contextual_entity_embeddings, entity_mask_expanded
-            )
-            min_pool_query = _min_pool(
                 contextual_entity_embeddings, entity_mask_expanded
             )
 
@@ -1048,14 +1041,13 @@ class Encoder(nn.Module):
                 (
                     mean_pool_query,
                     max_pool_query,
-                    min_pool_query,
                     side0_mean_pool_query,
-                    side1_mean_pool_query,
                     side0_max_pool_query,
+                    side1_mean_pool_query,
                     side1_max_pool_query,
                     active_mean_pool_query,
-                    inactive_mean_pool_query,
                     active_max_pool_query,
+                    inactive_mean_pool_query,
                     inactive_max_pool_query,
                 ),
             )

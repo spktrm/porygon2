@@ -315,7 +315,7 @@ def player_train_step(
         switch_head_entropy = average(pred_switch_head.entropy, switch_valid)
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
-        loss_entropy = -learner_log_prob  # Estimator for entropy
+        loss_entropy = -average(learner_log_prob, valid)  # Estimator for entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -328,8 +328,8 @@ def player_train_step(
             valid=valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
             valid=valid,
         )
 
@@ -530,7 +530,7 @@ def builder_train_step(
 
         species_entropy = average(learner_species_head.entropy, valid)
         packed_set_entropy = average(learner_packed_set_head.entropy, valid)
-        loss_entropy = -learner_log_prob  # Estimator for entropy
+        loss_entropy = -average(learner_log_prob, valid)  # Estimator for entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -543,8 +543,8 @@ def builder_train_step(
             valid=valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
+            policy_ratio=learner_actor_ratio,
+            log_policy_ratio=learner_actor_log_ratio,
             valid=valid,
         )
 
