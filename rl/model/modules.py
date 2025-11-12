@@ -46,7 +46,7 @@ class GatNet(nn.Module):
             num_layers=self.num_layers,
             num_heads=self.num_heads,
         )(
-            layer_norm(valid_node),
+            valid_node,
             messages,
             create_attention_mask(where_mask, where_mask),
         )

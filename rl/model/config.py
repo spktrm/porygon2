@@ -128,9 +128,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head = ConfigDict()
 
     for head, output_size in [
-        (cfg.value_head, 1),
-        (cfg.action_type_head, 3),
-        (cfg.wildcard_head, 5),
+        (cfg.value_head, (entity_size, 1)),
+        (cfg.action_type_head, (entity_size, 3)),
+        (cfg.wildcard_head, (entity_size, 5)),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
