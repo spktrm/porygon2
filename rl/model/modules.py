@@ -571,9 +571,8 @@ class Transformer(nn.Module):
 
         for _ in range(self.num_layers):
             q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
-            res = q
-            for kv, decoder_attn_mask, kv_position in contexts:
-                decoder_out = self.decoder_layer(
+            decoder_outputs = [
+                self.decoder_layer(
                     q,
                     kv,
                     decoder_attn_mask,
@@ -581,8 +580,9 @@ class Transformer(nn.Module):
                     q_positions,
                     kv_position,
                 )
-                res = res + decoder_out
-            q = res - len(contexts) * q
+                for kv, decoder_attn_mask, kv_position in contexts
+            ]
+            q = sum(decoder_outputs) / len(contexts)
 
         return q
 

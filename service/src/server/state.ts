@@ -754,26 +754,20 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
+        0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
+        0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -1245,16 +1239,20 @@ class Edge {
         let revealedOffset = 0;
 
         for (const side of this.player.publicBattle.sides) {
-            this.updateEntityData(side, playerIndex);
-            this.updateSideConditionData(side, playerIndex);
+            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+
+            this.updateEntityData(side, relativeSide);
+            this.updateSideConditionData(side, relativeSide);
 
             const teamLength = side.team.slice(0, 6).length;
             publicOffset += teamLength * numPublicEntityNodeFeatures;
             revealedOffset += teamLength * numRevealedEntityNodeFeatures;
         }
         for (const side of this.player.publicBattle.sides) {
+            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+
             const team = side.team.slice(0, 6);
-            const { revealedData, publicData } = isMySide(side.n, playerIndex)
+            const { revealedData, publicData } = relativeSide
                 ? unkPokemon1
                 : unkPokemon0;
             for (let i = team.length; i < side.totalPokemon; i++) {
@@ -1270,12 +1268,13 @@ class Edge {
         }
     }
 
-    updateEntityData(side: Side, playerIndex: number) {
+    updateEntityData(side: Side, relativeSide: number) {
         const team = side.team.slice(0, side.totalPokemon);
+
         for (const pokemon of team) {
             const { revealedData, publicData } = getArrayFromPublicPokemon(
                 pokemon,
-                playerIndex,
+                relativeSide,
             );
             const index =
                 this.player.eventHandler.identToIndex.get(
@@ -1295,8 +1294,7 @@ class Edge {
         }
     }
 
-    updateSideConditionData(side: Side, playerIndex: number) {
-        const isMe = isMySide(side.n, playerIndex);
+    updateSideConditionData(side: Side, relativeSide: number) {
         let sideConditionBuffer = BigInt(0b0);
         for (const [id] of Object.entries(side.sideConditions)) {
             const featureIndex = IndexValueFromEnum(SideconditionEnum, id);
@@ -1304,13 +1302,13 @@ class Edge {
         }
         this.fieldData.set(
             bigIntToInt16Array(sideConditionBuffer),
-            isMe
+            relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS0
                 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0,
         );
         if (side.sideConditions.spikes) {
             this.setFieldFeature({
-                featureIndex: isMe
+                featureIndex: relativeSide
                     ? FieldFeature.FIELD_FEATURE__MY_SPIKES
                     : FieldFeature.FIELD_FEATURE__OPP_SPIKES,
                 value: side.sideConditions.spikes.level,
@@ -1318,7 +1316,7 @@ class Edge {
         }
         if (side.sideConditions.toxicspikes) {
             this.setFieldFeature({
-                featureIndex: isMe
+                featureIndex: relativeSide
                     ? FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES
                     : FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES,
                 value: side.sideConditions.toxicspikes.level,
@@ -3783,14 +3781,14 @@ export class StateHandler {
         const fieldBuffer = new Int16Array(numFieldFeatures);
         const playerIndex = this.player.getPlayerIndex()!;
         for (const side of this.player.privateBattle.sides) {
-            const mySide = isMySide(side.n, playerIndex) === 1;
-            const sideOffset = mySide
+            const relativeSide = isMySide(side.n, playerIndex);
+            const sideOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS0
                 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0;
-            const spikesOffset = mySide
+            const spikesOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SPIKES
                 : FieldFeature.FIELD_FEATURE__OPP_SPIKES;
-            const toxisSpikesOffset = mySide
+            const toxisSpikesOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES
                 : FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES;
 
