@@ -27,10 +27,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     num_heads = 2
     scale = 1
 
-    num_state_latents = 6
     entity_size = int(scale * base_size * num_heads)
-
-    cfg.num_state_latents = num_state_latents
 
     cfg.generation = generation
     cfg.entity_size = entity_size
@@ -40,7 +37,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
-    cfg.encoder.num_state_latents = num_state_latents
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -50,6 +46,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_qk_layer_norm = True
     encoder_use_bias = True
+    encoder_use_post_attn_norm = True
+    encoder_use_post_ffw_norm = True
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -59,6 +57,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
     decoder_qk_layer_norm = True
     decoder_use_bias = True
+    decoder_use_post_attn_norm = True
+    decoder_use_post_ffw_norm = True
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -69,6 +69,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=encoder_use_bias,
         resblocks_hidden_size=encoder_hidden_size,
         qk_layer_norm=encoder_qk_layer_norm,
+        use_post_attn_norm=encoder_use_post_attn_norm,
+        use_post_ffw_norm=encoder_use_post_ffw_norm,
     )
 
     transformer_decoder_kwargs = dict(
@@ -80,6 +82,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=decoder_use_bias,
         resblocks_hidden_size=decoder_hidden_size,
         qk_layer_norm=decoder_qk_layer_norm,
+        use_post_attn_norm=decoder_use_post_attn_norm,
+        use_post_ffw_norm=decoder_use_post_ffw_norm,
     )
 
     cfg.encoder.timestep_gat = ConfigDict()
@@ -90,17 +94,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.encoder.move_encoder = ConfigDict()
     set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
+    cfg.encoder.move_encoder.need_pos = False
 
     cfg.encoder.switch_encoder = ConfigDict()
     set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
+    cfg.encoder.switch_encoder.need_pos = False
 
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
-
-    cfg.encoder.timestep_decoder = ConfigDict()
-    set_attributes(cfg.encoder.timestep_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.timestep_decoder.need_pos = True
 
     cfg.encoder.entity_timestep_transformer = ConfigDict()
     set_attributes(
@@ -186,6 +188,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     qkv_size = int(qkv_scale * entity_size)
     qk_layer_norm = True
     use_bias = True
+    use_post_attn_norm = True
+    use_post_ffw_norm = True
 
     transformer_kwargs = dict(
         num_layers=num_layers,
@@ -196,6 +200,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         use_bias=use_bias,
         resblocks_hidden_size=hidden_size,
         qk_layer_norm=qk_layer_norm,
+        use_post_attn_norm=use_post_attn_norm,
+        use_post_ffw_norm=use_post_ffw_norm,
     )
 
     cfg.encoder = ConfigDict()

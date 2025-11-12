@@ -52,6 +52,7 @@ class Porygon2LearnerConfig:
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
+    league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     league_size: int = 16
 
@@ -78,15 +79,13 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
 
     # Loss coefficients
-    reg_eta: float = 0.1
-
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
-    player_eta: float = 0.2
+    player_eta: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_eta: float = 0.2
+    builder_eta: float = 0.05
 
     # Smogon Generation
     generation: GenT = 9

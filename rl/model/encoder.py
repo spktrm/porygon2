@@ -318,7 +318,9 @@ class Encoder(nn.Module):
     def _embed_public_entity(self, public: jax.Array, revealed: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.
         _encode_hex = jax.vmap(
-            functools.partial(_binary_scale_encoding, world_dim=65535)
+            functools.partial(
+                _binary_scale_encoding, dtype=self.cfg.dtype, world_dim=65535
+            )
         )
         volatiles_indices = public[
             EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0 : EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8
@@ -335,7 +337,7 @@ class Encoder(nn.Module):
         hp_ratio = (
             public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO]
             / MAX_RATIO_TOKEN
-        )
+        ).astype(self.cfg.dtype)
         hp_features = jnp.concatenate(
             [
                 hp_ratio[..., None],
@@ -432,15 +434,16 @@ class Encoder(nn.Module):
             ]
         )
         move_tokens = revealed[move_indices]
+        move_pp_tokens = public[move_pp_indices]
 
-        moves_onehot = jax.nn.one_hot(move_tokens, NUM_MOVES)
         is_valid_move = (move_tokens != MovesEnum.MOVES_ENUM___NULL) & (
             move_tokens != MovesEnum.MOVES_ENUM___UNSPECIFIED
         )
-        move_pp_ratios = move_pp_indices[..., None] / 31
+        move_pp_ratios = is_valid_move * (move_pp_tokens / 31).astype(self.cfg.dtype)
         move_pp_onehot = (
-            jnp.where(is_valid_move[..., None], moves_onehot * move_pp_ratios, 0)
-            .sum(0)
+            jnp.zeros(NUM_MOVES, dtype=move_pp_ratios.dtype)
+            .at[move_tokens]
+            .set(move_pp_ratios)
             .clip(min=0, max=1)
         )
 
@@ -553,8 +556,8 @@ class Encoder(nn.Module):
 
         embedding = self.private_entity_sum(
             boolean_code,
-            ev_features / 255,
-            iv_features / 31,
+            (ev_features / 255).astype(self.cfg.dtype),
+            (iv_features / 31).astype(self.cfg.dtype),
             self._embed_species(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
@@ -665,7 +668,7 @@ class Encoder(nn.Module):
         embedding = self.edge_sum(
             minor_args_encoding,
             boolean_code,
-            stat_features,
+            stat_features.astype(self.cfg.dtype),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             self._embed_move(move_token),

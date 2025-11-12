@@ -121,18 +121,18 @@ def value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     return 0.5 * average(mse_loss, valid)
 
 
-def approx_backward_kl(*, policy_ratio: jax.Array, log_policy_ratio: jax.Array):
-    """
-    Calculate the Backward KL approximation.
-    """
-    return policy_ratio * log_policy_ratio - (policy_ratio - 1)
-
-
 def approx_forward_kl(*, policy_ratio: jax.Array, log_policy_ratio: jax.Array):
     """
     Calculate the Forward KL approximation.
     """
     return (policy_ratio - 1) - log_policy_ratio
+
+
+def approx_backward_kl(*, policy_ratio: jax.Array, log_policy_ratio: jax.Array):
+    """
+    Calculate the Backward KL approximation.
+    """
+    return policy_ratio * log_policy_ratio - (policy_ratio - 1)
 
 
 def backward_kl_loss(
@@ -236,12 +236,7 @@ def player_train_step(
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
-    reg_reward = approx_backward_kl(
-        policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
-    )
-    rewards_tm1 = (
-        player_transitions.env_output.win_reward - config.player_eta * reg_reward
-    )
+    rewards_tm1 = player_transitions.env_output.win_reward
 
     v_tm1 = player_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -320,12 +315,7 @@ def player_train_step(
         switch_head_entropy = average(pred_switch_head.entropy, switch_valid)
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
 
-        loss_entropy = (
-            action_type_head_entropy
-            + move_head_entropy
-            + switch_head_entropy
-            + wildcard_head_entropy
-        )
+        loss_entropy = -learner_log_prob  # Estimator for entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -338,14 +328,15 @@ def player_train_step(
             valid=valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
             valid=valid,
         )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
+            + config.player_eta * (loss_kl - loss_entropy)
         )
 
         return loss, dict(
@@ -379,7 +370,6 @@ def player_train_step(
 
     player_logs.update(
         dict(
-            player_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
@@ -468,12 +458,9 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-    reg_reward = approx_backward_kl(
-        policy_ratio=actor_target_ratio, log_policy_ratio=actor_target_log_ratio
-    )
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
-    ) - config.builder_eta * reg_reward
+    )
 
     v_tm1 = builder_target_pred.v
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
@@ -543,7 +530,7 @@ def builder_train_step(
 
         species_entropy = average(learner_species_head.entropy, valid)
         packed_set_entropy = average(learner_packed_set_head.entropy, valid)
-        loss_entropy = species_entropy + packed_set_entropy
+        loss_entropy = -learner_log_prob  # Estimator for entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -556,14 +543,15 @@ def builder_train_step(
             valid=valid,
         )
         loss_kl = backward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
             valid=valid,
         )
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
+            + config.builder_eta * (loss_kl - loss_entropy)
         )
 
         return loss, dict(
@@ -596,7 +584,6 @@ def builder_train_step(
 
     training_logs.update(
         dict(
-            builder_reg_reward_sum=reg_reward.sum(where=valid, axis=0).mean(),
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
@@ -869,7 +856,7 @@ class Learner:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)
                     training_logs.update(jax.device_get(usage_logs))
 
-                if (num_steps % 100) == 0:
+                if (num_steps % self.learner_config.league_winrate_log_steps) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
 
@@ -903,10 +890,10 @@ class Learner:
                     print("Adding new player to league @ step", num_steps)
                     self.league.add_player(
                         ParamsContainer(
-                            frame_count=self.player_state.actor_steps.item(),
+                            frame_count=new_params.frame_count,
                             step_count=num_steps,
-                            player_params=self.player_state.params,
-                            builder_params=self.builder_state.params,
+                            player_params=new_params.player_params,
+                            builder_params=new_params.builder_params,
                         )
                     )
 
