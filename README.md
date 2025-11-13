@@ -28,11 +28,11 @@ source venv/bin/activate
 
 ## Training
 
-./sh start.sh
+`./sh start.sh`
 
 ### Client Setup
 
-./sh eval.sh
+`./sh eval.sh`
 
 ## Scripts
 
