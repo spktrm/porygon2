@@ -134,6 +134,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
+        head.logits.use_layer_norm = True
 
     cfg.move_head = ConfigDict()
     cfg.switch_head = ConfigDict()
@@ -204,7 +205,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     set_attributes(cfg.encoder, **transformer_kwargs)
     cfg.encoder.need_pos = True
 
-    for name in ["species_head", "packed_set_head", "value_head", "entropy_head"]:
+    for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
         head_cfg.resnet = ConfigDict()
         head_cfg.resnet.num_resblocks = 1

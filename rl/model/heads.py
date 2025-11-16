@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import HeadOutput
-from rl.model.modules import MLP, PointerLogits
+from rl.model.modules import MLP, PointerLogits, Resnet
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -47,7 +47,7 @@ class PolicyQKHead(nn.Module):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(query_embedding, key_embeddings)
+        logits = qk_logits(resnet(query_embedding), key_embeddings)
         logits = logits / head_params.temp
 
         if valid_mask is None:
@@ -79,10 +79,13 @@ class PolicyLogitHeadInner(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        return MLP(
+        resnet = Resnet(**self.cfg.resnet.to_dict())
+        logits = MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
             **self.cfg.logits.to_dict()
-        )(x)
+        )
+        x = resnet(x)
+        return logits(x)
 
 
 class PolicyLogitHead(nn.Module):
@@ -128,8 +131,9 @@ class ValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = MLP(
-            final_kernel_init=nn.initializers.orthogonal(1e-2),
-            **self.cfg.logits.to_dict()
-        )(x)
+        resnet = Resnet(**self.cfg.resnet.to_dict())
+        logits = MLP(**self.cfg.logits.to_dict())
+
+        x = resnet(x)
+        x = logits(x)
         return jnp.tanh(x.squeeze(-1))
