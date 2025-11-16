@@ -345,7 +345,7 @@ def player_train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_kl
-            + config.player_entropy_loss_coef * loss_entropy
+            - config.player_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
@@ -565,7 +565,7 @@ def builder_train_step(
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_loss_coef * loss_kl
-            + config.builder_entropy_loss_coef * loss_entropy
+            - config.builder_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(

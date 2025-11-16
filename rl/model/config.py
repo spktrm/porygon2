@@ -23,8 +23,8 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 128
-    num_heads = 2
+    base_size = 64
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -166,8 +166,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 128
-    num_heads = 2
+    base_size = 64
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
