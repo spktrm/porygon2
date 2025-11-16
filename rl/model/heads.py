@@ -45,10 +45,7 @@ class PolicyQKHead(nn.Module):
         head_params: HeadParams = HeadParams(),
     ):
         resnet = Resnet(**self.cfg.resnet.to_dict())
-        qk_logits = PointerLogits(
-            keys_final_kernel_init=nn.initializers.orthogonal(1e-2),
-            **self.cfg.qk_logits.to_dict()
-        )
+        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
         logits = qk_logits(resnet(query_embedding), key_embeddings)
         logits = logits / head_params.temp
@@ -139,4 +136,4 @@ class ValueLogitHead(nn.Module):
 
         embedding = resnet(embedding)
         logits = logits(embedding)
-        return logits.squeeze(-1)
+        return jnp.tanh(logits.squeeze(-1))

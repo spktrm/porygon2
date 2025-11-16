@@ -1,4 +1,4 @@
-import { AnyObject, Teams, TeamValidator } from "@pkmn/sim";
+import { AnyObject, PokemonSet, Teams, TeamValidator, toID } from "@pkmn/sim";
 import {
     Args,
     BattleInitArgName,
@@ -35,14 +35,16 @@ import {
     lookUpSetsList,
     numActionMaskFeatures,
     numEntityEdgeFeatures,
-    numEntityNodeFeatures,
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    numPrivateEntityNodeFeatures,
+    numPublicEntityNodeFeatures,
+    numRevealedEntityNodeFeatures,
     sets,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
-import { Ability, Item, Move, BoostID } from "@pkmn/dex-types";
+import { Ability, Item, BoostID } from "@pkmn/dex-types";
 import { ID, MoveTarget, SideID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { OneDBoolean, TypedArray } from "./utils";
@@ -51,7 +53,9 @@ import {
     ActionType,
     EntityEdgeFeature,
     EntityEdgeFeatureMap,
-    EntityNodeFeature,
+    EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
+    EntityRevealedNodeFeature,
     FieldFeature,
     FieldFeatureMap,
     InfoFeature,
@@ -60,6 +64,7 @@ import {
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState } from "../../protos/service_pb";
+import { Move } from "@pkmn/dex";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames =
@@ -360,57 +365,114 @@ function bigIntToInt16Array(value: bigint): Int16Array {
     return result;
 }
 
-const entityNodeArrayToObject = (array: Int16Array) => {
-    const volatilesFlat = array.slice(
-        EntityNodeFeature.ENTITY_NODE_FEATURE__VOLATILES0,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__VOLATILES8 + 1,
-    );
-    const volatilesIndices = int16ArrayToBitIndices(volatilesFlat);
-
-    const typechangeFlat = array.slice(
-        EntityNodeFeature.ENTITY_NODE_FEATURE__TYPECHANGE0,
-        EntityNodeFeature.ENTITY_NODE_FEATURE__TYPECHANGE1 + 1,
-    );
-    const typechangeIndices = int16ArrayToBitIndices(typechangeFlat);
-
+const entityPrivateArrayToObject = (array: Int16Array) => {
     const moveIndicies = Array.from(
         array.slice(
-            EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID0,
-            EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID3 + 1,
+            EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID0,
+            EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID3 + 1,
         ),
     );
 
     return {
         species:
             jsonDatum["species"][
-                array[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES]
+                array[
+                    EntityPrivateNodeFeature
+                        .ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+                ]
             ],
         item: jsonDatum["items"][
-            array[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM]
+            array[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ITEM]
         ],
-        hp:
-            array[EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO] /
-            MAX_RATIO_TOKEN,
-        fainted: !!array[EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED],
         ability:
             jsonDatum["abilities"][
-                array[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY]
+                array[
+                    EntityPrivateNodeFeature
+                        .ENTITY_PRIVATE_NODE_FEATURE__ABILITY
+                ]
             ],
         moves: moveIndicies.map((index) => jsonDatum["moves"][index]),
+        teraType:
+            jsonDatum["typechart"][
+                array[
+                    EntityPrivateNodeFeature
+                        .ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE
+                ]
+            ],
+    };
+};
+
+const entityPublicArrayToObject = (array: Int16Array) => {
+    const volatilesFlat = array.slice(
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0,
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8 + 1,
+    );
+    const volatilesIndices = int16ArrayToBitIndices(volatilesFlat);
+
+    const typechangeFlat = array.slice(
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0,
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1 + 1,
+    );
+    const typechangeIndices = int16ArrayToBitIndices(typechangeFlat);
+
+    return {
+        hp:
+            array[
+                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+            ] / MAX_RATIO_TOKEN,
+        fainted:
+            !!array[
+                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
+            ],
         volatiles: volatilesIndices.map(
             (index) => jsonDatum["volatileStatus"][index],
         ),
         typechange: typechangeIndices.map(
             (index) => jsonDatum["typechart"][index],
         ),
-        active: array[EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE],
-        side: array[EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE],
-        status: jsonDatum["status"][
-            array[EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS]
+        active: array[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
         ],
+        side: array[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE],
+        status: jsonDatum["status"][
+            array[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS]
+        ],
+    };
+};
+
+const entityRevealedArrayToObject = (array: Int16Array) => {
+    const moveIndicies = Array.from(
+        array.slice(
+            EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
+            EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3 + 1,
+        ),
+    );
+
+    return {
+        species:
+            jsonDatum["species"][
+                array[
+                    EntityRevealedNodeFeature
+                        .ENTITY_REVEALED_NODE_FEATURE__SPECIES
+                ]
+            ],
+        item: jsonDatum["items"][
+            array[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM]
+        ],
+        ability:
+            jsonDatum["abilities"][
+                array[
+                    EntityRevealedNodeFeature
+                        .ENTITY_REVEALED_NODE_FEATURE__ABILITY
+                ]
+            ],
+        moves: moveIndicies.map((index) => jsonDatum["moves"][index]),
         teraType:
             jsonDatum["typechart"][
-                array[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE]
+                array[
+                    EntityRevealedNodeFeature
+                        .ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
+                ]
             ],
     };
 };
@@ -630,96 +692,257 @@ export function concatenateArrays<T extends TypedArray>(arrays: T[]): T {
 
 const POKEMON_ARRAY_CONSTRUCTOR = Int16Array;
 
-function getBlankPokemonArr() {
-    return new POKEMON_ARRAY_CONSTRUCTOR(numEntityNodeFeatures);
+function getBlankPublicPokemonArr() {
+    return new POKEMON_ARRAY_CONSTRUCTOR(numPublicEntityNodeFeatures);
+}
+
+function getBlankRevealedPokemonArr() {
+    return new POKEMON_ARRAY_CONSTRUCTOR(numRevealedEntityNodeFeatures);
+}
+
+function getBlankPrivatePokemonArr() {
+    return new POKEMON_ARRAY_CONSTRUCTOR(numPrivateEntityNodeFeatures);
+}
+
+function getUnkRevealedPokemon() {
+    const data = getBlankRevealedPokemonArr();
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES] =
+        SpeciesEnum.SPECIES_ENUM___UNK;
+
+    // Item
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM] =
+        ItemsEnum.ITEMS_ENUM___UNK;
+
+    // Ability
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY] =
+        AbilitiesEnum.ABILITIES_ENUM___UNK;
+
+    // Moves
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0] =
+        MovesEnum.MOVES_ENUM___UNK;
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID1] =
+        MovesEnum.MOVES_ENUM___UNK;
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID2] =
+        MovesEnum.MOVES_ENUM___UNK;
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3] =
+        MovesEnum.MOVES_ENUM___UNK;
+
+    // Teratype
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE] =
+        TypechartEnum.TYPECHART_ENUM___UNK;
+    return data;
+}
+
+function getUnkPublicPokemon() {
+    const data = getBlankPublicPokemonArr();
+
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT] =
+        ItemeffecttypesEnum.ITEMEFFECTTYPES_ENUM___NULL;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
+        GendernameEnum.GENDERNAME_ENUM___UNK;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP] = 100;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MAXHP] = 100;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO] =
+        MAX_RATIO_TOKEN; // Full Health;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS] =
+        StatusEnum.STATUS_ENUM___NULL;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
+    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_EVASION_VALUE
+    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES1] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES2] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES3] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES4] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES5] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES6] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES7] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NUM_MOVES] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE] =
+        MovesEnum.MOVES_ENUM___UNK;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MEGA] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__PRIMAL] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP0] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3] = 0;
+
+    return data;
 }
 
 function getUnkPokemon(n: number) {
-    const data = getBlankPokemonArr();
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES] =
-        SpeciesEnum.SPECIES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM] =
-        ItemsEnum.ITEMS_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__GENDER] =
-        GendernameEnum.GENDERNAME_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM_EFFECT] =
-        ItemeffecttypesEnum.ITEMEFFECTTYPES_ENUM___NULL;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY] =
-        AbilitiesEnum.ABILITIES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL] = 100;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__HP] = 100;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MAXHP] = 100;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO] = MAX_RATIO_TOKEN; // Full Health
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS] =
-        StatusEnum.STATUS_ENUM___NULL;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID0] =
-        MovesEnum.MOVES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID1] =
-        MovesEnum.MOVES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID2] =
-        MovesEnum.MOVES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEID3] =
-        MovesEnum.MOVES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP0] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP1] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP2] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__MOVEPP3] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__LAST_MOVE] =
-        MovesEnum.MOVES_ENUM___UNK;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__NUM_MOVES] = 4;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__HAS_STATUS] = 0;
+    const publicData = getUnkPublicPokemon();
+    const revealedData = getUnkRevealedPokemon();
 
-    // Evs
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_HP] = -255;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_ATK] = -255;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_DEF] = -255;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPA] = -255;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPD] = -255;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPE] = -255;
-
-    // Set Ivs
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_HP] = -31;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_ATK] = -31;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_DEF] = -31;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPA] = -31;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] = -31;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] = -31;
-
-    // Terastallized
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = 0;
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
-        TypechartEnum.TYPECHART_ENUM___UNK;
-
-    // Set Nature
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
-        NaturesEnum.NATURES_ENUM___UNK;
     // Side
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE] = n;
-    return data;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE] = n;
+    return { publicData, revealedData };
 }
 
 const unkPokemon0 = getUnkPokemon(0);
 const unkPokemon1 = getUnkPokemon(1);
 
 function getNullPokemon() {
-    const data = getBlankPokemonArr();
-    data[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES] =
+    const data = getBlankPublicPokemonArr();
+    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES] =
         SpeciesEnum.SPECIES_ENUM___NULL;
     return data;
 }
 
 const nullPokemon = getNullPokemon();
 
-function getArrayFromPokemon(
-    candidate: Pokemon | null,
-    playerIndex: number,
-    isPublic: boolean = true,
+function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
+    for (const key of keys) {
+        try {
+            return IndexValueFromEnum(enumDatum, key);
+        } catch (err) {
+            console.log(err);
+            continue;
+        }
+    }
+    throw new Error(`None of the keys ${keys} found in enum mapping`);
+}
+
+function getArrayFromPrivatePokemon(
+    candidate: Pokemon | null | undefined,
+    pokemonSet: PokemonSet,
 ) {
-    const dataArr = getBlankPokemonArr();
+    const dataArr = getBlankPrivatePokemonArr();
 
     if (candidate === null || candidate === undefined) {
-        return nullPokemon;
+        return dataArr;
+    }
+
+    let pokemon: Pokemon;
+    if (
+        candidate.volatiles.transform !== undefined &&
+        candidate.volatiles.transform.pokemon !== undefined
+    ) {
+        pokemon = candidate.volatiles.transform.pokemon as Pokemon;
+    } else {
+        pokemon = candidate;
+    }
+
+    if (pokemonSet === null || pokemonSet === undefined) {
+        throw new Error("Private data requested for null or undefined set");
+    }
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES] =
+        tryFindIndex(SpeciesEnum, [
+            pokemon.baseSpecies.id,
+            pokemon.baseSpecies.baseSpecies.toLowerCase(),
+        ]);
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ITEM] =
+        !!pokemonSet.item
+            ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
+            : ItemsEnum.ITEMS_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ABILITY] =
+        IndexValueFromEnum(AbilitiesEnum, pokemonSet.ability);
+
+    const moveset = pokemonSet.moves;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID0] =
+        moveset[0]
+            ? IndexValueFromEnum(MovesEnum, moveset[0])
+            : MovesEnum.MOVES_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID1] =
+        moveset[1]
+            ? IndexValueFromEnum(MovesEnum, moveset[1])
+            : MovesEnum.MOVES_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID2] =
+        moveset[2]
+            ? IndexValueFromEnum(MovesEnum, moveset[2])
+            : MovesEnum.MOVES_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__MOVEID3] =
+        moveset[3]
+            ? IndexValueFromEnum(MovesEnum, moveset[3])
+            : MovesEnum.MOVES_ENUM___NULL;
+
+    const evs = pokemonSet.evs ?? {};
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_HP] =
+        evs.hp ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_ATK] =
+        evs.atk ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_DEF] =
+        evs.def ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPA] =
+        evs.spa ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPD] =
+        evs.spd ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPE] =
+        evs.spe ?? 0;
+
+    const ivs = pokemonSet.ivs ?? {};
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_HP] =
+        ivs.hp ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_ATK] =
+        ivs.atk ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_DEF] =
+        ivs.def ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPA] =
+        ivs.spa ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPD] =
+        ivs.spd ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPE] =
+        ivs.spe ?? 0;
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__NATURE] =
+        pokemonSet.nature
+            ? IndexValueFromEnum(NaturesEnum, pokemonSet.nature)
+            : NaturesEnum.NATURES_ENUM__SERIOUS;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE] =
+        pokemonSet.teraType
+            ? IndexValueFromEnum(TypechartEnum, pokemonSet.teraType)
+            : TypechartEnum.TYPECHART_ENUM___NULL;
+    return dataArr;
+}
+
+function getArrayFromPublicPokemon(
+    candidate: Pokemon | null,
+    relativeSide: number,
+): {
+    publicData: Int16Array;
+    revealedData: Int16Array;
+} {
+    const { publicData, revealedData } =
+        relativeSide === 0 ? getUnkPokemon(0) : getUnkPokemon(1);
+
+    if (candidate === null || candidate === undefined) {
+        return { publicData, revealedData: nullPokemon };
     }
 
     let pokemon: Pokemon;
@@ -734,55 +957,13 @@ function getArrayFromPokemon(
         pokemon = candidate;
     }
 
-    // Set Evs
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_HP] =
-        pokemon.evs?.hp ?? -255;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_ATK] =
-        pokemon.evs?.atk ?? -255;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_DEF] =
-        pokemon.evs?.def ?? -255;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPA] =
-        pokemon.evs?.spa ?? -255;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPD] =
-        pokemon.evs?.spd ?? -255;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__EV_SPE] =
-        pokemon.evs?.spe ?? -255;
-
-    // Set Ivs
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_HP] =
-        pokemon.ivs?.hp ?? -31;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_ATK] =
-        pokemon.ivs?.atk ?? -31;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_DEF] =
-        pokemon.ivs?.def ?? -31;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPA] =
-        pokemon.ivs?.spa ?? -31;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPD] =
-        pokemon.ivs?.spd ?? -31;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IV_SPE] =
-        pokemon.ivs?.spe ?? -31;
-
-    // Set Nature
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NATURE] =
-        pokemon?.set?.nature === undefined
-            ? NaturesEnum.NATURES_ENUM___UNK
-            : pokemon?.set?.nature === ""
-              ? NaturesEnum.NATURES_ENUM___NULL
-              : IndexValueFromEnum(NaturesEnum, pokemon?.set?.nature);
-
     // Terastallized
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERASTALLIZED] = +(
-        pokemon.terastallized ?? false
-    );
-    const setTeraType = pokemon?.set?.teraType;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TERA_TYPE] =
-        setTeraType === undefined || setTeraType === ""
-            ? pokemon.terastallized
-                ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
-                : TypechartEnum.TYPECHART_ENUM___UNK
-            : IndexValueFromEnum(TypechartEnum, setTeraType.toString());
+    revealedData[
+        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
+    ] = pokemon.terastallized
+        ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
+        : TypechartEnum.TYPECHART_ENUM___UNK;
 
-    const baseSpecies = pokemon.species.baseSpecies.toLowerCase();
     const ability = pokemon.ability;
 
     // We take candidate item here instead of pokemons since
@@ -826,73 +1007,74 @@ function getArrayFromPokemon(
     }
     let remainingIndex: MoveIndex = moveSlots.length as MoveIndex;
 
-    if (isPublic) {
-        for (remainingIndex; remainingIndex < 4; remainingIndex++) {
-            moveIds.push(MovesEnum.MOVES_ENUM___UNK);
-            movePps.push(0);
-        }
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NUM_MOVES] = 4;
-    } else {
-        for (remainingIndex; remainingIndex < 4; remainingIndex++) {
-            moveIds.push(MovesEnum.MOVES_ENUM___NULL);
-            movePps.push(0);
-        }
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NUM_MOVES] =
-            moveSlots.length;
+    for (remainingIndex; remainingIndex < 4; remainingIndex++) {
+        moveIds.push(MovesEnum.MOVES_ENUM___UNK);
+        movePps.push(0);
     }
 
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__IS_PUBLIC] = +isPublic;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__SPECIES] =
-        IndexValueFromEnum<typeof SpeciesEnum>(SpeciesEnum, baseSpecies);
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM] = item
-        ? IndexValueFromEnum<typeof ItemsEnum>(ItemsEnum, item)
-        : ItemsEnum.ITEMS_ENUM___UNK;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ITEM_EFFECT] = itemEffect
+    revealedData[
+        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+    ] = tryFindIndex(SpeciesEnum, [
+        pokemon.baseSpecies.id,
+        pokemon.baseSpecies.baseSpecies.toLowerCase(),
+    ]);
+    revealedData[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM] =
+        item
+            ? IndexValueFromEnum<typeof ItemsEnum>(ItemsEnum, item)
+            : ItemsEnum.ITEMS_ENUM___UNK;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT
+    ] = itemEffect
         ? IndexValueFromEnum(ItemeffecttypesEnum, itemEffect)
         : ItemeffecttypesEnum.ITEMEFFECTTYPES_ENUM___NULL;
 
     const possibleAbilities = Object.values(pokemon.baseSpecies.abilities);
     if (ability) {
         if (ability === "noability" || ability === "none") {
-            dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY] =
-                AbilitiesEnum.ABILITIES_ENUM__NOABILITY;
+            revealedData[
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
+            ] = AbilitiesEnum.ABILITIES_ENUM__NOABILITY;
         } else {
             const actualAbility = IndexValueFromEnum(AbilitiesEnum, ability);
-            dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY] =
-                actualAbility;
+            revealedData[
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
+            ] = actualAbility;
         }
     } else if (possibleAbilities.length === 1) {
         const onlyAbility = possibleAbilities[0]
             ? IndexValueFromEnum(AbilitiesEnum, possibleAbilities[0])
             : AbilitiesEnum.ABILITIES_ENUM___UNK;
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY] = onlyAbility;
+        revealedData[
+            EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
+        ] = onlyAbility;
     } else {
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ABILITY] =
-            AbilitiesEnum.ABILITIES_ENUM___UNK;
+        revealedData[
+            EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
+        ] = AbilitiesEnum.ABILITIES_ENUM___UNK;
     }
 
     // We take candidate lastMove here instead of pokemons since
     // transformed does not lastMove
     if (candidate.lastMove === "") {
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__LAST_MOVE] =
-            MovesEnum.MOVES_ENUM___NULL;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE
+        ] = MovesEnum.MOVES_ENUM___NULL;
     } else if (candidate.lastMove === "switch-in") {
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__LAST_MOVE] =
-            MovesEnum.MOVES_ENUM___SWITCH_IN;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE
+        ] = MovesEnum.MOVES_ENUM___SWITCH_IN;
     } else {
-        dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__LAST_MOVE] =
-            IndexValueFromEnum(MovesEnum, candidate.lastMove);
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LAST_MOVE
+        ] = IndexValueFromEnum(MovesEnum, candidate.lastMove);
     }
 
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__GENDER] = IndexValueFromEnum(
-        GendernameEnum,
-        pokemon.gender,
-    );
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__ACTIVE] =
-        candidate.isActive() ? 1 : 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__FAINTED] = candidate.fainted
-        ? 1
-        : 0;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
+        IndexValueFromEnum(GendernameEnum, pokemon.gender);
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+        +candidate.isActive();
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
+        +candidate.fainted;
 
     // We take candidate HP here instead of pokemons since
     // transformed does not copy HP
@@ -900,43 +1082,48 @@ function getArrayFromPokemon(
     const hp = isHpBug ? 100 : candidate.hp;
     const maxHp = isHpBug ? 100 : candidate.maxhp;
     const hpRatio = hp / maxHp;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__HP] = hp;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__MAXHP] = maxHp;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__HP_RATIO] = Math.floor(
-        MAX_RATIO_TOKEN * hpRatio,
-    );
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP] = hp;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MAXHP] =
+        maxHp;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO] =
+        Math.floor(MAX_RATIO_TOKEN * hpRatio);
 
     // We take candidate status here instead of pokemons since
     // transformed does not copy status
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__STATUS] = candidate.status
-        ? IndexValueFromEnum(StatusEnum, candidate.status)
-        : StatusEnum.STATUS_ENUM___NULL;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__HAS_STATUS] =
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS] =
+        candidate.status
+            ? IndexValueFromEnum(StatusEnum, candidate.status)
+            : StatusEnum.STATUS_ENUM___NULL;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] =
         candidate.status ? 1 : 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TOXIC_TURNS] =
-        candidate.statusState.toxicTurns;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__SLEEP_TURNS] =
-        candidate.statusState.sleepTurns;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BEING_CALLED_BACK] =
-        candidate.beingCalledBack ? 1 : 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__TRAPPED] = candidate.trapped
-        ? 1
-        : 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__NEWLY_SWITCHED] =
-        candidate.newlySwitched ? 1 : 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS
+    ] = candidate.statusState.toxicTurns;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS
+    ] = candidate.statusState.sleepTurns;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
+    ] = candidate.beingCalledBack ? 1 : 0;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] =
+        candidate.trapped ? 1 : 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = candidate.newlySwitched ? 1 : 0;
 
     // We take pokemon level here
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__LEVEL] = pokemon.level;
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] =
+        pokemon.level;
 
     for (let moveIndex = 0; moveIndex < 4; moveIndex++) {
-        dataArr[
-            EntityNodeFeature[
-                `ENTITY_NODE_FEATURE__MOVEID${moveIndex as MoveIndex}`
+        revealedData[
+            EntityRevealedNodeFeature[
+                `ENTITY_REVEALED_NODE_FEATURE__MOVEID${moveIndex as MoveIndex}`
             ]
         ] = moveIds[moveIndex];
-        dataArr[
-            EntityNodeFeature[
-                `ENTITY_NODE_FEATURE__MOVEPP${moveIndex as MoveIndex}`
+        publicData[
+            EntityPublicNodeFeature[
+                `ENTITY_PUBLIC_NODE_FEATURE__MOVEPP${moveIndex as MoveIndex}`
             ]
         ] = movePps[moveIndex];
     }
@@ -949,31 +1136,36 @@ function getArrayFromPokemon(
         );
         volatiles |= BigInt(1) << BigInt(index);
     }
-    dataArr.set(
+    publicData.set(
         bigIntToInt16Array(volatiles),
-        EntityNodeFeature.ENTITY_NODE_FEATURE__VOLATILES0,
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0,
     );
 
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__SIDE] = isMySide(
-        pokemon.side.n,
-        playerIndex,
-    );
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE] =
+        relativeSide;
 
     // Only copy pokemon boosts
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ATK_VALUE] =
-        pokemon.boosts.atk ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_DEF_VALUE] =
-        pokemon.boosts.def ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPA_VALUE] =
-        pokemon.boosts.spa ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPD_VALUE] =
-        pokemon.boosts.spd ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_SPE_VALUE] =
-        pokemon.boosts.spe ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_EVASION_VALUE] =
-        pokemon.boosts.evasion ?? 0;
-    dataArr[EntityNodeFeature.ENTITY_NODE_FEATURE__BOOST_ACCURACY_VALUE] =
-        pokemon.boosts.accuracy ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = pokemon.boosts.atk ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = pokemon.boosts.def ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = pokemon.boosts.spa ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = pokemon.boosts.spd ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = pokemon.boosts.spe ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_EVASION_VALUE
+    ] = pokemon.boosts.evasion ?? 0;
+    publicData[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
+    ] = pokemon.boosts.accuracy ?? 0;
 
     // Copy candidate type change
     let typeChanged = BigInt(0b0);
@@ -989,18 +1181,19 @@ function getArrayFromPokemon(
             }
         }
     }
-    dataArr.set(
+    publicData.set(
         bigIntToInt16Array(typeChanged),
-        EntityNodeFeature.ENTITY_NODE_FEATURE__TYPECHANGE0,
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0,
     );
 
-    return dataArr;
+    return { publicData, revealedData };
 }
 
 class Edge {
     player: TrainablePlayerAI;
 
-    entityNodeData: Int16Array;
+    entityPublicData: Int16Array;
+    entityRevealedData: Int16Array;
     entityEdgeData: Int16Array;
     fieldData: Int16Array;
 
@@ -1009,7 +1202,12 @@ class Edge {
     constructor(player: TrainablePlayerAI) {
         this.player = player;
 
-        this.entityNodeData = new Int16Array(12 * numEntityNodeFeatures);
+        this.entityPublicData = new Int16Array(
+            12 * numPublicEntityNodeFeatures,
+        );
+        this.entityRevealedData = new Int16Array(
+            12 * numRevealedEntityNodeFeatures,
+        );
         this.entityEdgeData = new Int16Array(12 * numEntityEdgeFeatures);
         this.fieldData = new Int16Array(numFieldFeatures);
 
@@ -1033,7 +1231,8 @@ class Edge {
 
     clone() {
         const edge = new Edge(this.player);
-        edge.entityNodeData.set(this.entityNodeData);
+        edge.entityPublicData.set(this.entityPublicData);
+        edge.entityRevealedData.set(this.entityRevealedData);
         edge.entityEdgeData.set(this.entityEdgeData);
         edge.fieldData.set(this.fieldData);
         return edge;
@@ -1042,52 +1241,66 @@ class Edge {
     updateSideData() {
         const playerIndex = this.player.getPlayerIndex()!;
 
-        let offset = 0;
+        let publicOffset = 0;
+        let revealedOffset = 0;
+
         for (const side of this.player.publicBattle.sides) {
-            this.updateEntityData(side, playerIndex);
-            this.updateSideConditionData(side, playerIndex);
-            offset += side.team.slice(0, 6).length * numEntityNodeFeatures;
+            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+
+            this.updateEntityData(side, relativeSide);
+            this.updateSideConditionData(side, relativeSide);
+
+            const teamLength = side.team.slice(0, 6).length;
+            publicOffset += teamLength * numPublicEntityNodeFeatures;
+            revealedOffset += teamLength * numRevealedEntityNodeFeatures;
         }
         for (const side of this.player.publicBattle.sides) {
+            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+
             const team = side.team.slice(0, 6);
-            const unkPokemon = isMySide(side.n, playerIndex)
+            const { revealedData, publicData } = relativeSide
                 ? unkPokemon1
                 : unkPokemon0;
             for (let i = team.length; i < side.totalPokemon; i++) {
-                this.entityNodeData.set(unkPokemon, offset);
-                offset += numEntityNodeFeatures;
+                this.entityPublicData.set(publicData, publicOffset);
+                this.entityRevealedData.set(revealedData, revealedOffset);
+                publicOffset += numPublicEntityNodeFeatures;
+                revealedOffset += numRevealedEntityNodeFeatures;
             }
             for (let i = side.totalPokemon; i < 6; i++) {
-                this.entityNodeData.set(nullPokemon, offset);
-                offset += numEntityNodeFeatures;
+                this.entityRevealedData.set(nullPokemon, revealedOffset);
+                revealedOffset += numRevealedEntityNodeFeatures;
             }
         }
     }
 
-    updateEntityData(side: Side, playerIndex: number) {
+    updateEntityData(side: Side, relativeSide: number) {
         const team = side.team.slice(0, side.totalPokemon);
+
         for (const pokemon of team) {
-            const pokemonBuffer = getArrayFromPokemon(pokemon, playerIndex);
-            const index = this.player.eventHandler.identToIndex.get(
-                pokemon.originalIdent,
+            const { revealedData, publicData } = getArrayFromPublicPokemon(
+                pokemon,
+                relativeSide,
+            );
+            const index =
+                this.player.eventHandler.identToIndex.get(
+                    pokemon.originalIdent,
+                ) ?? this.unkEntityIndex;
+            this.entityRevealedData.set(
+                revealedData,
+                index * numRevealedEntityNodeFeatures,
+            );
+            this.entityPublicData.set(
+                publicData,
+                index * numPublicEntityNodeFeatures,
             );
             if (index === undefined) {
-                this.entityNodeData.set(
-                    pokemonBuffer,
-                    this.unkEntityIndex * numEntityNodeFeatures,
-                );
                 this.unkEntityIndex += 1;
-            } else {
-                this.entityNodeData.set(
-                    pokemonBuffer,
-                    index * numEntityNodeFeatures,
-                );
             }
         }
     }
 
-    updateSideConditionData(side: Side, playerIndex: number) {
-        const isMe = isMySide(side.n, playerIndex);
+    updateSideConditionData(side: Side, relativeSide: number) {
         let sideConditionBuffer = BigInt(0b0);
         for (const [id] of Object.entries(side.sideConditions)) {
             const featureIndex = IndexValueFromEnum(SideconditionEnum, id);
@@ -1095,13 +1308,13 @@ class Edge {
         }
         this.fieldData.set(
             bigIntToInt16Array(sideConditionBuffer),
-            isMe
+            relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS0
                 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0,
         );
         if (side.sideConditions.spikes) {
             this.setFieldFeature({
-                featureIndex: isMe
+                featureIndex: relativeSide
                     ? FieldFeature.FIELD_FEATURE__MY_SPIKES
                     : FieldFeature.FIELD_FEATURE__OPP_SPIKES,
                 value: side.sideConditions.spikes.level,
@@ -1109,7 +1322,7 @@ class Edge {
         }
         if (side.sideConditions.toxicspikes) {
             this.setFieldFeature({
-                featureIndex: isMe
+                featureIndex: relativeSide
                     ? FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES
                     : FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES,
                 value: side.sideConditions.toxicspikes.level,
@@ -1325,15 +1538,18 @@ function getVolatileStatusToken(id: string): number {
 export class EdgeBuffer {
     player: TrainablePlayerAI;
 
-    entityNodeData: Int16Array;
+    entityPublicData: Int16Array;
+    entityRevealedData: Int16Array;
     entityEdgeData: Int16Array;
     fieldData: Int16Array;
 
-    entityNodeCursor: number;
+    entityPublicCursor: number;
+    entityRevealedCursor: number;
     entityEdgeCursor: number;
     fieldCursor: number;
 
-    prevEntityNodeCursor: number;
+    prevEntityPublicCursor: number;
+    prevEntityRevealedCursor: number;
     prevEntityEdgeCursor: number;
     prevFieldCursor: number;
 
@@ -1346,19 +1562,24 @@ export class EdgeBuffer {
         const maxEdges = 4000;
         this.maxEdges = maxEdges;
 
-        this.entityNodeData = new Int16Array(
-            maxEdges * 12 * numEntityNodeFeatures,
+        this.entityPublicData = new Int16Array(
+            maxEdges * 12 * numPublicEntityNodeFeatures,
+        );
+        this.entityRevealedData = new Int16Array(
+            maxEdges * 12 * numRevealedEntityNodeFeatures,
         );
         this.entityEdgeData = new Int16Array(
             maxEdges * 12 * numEntityEdgeFeatures,
         );
         this.fieldData = new Int16Array(maxEdges * numFieldFeatures);
 
-        this.entityNodeCursor = 0;
+        this.entityPublicCursor = 0;
+        this.entityRevealedCursor = 0;
         this.entityEdgeCursor = 0;
         this.fieldCursor = 0;
 
-        this.prevEntityNodeCursor = 0;
+        this.prevEntityPublicCursor = 0;
+        this.prevEntityRevealedCursor = 0;
         this.prevEntityEdgeCursor = 0;
         this.prevFieldCursor = 0;
 
@@ -1524,15 +1745,24 @@ export class EdgeBuffer {
     }
 
     addEdge(edge: Edge) {
-        this.entityNodeData.set(edge.entityNodeData, this.entityNodeCursor);
+        this.entityPublicData.set(
+            edge.entityPublicData,
+            this.entityPublicCursor,
+        );
+        this.entityRevealedData.set(
+            edge.entityRevealedData,
+            this.entityRevealedCursor,
+        );
         this.entityEdgeData.set(edge.entityEdgeData, this.entityEdgeCursor);
         this.fieldData.set(edge.fieldData, this.fieldCursor);
 
-        this.prevEntityNodeCursor = this.entityNodeCursor;
+        this.prevEntityPublicCursor = this.entityPublicCursor;
+        this.prevEntityRevealedCursor = this.entityRevealedCursor;
         this.prevEntityEdgeCursor = this.entityEdgeCursor;
         this.prevFieldCursor = this.fieldCursor;
 
-        this.entityNodeCursor += 12 * numEntityNodeFeatures;
+        this.entityPublicCursor += 12 * numPublicEntityNodeFeatures;
+        this.entityRevealedCursor += 12 * numRevealedEntityNodeFeatures;
         this.entityEdgeCursor += 12 * numEntityEdgeFeatures;
         this.fieldCursor += numFieldFeatures;
 
@@ -1541,11 +1771,18 @@ export class EdgeBuffer {
 
     getHistory(numHistory: number = NUM_HISTORY) {
         const historyLength = Math.max(1, Math.min(this.numEdges, numHistory));
-        const historyEntityNodes = new Uint8Array(
-            this.entityNodeData.slice(
-                this.entityNodeCursor -
-                    historyLength * 12 * numEntityNodeFeatures,
-                this.entityNodeCursor,
+        const historyEntityPublic = new Uint8Array(
+            this.entityPublicData.slice(
+                this.entityPublicCursor -
+                    historyLength * 12 * numPublicEntityNodeFeatures,
+                this.entityPublicCursor,
+            ).buffer,
+        );
+        const historyEntityRevealed = new Uint8Array(
+            this.entityRevealedData.slice(
+                this.entityRevealedCursor -
+                    historyLength * 12 * numRevealedEntityNodeFeatures,
+                this.entityRevealedCursor,
             ).buffer,
         );
         const historyEntityEdges = new Uint8Array(
@@ -1562,7 +1799,8 @@ export class EdgeBuffer {
             ).buffer,
         );
         return {
-            historyEntityNodes,
+            historyEntityPublic,
+            historyEntityRevealed,
             historyEntityEdges,
             historyField,
             historyLength,
@@ -1570,20 +1808,25 @@ export class EdgeBuffer {
     }
 
     static toReadableHistory(args: {
-        historyEntityNodesBuffer: Uint8Array;
+        historyEntityPublicBuffer: Uint8Array;
+        historyEntityRevealedBuffer: Uint8Array;
         historyEntityEdgesBuffer: Uint8Array;
         historyFieldBuffer: Uint8Array;
         historyLength: number;
     }) {
         const {
-            historyEntityNodesBuffer,
+            historyEntityPublicBuffer,
+            historyEntityRevealedBuffer,
             historyEntityEdgesBuffer,
             historyFieldBuffer,
             historyLength,
         } = args;
         const historyItems = [];
-        const historyEntityNodes = new Int16Array(
-            historyEntityNodesBuffer.buffer,
+        const historyEntityPublic = new Int16Array(
+            historyEntityPublicBuffer.buffer,
+        );
+        const historyEntityRevealed = new Int16Array(
+            historyEntityRevealedBuffer.buffer,
         );
         const historyEntityEdges = new Int16Array(
             historyEntityEdgesBuffer.buffer,
@@ -1595,9 +1838,13 @@ export class EdgeBuffer {
             historyIndex < historyLength;
             historyIndex++
         ) {
-            const stepEntityNodes = historyEntityNodes.slice(
-                historyIndex * 12 * numEntityNodeFeatures,
-                (historyIndex + 1) * 12 * numEntityNodeFeatures,
+            const stepEntityPublic = historyEntityPublic.slice(
+                historyIndex * 12 * numPublicEntityNodeFeatures,
+                (historyIndex + 1) * 12 * numPublicEntityNodeFeatures,
+            );
+            const stepEntityRevealed = historyEntityRevealed.slice(
+                historyIndex * 12 * numRevealedEntityNodeFeatures,
+                (historyIndex + 1) * 12 * numRevealedEntityNodeFeatures,
             );
             const stepEntityEdges = historyEntityEdges.slice(
                 historyIndex * 12 * numEntityEdgeFeatures,
@@ -1609,11 +1856,19 @@ export class EdgeBuffer {
             );
             const oneToEleven = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
             historyItems.push({
-                entities: oneToEleven.map((memberIndex) => {
-                    const start = memberIndex * numEntityNodeFeatures;
-                    const end = (memberIndex + 1) * numEntityNodeFeatures;
-                    return entityNodeArrayToObject(
-                        stepEntityNodes.slice(start, end),
+                public: oneToEleven.map((memberIndex) => {
+                    const start = memberIndex * numPublicEntityNodeFeatures;
+                    const end = (memberIndex + 1) * numPublicEntityNodeFeatures;
+                    return entityPublicArrayToObject(
+                        stepEntityPublic.slice(start, end),
+                    );
+                }),
+                revealed: oneToEleven.map((memberIndex) => {
+                    const start = memberIndex * numRevealedEntityNodeFeatures;
+                    const end =
+                        (memberIndex + 1) * numRevealedEntityNodeFeatures;
+                    return entityRevealedArrayToObject(
+                        stepEntityRevealed.slice(start, end),
                     );
                 }),
                 edges: oneToEleven.map((memberIndex) => {
@@ -3240,92 +3495,138 @@ export class StateHandler {
         return actionHandler.build();
     }
 
-    getTeamFromSide(
-        side: Side,
-        playerIndex: number,
-        isPublic: boolean = true,
-    ): Int16Array {
-        const buffer = new Int16Array(6 * numEntityNodeFeatures);
+    getPublicTeamFromSide(playerIndex: number): {
+        publicBuffer: Int16Array;
+        revealedBuffer: Int16Array;
+    } {
+        const side = this.player.publicBattle.sides[playerIndex];
+        const publicBuffer = new Int16Array(6 * numPublicEntityNodeFeatures);
+        const revealedBuffer = new Int16Array(
+            6 * numRevealedEntityNodeFeatures,
+        );
 
-        let offset = 0;
+        let publicOffset = 0;
+        let revealedOffset = 0;
         let team = side.team.slice(0, 6);
 
-        if (!isPublic) {
-            const request = this.player.getRequest();
-            if (request === undefined) {
-                throw new Error("Request is undefined");
-            }
-            const requestPokemon = request.side?.pokemon as
-                | Protocol.Request.SideInfo["pokemon"]
-                | undefined;
-            if (requestPokemon !== undefined) {
-                const requestIdents = requestPokemon.map((x) => x.ident);
-                team = requestIdents.map(
-                    (ident) => team.find((x) => x.originalIdent === ident)!,
-                );
-                if (team.some((x) => x === undefined)) {
-                    throw new Error("Team member not found");
-                }
-            }
-        }
+        const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
 
         try {
             for (const member of team) {
-                buffer.set(
-                    getArrayFromPokemon(member, playerIndex, isPublic),
-                    offset,
+                const { publicData, revealedData } = getArrayFromPublicPokemon(
+                    member,
+                    relativeSide,
                 );
-                offset += numEntityNodeFeatures;
+                publicBuffer.set(publicData, publicOffset);
+                revealedBuffer.set(revealedData, revealedOffset);
+                publicOffset += numPublicEntityNodeFeatures;
+                revealedOffset += numRevealedEntityNodeFeatures;
             }
 
-            if (isPublic) {
-                const unkPoke = isMySide(side.n, playerIndex)
-                    ? unkPokemon1
-                    : unkPokemon0;
-                for (let i = team.length; i < side.totalPokemon; i++) {
-                    buffer.set(unkPoke, offset);
-                    offset += numEntityNodeFeatures;
-                }
+            const { publicData, revealedData } = relativeSide
+                ? unkPokemon1
+                : unkPokemon0;
+            for (let i = team.length; i < side.totalPokemon; i++) {
+                publicBuffer.set(publicData, publicOffset);
+                revealedBuffer.set(revealedData, revealedOffset);
+                publicOffset += numPublicEntityNodeFeatures;
+                revealedOffset += numRevealedEntityNodeFeatures;
             }
 
             for (let i = side.totalPokemon; i < 6; i++) {
-                buffer.set(nullPokemon, offset);
-                offset += numEntityNodeFeatures;
+                revealedBuffer.set(nullPokemon, revealedOffset);
+                revealedOffset += numRevealedEntityNodeFeatures;
             }
         } catch (error) {
             console.log(error);
             console.log(team);
-            return buffer;
+            return { publicBuffer, revealedBuffer };
         }
 
-        if (offset !== buffer.length) {
+        if (publicOffset !== publicBuffer.length) {
             throw new Error(
-                `Buffer length mismatch: expected ${buffer.length}, got ${offset}`,
+                `Buffer length mismatch: expected ${publicBuffer.length}, got ${publicOffset}`,
             );
         }
-        return buffer;
+        return { publicBuffer, revealedBuffer };
     }
 
     getPrivateTeam(playerIndex: number): Int16Array {
-        return this.getTeamFromSide(
-            this.player.privateBattle.sides[playerIndex],
-            playerIndex,
-            false,
-        );
+        let sets =
+            this.player.privateBattle.sides[playerIndex].sets ??
+            this.player.privateBattle.sides[1 - playerIndex].sets;
+        if (sets === undefined) {
+            throw new Error("Team is undefined");
+        }
+
+        const request = this.player.getRequest();
+        if (request === undefined) {
+            throw new Error("Request is undefined");
+        }
+        const requestPokemon = request.side?.pokemon as
+            | Protocol.Request.SideInfo["pokemon"]
+            | undefined;
+
+        let offset = 0;
+        const buffer = new Int16Array(6 * numPrivateEntityNodeFeatures);
+
+        if (requestPokemon === undefined) {
+            throw new Error("Request pokemon is undefined");
+        } else {
+            for (const member of requestPokemon) {
+                const name = toID(member.speciesForme);
+                const matchedSet = sets.find((set) => {
+                    const setSpecies = toID(set.species);
+                    return (
+                        setSpecies === name ||
+                        setSpecies.includes(name) ||
+                        name.includes(setSpecies)
+                    );
+                });
+                const matchedTeamMate = this.player.privateBattle.sides[
+                    playerIndex
+                ].team.find((teamMate) => {
+                    const setSpecies = toID(
+                        teamMate.baseSpecies.baseSpecies.toLowerCase(),
+                    );
+                    return (
+                        setSpecies === name ||
+                        setSpecies.includes(name) ||
+                        name.includes(setSpecies)
+                    );
+                });
+                if (matchedSet === undefined) {
+                    throw new Error(`Pokemon ${name} not found in team`);
+                }
+
+                buffer.set(
+                    getArrayFromPrivatePokemon(matchedTeamMate, matchedSet),
+                    offset,
+                );
+                offset += numPrivateEntityNodeFeatures;
+            }
+        }
+
+        return buffer;
     }
 
-    getPublicTeam(playerIndex: number): Int16Array {
-        const team = [
-            this.getTeamFromSide(
-                this.player.publicBattle.sides[playerIndex],
-                playerIndex,
-            ),
-            this.getTeamFromSide(
-                this.player.publicBattle.sides[1 - playerIndex],
-                playerIndex,
-            ),
-        ];
-        return concatenateArrays(team);
+    getPublicTeam(playerIndex: number): {
+        publicData: Int16Array;
+        revealedData: Int16Array;
+    } {
+        const publicDataArr = [];
+        const revealedDataArr = [];
+        for (const idx of [playerIndex, 1 - playerIndex]) {
+            const { publicBuffer, revealedBuffer } =
+                this.getPublicTeamFromSide(idx);
+            publicDataArr.push(publicBuffer);
+            revealedDataArr.push(revealedBuffer);
+        }
+
+        return {
+            publicData: concatenateArrays(publicDataArr),
+            revealedData: concatenateArrays(revealedDataArr),
+        };
     }
 
     getHistory(numHistory: number = NUM_HISTORY) {
@@ -3426,15 +3727,43 @@ export class StateHandler {
         return new Uint8Array(infoBuffer.buffer);
     }
 
-    static toReadableTeam(buffer: Uint8Array) {
+    static toReadablePrivate(buffer: Uint8Array) {
         const teamBuffer = new Int16Array(buffer.buffer);
         const entityDatums = [];
-        const numEntites = teamBuffer.length / numEntityNodeFeatures;
+        const numEntites = teamBuffer.length / numPrivateEntityNodeFeatures;
         for (let entityIndex = 0; entityIndex < numEntites; entityIndex++) {
-            const start = entityIndex * numEntityNodeFeatures;
-            const end = (entityIndex + 1) * numEntityNodeFeatures;
+            const start = entityIndex * numPrivateEntityNodeFeatures;
+            const end = (entityIndex + 1) * numPrivateEntityNodeFeatures;
             entityDatums.push(
-                entityNodeArrayToObject(teamBuffer.slice(start, end)),
+                entityPrivateArrayToObject(teamBuffer.slice(start, end)),
+            );
+        }
+        return entityDatums;
+    }
+
+    static toReadablePublic(buffer: Uint8Array) {
+        const teamBuffer = new Int16Array(buffer.buffer);
+        const entityDatums = [];
+        const numEntites = teamBuffer.length / numPublicEntityNodeFeatures;
+        for (let entityIndex = 0; entityIndex < numEntites; entityIndex++) {
+            const start = entityIndex * numPublicEntityNodeFeatures;
+            const end = (entityIndex + 1) * numPublicEntityNodeFeatures;
+            entityDatums.push(
+                entityPublicArrayToObject(teamBuffer.slice(start, end)),
+            );
+        }
+        return entityDatums;
+    }
+
+    static toReadableRevealed(buffer: Uint8Array) {
+        const teamBuffer = new Int16Array(buffer.buffer);
+        const entityDatums = [];
+        const numEntites = teamBuffer.length / numRevealedEntityNodeFeatures;
+        for (let entityIndex = 0; entityIndex < numEntites; entityIndex++) {
+            const start = entityIndex * numRevealedEntityNodeFeatures;
+            const end = (entityIndex + 1) * numRevealedEntityNodeFeatures;
+            entityDatums.push(
+                entityRevealedArrayToObject(teamBuffer.slice(start, end)),
             );
         }
         return entityDatums;
@@ -3458,14 +3787,14 @@ export class StateHandler {
         const fieldBuffer = new Int16Array(numFieldFeatures);
         const playerIndex = this.player.getPlayerIndex()!;
         for (const side of this.player.privateBattle.sides) {
-            const mySide = isMySide(side.n, playerIndex) === 1;
-            const sideOffset = mySide
+            const relativeSide = isMySide(side.n, playerIndex);
+            const sideOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SIDECONDITIONS0
                 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0;
-            const spikesOffset = mySide
+            const spikesOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_SPIKES
                 : FieldFeature.FIELD_FEATURE__OPP_SPIKES;
-            const toxisSpikesOffset = mySide
+            const toxisSpikesOffset = relativeSide
                 ? FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES
                 : FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES;
 
@@ -3524,12 +3853,14 @@ export class StateHandler {
         state.setActionMask(actionMask.buffer);
 
         const {
-            historyEntityNodes,
+            historyEntityPublic,
+            historyEntityRevealed,
             historyEntityEdges,
             historyField,
             historyLength,
         } = this.getHistory(NUM_HISTORY);
-        state.setHistoryEntityNodes(historyEntityNodes);
+        state.setHistoryEntityPublic(historyEntityPublic);
+        state.setHistoryEntityRevealed(historyEntityRevealed);
         state.setHistoryEntityEdges(historyEntityEdges);
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
@@ -3542,8 +3873,9 @@ export class StateHandler {
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
 
-        const publicTeam = this.getPublicTeam(playerIndex);
-        state.setPublicTeam(new Uint8Array(publicTeam.buffer));
+        const { publicData, revealedData } = this.getPublicTeam(playerIndex);
+        state.setPublicTeam(new Uint8Array(publicData.buffer));
+        state.setRevealedTeam(new Uint8Array(revealedData.buffer));
 
         state.setMoveset(this.getMoveset());
 

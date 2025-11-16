@@ -10,6 +10,7 @@ class PlayerEnvOutput(NamedTuple):
     win_reward: ArrayLike = ()
     fib_reward: ArrayLike = ()
     public_team: ArrayLike = ()
+    revealed_team: ArrayLike = ()
     field: ArrayLike = ()
 
     # Private Info
@@ -23,7 +24,8 @@ class PlayerEnvOutput(NamedTuple):
 
 
 class PlayerHistoryOutput(NamedTuple):
-    nodes: ArrayLike = ()
+    public: ArrayLike = ()
+    revealed: ArrayLike = ()
     edges: ArrayLike = ()
     field: ArrayLike = ()
 

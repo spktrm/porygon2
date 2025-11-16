@@ -115,12 +115,10 @@ class League:
         home = sender.step_count
         away = receiver.step_count
 
-        if self.games[home, away] == 0:
-            return 0.5
+        numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
+        denom = self.games[home, away] + 1
 
-        return (self.wins[home, away] + 0.5 * self.draws[home, away]) / self.games[
-            home, away
-        ]
+        return numer / denom
 
     def add_player(self, player: ParamsContainer):
         # self.remove_weakest_players()
