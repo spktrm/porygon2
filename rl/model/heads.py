@@ -44,7 +44,7 @@ class PolicyQKHead(nn.Module):
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
-        query_embedding = MLP()(query_embedding)
+        resnet = Resnet(**self.cfg.resnet.to_dict())
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
         logits = qk_logits(query_embedding, key_embeddings)

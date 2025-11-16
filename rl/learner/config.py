@@ -161,12 +161,12 @@ def create_train_state(
         target_params=player_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.player_clip_gradient),
-            optax.scale_by_adam(
+            optax.adam(
+                learning_rate=config.learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
             ),
-            optax.scale(-1.0),
         ),
         rng_key=rng,
     )
@@ -188,12 +188,12 @@ def create_train_state(
         target_params=builder_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.builder_clip_gradient),
-            optax.scale_by_adam(
+            optax.adam(
+                learning_rate=config.learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
             ),
-            optax.scale(-1.0),
         ),
     )
 

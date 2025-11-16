@@ -128,9 +128,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head = ConfigDict()
 
     for head, output_size in [
-        (cfg.value_head, (4 * entity_size, 1)),
-        (cfg.action_type_head, (4 * entity_size, 3)),
-        (cfg.wildcard_head, (4 * entity_size, 5)),
+        (cfg.value_head, 1),
+        (cfg.action_type_head, 3),
+        (cfg.wildcard_head, 5),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
@@ -211,7 +211,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.layer_sizes = (entity_size, 1)
+    cfg.value_head.logits.layer_sizes = 1
+    cfg.value_head.logits.use_layer_norm = True
 
     for head in [
         cfg.species_head,
