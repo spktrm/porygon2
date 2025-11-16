@@ -118,7 +118,7 @@ class InferenceModel:
             packed_set_indices=builder_actor_input.history.packed_set_tokens.reshape(
                 -1
             ).tolist(),
-            v=builder_agent_output.actor_output.value_head.item(),
+            v=builder_agent_output.actor_output.v.item(),
         )
 
     def step(self, timestep: PlayerActorInput):
@@ -127,7 +127,7 @@ class InferenceModel:
         agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
-            v=actor_output.value_head.item(),
+            v=actor_output.v.item(),
             action_type=ACTION_TYPE_MAPPING[
                 agent_output.actor_output.action_type_head.action_index.item()
             ],
