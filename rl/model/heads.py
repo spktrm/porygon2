@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import HeadOutput
-from rl.model.modules import MLP, PointerLogits, Resnet
+from rl.model.modules import MLP, PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -44,13 +44,10 @@ class PolicyQKHead(nn.Module):
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        qk_logits = PointerLogits(
-            keys_final_kernel_init=nn.initializers.orthogonal(1e-2),
-            **self.cfg.qk_logits.to_dict()
-        )
+        query_embedding = MLP()(query_embedding)
+        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(resnet(query_embedding), key_embeddings)
+        logits = qk_logits(query_embedding, key_embeddings)
         logits = logits / head_params.temp
 
         if valid_mask is None:
@@ -81,14 +78,11 @@ class PolicyLogitHeadInner(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, embedding: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        logits = MLP(
+    def __call__(self, x: jax.Array):
+        return MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
             **self.cfg.logits.to_dict()
-        )
-        embedding = resnet(embedding)
-        return logits(embedding)
+        )(x)
 
 
 class PolicyLogitHead(nn.Module):
@@ -133,10 +127,9 @@ class ValueLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, embedding: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        logits = MLP(**self.cfg.logits.to_dict())
-
-        embedding = resnet(embedding)
-        logits = logits(embedding)
-        return jnp.tanh(logits.squeeze(-1))
+    def __call__(self, x: jax.Array):
+        x = MLP(
+            final_kernel_init=nn.initializers.orthogonal(1e-2),
+            **self.cfg.logits.to_dict()
+        )(x)
+        return jnp.tanh(x.squeeze(-1))

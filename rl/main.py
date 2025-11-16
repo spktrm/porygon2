@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import concurrent.futures
-import functools
 import json
 import threading
 import time
@@ -10,7 +9,6 @@ import traceback
 from pprint import pprint
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import wandb.wandb_run
 
@@ -18,7 +16,6 @@ import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.environment.utils import get_ex_player_step
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
@@ -95,6 +92,7 @@ def run_eval_heuristic(
 
         except Exception:
             traceback.print_exc()
+            # Dont let bad evaluation crash the whole training loop
             continue
 
         time.sleep(5)
@@ -151,42 +149,6 @@ def main():
     player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state, from_scratch=True
     )
-
-    partial_reset = False
-    if partial_reset:
-        rng = jax.random.key(69)
-
-        ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
-            lambda x: jnp.asarray(x[:, 0]), get_ex_player_step()
-        )
-        random_player_params = functools.partial(
-            learner_player_network.init,
-            head_params=HeadParams(),
-        )(rng, ex_player_actor_inp, ex_player_actor_out)
-        new_params = player_state.params.copy()
-        new_target_params = player_state.target_params.copy()
-        for head in ["action_type_head"]:
-            new_params["params"][head] = random_player_params["params"][head]
-            new_target_params["params"][head] = random_player_params["params"][head]
-        player_state = player_state.replace(
-            params=new_params, target_params=new_target_params
-        )
-
-        # ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
-        #     lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
-        # )
-        # random_builder_params = functools.partial(
-        #     learner_builder_network.init,
-        #     head_params=HeadParams(),
-        # )(rng, ex_builder_actor_inp, ex_builder_actor_out)
-        # new_params = builder_state.params.copy()
-        # new_target_params = builder_state.target_params.copy()
-        # for head in ["value_head"]:
-        #     new_params["params"][head] = random_builder_params["params"][head]
-        #     new_target_params["params"][head] = random_builder_params["params"][head]
-        # builder_state = builder_state.replace(
-        #     params=new_params, target_params=new_target_params
-        # )
 
     wandb_run = wandb.init(
         project="pokemon-rl",
