@@ -54,6 +54,7 @@ class Porygon2LearnerConfig:
     save_interval_steps: int = 20_000
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
+    add_player_max_frames: int = int(3e8)
     league_size: int = 16
 
     # Batch iteration params
@@ -62,10 +63,11 @@ class Porygon2LearnerConfig:
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
-    learning_rate: float = 3e-5
+    learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     tau: float = 1e-3
+    mix_noise_ratio: float = 0.5
 
     # Discount params
     player_gamma: float = 1.0
@@ -73,19 +75,21 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     player_lambda: float = 0.95
-    builder_lambda: float = 0.95
+    builder_lambda: float = 0.5
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
-    clip_ppo: float = 0.3
+    clip_ppo: float = 0.2
 
     # Loss coefficients
-    player_value_loss_coef: float = 0.5
+    player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
-    player_eta: float = 0.05
+    player_kl_loss_coef: float = 0.1
+    player_entropy_loss_coef: float = 0.01
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_eta: float = 0.05
+    builder_kl_loss_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 0.05
 
     # Smogon Generation
     generation: GenT = 9
@@ -99,8 +103,10 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     apply_fn: Callable[
         [Params, PlayerActorInput, PlayerActorOutput, HeadParams], PlayerActorOutput
     ] = struct.field(pytree_node=False)
+    init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    rng_key: jax.Array = struct.field(pytree_node=False)
 
     num_steps: int = 0
     num_samples: int = 0
@@ -114,6 +120,7 @@ class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
         [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
+    init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
@@ -137,19 +144,21 @@ def create_train_state(
         lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
     )
 
-    player_params_init_fn = lambda: functools.partial(
+    player_params_init_fn = functools.partial(
         player_network.init,
         head_params=HeadParams(),
-    )(rng, ex_player_actor_inp, ex_player_actor_out)
-    builder_params_init_fn = lambda: functools.partial(
-        builder_network.init,
-        head_params=HeadParams(),
-    )(rng, ex_builder_actor_inp, ex_builder_actor_out)
-
+        actor_input=ex_player_actor_inp,
+        actor_output=ex_player_actor_out,
+    )
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
-        params=player_params_init_fn(),
-        target_params=player_params_init_fn(),
+        apply_fn=jax.vmap(
+            player_network.apply,
+            in_axes=(None, 1, 1, None),
+            out_axes=1,
+        ),
+        init_fn=player_params_init_fn,
+        params=player_params_init_fn(rng),
+        target_params=player_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.player_clip_gradient),
             optax.scale_by_adam(
@@ -157,36 +166,32 @@ def create_train_state(
                 b2=config.adam.b2,
                 eps=config.adam.eps,
             ),
-            optax.scale_by_schedule(
-                optax.linear_schedule(
-                    init_value=config.learning_rate,
-                    end_value=0.0,
-                    transition_steps=config.num_steps,
-                )
-            ),
             optax.scale(-1.0),
         ),
+        rng_key=rng,
     )
 
+    builder_params_init_fn = functools.partial(
+        builder_network.init,
+        actor_input=ex_builder_actor_inp,
+        actor_output=ex_builder_actor_out,
+        head_params=HeadParams(),
+    )
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
-            builder_network.apply, in_axes=(None, 1, 1, None), out_axes=1
+            builder_network.apply,
+            in_axes=(None, 1, 1, None),
+            out_axes=1,
         ),
-        params=builder_params_init_fn(),
-        target_params=builder_params_init_fn(),
+        init_fn=builder_params_init_fn,
+        params=builder_params_init_fn(rng),
+        target_params=builder_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.builder_clip_gradient),
             optax.scale_by_adam(
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
-            ),
-            optax.scale_by_schedule(
-                optax.linear_schedule(
-                    init_value=config.learning_rate,
-                    end_value=0.0,
-                    transition_steps=config.num_steps,
-                )
             ),
             optax.scale(-1.0),
         ),
@@ -248,6 +253,7 @@ def save_state(
             actor_steps=player_state.actor_steps,
             target_adv_mean=player_state.target_adv_mean,
             target_adv_std=player_state.target_adv_std,
+            rng=player_state.rng_key,
         )
     if builder_state is not None:
         data["builder_state"] = dict(
@@ -342,6 +348,7 @@ def load_train_state(
         actor_steps=ckpt_player_state["actor_steps"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
+        rng=ckpt_player_state["rng"],
     )
 
     builder_state = builder_state.replace(

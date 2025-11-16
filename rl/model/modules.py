@@ -16,7 +16,7 @@ class GatNet(nn.Module):
     max_edges: int = 2
 
     @nn.compact
-    def __call__(self, x: jax.Array, e: jax.Array, f: jax.Array, valid_mask: jax.Array):
+    def __call__(self, x: jax.Array, e: jax.Array, valid_mask: jax.Array):
         """
         x: (N, D) node embeddings
         e: (N, D) edge embeddings, fully connected to valid nodes
@@ -24,7 +24,6 @@ class GatNet(nn.Module):
         valid_mask: (N,) bool
         returns: (N, out_dim)
         """
-        x = nn.Dense(self.out_dim, dtype=x.dtype)(x)
 
         valid_idx = jnp.where(valid_mask, size=self.max_edges, fill_value=-1)[0]
         take_mask = valid_idx != -1  # True only for real indices
@@ -34,9 +33,7 @@ class GatNet(nn.Module):
         valid_edge = jnp.take(e, valid_idx, axis=0, mode="fill", fill_value=0)
         where_mask = take_mask  # use this everywhere downstream
 
-        messages = jnp.concatenate(
-            (valid_node, valid_edge, jnp.broadcast_to(f, valid_edge.shape)), axis=-1
-        )
+        messages = GLU()(valid_edge, valid_node)
 
         output = TransformerDecoder(
             qk_size=self.out_dim // self.num_heads,
@@ -176,8 +173,6 @@ class MultiHeadAttention(nn.Module):
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
     ) -> jax.Array:
-        # In shape hints below, we suppress the leading dims [...] for brevity.
-        # Hence e.g. [A, B] should be read in every case as [..., A, B].
         *q_leading_dims, _ = q.shape
         *kv_leading_dims, _ = kv.shape
 
@@ -238,6 +233,7 @@ class MultiHeadAttention(nn.Module):
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+        attn_logits = softcap(attn_logits, max_value=50.0)
 
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
         attn_weights = nn.softmax(attn_logits)
@@ -590,7 +586,7 @@ class Transformer(nn.Module):
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 
-    layer_sizes: int | tuple[int] | list[int]
+    layer_sizes: int | tuple[int] | list[int] = None
     use_layer_norm: bool = True
     input_activation: bool = True
     final_kernel_init: Optional[nn.initializers.Initializer] = None
@@ -606,8 +602,12 @@ class MLP(nn.Module):
         Returns:
             jax.Array: Output array.
         """
-        if isinstance(self.layer_sizes, int):
-            layer_sizes = (self.layer_sizes,)
+        layer_sizes = self.layer_sizes
+        if layer_sizes is None:
+            layer_sizes = x.shape[-1]
+
+        if isinstance(layer_sizes, int):
+            layer_sizes = (layer_sizes,)
         else:
             layer_sizes = self.layer_sizes
 
@@ -617,8 +617,9 @@ class MLP(nn.Module):
             if (i > 0) or (i == 0 and self.input_activation):
                 x = activation_fn(x)
             dense_kwargs = dict()
-            if (i == len(layer_sizes) - 1) and (self.final_kernel_init is not None):
-                dense_kwargs["kernel_init"] = self.final_kernel_init
+            if i == len(layer_sizes) - 1:
+                if self.final_kernel_init is not None:
+                    dense_kwargs["kernel_init"] = self.final_kernel_init
             x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
 
@@ -631,8 +632,8 @@ class GLU(nn.Module):
         Apply Gated Linear Unit (GLU) to the inputs.
 
         Args:
-            x (jax.Array): Input array.
-            y (jax.Array): Input array.
+            value (jax.Array): Input array.
+            gate (jax.Array): Input array.
 
         Returns:
             jax.Array: Output array.
@@ -705,7 +706,7 @@ class SumEmbeddings(nn.Module):
         ) + self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
         )
-        return VectorResblock()(aggregated.astype(self.dtype))
+        return aggregated.astype(self.dtype)
 
 
 class VectorResblock(nn.Module):
@@ -746,38 +747,46 @@ class Resnet(nn.Module):
 
 
 class PointerLogits(nn.Module):
-    num_layers_query: int = 2
-    num_layers_keys: int = 2
-    key_size: int = 64
-    use_layer_norm: bool = True
-    keys_final_kernel_init: Optional[nn.initializers.Initializer] = None
+    qk_size: int = None
+    num_heads: int = 2
+    use_bias: bool = True
+    qk_layer_norm: bool = False
 
     @nn.compact
-    def __call__(self, query: jax.Array, keys: jax.Array) -> jax.Array:
-        for i in range(self.num_layers_query):
-            if self.use_layer_norm:
-                query = layer_norm(query)
-            query = activation_fn(query)
-            if i == self.num_layers_query - 1:
-                query = nn.Dense(self.key_size, dtype=query.dtype)(query)
-            else:
-                query = nn.Dense(query.shape[-1], dtype=query.dtype)(query)
+    def __call__(self, q: jax.Array, k: jax.Array) -> jax.Array:
+        if q.ndim < 2:
+            q = jnp.expand_dims(q, axis=0)
 
-        for i in range(self.num_layers_keys):
-            if self.use_layer_norm:
-                keys = layer_norm(keys)
-            keys = activation_fn(keys)
-            if i == self.num_layers_keys - 1:
-                dense_kwargs = dict()
-                if self.keys_final_kernel_init is not None:
-                    dense_kwargs["kernel_init"] = self.keys_final_kernel_init
-                keys = nn.Dense(self.key_size, dtype=keys.dtype, **dense_kwargs)(keys)
-            else:
-                keys = nn.Dense(keys.shape[-1], dtype=keys.dtype)(keys)
+        *q_leading_dims, _ = q.shape
+        *kv_leading_dims, _ = k.shape
 
-        return jnp.einsum("d,jd->j", query, keys) / np.sqrt(self.key_size).astype(
-            query.dtype
-        )
+        qk_size = self.qk_size or k.shape[-1] // self.num_heads
+
+        q = activation_fn(layer_norm(q))
+        k = activation_fn(layer_norm(k))
+
+        query_heads = nn.Dense(
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=q.dtype,
+            name="q_proj",
+        )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
+        key_heads = nn.Dense(
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=k.dtype,
+            name="k_proj",
+        )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
+
+        if self.qk_layer_norm:
+            query_heads = layer_norm(query_heads)
+            key_heads = layer_norm(key_heads)
+
+        # Compute attention weights.
+        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+
+        return attn_logits.mean(axis=0).reshape(*kv_leading_dims)
 
 
 def one_hot_concat_jax(
