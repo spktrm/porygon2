@@ -23,8 +23,8 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 128
-    num_heads = 2
+    base_size = 64
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -128,9 +128,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head = ConfigDict()
 
     for head, output_size in [
-        (cfg.value_head, (entity_size, 1)),
-        (cfg.action_type_head, (entity_size, 3)),
-        (cfg.wildcard_head, (entity_size, 5)),
+        (cfg.value_head, 1),
+        (cfg.action_type_head, 3),
+        (cfg.wildcard_head, 5),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
@@ -141,9 +141,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     for head in [cfg.move_head, cfg.switch_head]:
         head.qk_logits = ConfigDict()
-        head.qk_logits.num_layers_query = 1
-        head.qk_logits.num_layers_keys = 2
-        head.qk_logits.use_layer_norm = True
+        head.qk_logits.qk_layer_norm = True
 
     for head in [
         cfg.value_head,
@@ -169,8 +167,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 128
-    num_heads = 2
+    base_size = 64
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -215,7 +213,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.layer_sizes = (entity_size, entity_size, 1)
+    cfg.value_head.logits.layer_sizes = 1
     cfg.value_head.logits.use_layer_norm = True
 
     for head in [
@@ -223,9 +221,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         cfg.packed_set_head,
     ]:
         head.qk_logits = ConfigDict()
-        head.qk_logits.num_layers_query = 1
-        head.qk_logits.num_layers_keys = 3
-        head.qk_logits.use_layer_norm = True
+        head.qk_logits.qk_layer_norm = True
         head.train = train
 
     return cfg
