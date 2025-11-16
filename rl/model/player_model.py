@@ -77,14 +77,14 @@ class Porygon2PlayerModel(nn.Module):
             env_step.switch_mask,
             head_params,
         )
-        value = self.value_head(state_query)
+        v = self.value_head(state_query)
 
         return PlayerActorOutput(
             action_type_head=action_type_head,
             move_head=move_head,
             switch_head=switch_head,
             wildcard_head=wildcard_head,
-            v=value,
+            v=v,
         )
 
     def __call__(

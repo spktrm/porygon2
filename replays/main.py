@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Set
 import aiohttp
 from aiohttp import ClientSession
 from tqdm import tqdm
+import argparse
 
 # Global rate limit semaphore (adjust this number as appropriate for your environment)
 RATE_LIMIT = 100
@@ -69,6 +70,7 @@ async def get_battles_ids(
     format_id: Optional[str] = None,
     page: int = 1,
     rating_threshold: Optional[int] = None,
+    limit: int = None,
 ) -> List[Dict[str, Any]]:
     """Recursively fetch battle IDs for a user/format combination starting from a page,
     filtering by rating_threshold if provided."""
@@ -87,9 +89,14 @@ async def get_battles_ids(
 
     # If more than 50 results returned, assume there's a next page
     next_page = []
-    if len(res) > 50:
+    if len(res) > 50 and len(res) < (limit or float("inf")):
         next_page = await get_battles_ids(
-            session, user, format_id, page + 1, rating_threshold
+            session,
+            user,
+            format_id,
+            page + 1,
+            rating_threshold,
+            limit=(limit or float("inf")) - len(res),
         )
 
     final = res + next_page
@@ -127,11 +134,11 @@ class Search:
                 user=player_id,
                 format_id=self.format_id,
                 rating_threshold=1000,
+                limit=self.limit - len(self.game_ids),
             )
             for battle in battles:
                 if len(self.game_ids) >= self.limit:
-                    self.is_broken = True
-                    break
+                    return
                 battle_str = json.dumps(battle, sort_keys=True)
                 if battle_str not in self.game_ids:
                     self.game_ids.add(battle_str)
@@ -144,8 +151,6 @@ class Search:
                 f"Num Games: {len(self.game_ids):,} | Frontier Size: {player_queue.qsize():,} ",
                 end="\r",
             )
-            if self.is_broken:
-                break
 
     def get_results(self) -> List[Dict[str, Any]]:
         if not self.game_ids:
@@ -171,7 +176,21 @@ class Counter:
 
 
 async def main():
-    format_id = "gen3ou"
+    parser = argparse.ArgumentParser(
+        description="Download Pokemon Showdown replays for a format"
+    )
+    parser.add_argument("format_id", type=str, help="Format id, e.g. gen3ou")
+    parser.add_argument(
+        "-l",
+        "--limit",
+        type=int,
+        default=10000,
+        help="Maximum number of games to collect (default: 10000)",
+    )
+    args = parser.parse_args()
+
+    format_id = args.format_id
+    limit = args.limit
 
     async with aiohttp.ClientSession() as session:
         leaderboard = await get_leaderboard(session, format_id)
@@ -186,7 +205,8 @@ async def main():
         for player in initlist:
             await player_queue.put(player)
 
-        search = Search(session, format_id, limit=5000)
+        # Initialize Search with parsed --limit/-l argument from top-level parser
+        search = Search(session, format_id, limit=limit)
 
         # Use a moderate number of workers
         workers = 10

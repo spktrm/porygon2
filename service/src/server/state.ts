@@ -1233,13 +1233,13 @@ class Edge {
     }
 
     updateSideData() {
-        const playerIndex = this.player.getPlayerIndex()!;
+        const playerIndex = this.player.getPlayerIndex();
 
         let publicOffset = 0;
         let revealedOffset = 0;
 
         for (const side of this.player.publicBattle.sides) {
-            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+            const relativeSide = isMySide(side.n, playerIndex);
 
             this.updateEntityData(side, relativeSide);
             this.updateSideConditionData(side, relativeSide);
@@ -1249,7 +1249,7 @@ class Edge {
             revealedOffset += teamLength * numRevealedEntityNodeFeatures;
         }
         for (const side of this.player.publicBattle.sides) {
-            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+            const relativeSide = isMySide(side.n, playerIndex);
 
             const team = side.team.slice(0, 6);
             const { revealedData, publicData } = relativeSide

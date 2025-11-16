@@ -88,7 +88,6 @@ class BuilderActorInput(NamedTuple):
 
 class BuilderActorOutput(NamedTuple):
     v: ArrayLike = ()
-
     species_head: HeadOutput = HeadOutput()
     packed_set_head: HeadOutput = HeadOutput()
 

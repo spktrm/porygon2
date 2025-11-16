@@ -128,22 +128,19 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head = ConfigDict()
 
     for head, output_size in [
-        (cfg.value_head, (entity_size, 1)),
-        (cfg.action_type_head, (entity_size, 3)),
-        (cfg.wildcard_head, (entity_size, 5)),
+        (cfg.value_head, (4 * entity_size, 1)),
+        (cfg.action_type_head, (4 * entity_size, 3)),
+        (cfg.wildcard_head, (4 * entity_size, 5)),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
-        head.logits.use_layer_norm = True
 
     cfg.move_head = ConfigDict()
     cfg.switch_head = ConfigDict()
 
     for head in [cfg.move_head, cfg.switch_head]:
         head.qk_logits = ConfigDict()
-        head.qk_logits.num_layers_query = 1
-        head.qk_logits.num_layers_keys = 2
-        head.qk_logits.use_layer_norm = True
+        head.qk_logits.qk_layer_norm = True
 
     for head in [
         cfg.value_head,
@@ -178,7 +175,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
-    cfg.temp = 1.0
 
     num_layers = 2
     num_heads = num_heads
@@ -208,24 +204,21 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     set_attributes(cfg.encoder, **transformer_kwargs)
     cfg.encoder.need_pos = True
 
-    for name in ["species_head", "packed_set_head", "value_head"]:
+    for name in ["species_head", "packed_set_head", "value_head", "entropy_head"]:
         head_cfg = ConfigDict()
         head_cfg.resnet = ConfigDict()
         head_cfg.resnet.num_resblocks = 1
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.layer_sizes = (entity_size, entity_size, 1)
-    cfg.value_head.logits.use_layer_norm = True
+    cfg.value_head.logits.layer_sizes = (entity_size, 1)
 
     for head in [
         cfg.species_head,
         cfg.packed_set_head,
     ]:
         head.qk_logits = ConfigDict()
-        head.qk_logits.num_layers_query = 1
-        head.qk_logits.num_layers_keys = 3
-        head.qk_logits.use_layer_norm = True
+        head.qk_logits.qk_layer_norm = True
         head.train = train
 
     return cfg
