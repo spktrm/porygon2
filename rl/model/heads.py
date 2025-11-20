@@ -1,4 +1,3 @@
-import math
 from typing import NamedTuple
 
 import flax.linen as nn
@@ -16,20 +15,37 @@ class HeadParams(NamedTuple):
     min_p: float = 0.0
 
 
-def sample_categorical(
-    logits: jax.Array,
-    log_policy: jax.Array,
-    mask: jax.Array,
-    rng_key: jax.random.PRNGKey,
-    min_p: float = 0,
-):
-    masked_logits = jnp.where(mask, logits, -jnp.inf)
-    if 0.0 < min_p < 1.0:
-        masked_log_policy = jnp.where(mask, log_policy, -jnp.inf)
-        max_logp = masked_log_policy.max(keepdims=True, axis=-1)
-        keep = masked_log_policy >= (max_logp + math.log(min_p))
-        masked_logits = jnp.where(keep & mask, masked_logits, -jnp.inf)
-    return jax.random.categorical(rng_key, masked_logits.astype(jnp.float32), axis=-1)
+def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float = 0):
+    # Fast path: no min_p adjustment, sample directly from logits.
+    if min_p <= 0.0:
+        return jax.random.categorical(rng_key, log_policy, axis=-1)
+
+    # Convert to probs, clamp, renormalize, then go back to log-space for sampling.
+    probs = jax.nn.softmax(log_policy, axis=-1)
+    probs = jnp.maximum(probs, min_p)
+    probs = probs / probs.sum(axis=-1, keepdims=True)
+
+    # Avoid log(0) just in case of numerical edge cases
+    log_probs = jnp.log(probs)
+
+    return jax.random.categorical(rng_key, log_probs, axis=-1)
+
+
+class HeadlessPolicyQKHead(nn.Module):
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        query_embedding: jax.Array,
+        key_embeddings: jax.Array,
+        head_params: HeadParams = HeadParams(),
+    ):
+        resnet = Resnet(**self.cfg.resnet.to_dict())
+        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
+
+        logits = qk_logits(resnet(query_embedding), key_embeddings)
+        return logits / head_params.temp
 
 
 class PolicyQKHead(nn.Module):
@@ -63,9 +79,7 @@ class PolicyQKHead(nn.Module):
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
-                logits,
-                log_policy,
-                valid_mask,
+                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
                 self.make_rng("sampling"),
                 min_p=head_params.min_p,
             )
@@ -115,9 +129,7 @@ class PolicyLogitHead(nn.Module):
             entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
-                logits,
-                log_policy,
-                valid_mask,
+                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
                 self.make_rng("sampling"),
                 min_p=head_params.min_p,
             )

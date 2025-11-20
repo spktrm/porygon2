@@ -35,11 +35,11 @@ import {
     InfoFeature,
     EntityEdgeFeature,
     FieldFeature,
-    ActionMaskFeature,
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
 } from "../../protos/features_pb";
+import { ActionEnum, WildCardEnum } from "../../protos/service_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -73,7 +73,8 @@ export const numSideConditions = Object.keys(SideconditionEnum).length;
 export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
 export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
 export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
-export const numActionMaskFeatures = Object.keys(ActionMaskFeature).length;
+export const numActionMaskFeatures = Object.keys(ActionEnum).length;
+export const numWildcardMaskFeatures = Object.keys(WildCardEnum).length;
 
 export const actionIndexMapping = {
     0: "move 1",

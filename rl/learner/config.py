@@ -43,18 +43,15 @@ GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
-    num_eval_actors: int = 5
+    num_eval_actors: int = 2
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
-
-    # False for the beginning
-    builder_start_step: int = 100_000
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
-    add_player_max_frames: int = int(3e8)
+    add_player_max_frames: int = int(3e7)
     league_size: int = 16
 
     # Batch iteration params
@@ -75,7 +72,7 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     player_lambda: float = 0.95
-    builder_lambda: float = 0.5
+    builder_lambda: float = 0.75
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.2
@@ -89,7 +86,7 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 0.05
+    builder_entropy_loss_coef: float = 0.1
 
     # Smogon Generation
     generation: GenT = 9
@@ -348,7 +345,7 @@ def load_train_state(
         actor_steps=ckpt_player_state["actor_steps"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
-        rng=ckpt_player_state["rng"],
+        rng_key=ckpt_player_state["rng"],
     )
 
     builder_state = builder_state.replace(

@@ -1,19 +1,10 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
-import {
-    EdgeBuffer,
-    generateTeamFromFormat,
-    generateTeamFromIndices,
-    getSampleTeam,
-    StateHandler,
-} from "../server/state";
-import { OneDBoolean } from "../server/utils";
-import { numActionMaskFeatures } from "../server/data";
+import { EdgeBuffer, getSampleTeam, StateHandler } from "../server/state";
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
-import { actionMaskToRandomAction } from "../server/baselines/random";
-import { get } from "axios";
+import { GetRandomAction } from "../server/baselines/random";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -65,11 +56,9 @@ async function playerController(player: TrainablePlayerAI) {
             // A request is pending, so we need to choose an action.
             const stepRequest = new StepRequest();
 
-            const actionMask = new OneDBoolean(numActionMaskFeatures);
-            actionMask.setBuffer(state.getActionMask_asU8());
-            const randomAction = actionMaskToRandomAction(actionMask);
+            const actionList = GetRandomAction({ player });
 
-            stepRequest.setAction(randomAction);
+            stepRequest.setActionsList(actionList);
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         } catch (error) {
@@ -86,12 +75,12 @@ async function runBattle() {
 
     const battleOptions = {
         p1Name: "Bot1",
-        p2Name: `baseline-eval-heuristic:4`,
+        p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou"),
-        smogonFormat: "gen9ou",
+        smogonFormat: "gen9randomdoublesbattle",
     };
-    const { p1, p2 } = createBattle(battleOptions, false);
+    const { p1, p2 } = createBattle(battleOptions, true);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);

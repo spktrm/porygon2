@@ -7,6 +7,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.service_pb2 import WildCardEnum
 from rl.learner.config import Porygon2LearnerConfig
 
 
@@ -32,28 +33,26 @@ def collect_batch_telemetry_data(
         ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
-    can_move = batch.player_transitions.env_output.action_type_mask[..., 0]
-    can_switch = batch.player_transitions.env_output.action_type_mask[..., 1]
+    can_move = batch.player_transitions.env_output.action_mask[..., :4].any(-1)
+    can_switch = batch.player_transitions.env_output.action_mask[..., 4:].any(-1)
     can_act = can_move & can_switch & player_valid
 
-    action_type_index = (
-        batch.player_transitions.agent_output.actor_output.action_type_head.action_index
+    action_index = (
+        batch.player_transitions.agent_output.actor_output.action_head.action_index
     )
     wildcard_index = (
         batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
     )
-    move_ratio = renormalize(action_type_index == 0, can_act)
-    switch_ratio = renormalize(action_type_index == 1, can_act)
+    did_move = (action_index < 4) & can_move
+    did_switch = (action_index >= 4) & can_switch
+    move_ratio = renormalize(did_move, can_act)
+    switch_ratio = renormalize(did_switch, can_act)
 
-    wildcard_turn = (
-        jnp.where(
-            (action_type_index == 0) & (wildcard_index != 0),
-            jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-            jnp.iinfo(action_type_index.dtype).max,
-        )
-        .clip(max=action_type_index.shape[0])
-        .min(axis=0)
-    )
+    wildcard_turn = jnp.where(
+        did_move & (wildcard_index != WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL),
+        jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
+        player_valid.shape[0],
+    ).min(axis=0)
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
