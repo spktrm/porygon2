@@ -44,20 +44,13 @@ from rl.utils import average
 
 def calculate_player_log_prob(
     *,
-    action_type_log_prob: jax.Array,
-    action_type_index: jax.Array,
-    move_log_prob: jax.Array,
+    action_log_prob: jax.Array,
+    action_index: jax.Array,
     wildcard_log_prob: jax.Array,
-    switch_log_prob: jax.Array,
 ):
-    is_move = action_type_index == 0
-    is_sw_or_preview = (action_type_index == 1) | (action_type_index == 2)
+    is_move = action_index < 4
 
-    return (
-        action_type_log_prob
-        + jnp.where(is_move, move_log_prob + wildcard_log_prob, 0.0)
-        + jnp.where(is_sw_or_preview, switch_log_prob, 0.0)
-    )
+    return action_log_prob + jnp.where(is_move, wildcard_log_prob, 0.0)
 
 
 def calculate_builder_log_prob(
@@ -201,32 +194,22 @@ def player_train_step(
         )
     )
 
-    actor_action_type_head = (
-        player_transitions.agent_output.actor_output.action_type_head
-    )
-    actor_move_head = player_transitions.agent_output.actor_output.move_head
+    actor_action_head = player_transitions.agent_output.actor_output.action_head
     actor_wildcard_head = player_transitions.agent_output.actor_output.wildcard_head
-    actor_switch_head = player_transitions.agent_output.actor_output.switch_head
 
     target_value_head = player_target_pred.v
-    target_action_type_head = player_target_pred.action_type_head
-    target_move_head = player_target_pred.move_head
+    target_action_head = player_target_pred.action_head
     target_wildcard_head = player_target_pred.wildcard_head
-    target_switch_head = player_target_pred.switch_head
 
     actor_log_prob = calculate_player_log_prob(
-        action_type_log_prob=actor_action_type_head.log_prob,
-        action_type_index=actor_action_type_head.action_index,
-        move_log_prob=actor_move_head.log_prob,
+        action_log_prob=actor_action_head.log_prob,
+        action_index=actor_action_head.action_index,
         wildcard_log_prob=actor_wildcard_head.log_prob,
-        switch_log_prob=actor_switch_head.log_prob,
     )
     target_log_prob = calculate_player_log_prob(
-        action_type_log_prob=target_action_type_head.log_prob,
-        action_type_index=target_action_type_head.action_index,
-        move_log_prob=target_move_head.log_prob,
+        action_log_prob=target_action_head.log_prob,
+        action_index=target_action_head.action_index,
         wildcard_log_prob=target_wildcard_head.log_prob,
-        switch_log_prob=target_switch_head.log_prob,
     )
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
@@ -268,9 +251,7 @@ def player_train_step(
         player_state.target_adv_std + 1e-8
     )
 
-    move_valid = valid & (actor_action_type_head.action_index == 0)
-    switch_valid = valid & (actor_action_type_head.action_index == 1)
-    wildcard_valid = move_valid & (
+    wildcard_valid = valid & (
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
@@ -286,17 +267,13 @@ def player_train_step(
         )
 
         pred_value_head = player_pred.v
-        pred_action_type_head = player_pred.action_type_head
-        pred_move_head = player_pred.move_head
+        pred_action_head = player_pred.action_head
         pred_wildcard_head = player_pred.wildcard_head
-        pred_switch_head = player_pred.switch_head
 
         learner_log_prob = calculate_player_log_prob(
-            action_type_log_prob=pred_action_type_head.log_prob,
-            action_type_index=pred_action_type_head.action_index,
-            move_log_prob=pred_move_head.log_prob,
+            action_log_prob=pred_action_head.log_prob,
+            action_index=pred_action_head.action_index,
             wildcard_log_prob=pred_wildcard_head.log_prob,
-            switch_log_prob=pred_switch_head.log_prob,
         )
 
         # Calculate the log ratios.
@@ -318,12 +295,9 @@ def player_train_step(
 
         loss_v = mse_value_loss(pred_v=pred_value_head, target_v=target_v, valid=valid)
 
-        action_type_head_entropy = average(pred_action_type_head.entropy, valid)
-        move_head_entropy = average(pred_move_head.entropy, move_valid)
-        switch_head_entropy = average(pred_switch_head.entropy, switch_valid)
+        action_head_entropy = average(pred_action_head.entropy, valid)
         wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
-
-        loss_entropy = -average(learner_log_prob, valid)  # Estimator for entropy
+        loss_entropy = action_head_entropy + wildcard_head_entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -355,9 +329,7 @@ def player_train_step(
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_kl,
             # Per head entropies
-            player_action_type_entropy=action_type_head_entropy,
-            player_move_entropy=move_head_entropy,
-            player_switch_entropy=switch_head_entropy,
+            player_action_entropy=action_head_entropy,
             player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
@@ -801,35 +773,48 @@ class Learner:
 
     def mix_noise(self):
         print("Mixing noise into parameters.")
-        noise_rng_key, noise_rng_subkey = jax.random.split(self.player_state.rng_key)
-
-        noise_player_params = self.player_state.init_fn(noise_rng_subkey)
-        self.player_state = self.player_state.replace(
-            params=optax.incremental_update(
-                self.player_state.params,
-                noise_player_params,
-                self.learner_config.mix_noise_ratio,
-            ),
-            target_params=optax.incremental_update(
-                self.player_state.target_params,
-                noise_player_params,
-                self.learner_config.mix_noise_ratio,
-            ),
-            rng=noise_rng_key,
+        base_rng, player_noise_key, builder_noise_key = jax.random.split(
+            self.player_state.rng_key, 3
         )
 
-        noise_builder_params = self.builder_state.init_fn(noise_rng_subkey)
+        noise_player_params = self.player_state.init_fn(player_noise_key)
+        new_player_params = optax.incremental_update(
+            noise_player_params,
+            self.player_state.target_params,
+            self.learner_config.mix_noise_ratio,
+        )
+        self.player_state = self.player_state.replace(
+            params=new_player_params, target_params=new_player_params, rng_key=base_rng
+        )
+
+        noise_builder_params = self.builder_state.init_fn(builder_noise_key)
+        new_builder_params = optax.incremental_update(
+            noise_builder_params,
+            self.builder_state.target_params,
+            self.learner_config.mix_noise_ratio,
+        )
         self.builder_state = self.builder_state.replace(
-            params=optax.incremental_update(
-                self.builder_state.params,
-                noise_builder_params,
-                self.learner_config.mix_noise_ratio,
-            ),
-            target_params=optax.incremental_update(
-                self.builder_state.target_params,
-                noise_builder_params,
-                self.learner_config.mix_noise_ratio,
-            ),
+            params=new_builder_params, target_params=new_builder_params
+        )
+
+    def update_main_player(self):
+        new_params = ParamsContainer(
+            frame_count=self.player_state.actor_steps.item(),
+            step_count=MAIN_KEY,  # For main agent
+            player_params=self.player_state.params,
+            builder_params=self.builder_state.params,
+        )
+        self.league.update_main_player(new_params)
+
+    def add_new_player(self):
+        num_steps = np.array(self.player_state.num_steps).item()
+        self.league.add_player(
+            ParamsContainer(
+                frame_count=self.player_state.actor_steps.item(),
+                step_count=num_steps,
+                player_params=self.player_state.params,
+                builder_params=self.builder_state.params,
+            )
         )
 
     def train(self):
@@ -907,13 +892,7 @@ class Learner:
 
                 self.wandb_run.log(training_logs)
 
-                new_params = ParamsContainer(
-                    frame_count=self.player_state.actor_steps.item(),
-                    step_count=MAIN_KEY,  # For main agent
-                    player_params=self.player_state.params,
-                    builder_params=self.builder_state.params,
-                )
-                self.league.update_main_player(new_params)
+                self.update_main_player()
 
                 if (num_steps % self.learner_config.save_interval_steps) == 0:
                     save_train_state(
@@ -926,15 +905,15 @@ class Learner:
 
                 if self.ready_to_add_player():
                     print("Adding new player to league @ step", num_steps)
-                    self.league.add_player(
-                        ParamsContainer(
-                            frame_count=new_params.frame_count,
-                            step_count=num_steps,
-                            player_params=new_params.player_params,
-                            builder_params=new_params.builder_params,
-                        )
-                    )
+                    self.add_new_player()
                     self.mix_noise()
+                    self.update_main_player()
+                    # Drain the device queue to avoid training on old data
+                    for _ in range(
+                        self.learner_config.target_replay_ratio
+                        * self.learner_config.batch_size
+                    ):
+                        batch = self.device_q.get()
 
             except Exception as e:
                 logger.error(f"Learner train step failed: {e}")

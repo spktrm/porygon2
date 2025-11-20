@@ -985,8 +985,8 @@ class Encoder(nn.Module):
                 env_step.field, public_team_side_token
             )
 
-            move_mask = env_step.action_type_mask[0] * env_step.move_mask
-            switch_mask = env_step.action_type_mask[1] * env_step.switch_mask
+            move_mask = env_step.action_mask[:4]
+            switch_mask = env_step.action_mask[4:]
 
             move_embeddings = self._embed_moves(env_step.moveset, move_mask)
             switch_embeddings, switch_mask = self._embed_private_entities(

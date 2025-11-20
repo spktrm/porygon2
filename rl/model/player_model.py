@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
+    HeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
@@ -15,9 +16,20 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import HeadParams, PolicyLogitHead, PolicyQKHead, ValueLogitHead
+from rl.model.heads import (
+    HeadlessPolicyQKHead,
+    HeadParams,
+    PolicyLogitHead,
+    ValueLogitHead,
+    sample_categorical,
+)
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import (
+    get_most_recent_file,
+    get_num_params,
+    legal_log_policy,
+    legal_policy,
+)
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -29,14 +41,38 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.action_type_head = PolicyLogitHead(self.cfg.action_type_head)
-        self.move_head = PolicyQKHead(self.cfg.move_head)
-        self.switch_head = PolicyQKHead(self.cfg.switch_head)
+        self.move_head = HeadlessPolicyQKHead(self.cfg.move_head)
+        self.switch_head = HeadlessPolicyQKHead(self.cfg.switch_head)
         self.wildcard_merge = SumEmbeddings(
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )
         self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
         self.value_head = ValueLogitHead(self.cfg.value_head)
+
+    def post_head(
+        self,
+        logits: jax.Array,
+        valid_mask: jax.Array,
+        head: HeadOutput,
+        train: bool,
+        min_p: float,
+    ):
+        log_policy = legal_log_policy(logits, valid_mask)
+
+        entropy = ()
+        if train:
+            action_index = head.action_index
+            policy = legal_policy(logits, valid_mask)
+            entropy = -jnp.sum(policy * log_policy, axis=-1)
+        else:
+            action_index = sample_categorical(
+                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
+                self.make_rng("sampling"),
+                min_p=min_p,
+            )
+
+        log_prob = jnp.take(log_policy, action_index, axis=-1)
+        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
 
     def get_head_outputs(
         self,
@@ -47,21 +83,22 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        action_type_head = self.action_type_head(
-            state_query,
-            actor_output.action_type_head,
-            env_step.action_type_mask,
-            head_params,
+        move_logits = self.move_head(state_query, contextual_moves, head_params)
+        switch_logits = self.switch_head(state_query, contextual_switches, head_params)
+        action_logits = jnp.concatenate([move_logits, switch_logits], axis=-1)
+
+        action_head = self.post_head(
+            action_logits,
+            env_step.action_mask,
+            actor_output.action_head,
+            train=self.cfg.train,
+            min_p=head_params.min_p,
         )
-        move_head = self.move_head(
-            state_query,
-            contextual_moves,
-            actor_output.move_head,
-            env_step.move_mask,
-            head_params,
-        )
+
         selected_move_embedding = jnp.take(
-            contextual_moves, move_head.action_index, axis=0
+            contextual_moves,
+            action_head.action_index.clip(max=move_logits.shape[-1] - 1),
+            axis=0,
         )
         wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
         wildcard_head = self.wildcard_head(
@@ -70,19 +107,10 @@ class Porygon2PlayerModel(nn.Module):
             env_step.wildcard_mask,
             head_params,
         )
-        switch_head = self.switch_head(
-            state_query,
-            contextual_switches,
-            actor_output.switch_head,
-            env_step.switch_mask,
-            head_params,
-        )
         value = self.value_head(state_query)
 
         return PlayerActorOutput(
-            action_type_head=action_type_head,
-            move_head=move_head,
-            switch_head=switch_head,
+            action_head=action_head,
             wildcard_head=wildcard_head,
             v=value,
         )

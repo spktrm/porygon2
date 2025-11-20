@@ -10,7 +10,8 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 import * as path from "path";
 import { TrainablePlayerAI } from "../server/runner";
 import {
-    Action as MultiDiscreteAction,
+    ActionEnum,
+    Action as ProtoAction,
     StepRequest,
 } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
@@ -188,13 +189,10 @@ class Battle {
                 const stepResponse = await response.json();
                 const stepRequest = new StepRequest();
 
-                const action = new MultiDiscreteAction();
-                action.setActionType(stepResponse.action_type);
-                action.setMoveSlot(stepResponse.move_slot);
-                action.setWildcardSlot(stepResponse.wildcard_slot);
-                action.setSwitchSlot(stepResponse.switch_slot);
+                const action = new ProtoAction();
+                action.setAction(ActionEnum.ACTION_ENUM__DEFAULT);
 
-                stepRequest.setAction(action);
+                stepRequest.setActionsList([action]);
                 stepRequest.setRqid(state.getRqid());
                 this.player.submitStepRequest(stepRequest);
             } else {

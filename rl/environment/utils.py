@@ -7,7 +7,7 @@ import rlax
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
-    NUM_ACTION_MASK_FEATURES,
+    NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
     NUM_ENTITY_PUBLIC_FEATURES,
@@ -16,6 +16,7 @@ from rl.environment.data import (
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
     NUM_SPECIES,
+    NUM_WILDCARD_FEATURES,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -29,12 +30,8 @@ from rl.environment.interfaces import (
     PlayerHiddenInfo,
     PlayerHistoryOutput,
 )
-from rl.environment.protos.features_pb2 import (
-    ActionMaskFeature,
-    FieldFeature,
-    InfoFeature,
-)
-from rl.environment.protos.service_pb2 import EnvironmentState, ResetRequest
+from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState, ResetRequest
 
 T = TypeVar("T")
 
@@ -77,46 +74,34 @@ def clip_history(
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def get_action_mask(state: EnvironmentState):
+def get_action_mask(state: EnvironmentState, num_active: int):
     buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)
-    return mask[:NUM_ACTION_MASK_FEATURES].astype(bool)
+    return np.take(
+        mask[: num_active * NUM_ACTION_FEATURES].astype(bool),
+        [
+            ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
+            ActionEnum.ACTION_ENUM__SWITCH_1,
+            ActionEnum.ACTION_ENUM__SWITCH_2,
+            ActionEnum.ACTION_ENUM__SWITCH_3,
+            ActionEnum.ACTION_ENUM__SWITCH_4,
+            ActionEnum.ACTION_ENUM__SWITCH_5,
+            ActionEnum.ACTION_ENUM__SWITCH_6,
+        ],
+    ).reshape(10)
 
 
-def get_action_type_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_move_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_4
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_switch_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_tera_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
+def get_tera_mask(state: EnvironmentState, num_active: int):
+    buffer = np.frombuffer(state.wildcard_mask, dtype=np.uint8)
+    mask = np.unpackbits(buffer, axis=-1)
+    return (
+        mask[: num_active * NUM_WILDCARD_FEATURES]
+        .astype(bool)
+        .reshape(NUM_WILDCARD_FEATURES)
+    )
 
 
 def process_state(
@@ -188,7 +173,7 @@ def process_state(
     # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
     fib_reward = fib_reward_token / MAX_RATIO_TOKEN
 
-    action_mask = get_action_mask(state)
+    num_active = info[InfoFeature.INFO_FEATURE__NUM_ACTIVE].item()
 
     env_step = PlayerEnvOutput(
         info=info,
@@ -200,10 +185,8 @@ def process_state(
         revealed_team=revealed_team,
         field=field,
         moveset=moveset,
-        action_type_mask=get_action_type_mask(action_mask),
-        move_mask=get_move_mask(action_mask),
-        switch_mask=get_switch_mask(action_mask),
-        wildcard_mask=get_tera_mask(action_mask),
+        action_mask=get_action_mask(state, num_active),
+        wildcard_mask=get_tera_mask(state, num_active),
     )
     history_step = PlayerHistoryOutput(
         public=history_entity_public,
@@ -251,10 +234,8 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
         PlayerActorInput(env=env, history=history, hidden=hidden),
         PlayerActorOutput(
             v=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            action_type_head=HeadOutput(action_index=env.action_type_mask.argmax(-1)),
-            move_head=HeadOutput(action_index=env.move_mask.argmax(-1)),
+            action_head=HeadOutput(action_index=env.action_mask.argmax(-1)),
             wildcard_head=HeadOutput(action_index=env.wildcard_mask.argmax(-1)),
-            switch_head=HeadOutput(action_index=env.switch_mask.argmax(-1)),
         ),
     )
 

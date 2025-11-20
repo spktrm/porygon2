@@ -310,7 +310,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = True, generation: int = 9):
+def main(debug: bool = False, generation: int = 9):
     get_learner_config()
 
     actor_model_config = get_builder_model_config(generation, train=False)
@@ -339,7 +339,7 @@ def main(debug: bool = True, generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        builder_head_params=HeadParams(temp=0.8),
+        # builder_head_params=HeadParams(temp=0.8),
     )
 
     builder_env = TeamBuilderEnvironment(

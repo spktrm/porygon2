@@ -17,9 +17,7 @@ class PlayerEnvOutput(NamedTuple):
     moveset: ArrayLike = ()
     private_team: ArrayLike = ()
 
-    action_type_mask: ArrayLike = ()
-    move_mask: ArrayLike = ()
-    switch_mask: ArrayLike = ()
+    action_mask: ArrayLike = ()
     wildcard_mask: ArrayLike = ()
 
 
@@ -50,9 +48,7 @@ class HeadOutput(NamedTuple):
 class PlayerActorOutput(NamedTuple):
     v: ArrayLike = ()
 
-    action_type_head: HeadOutput = HeadOutput()
-    move_head: HeadOutput = HeadOutput()
-    switch_head: HeadOutput = HeadOutput()
+    action_head: HeadOutput = HeadOutput()
     wildcard_head: HeadOutput = HeadOutput()
 
 

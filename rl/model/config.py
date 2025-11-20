@@ -3,6 +3,8 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.data import NUM_WILDCARD_FEATURES
+
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
     """
@@ -112,30 +114,24 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
     cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
 
-    cfg.encoder.query_pool = ConfigDict()
-    set_attributes(cfg.encoder.query_pool, **transformer_decoder_kwargs)
-    cfg.encoder.query_pool.num_layers = 1
-    cfg.encoder.query_pool.need_pos = False
-
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
     cfg.encoder.action_entity_decoder.num_layers = 2
     cfg.encoder.action_entity_decoder.need_pos = False
 
     # Policy Head Configuration
-    cfg.action_type_head = ConfigDict()
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
 
     for head, output_size in [
         (cfg.value_head, 1),
-        (cfg.action_type_head, 3),
-        (cfg.wildcard_head, 5),
+        (cfg.wildcard_head, NUM_WILDCARD_FEATURES),
     ]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
         head.logits.use_layer_norm = True
 
+    cfg.train = train
     cfg.move_head = ConfigDict()
     cfg.switch_head = ConfigDict()
 
@@ -145,7 +141,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     for head in [
         cfg.value_head,
-        cfg.action_type_head,
         cfg.move_head,
         cfg.switch_head,
         cfg.wildcard_head,
@@ -154,7 +149,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         head.resnet.num_resblocks = 1
 
     for head in [
-        cfg.action_type_head,
         cfg.move_head,
         cfg.switch_head,
         cfg.wildcard_head,

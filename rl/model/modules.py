@@ -784,9 +784,10 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = attn_logits.sum(axis=0)  # sum over heads
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        return attn_logits.mean(axis=0).reshape(*kv_leading_dims)
+        return attn_logits.reshape(*kv_leading_dims)
 
 
 def one_hot_concat_jax(
