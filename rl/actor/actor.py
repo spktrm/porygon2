@@ -4,6 +4,7 @@ import numpy as np
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
+    BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
     PlayerAgentOutput,
@@ -11,7 +12,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.service_pb2 import Action, ActionEnum
-from rl.environment.utils import clip_history, split_rng
+from rl.environment.utils import clip_history, get_ex_builder_step, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
@@ -243,10 +244,6 @@ class Actor:
         )
 
         # Create empty builder trajectory (not used in controlled eval)
-        from rl.environment.utils import get_ex_builder_step
-        from rl.environment.interfaces import BuilderHistoryOutput
-        import numpy as np
-        
         builder_transition = get_ex_builder_step()
         builder_unroll_length = self._builder_env._max_trajectory_length + 1
         builder_trajectory = jax.tree.map(

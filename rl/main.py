@@ -17,6 +17,7 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
+from rl.learner.league import MAIN_KEY
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -106,8 +107,6 @@ def run_controlled_eval(
     wandb_run: wandb.wandb_run.Run,
 ):
     """Runs controlled evaluation with fixed teams to measure pure playing skill."""
-    from rl.learner.league import MAIN_KEY
-    
     learner = player_actor._learner
     step_count = np.array(learner.player_state.num_steps).item()
     
@@ -252,6 +251,8 @@ def main():
         max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors + learner_config.num_controlled_eval_actors)
     ) as executor:
 
+        rng_seed_counter = 0
+        
         for game_id in range(learner_config.num_actors // 2):
             actors = [
                 Actor(
@@ -262,10 +263,11 @@ def main():
                     ),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
-                    rng_seed=len(actor_threads),
+                    rng_seed=rng_seed_counter + player_id,
                 )
                 for player_id in range(2)
             ]
+            rng_seed_counter += 2
             args = (*actors, executor, stop_signal)
             actor_threads.append(
                 threading.Thread(
@@ -284,8 +286,9 @@ def main():
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
-                rng_seed=len(actor_threads),
+                rng_seed=rng_seed_counter,
             )
+            rng_seed_counter += 1
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
                 threading.Thread(
@@ -302,8 +305,9 @@ def main():
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
-                rng_seed=len(actor_threads),
+                rng_seed=rng_seed_counter,
             )
+            rng_seed_counter += 1
             opponent_actor = Actor(
                 agent=eval_agent,
                 env=SinglePlayerSyncEnvironment(
@@ -312,8 +316,9 @@ def main():
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
-                rng_seed=len(actor_threads) + 1,
+                rng_seed=rng_seed_counter,
             )
+            rng_seed_counter += 1
             args = (player_actor, opponent_actor, executor, stop_signal, wandb_run)
             actor_threads.append(
                 threading.Thread(
