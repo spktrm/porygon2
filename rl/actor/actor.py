@@ -191,6 +191,76 @@ class Actor:
             self._learner.enqueue_traj(act_out)
         return act_out
 
+    def unroll_with_fixed_team(
+        self,
+        rng_key: jax.Array,
+        frame_count: int,
+        player_params: Params,
+        species_tokens: list[int],
+        packed_set_tokens: list[int],
+    ) -> Trajectory:
+        """Run unroll with a fixed team (for controlled evaluation)."""
+        player_subkeys = split_rng(rng_key, self._unroll_length)
+
+        player_traj = []
+
+        # Reset the player environment with fixed team.
+        player_actor_input = self._player_env.reset(
+            species_tokens,
+            packed_set_tokens,
+        )
+        # Extract opponent hidden info to better inform builder value function.
+        player_hidden = player_actor_input.hidden
+
+        # Rollout the player environment.
+        for player_step_index in range(player_subkeys.shape[0]):
+            player_actor_input_clipped = self.clip_actor_history(player_actor_input)
+            player_agent_output = self._agent.step_player(
+                player_subkeys[player_step_index],
+                player_params,
+                player_actor_input_clipped,
+            )
+            player_transition = PlayerTransition(
+                env_output=player_actor_input_clipped.env,
+                agent_output=player_agent_output,
+            )
+            player_traj.append(player_transition)
+            if player_actor_input_clipped.env.done.item():
+                break
+
+            action = self.player_agent_output_to_action(player_agent_output)
+            player_actor_input = self._player_env.step(action)
+
+        if len(player_traj) < self._unroll_length:
+            player_traj += [player_transition] * (
+                self._unroll_length - len(player_traj)
+            )
+
+        # Pack the trajectory and reset parent state.
+        player_trajectory = jax.device_get(player_traj)
+        player_trajectory: PlayerTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *player_trajectory
+        )
+
+        # Create empty builder trajectory (not used in controlled eval)
+        from rl.environment.utils import get_ex_builder_step
+        builder_transition = get_ex_builder_step()
+        builder_unroll_length = self._builder_env._max_trajectory_length + 1
+        builder_trajectory = jax.tree.map(
+            lambda x: np.tile(x, (builder_unroll_length,) + (1,) * x.ndim),
+            builder_transition,
+        )
+
+        trajectory = Trajectory(
+            builder_transitions=builder_trajectory,
+            builder_history=player_hidden,  # Reuse player_hidden as placeholder
+            player_transitions=player_trajectory,
+            player_history=player_actor_input.history,
+            player_hidden=player_hidden,
+        )
+
+        return promote_map(trajectory)
+
     def pull_main_player(self) -> ParamsContainer:
         league = self._learner.league
         return league.get_main_player()

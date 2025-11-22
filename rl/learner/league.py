@@ -47,6 +47,12 @@ class League:
         self.draws = collections.defaultdict(lambda: 0)
         self.losses = collections.defaultdict(lambda: 0)
         self.games = collections.defaultdict(lambda: 0)
+        
+        # Track controlled matches where teams are swapped/fixed
+        self.controlled_wins = collections.defaultdict(lambda: 0)
+        self.controlled_draws = collections.defaultdict(lambda: 0)
+        self.controlled_losses = collections.defaultdict(lambda: 0)
+        self.controlled_games = collections.defaultdict(lambda: 0)
 
     def print_players(self):
         print("League initialized with num players: ", len(self.players.keys()))
@@ -61,6 +67,10 @@ class League:
                 draws=self.draws,
                 losses=self.losses,
                 games=self.games,
+                controlled_wins=self.controlled_wins,
+                controlled_draws=self.controlled_draws,
+                controlled_losses=self.controlled_losses,
+                controlled_games=self.controlled_games,
                 max_players=self.league_size,
                 decay=self.decay,
             )
@@ -83,6 +93,10 @@ class League:
         league.draws = state["draws"]
         league.losses = state["losses"]
         league.games = state["games"]
+        league.controlled_wins = state.get("controlled_wins", collections.defaultdict(lambda: 0))
+        league.controlled_draws = state.get("controlled_draws", collections.defaultdict(lambda: 0))
+        league.controlled_losses = state.get("controlled_losses", collections.defaultdict(lambda: 0))
+        league.controlled_games = state.get("controlled_games", collections.defaultdict(lambda: 0))
         league.print_players()
         return league
 
@@ -119,6 +133,37 @@ class League:
         denom = self.games[home, away] + 1
 
         return numer / denom
+
+    def _controlled_win_rate(self, sender: ParamsContainer, receiver: ParamsContainer) -> float:
+        """Get win rate for controlled matches (fixed/swapped teams)."""
+        home = sender.step_count
+        away = receiver.step_count
+
+        numer = self.controlled_wins[home, away] + 0.5 * self.controlled_draws[home, away] + 0.5
+        denom = self.controlled_games[home, away] + 1
+
+        return numer / denom
+
+    def get_controlled_winrate(
+        self,
+        match: tuple[
+            ParamsContainer | list[ParamsContainer],
+            ParamsContainer | list[ParamsContainer],
+        ],
+    ) -> np.ndarray:
+        """Get win rates for controlled matches where teams are fixed."""
+        home, away = match
+
+        if isinstance(home, ParamsContainer):
+            home = [home]
+        if isinstance(away, ParamsContainer):
+            away = [away]
+
+        win_rates = np.array([[self._controlled_win_rate(h, a) for a in away] for h in home])
+        if win_rates.shape[0] == 1 or win_rates.shape[1] == 1:
+            win_rates = win_rates.reshape(-1)
+
+        return win_rates
 
     def add_player(self, player: ParamsContainer):
         # self.remove_weakest_players()
@@ -158,6 +203,35 @@ class League:
             else:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
+
+    def update_controlled_payoff(
+        self, sender: ParamsContainer, receiver: ParamsContainer, payoff: float
+    ):
+        """Update payoff for controlled matches where teams are fixed."""
+        with self.lock:
+            # Ignore updates for players that may have been removed
+            home = sender.step_count
+            away = receiver.step_count
+
+            if home not in self.players or away not in self.players:
+                return
+
+            for stats in (self.controlled_games, self.controlled_wins, self.controlled_draws, self.controlled_losses):
+                stats[home, away] *= 1 - self.decay
+                stats[away, home] *= 1 - self.decay
+
+            self.controlled_games[home, away] += 1
+            self.controlled_games[away, home] += 1
+
+            if payoff > 0:
+                self.controlled_wins[home, away] += 1
+                self.controlled_losses[away, home] += 1
+            elif payoff == 0:
+                self.controlled_draws[home, away] += 1
+                self.controlled_draws[away, home] += 1
+            else:
+                self.controlled_losses[home, away] += 1
+                self.controlled_wins[away, home] += 1
 
     def remove_weakest_players(self) -> ParamsContainer:
         with self.lock:

@@ -43,6 +43,7 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 0
+    num_controlled_eval_actors: int = 0
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
 
