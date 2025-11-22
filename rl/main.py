@@ -111,10 +111,9 @@ def run_controlled_eval(
     learner = player_actor._learner
     step_count = np.array(learner.player_state.num_steps).item()
     
-    # Generate a fixed team for controlled evaluation
-    # This team will be used by both players to isolate playing skill
-    fixed_species = [0, 1, 2, 3, 4, 5]  # Example team - can be customized
-    fixed_sets = [0, 0, 0, 0, 0, 0]
+    # Get fixed team from config
+    fixed_species = list(learner.learner_config.controlled_eval_fixed_species)
+    fixed_sets = list(learner.learner_config.controlled_eval_fixed_sets)
     
     while not stop_signal[0]:
         try:

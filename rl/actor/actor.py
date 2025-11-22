@@ -244,16 +244,25 @@ class Actor:
 
         # Create empty builder trajectory (not used in controlled eval)
         from rl.environment.utils import get_ex_builder_step
+        from rl.environment.interfaces import BuilderHistoryOutput
+        import numpy as np
+        
         builder_transition = get_ex_builder_step()
         builder_unroll_length = self._builder_env._max_trajectory_length + 1
         builder_trajectory = jax.tree.map(
             lambda x: np.tile(x, (builder_unroll_length,) + (1,) * x.ndim),
             builder_transition,
         )
+        
+        # Create proper empty builder history
+        builder_history = BuilderHistoryOutput(
+            species_tokens=np.array(species_tokens, dtype=np.int32),
+            packed_set_tokens=np.array(packed_set_tokens, dtype=np.int32),
+        )
 
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
-            builder_history=player_hidden,  # Reuse player_hidden as placeholder
+            builder_history=builder_history,
             player_transitions=player_trajectory,
             player_history=player_actor_input.history,
             player_hidden=player_hidden,

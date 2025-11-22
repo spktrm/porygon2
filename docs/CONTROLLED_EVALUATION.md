@@ -35,18 +35,22 @@ In your learner config, set `num_controlled_eval_actors`:
 ```python
 learner_config = Porygon2LearnerConfig(
     num_controlled_eval_actors=1,  # Enable controlled evaluation
-    # ... other config
+    # Optionally customize the fixed team used for evaluation:
+    controlled_eval_fixed_species=(0, 1, 2, 3, 4, 5),  # Pokemon species indices
+    controlled_eval_fixed_sets=(0, 0, 0, 0, 0, 0),     # Moveset indices
 )
 ```
 
 #### Customize the Fixed Team
 
-Edit the fixed team in `rl/main.py` in the `run_controlled_eval` function:
+You can customize the fixed team directly in the config (recommended):
 
 ```python
-# Generate a fixed team for controlled evaluation
-fixed_species = [0, 1, 2, 3, 4, 5]  # Replace with desired Pokemon species indices
-fixed_sets = [0, 0, 0, 0, 0, 0]     # Replace with desired moveset indices
+learner_config = Porygon2LearnerConfig(
+    num_controlled_eval_actors=1,
+    controlled_eval_fixed_species=(10, 25, 50, 75, 100, 125),  # Your team
+    controlled_eval_fixed_sets=(1, 2, 0, 1, 0, 2),
+)
 ```
 
 #### Interpret Results

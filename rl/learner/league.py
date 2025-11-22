@@ -48,7 +48,7 @@ class League:
         self.losses = collections.defaultdict(lambda: 0)
         self.games = collections.defaultdict(lambda: 0)
         
-        # Track controlled matches where teams are swapped/fixed
+        # Track controlled matches where teams are fixed
         self.controlled_wins = collections.defaultdict(lambda: 0)
         self.controlled_draws = collections.defaultdict(lambda: 0)
         self.controlled_losses = collections.defaultdict(lambda: 0)

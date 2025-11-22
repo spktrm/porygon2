@@ -54,6 +54,10 @@ class Porygon2LearnerConfig:
     add_player_max_frames: int = int(3e7)
     league_size: int = 16
 
+    # Controlled evaluation params
+    controlled_eval_fixed_species: tuple[int, ...] = (0, 1, 2, 3, 4, 5)
+    controlled_eval_fixed_sets: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
+
     # Batch iteration params
     batch_size: int = 4
     target_replay_ratio: float = 4
