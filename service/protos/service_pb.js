@@ -22,6 +22,7 @@ var global =
     Function('return this')();
 
 goog.exportSymbol('proto.servicev2.Action', null, global);
+goog.exportSymbol('proto.servicev2.ActionEnum', null, global);
 goog.exportSymbol('proto.servicev2.ClientRequest', null, global);
 goog.exportSymbol('proto.servicev2.ClientRequest.MessageTypeCase', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentResponse', null, global);
@@ -30,6 +31,7 @@ goog.exportSymbol('proto.servicev2.EnvironmentTrajectory', null, global);
 goog.exportSymbol('proto.servicev2.ErrorResponse', null, global);
 goog.exportSymbol('proto.servicev2.ResetRequest', null, global);
 goog.exportSymbol('proto.servicev2.StepRequest', null, global);
+goog.exportSymbol('proto.servicev2.WildCardEnum', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest.RequestCase', null, global);
 goog.exportSymbol('proto.servicev2.WorkerResponse', null, global);
@@ -86,7 +88,7 @@ if (goog.DEBUG && !COMPILED) {
  * @constructor
  */
 proto.servicev2.StepRequest = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, null, null);
+  jspb.Message.initialize(this, opt_data, 0, -1, proto.servicev2.StepRequest.repeatedFields_, null);
 };
 goog.inherits(proto.servicev2.StepRequest, jspb.Message);
 if (goog.DEBUG && !COMPILED) {
@@ -503,10 +505,8 @@ proto.servicev2.Action.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.Action.toObject = function(includeInstance, msg) {
   var f, obj = {
-actionType: jspb.Message.getFieldWithDefault(msg, 1, 0),
-moveSlot: jspb.Message.getFieldWithDefault(msg, 2, 0),
-switchSlot: jspb.Message.getFieldWithDefault(msg, 3, 0),
-wildcardSlot: jspb.Message.getFieldWithDefault(msg, 4, 0)
+action: jspb.Message.getFieldWithDefault(msg, 1, 0),
+wildcard: jspb.Message.getFieldWithDefault(msg, 2, 0)
   };
 
   if (includeInstance) {
@@ -544,20 +544,12 @@ proto.servicev2.Action.deserializeBinaryFromReader = function(msg, reader) {
     var field = reader.getFieldNumber();
     switch (field) {
     case 1:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setActionType(value);
+      var value = /** @type {!proto.servicev2.ActionEnum} */ (reader.readEnum());
+      msg.setAction(value);
       break;
     case 2:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setMoveSlot(value);
-      break;
-    case 3:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setSwitchSlot(value);
-      break;
-    case 4:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setWildcardSlot(value);
+      var value = /** @type {!proto.servicev2.WildCardEnum} */ (reader.readEnum());
+      msg.setWildcard(value);
       break;
     default:
       reader.skipField();
@@ -588,109 +580,66 @@ proto.servicev2.Action.prototype.serializeBinary = function() {
  */
 proto.servicev2.Action.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getActionType();
-  if (f !== 0) {
-    writer.writeInt32(
+  f = message.getAction();
+  if (f !== 0.0) {
+    writer.writeEnum(
       1,
       f
     );
   }
-  f = message.getMoveSlot();
-  if (f !== 0) {
-    writer.writeInt32(
+  f = message.getWildcard();
+  if (f !== 0.0) {
+    writer.writeEnum(
       2,
       f
     );
   }
-  f = message.getSwitchSlot();
-  if (f !== 0) {
-    writer.writeInt32(
-      3,
-      f
-    );
-  }
-  f = message.getWildcardSlot();
-  if (f !== 0) {
-    writer.writeInt32(
-      4,
-      f
-    );
-  }
 };
 
 
 /**
- * optional int32 action_type = 1;
- * @return {number}
+ * optional ActionEnum action = 1;
+ * @return {!proto.servicev2.ActionEnum}
  */
-proto.servicev2.Action.prototype.getActionType = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
+proto.servicev2.Action.prototype.getAction = function() {
+  return /** @type {!proto.servicev2.ActionEnum} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
 
 /**
- * @param {number} value
+ * @param {!proto.servicev2.ActionEnum} value
  * @return {!proto.servicev2.Action} returns this
  */
-proto.servicev2.Action.prototype.setActionType = function(value) {
-  return jspb.Message.setProto3IntField(this, 1, value);
+proto.servicev2.Action.prototype.setAction = function(value) {
+  return jspb.Message.setProto3EnumField(this, 1, value);
 };
 
 
 /**
- * optional int32 move_slot = 2;
- * @return {number}
+ * optional WildCardEnum wildcard = 2;
+ * @return {!proto.servicev2.WildCardEnum}
  */
-proto.servicev2.Action.prototype.getMoveSlot = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
+proto.servicev2.Action.prototype.getWildcard = function() {
+  return /** @type {!proto.servicev2.WildCardEnum} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
 };
 
 
 /**
- * @param {number} value
+ * @param {!proto.servicev2.WildCardEnum} value
  * @return {!proto.servicev2.Action} returns this
  */
-proto.servicev2.Action.prototype.setMoveSlot = function(value) {
-  return jspb.Message.setProto3IntField(this, 2, value);
+proto.servicev2.Action.prototype.setWildcard = function(value) {
+  return jspb.Message.setProto3EnumField(this, 2, value);
 };
+
 
 
 /**
- * optional int32 switch_slot = 3;
- * @return {number}
+ * List of repeated fields within this message type.
+ * @private {!Array<number>}
+ * @const
  */
-proto.servicev2.Action.prototype.getSwitchSlot = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 3, 0));
-};
-
-
-/**
- * @param {number} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setSwitchSlot = function(value) {
-  return jspb.Message.setProto3IntField(this, 3, value);
-};
-
-
-/**
- * optional int32 wildcard_slot = 4;
- * @return {number}
- */
-proto.servicev2.Action.prototype.getWildcardSlot = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 4, 0));
-};
-
-
-/**
- * @param {number} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setWildcardSlot = function(value) {
-  return jspb.Message.setProto3IntField(this, 4, value);
-};
-
-
+proto.servicev2.StepRequest.repeatedFields_ = [2];
 
 
 
@@ -724,8 +673,10 @@ proto.servicev2.StepRequest.prototype.toObject = function(opt_includeInstance) {
 proto.servicev2.StepRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
 username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-action: (f = msg.getAction()) && proto.servicev2.Action.toObject(includeInstance, f),
-rqid: jspb.Message.getFieldWithDefault(msg, 3, 0)
+actionsList: jspb.Message.toObjectList(msg.getActionsList(),
+    proto.servicev2.Action.toObject, includeInstance),
+rqid: jspb.Message.getFieldWithDefault(msg, 3, 0),
+teampreview: jspb.Message.getBooleanFieldWithDefault(msg, 4, false)
   };
 
   if (includeInstance) {
@@ -769,11 +720,15 @@ proto.servicev2.StepRequest.deserializeBinaryFromReader = function(msg, reader) 
     case 2:
       var value = new proto.servicev2.Action;
       reader.readMessage(value,proto.servicev2.Action.deserializeBinaryFromReader);
-      msg.setAction(value);
+      msg.addActions(value);
       break;
     case 3:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRqid(value);
+      break;
+    case 4:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setTeampreview(value);
       break;
     default:
       reader.skipField();
@@ -811,9 +766,9 @@ proto.servicev2.StepRequest.serializeBinaryToWriter = function(message, writer) 
       f
     );
   }
-  f = message.getAction();
-  if (f != null) {
-    writer.writeMessage(
+  f = message.getActionsList();
+  if (f.length > 0) {
+    writer.writeRepeatedMessage(
       2,
       f,
       proto.servicev2.Action.serializeBinaryToWriter
@@ -823,6 +778,13 @@ proto.servicev2.StepRequest.serializeBinaryToWriter = function(message, writer) 
   if (f !== 0) {
     writer.writeInt32(
       3,
+      f
+    );
+  }
+  f = message.getTeampreview();
+  if (f) {
+    writer.writeBool(
+      4,
       f
     );
   }
@@ -848,39 +810,40 @@ proto.servicev2.StepRequest.prototype.setUsername = function(value) {
 
 
 /**
- * optional Action action = 2;
- * @return {?proto.servicev2.Action}
+ * repeated Action actions = 2;
+ * @return {!Array<!proto.servicev2.Action>}
  */
-proto.servicev2.StepRequest.prototype.getAction = function() {
-  return /** @type{?proto.servicev2.Action} */ (
-    jspb.Message.getWrapperField(this, proto.servicev2.Action, 2));
+proto.servicev2.StepRequest.prototype.getActionsList = function() {
+  return /** @type{!Array<!proto.servicev2.Action>} */ (
+    jspb.Message.getRepeatedWrapperField(this, proto.servicev2.Action, 2));
 };
 
 
 /**
- * @param {?proto.servicev2.Action|undefined} value
+ * @param {!Array<!proto.servicev2.Action>} value
  * @return {!proto.servicev2.StepRequest} returns this
 */
-proto.servicev2.StepRequest.prototype.setAction = function(value) {
-  return jspb.Message.setWrapperField(this, 2, value);
+proto.servicev2.StepRequest.prototype.setActionsList = function(value) {
+  return jspb.Message.setRepeatedWrapperField(this, 2, value);
 };
 
 
 /**
- * Clears the message field making it undefined.
+ * @param {!proto.servicev2.Action=} opt_value
+ * @param {number=} opt_index
+ * @return {!proto.servicev2.Action}
+ */
+proto.servicev2.StepRequest.prototype.addActions = function(opt_value, opt_index) {
+  return jspb.Message.addToRepeatedWrapperField(this, 2, opt_value, proto.servicev2.Action, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
  * @return {!proto.servicev2.StepRequest} returns this
  */
-proto.servicev2.StepRequest.prototype.clearAction = function() {
-  return this.setAction(undefined);
-};
-
-
-/**
- * Returns whether this field is set.
- * @return {boolean}
- */
-proto.servicev2.StepRequest.prototype.hasAction = function() {
-  return jspb.Message.getField(this, 2) != null;
+proto.servicev2.StepRequest.prototype.clearActionsList = function() {
+  return this.setActionsList([]);
 };
 
 
@@ -899,6 +862,24 @@ proto.servicev2.StepRequest.prototype.getRqid = function() {
  */
 proto.servicev2.StepRequest.prototype.setRqid = function(value) {
   return jspb.Message.setProto3IntField(this, 3, value);
+};
+
+
+/**
+ * optional bool teampreview = 4;
+ * @return {boolean}
+ */
+proto.servicev2.StepRequest.prototype.getTeampreview = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 4, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.servicev2.StepRequest} returns this
+ */
+proto.servicev2.StepRequest.prototype.setTeampreview = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 4, value);
 };
 
 
@@ -1265,17 +1246,18 @@ proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
 info: msg.getInfo_asB64(),
 actionMask: msg.getActionMask_asB64(),
+wildcardMask: msg.getWildcardMask_asB64(),
 historyEntityPublic: msg.getHistoryEntityPublic_asB64(),
 historyEntityRevealed: msg.getHistoryEntityRevealed_asB64(),
 historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
 historyField: msg.getHistoryField_asB64(),
-historyLength: jspb.Message.getFieldWithDefault(msg, 7, 0),
+historyLength: jspb.Message.getFieldWithDefault(msg, 8, 0),
 moveset: msg.getMoveset_asB64(),
 publicTeam: msg.getPublicTeam_asB64(),
 revealedTeam: msg.getRevealedTeam_asB64(),
 privateTeam: msg.getPrivateTeam_asB64(),
 field: msg.getField_asB64(),
-rqid: jspb.Message.getFieldWithDefault(msg, 13, 0)
+rqid: jspb.Message.getFieldWithDefault(msg, 14, 0)
   };
 
   if (includeInstance) {
@@ -1322,45 +1304,49 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityPublic(value);
+      msg.setWildcardMask(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityRevealed(value);
+      msg.setHistoryEntityPublic(value);
       break;
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityEdges(value);
+      msg.setHistoryEntityRevealed(value);
       break;
     case 6:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryField(value);
+      msg.setHistoryEntityEdges(value);
       break;
     case 7:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setHistoryField(value);
+      break;
+    case 8:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setHistoryLength(value);
       break;
-    case 8:
+    case 9:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setMoveset(value);
       break;
-    case 9:
+    case 10:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setPublicTeam(value);
       break;
-    case 10:
+    case 11:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setRevealedTeam(value);
       break;
-    case 11:
+    case 12:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setPrivateTeam(value);
       break;
-    case 12:
+    case 13:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setField(value);
       break;
-    case 13:
+    case 14:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRqid(value);
       break;
@@ -1407,80 +1393,87 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
       f
     );
   }
-  f = message.getHistoryEntityPublic_asU8();
+  f = message.getWildcardMask_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       3,
       f
     );
   }
-  f = message.getHistoryEntityRevealed_asU8();
+  f = message.getHistoryEntityPublic_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       4,
       f
     );
   }
-  f = message.getHistoryEntityEdges_asU8();
+  f = message.getHistoryEntityRevealed_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       5,
       f
     );
   }
-  f = message.getHistoryField_asU8();
+  f = message.getHistoryEntityEdges_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       6,
       f
     );
   }
+  f = message.getHistoryField_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      7,
+      f
+    );
+  }
   f = message.getHistoryLength();
   if (f !== 0) {
     writer.writeInt32(
-      7,
+      8,
       f
     );
   }
   f = message.getMoveset_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      8,
+      9,
       f
     );
   }
   f = message.getPublicTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      9,
+      10,
       f
     );
   }
   f = message.getRevealedTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      10,
+      11,
       f
     );
   }
   f = message.getPrivateTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      11,
+      12,
       f
     );
   }
   f = message.getField_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      12,
+      13,
       f
     );
   }
   f = message.getRqid();
   if (f !== 0) {
     writer.writeInt32(
-      13,
+      14,
       f
     );
   }
@@ -1572,16 +1565,58 @@ proto.servicev2.EnvironmentState.prototype.setActionMask = function(value) {
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes wildcard_mask = 3;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic = function() {
+proto.servicev2.EnvironmentState.prototype.getWildcardMask = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
 };
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes wildcard_mask = 3;
+ * This is a type-conversion wrapper around `getWildcardMask()`
+ * @return {string}
+ */
+proto.servicev2.EnvironmentState.prototype.getWildcardMask_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getWildcardMask()));
+};
+
+
+/**
+ * optional bytes wildcard_mask = 3;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getWildcardMask()`
+ * @return {!Uint8Array}
+ */
+proto.servicev2.EnvironmentState.prototype.getWildcardMask_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getWildcardMask()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.servicev2.EnvironmentState} returns this
+ */
+proto.servicev2.EnvironmentState.prototype.setWildcardMask = function(value) {
+  return jspb.Message.setProto3BytesField(this, 3, value);
+};
+
+
+/**
+ * optional bytes history_entity_public = 4;
+ * @return {!(string|Uint8Array)}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+};
+
+
+/**
+ * optional bytes history_entity_public = 4;
  * This is a type-conversion wrapper around `getHistoryEntityPublic()`
  * @return {string}
  */
@@ -1592,7 +1627,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asB64 = functi
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public = 4;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryEntityPublic()`
@@ -1609,21 +1644,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asU8 = functio
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryEntityPublic = function(value) {
-  return jspb.Message.setProto3BytesField(this, 3, value);
+  return jspb.Message.setProto3BytesField(this, 4, value);
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
  * @return {string}
  */
@@ -1634,7 +1669,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asB64 = func
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
@@ -1651,21 +1686,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asU8 = funct
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryEntityRevealed = function(value) {
-  return jspb.Message.setProto3BytesField(this, 4, value);
+  return jspb.Message.setProto3BytesField(this, 5, value);
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_edges = 6;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_edges = 6;
  * This is a type-conversion wrapper around `getHistoryEntityEdges()`
  * @return {string}
  */
@@ -1676,7 +1711,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asB64 = functio
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_edges = 6;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryEntityEdges()`
@@ -1693,21 +1728,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdges = function(value) {
-  return jspb.Message.setProto3BytesField(this, 5, value);
+  return jspb.Message.setProto3BytesField(this, 6, value);
 };
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_field = 7;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
 };
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_field = 7;
  * This is a type-conversion wrapper around `getHistoryField()`
  * @return {string}
  */
@@ -1718,7 +1753,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryField_asB64 = function() {
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_field = 7;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryField()`
@@ -1735,16 +1770,16 @@ proto.servicev2.EnvironmentState.prototype.getHistoryField_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 6, value);
+  return jspb.Message.setProto3BytesField(this, 7, value);
 };
 
 
 /**
- * optional int32 history_length = 7;
+ * optional int32 history_length = 8;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryLength = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 7, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 8, 0));
 };
 
 
@@ -1753,21 +1788,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryLength = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryLength = function(value) {
-  return jspb.Message.setProto3IntField(this, 7, value);
+  return jspb.Message.setProto3IntField(this, 8, value);
 };
 
 
 /**
- * optional bytes moveset = 8;
+ * optional bytes moveset = 9;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getMoveset = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
 };
 
 
 /**
- * optional bytes moveset = 8;
+ * optional bytes moveset = 9;
  * This is a type-conversion wrapper around `getMoveset()`
  * @return {string}
  */
@@ -1778,7 +1813,7 @@ proto.servicev2.EnvironmentState.prototype.getMoveset_asB64 = function() {
 
 
 /**
- * optional bytes moveset = 8;
+ * optional bytes moveset = 9;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getMoveset()`
@@ -1795,21 +1830,21 @@ proto.servicev2.EnvironmentState.prototype.getMoveset_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setMoveset = function(value) {
-  return jspb.Message.setProto3BytesField(this, 8, value);
+  return jspb.Message.setProto3BytesField(this, 9, value);
 };
 
 
 /**
- * optional bytes public_team = 9;
+ * optional bytes public_team = 10;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getPublicTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
 };
 
 
 /**
- * optional bytes public_team = 9;
+ * optional bytes public_team = 10;
  * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {string}
  */
@@ -1820,7 +1855,7 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asB64 = function() {
 
 
 /**
- * optional bytes public_team = 9;
+ * optional bytes public_team = 10;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPublicTeam()`
@@ -1837,21 +1872,21 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPublicTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 9, value);
+  return jspb.Message.setProto3BytesField(this, 10, value);
 };
 
 
 /**
- * optional bytes revealed_team = 10;
+ * optional bytes revealed_team = 11;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getRevealedTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
 };
 
 
 /**
- * optional bytes revealed_team = 10;
+ * optional bytes revealed_team = 11;
  * This is a type-conversion wrapper around `getRevealedTeam()`
  * @return {string}
  */
@@ -1862,7 +1897,7 @@ proto.servicev2.EnvironmentState.prototype.getRevealedTeam_asB64 = function() {
 
 
 /**
- * optional bytes revealed_team = 10;
+ * optional bytes revealed_team = 11;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getRevealedTeam()`
@@ -1879,21 +1914,21 @@ proto.servicev2.EnvironmentState.prototype.getRevealedTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setRevealedTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 10, value);
+  return jspb.Message.setProto3BytesField(this, 11, value);
 };
 
 
 /**
- * optional bytes private_team = 11;
+ * optional bytes private_team = 12;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getPrivateTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 12, ""));
 };
 
 
 /**
- * optional bytes private_team = 11;
+ * optional bytes private_team = 12;
  * This is a type-conversion wrapper around `getPrivateTeam()`
  * @return {string}
  */
@@ -1904,7 +1939,7 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asB64 = function() {
 
 
 /**
- * optional bytes private_team = 11;
+ * optional bytes private_team = 12;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPrivateTeam()`
@@ -1921,21 +1956,21 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPrivateTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 11, value);
+  return jspb.Message.setProto3BytesField(this, 12, value);
 };
 
 
 /**
- * optional bytes field = 12;
+ * optional bytes field = 13;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 12, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 13, ""));
 };
 
 
 /**
- * optional bytes field = 12;
+ * optional bytes field = 13;
  * This is a type-conversion wrapper around `getField()`
  * @return {string}
  */
@@ -1946,7 +1981,7 @@ proto.servicev2.EnvironmentState.prototype.getField_asB64 = function() {
 
 
 /**
- * optional bytes field = 12;
+ * optional bytes field = 13;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getField()`
@@ -1963,16 +1998,16 @@ proto.servicev2.EnvironmentState.prototype.getField_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 12, value);
+  return jspb.Message.setProto3BytesField(this, 13, value);
 };
 
 
 /**
- * optional int32 rqid = 13;
+ * optional int32 rqid = 14;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getRqid = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 13, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 14, 0));
 };
 
 
@@ -1981,7 +2016,7 @@ proto.servicev2.EnvironmentState.prototype.getRqid = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setRqid = function(value) {
-  return jspb.Message.setProto3IntField(this, 13, value);
+  return jspb.Message.setProto3IntField(this, 14, value);
 };
 
 
@@ -2996,5 +3031,52 @@ proto.servicev2.WorkerResponse.prototype.hasOpponentResetRequest = function() {
   return jspb.Message.getField(this, 4) != null;
 };
 
+
+/**
+ * @enum {number}
+ */
+proto.servicev2.ActionEnum = {
+  ACTION_ENUM___UNSPECIFIED: 0,
+  ACTION_ENUM__MOVE_1_TARGET_NA: 1,
+  ACTION_ENUM__MOVE_1_TARGET_1: 2,
+  ACTION_ENUM__MOVE_1_TARGET_2: 3,
+  ACTION_ENUM__MOVE_1_TARGET_3: 4,
+  ACTION_ENUM__MOVE_1_TARGET_4: 5,
+  ACTION_ENUM__MOVE_2_TARGET_NA: 6,
+  ACTION_ENUM__MOVE_2_TARGET_1: 7,
+  ACTION_ENUM__MOVE_2_TARGET_2: 8,
+  ACTION_ENUM__MOVE_2_TARGET_3: 9,
+  ACTION_ENUM__MOVE_2_TARGET_4: 10,
+  ACTION_ENUM__MOVE_3_TARGET_NA: 11,
+  ACTION_ENUM__MOVE_3_TARGET_1: 12,
+  ACTION_ENUM__MOVE_3_TARGET_2: 13,
+  ACTION_ENUM__MOVE_3_TARGET_3: 14,
+  ACTION_ENUM__MOVE_3_TARGET_4: 15,
+  ACTION_ENUM__MOVE_4_TARGET_NA: 16,
+  ACTION_ENUM__MOVE_4_TARGET_1: 17,
+  ACTION_ENUM__MOVE_4_TARGET_2: 18,
+  ACTION_ENUM__MOVE_4_TARGET_3: 19,
+  ACTION_ENUM__MOVE_4_TARGET_4: 20,
+  ACTION_ENUM__SWITCH_1: 21,
+  ACTION_ENUM__SWITCH_2: 22,
+  ACTION_ENUM__SWITCH_3: 23,
+  ACTION_ENUM__SWITCH_4: 24,
+  ACTION_ENUM__SWITCH_5: 25,
+  ACTION_ENUM__SWITCH_6: 26,
+  ACTION_ENUM__DEFAULT: 27,
+  ACTION_ENUM__PASS: 28
+};
+
+/**
+ * @enum {number}
+ */
+proto.servicev2.WildCardEnum = {
+  WILD_CARD_ENUM___UNSPECIFIED: 0,
+  WILD_CARD_ENUM__CAN_NORMAL: 1,
+  WILD_CARD_ENUM__CAN_MEGA: 2,
+  WILD_CARD_ENUM__CAN_ZMOVE: 3,
+  WILD_CARD_ENUM__CAN_MAX: 4,
+  WILD_CARD_ENUM__CAN_TERA: 5
+};
 
 goog.object.extend(exports, proto.servicev2);

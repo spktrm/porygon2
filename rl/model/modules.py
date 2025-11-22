@@ -509,7 +509,7 @@ class Transformer(nn.Module):
         qkv = qkv + ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
-    def decoder_layer(
+    def decoder_attn(
         self,
         q: jax.Array,
         kv: jax.Array,
@@ -538,15 +538,16 @@ class Transformer(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        q = q + mha
+        return jnp.where(positionwise_mask, mha, 0)
+
+    def decoder_mlp(self, q: jax.Array, positionwise_mask: jax.Array):
         q_ln = layer_norm(q)
         ffn = MLP(
             self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
         )(q_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
-        q = q + ffn
-        return jnp.where(positionwise_mask, q, 0)
+        return jnp.where(positionwise_mask, ffn, 0)
 
     @nn.compact
     def __call__(
@@ -565,20 +566,42 @@ class Transformer(nn.Module):
         if q_positions is None and self.encoder_need_pos:
             q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
 
-        for _ in range(self.num_layers):
+        alpha_xattn = self.param(
+            "alpha_xattn",
+            nn.initializers.zeros_init(),
+            (self.num_layers, len(contexts)),
+            q.dtype,
+        )
+        alpha_dense = self.param(
+            "alpha_dense",
+            nn.initializers.zeros_init(),
+            (self.num_layers,),
+            q.dtype,
+        )
+
+        xattn_gates = jnp.tanh(alpha_xattn)
+        dense_gates = jnp.tanh(alpha_dense)
+
+        for layer_idx in range(self.num_layers):
             q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
-            decoder_outputs = [
-                self.decoder_layer(
-                    q,
+
+            res = q
+            layer_gates = xattn_gates[layer_idx]
+
+            for layer_gate, (kv, decoder_attn_mask, kv_position) in zip(
+                layer_gates, contexts
+            ):
+                q = q + layer_gate * self.decoder_attn(
+                    res,
                     kv,
                     decoder_attn_mask,
                     positionwise_mask,
                     q_positions,
                     kv_position,
                 )
-                for kv, decoder_attn_mask, kv_position in contexts
-            ]
-            q = sum(decoder_outputs) / len(contexts)
+
+            ffn = self.decoder_mlp(q, positionwise_mask)
+            q = q + dense_gates[layer_idx] * ffn
 
         return q
 
@@ -784,9 +807,10 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = attn_logits.mean(axis=0)  # mean over heads
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        return attn_logits.mean(axis=0).reshape(*kv_leading_dims)
+        return attn_logits.reshape(*kv_leading_dims)
 
 
 def one_hot_concat_jax(

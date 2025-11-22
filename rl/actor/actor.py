@@ -10,17 +10,23 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import ActionType
-from rl.environment.protos.service_pb2 import Action
+from rl.environment.protos.service_pb2 import Action, ActionEnum
 from rl.environment.utils import clip_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
-ACTION_TYPE_MAPPING = {
-    0: ActionType.ACTION_TYPE__MOVE,
-    1: ActionType.ACTION_TYPE__SWITCH,
-    2: ActionType.ACTION_TYPE__TEAMPREVIEW,
+ACTION_MAPPING = {
+    0: ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
+    1: ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
+    2: ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
+    3: ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
+    4: ActionEnum.ACTION_ENUM__SWITCH_1,
+    5: ActionEnum.ACTION_ENUM__SWITCH_2,
+    6: ActionEnum.ACTION_ENUM__SWITCH_3,
+    7: ActionEnum.ACTION_ENUM__SWITCH_4,
+    8: ActionEnum.ACTION_ENUM__SWITCH_5,
+    9: ActionEnum.ACTION_ENUM__SWITCH_6,
 }
 
 
@@ -53,12 +59,10 @@ class Actor:
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(
-            action_type=ACTION_TYPE_MAPPING[
-                agent_output.actor_output.action_type_head.action_index.item()
+            action=ACTION_MAPPING[
+                agent_output.actor_output.action_head.action_index.item()
             ],
-            move_slot=agent_output.actor_output.move_head.action_index.item(),
-            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
-            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
+            wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
         )
 
     def unroll(
@@ -211,7 +215,10 @@ class Actor:
         coin_toss = np.random.random()
 
         # Make sure you can beat the League (PFSP)
-        if coin_toss < 0.5:
+        # We only store trajectories from the the perspective of the main player,
+        # so we need to oversample playing against it such that the proportion of
+        # games played against it is 50%.
+        if coin_toss < 0.667:
             opponent = self._pfsp_branch()
             if opponent is not None:  # Found a historical opponent
                 return opponent, False

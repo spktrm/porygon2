@@ -146,8 +146,8 @@ def main():
         builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
-    player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state, from_scratch=True
+    player_state, builder_state, league, metadata = load_train_state(
+        learner_config, player_state, builder_state
     )
 
     wandb_run = wandb.init(
@@ -172,6 +172,7 @@ def main():
         league=league,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
+        metadata=metadata,
     )
 
     with concurrent.futures.ThreadPoolExecutor(
