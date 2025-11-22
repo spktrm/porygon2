@@ -21,8 +21,8 @@ def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float =
         return jax.random.categorical(rng_key, log_policy, axis=-1)
 
     # Convert to probs, clamp, renormalize, then go back to log-space for sampling.
-    probs = jax.nn.softmax(log_policy, axis=-1)
-    probs = jnp.maximum(probs, min_p)
+    probs = jnp.exp(log_policy)
+    probs = jnp.where(probs >= min_p * probs.max(), probs, 0)
     probs = probs / probs.sum(axis=-1, keepdims=True)
 
     # Avoid log(0) just in case of numerical edge cases
@@ -70,13 +70,12 @@ class PolicyQKHead(nn.Module):
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
+        policy = legal_policy(logits, valid_mask)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        entropy = ()
         train = self.cfg.get("train", False)
         if train:
             action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
                 jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
@@ -120,13 +119,12 @@ class PolicyLogitHead(nn.Module):
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
+        policy = legal_policy(logits, valid_mask)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        entropy = ()
         train = self.cfg.get("train", False)
         if train:
             action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
                 jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
@@ -148,4 +146,9 @@ class ValueLogitHead(nn.Module):
 
         x = resnet(x)
         x = logits(x)
-        return jnp.tanh(x.squeeze(-1))
+
+        final_act = getattr(self.cfg, "final_activation", None)
+        if final_act is not None:
+            return final_act(x.squeeze(-1))
+        else:
+            return x.squeeze(-1)

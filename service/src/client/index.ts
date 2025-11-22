@@ -186,13 +186,14 @@ class Battle {
                 });
                 // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
-                const stepResponse = await response.json();
+                const { action, wildcard } = await response.json();
                 const stepRequest = new StepRequest();
 
-                const action = new ProtoAction();
-                action.setAction(ActionEnum.ACTION_ENUM__DEFAULT);
+                const protoAction = new ProtoAction();
+                protoAction.setAction(action);
+                protoAction.setWildcard(wildcard);
 
-                stepRequest.setActionsList([action]);
+                stepRequest.setActionsList([protoAction]);
                 stepRequest.setRqid(state.getRqid());
                 this.player.submitStepRequest(stepRequest);
             } else {

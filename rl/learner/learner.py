@@ -17,16 +17,7 @@ from tqdm import tqdm
 
 import wandb
 from rl.environment.data import STOI
-from rl.environment.interfaces import (
-    BuilderActorInput,
-    BuilderHistoryOutput,
-    BuilderTransition,
-    PlayerActorInput,
-    PlayerHiddenInfo,
-    PlayerHistoryOutput,
-    PlayerTransition,
-    Trajectory,
-)
+from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
@@ -176,11 +167,13 @@ def postprocess_log_prob(log_prob: jax.Array, min_p: float = 0.03):
 
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
-    player_transitions: PlayerTransition,
-    player_history: PlayerHistoryOutput,
+    batch: Trajectory,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
+
+    player_transitions = batch.player_transitions
+    player_history = batch.player_history
 
     player_actor_input = PlayerActorInput(
         env=player_transitions.env_output, history=player_history
@@ -219,7 +212,6 @@ def player_train_step(
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     valid = jnp.bitwise_not(player_transitions.env_output.done)
-
     rewards_tm1 = player_transitions.env_output.win_reward
 
     v_tm1 = target_value_head
@@ -368,15 +360,13 @@ def player_train_step(
     player_state = player_state.replace(
         # Update target params and adv mean/std.
         target_params=optax.incremental_update(
-            player_state.params, player_state.target_params, config.tau
+            player_state.params, player_state.target_params, config.player_ema_decay
         ),
-        target_adv_mean=player_state.target_adv_mean * (1 - config.tau)
-        + player_adv_mean * config.tau,
-        target_adv_std=player_state.target_adv_std * (1 - config.tau)
-        + player_adv_std * config.tau,
-        # Update num steps sampled.
+        target_adv_mean=player_state.target_adv_mean * (1 - config.player_ema_decay)
+        + player_adv_mean * config.player_ema_decay,
+        target_adv_std=player_state.target_adv_std * (1 - config.player_ema_decay)
+        + player_adv_std * config.player_ema_decay,
         num_steps=player_state.num_steps + 1,
-        # Add 1 for the final step in each trajectory
         actor_steps=player_state.actor_steps + valid.sum(),
     )
 
@@ -392,13 +382,14 @@ def player_train_step(
 
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
-    builder_transitions: BuilderTransition,
-    builder_history: BuilderHistoryOutput,
-    player_hidden: PlayerHiddenInfo,
-    final_reward: jax.Array,
+    batch: Trajectory,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
+
+    builder_transitions = batch.builder_transitions
+    builder_history = batch.builder_history
+    player_hidden = batch.player_hidden
 
     builder_actor_input = BuilderActorInput(
         env=builder_transitions.env_output,
@@ -439,6 +430,7 @@ def builder_train_step(
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
+    final_reward = batch.player_transitions.env_output.win_reward[-1]
 
     rewards_tm1 = (
         jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
@@ -587,12 +579,13 @@ def builder_train_step(
     builder_state = builder_state.replace(
         # Update target params.
         target_params=optax.incremental_update(
-            builder_state.params, builder_state.target_params, config.tau
+            builder_state.params, builder_state.target_params, config.builder_ema_decay
         ),
-        target_adv_mean=builder_state.target_adv_mean * (1 - config.tau)
-        + builder_adv_mean * config.tau,
-        target_adv_std=builder_state.target_adv_std * (1 - config.tau)
-        + builder_adv_std * config.tau,
+        target_adv_mean=builder_state.target_adv_mean * (1 - config.builder_ema_decay)
+        + builder_adv_mean * config.builder_ema_decay,
+        target_adv_std=builder_state.target_adv_std * (1 - config.builder_ema_decay)
+        + builder_adv_std * config.builder_ema_decay,
+        num_steps=builder_state.num_steps + 1,
         actor_steps=builder_state.actor_steps + valid.sum(),
     )
 
@@ -608,11 +601,12 @@ class Learner:
         wandb_run: wandb.wandb_run.Run,
         league: League | None = None,
         gpu_lock: LockType | None = None,
+        metadata: dict | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
         self.learner_config = learner_config
-
+        self.metadata = metadata or {}
         self.wandb_run = wandb_run
         self.gpu_lock = gpu_lock or nullcontext()
 
@@ -808,6 +802,8 @@ class Learner:
 
     def add_new_player(self):
         num_steps = np.array(self.player_state.num_steps).item()
+        print("Adding new player to league @ step", num_steps)
+
         self.league.add_player(
             ParamsContainer(
                 frame_count=self.player_state.actor_steps.item(),
@@ -820,9 +816,6 @@ class Learner:
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
-
-        # player_train_step_jit = player_train_step
-        # builder_train_step_jit = builder_train_step
 
         player_train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
         builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
@@ -837,20 +830,12 @@ class Learner:
 
                 with self.gpu_lock:
                     new_player_state, player_logs = player_train_step_jit(
-                        self.player_state,
-                        batch.player_transitions,
-                        batch.player_history,
-                        self.learner_config,
+                        self.player_state, batch, self.learner_config
                     )
 
                 with self.gpu_lock:
                     new_builder_state, builder_logs = builder_train_step_jit(
-                        self.builder_state,
-                        batch.builder_transitions,
-                        batch.builder_history,
-                        batch.player_hidden,
-                        batch.player_transitions.env_output.win_reward[-1],
-                        self.learner_config,
+                        self.builder_state, batch, self.learner_config
                     )
 
                 # Safety check: only apply the update if the losses are finite.
@@ -901,19 +886,11 @@ class Learner:
                         self.player_state,
                         self.builder_state,
                         self.league,
+                        self.metadata,
                     )
 
                 if self.ready_to_add_player():
-                    print("Adding new player to league @ step", num_steps)
                     self.add_new_player()
-                    self.mix_noise()
-                    self.update_main_player()
-                    # Drain the device queue to avoid training on old data
-                    for _ in range(
-                        self.learner_config.target_replay_ratio
-                        * self.learner_config.batch_size
-                    ):
-                        batch = self.device_q.get()
 
             except Exception as e:
                 logger.error(f"Learner train step failed: {e}")

@@ -109,6 +109,7 @@ export interface MovesetFeatureMap {
   MOVESET_FEATURE__HAS_PP: 5;
   MOVESET_FEATURE__ACTION_TYPE: 6;
   MOVESET_FEATURE__ENTITY_IDX: 7;
+  MOVESET_FEATURE__DISABLED: 8;
 }
 
 export const MovesetFeature: MovesetFeatureMap;

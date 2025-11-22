@@ -58,12 +58,11 @@ class Porygon2PlayerModel(nn.Module):
         min_p: float,
     ):
         log_policy = legal_log_policy(logits, valid_mask)
+        policy = legal_policy(logits, valid_mask)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        entropy = ()
         if train:
             action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
                 jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),

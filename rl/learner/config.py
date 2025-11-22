@@ -19,7 +19,6 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
-    Trajectory,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner.league import League
@@ -43,7 +42,7 @@ GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
-    num_eval_actors: int = 2
+    num_eval_actors: int = 0
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
 
@@ -63,8 +62,11 @@ class Porygon2LearnerConfig:
     learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    tau: float = 1e-3
     mix_noise_ratio: float = 0.5
+
+    # EMA params
+    player_ema_decay: float = 1e-3
+    builder_ema_decay: float = 1e-4
 
     # Discount params
     player_gamma: float = 1.0
@@ -72,10 +74,11 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     player_lambda: float = 0.95
-    builder_lambda: float = 0.75
+    builder_lambda: float = 0.5
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.2
+    consistency_coef: float = 0.01
 
     # Loss coefficients
     player_value_loss_coef: float = 1.0
@@ -103,10 +106,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    rng_key: jax.Array = struct.field(pytree_node=False)
 
     num_steps: int = 0
-    num_samples: int = 0
     actor_steps: int = 0
 
     target_adv_mean: float = 0
@@ -121,6 +122,7 @@ class Porygon2BuilderTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
+    num_steps: int = 0
     actor_steps: int = 0
 
     target_adv_mean: float = 0
@@ -165,7 +167,6 @@ def create_train_state(
                 eps=config.adam.eps,
             ),
         ),
-        rng_key=rng,
     )
 
     builder_params_init_fn = functools.partial(
@@ -203,9 +204,10 @@ def save_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    metadata: dict | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league
+        learner_config, player_state, builder_state, league, metadata
     )
     wandb_run.log_artifact(
         artifact_or_path=save_path,
@@ -219,13 +221,13 @@ def save_train_state_locally(
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
     league: League = None,
-    batch: Trajectory = None,
+    metadata: dict | None = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
     )
     return save_state(
-        save_path, learner_config, player_state, builder_state, league, batch
+        save_path, learner_config, player_state, builder_state, league, metadata
     )
 
 
@@ -235,7 +237,7 @@ def save_state(
     player_state: Porygon2PlayerTrainState = None,
     builder_state: Porygon2BuilderTrainState = None,
     league: League = None,
-    batch: Trajectory = None,
+    metadata: dict | None = None,
 ):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -246,11 +248,9 @@ def save_state(
             target_params=player_state.target_params,
             opt_state=player_state.opt_state,
             num_steps=player_state.num_steps,
-            num_samples=player_state.num_samples,
             actor_steps=player_state.actor_steps,
             target_adv_mean=player_state.target_adv_mean,
             target_adv_std=player_state.target_adv_std,
-            rng=player_state.rng_key,
         )
     if builder_state is not None:
         data["builder_state"] = dict(
@@ -263,8 +263,8 @@ def save_state(
         )
     if league is not None:
         data["league"] = league.serialize()
-    if batch is not None:
-        data["batch"] = batch
+    if metadata is not None:
+        data["metadata"] = metadata
     with open(save_path, "wb") as f:
         pickle.dump(data, f)
     return save_path
@@ -275,7 +275,8 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     from_scratch: bool = False,
-):
+    metadata: dict | None = None,
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, dict | None]:
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -295,7 +296,7 @@ def load_train_state(
             players=[initial_params],
             league_size=learner_config.league_size,
         )
-        return player_state, builder_state, league
+        return player_state, builder_state, league, None
 
     print(f"loading checkpoint from {latest_ckpt}")
     with open(latest_ckpt, "rb") as f:
@@ -341,11 +342,9 @@ def load_train_state(
         target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
         num_steps=ckpt_player_state["num_steps"],
-        num_samples=ckpt_player_state["num_samples"],
         actor_steps=ckpt_player_state["actor_steps"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
-        rng_key=ckpt_player_state["rng"],
     )
 
     builder_state = builder_state.replace(
@@ -357,4 +356,6 @@ def load_train_state(
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
     )
 
-    return player_state, builder_state, league
+    metadata = ckpt_data.get("metadata", None)
+
+    return player_state, builder_state, league, metadata

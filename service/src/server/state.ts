@@ -3091,6 +3091,13 @@ class PrivateActionHandler {
             index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
             value: ActionType.ACTION_TYPE__MOVE,
         });
+        if ("disabled" in move) {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__DISABLED,
+                value: move.disabled ? 1 : 0,
+            });
+        }
     }
 
     build() {

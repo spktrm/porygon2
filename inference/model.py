@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import ResetResponse, StepResponse
-from rl.actor.actor import ACTION_TYPE_MAPPING
+from rl.actor.actor import ACTION_MAPPING
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
@@ -128,10 +128,8 @@ class InferenceModel:
         actor_output = agent_output.actor_output
         return StepResponse(
             v=actor_output.v.item(),
-            action_type=ACTION_TYPE_MAPPING[
-                agent_output.actor_output.action_type_head.action_index.item()
+            action=ACTION_MAPPING[
+                agent_output.actor_output.action_head.action_index.item()
             ],
-            move_slot=agent_output.actor_output.move_head.action_index.item(),
-            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
-            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
+            wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
         )
