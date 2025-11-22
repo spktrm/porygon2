@@ -43,6 +43,7 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 0
+    num_controlled_eval_actors: int = 0
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
 
@@ -52,6 +53,11 @@ class Porygon2LearnerConfig:
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
     league_size: int = 16
+
+    # Controlled evaluation params
+    controlled_eval_fixed_species: tuple[int, ...] = (0, 1, 2, 3, 4, 5)
+    controlled_eval_fixed_sets: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
+    controlled_eval_interval_seconds: int = 30
 
     # Batch iteration params
     batch_size: int = 4

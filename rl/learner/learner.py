@@ -746,10 +746,18 @@ class Learner:
         league = self.league
         historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
         win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
-        return {
+        controlled_win_rates = league.get_controlled_winrate((league.players[MAIN_KEY], historical_players))
+        
+        result = {
             f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
         }
+        result.update({
+            f"league_main_v_{historical_players[i].step_count}_controlled_winrate": win_rate
+            for i, win_rate in enumerate(controlled_win_rates)
+        })
+        
+        return result
 
     def ready_to_add_player(self):
         league = self.league

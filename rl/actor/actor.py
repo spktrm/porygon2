@@ -4,6 +4,8 @@ import numpy as np
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
+    BuilderAgentOutput,
+    BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
     PlayerAgentOutput,
@@ -11,7 +13,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.service_pb2 import Action, ActionEnum
-from rl.environment.utils import clip_history, split_rng
+from rl.environment.utils import clip_history, get_ex_builder_step, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
@@ -190,6 +192,85 @@ class Actor:
         if self._player_env.username.startswith("train") and do_push:
             self._learner.enqueue_traj(act_out)
         return act_out
+
+    def unroll_with_fixed_team(
+        self,
+        rng_key: jax.Array,
+        frame_count: int,
+        player_params: Params,
+        species_tokens: list[int],
+        packed_set_tokens: list[int],
+    ) -> Trajectory:
+        """Run unroll with a fixed team (for controlled evaluation)."""
+        player_subkeys = split_rng(rng_key, self._unroll_length)
+
+        player_traj = []
+
+        # Reset the player environment with fixed team.
+        player_actor_input = self._player_env.reset(
+            species_tokens,
+            packed_set_tokens,
+        )
+        # Extract opponent hidden info to better inform builder value function.
+        player_hidden = player_actor_input.hidden
+
+        # Rollout the player environment.
+        for player_step_index in range(player_subkeys.shape[0]):
+            player_actor_input_clipped = self.clip_actor_history(player_actor_input)
+            player_agent_output = self._agent.step_player(
+                player_subkeys[player_step_index],
+                player_params,
+                player_actor_input_clipped,
+            )
+            player_transition = PlayerTransition(
+                env_output=player_actor_input_clipped.env,
+                agent_output=player_agent_output,
+            )
+            player_traj.append(player_transition)
+            if player_actor_input_clipped.env.done.item():
+                break
+
+            action = self.player_agent_output_to_action(player_agent_output)
+            player_actor_input = self._player_env.step(action)
+
+        if len(player_traj) < self._unroll_length:
+            player_traj += [player_transition] * (
+                self._unroll_length - len(player_traj)
+            )
+
+        # Pack the trajectory and reset parent state.
+        player_trajectory = jax.device_get(player_traj)
+        player_trajectory: PlayerTransition = jax.tree.map(
+            lambda *xs: np.stack(xs), *player_trajectory
+        )
+
+        # Create empty builder trajectory (not used in controlled eval)
+        builder_input, builder_output = get_ex_builder_step()
+        builder_transition = BuilderTransition(
+            env_output=builder_input.env,
+            agent_output=BuilderAgentOutput(actor_output=builder_output),
+        )
+        builder_unroll_length = self._builder_env._max_trajectory_length + 1
+        builder_trajectory = jax.tree.map(
+            lambda x: np.tile(x, (builder_unroll_length,) + (1,) * x.ndim),
+            builder_transition,
+        )
+        
+        # Create proper empty builder history
+        builder_history = BuilderHistoryOutput(
+            species_tokens=np.array(species_tokens, dtype=np.int32),
+            packed_set_tokens=np.array(packed_set_tokens, dtype=np.int32),
+        )
+
+        trajectory = Trajectory(
+            builder_transitions=builder_trajectory,
+            builder_history=builder_history,
+            player_transitions=player_trajectory,
+            player_history=player_actor_input.history,
+            player_hidden=player_hidden,
+        )
+
+        return promote_map(trajectory)
 
     def pull_main_player(self) -> ParamsContainer:
         league = self._learner.league

@@ -17,6 +17,7 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
+from rl.learner.league import MAIN_KEY
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -98,6 +99,77 @@ def run_eval_heuristic(
         time.sleep(5)
 
 
+def run_controlled_eval(
+    player_actor: Actor,
+    opponent_actor: Actor,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    stop_signal: list[bool],
+    wandb_run: wandb.wandb_run.Run,
+):
+    """Runs controlled evaluation with fixed teams to measure pure playing skill."""
+    learner = player_actor._learner
+    step_count = np.array(learner.player_state.num_steps).item()
+    
+    # Get fixed team from config
+    fixed_species = list(learner.learner_config.controlled_eval_fixed_species)
+    fixed_sets = list(learner.learner_config.controlled_eval_fixed_sets)
+    
+    while not stop_signal[0]:
+        try:
+            new_step_count = np.array(learner.player_state.num_steps).item()
+            if new_step_count > step_count:
+                step_count = new_step_count
+                
+                # Get current and historical players
+                main_player = player_actor.pull_main_player()
+                league = learner.league
+                historical_players = [
+                    v for k, v in league.players.items() if k != MAIN_KEY
+                ]
+                
+                # Run controlled matches against historical players
+                if historical_players:
+                    for historical_player in historical_players:
+                        # Set checkpoints for matchmaking
+                        player_actor.set_current_ckpt(np.array(main_player.step_count).item())
+                        player_actor.set_opponent_ckpt(np.array(historical_player.step_count).item())
+                        
+                        opponent_actor.set_current_ckpt(np.array(historical_player.step_count).item())
+                        opponent_actor.set_opponent_ckpt(np.array(main_player.step_count).item())
+                        
+                        # Both players use the same fixed team
+                        player_key = player_actor.split_rng()
+                        player_params = jax.device_put(main_player.player_params)
+                        
+                        future = executor.submit(
+                            player_actor.unroll_with_fixed_team,
+                            player_key,
+                            main_player.frame_count,
+                            player_params,
+                            fixed_species,
+                            fixed_sets,
+                        )
+                        trajectory = future.result()
+                        player_actor.reset_ckpts()
+                        opponent_actor.reset_ckpts()
+                        
+                        payoff = trajectory.player_transitions.env_output.win_reward[-1]
+                        
+                        # Update controlled match stats
+                        league.update_controlled_payoff(main_player, historical_player, payoff)
+                        
+                        wandb_run.log({
+                            "Step": step_count,
+                            f"controlled_wr_main_v_{historical_player.step_count}": payoff,
+                        })
+                        
+        except Exception:
+            traceback.print_exc()
+            continue
+            
+        time.sleep(learner.learner_config.controlled_eval_interval_seconds)
+
+
 def main():
     """Main function to run the RL learner."""
 
@@ -176,9 +248,11 @@ def main():
     )
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors)
+        max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors + learner_config.num_controlled_eval_actors)
     ) as executor:
 
+        rng_seed_counter = 0
+        
         for game_id in range(learner_config.num_actors // 2):
             actors = [
                 Actor(
@@ -189,10 +263,11 @@ def main():
                     ),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
-                    rng_seed=len(actor_threads),
+                    rng_seed=rng_seed_counter + player_id,
                 )
                 for player_id in range(2)
             ]
+            rng_seed_counter += 2
             args = (*actors, executor, stop_signal)
             actor_threads.append(
                 threading.Thread(
@@ -211,12 +286,45 @@ def main():
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
-                rng_seed=len(actor_threads),
+                rng_seed=rng_seed_counter,
             )
+            rng_seed_counter += 1
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
                 threading.Thread(
                     target=run_eval_heuristic, args=args, name=f"EvalActor-{eval_id}"
+                )
+            )
+
+        for controlled_eval_id in range(learner_config.num_controlled_eval_actors):
+            player_actor = Actor(
+                agent=eval_agent,
+                env=SinglePlayerSyncEnvironment(
+                    f"controlled-eval:p0:{controlled_eval_id:04d}",
+                    generation=learner_config.generation,
+                ),
+                unroll_length=learner_config.unroll_length,
+                learner=learner,
+                rng_seed=rng_seed_counter,
+            )
+            rng_seed_counter += 1
+            opponent_actor = Actor(
+                agent=eval_agent,
+                env=SinglePlayerSyncEnvironment(
+                    f"controlled-eval:p1:{controlled_eval_id:04d}",
+                    generation=learner_config.generation,
+                ),
+                unroll_length=learner_config.unroll_length,
+                learner=learner,
+                rng_seed=rng_seed_counter,
+            )
+            rng_seed_counter += 1
+            args = (player_actor, opponent_actor, executor, stop_signal, wandb_run)
+            actor_threads.append(
+                threading.Thread(
+                    target=run_controlled_eval,
+                    args=args,
+                    name=f"ControlledEval-{controlled_eval_id}",
                 )
             )
 
