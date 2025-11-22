@@ -1,8 +1,7 @@
-import secrets
-
 from dotenv import load_dotenv
 
 load_dotenv()
+import secrets
 
 import numpy as np
 import uvicorn

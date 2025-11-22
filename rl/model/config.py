@@ -122,6 +122,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
+    cfg.value_head.final_activation = jnp.tanh
 
     for head, output_size in [
         (cfg.value_head, 1),
@@ -206,6 +207,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
+    cfg.value_head.final_activation = jnp.tanh
     cfg.value_head.logits.layer_sizes = 1
     cfg.value_head.logits.use_layer_norm = True
 

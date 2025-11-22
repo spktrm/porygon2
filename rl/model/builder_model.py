@@ -339,7 +339,7 @@ def main(debug: bool = False, generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        # builder_head_params=HeadParams(temp=0.8),
+        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     builder_env = TeamBuilderEnvironment(
