@@ -34,6 +34,28 @@ source venv/bin/activate
 
 `./sh eval.sh`
 
+## Evaluation
+
+Porygon2 includes advanced evaluation features to help understand agent performance:
+
+### Controlled Evaluation
+
+To quantify whether your agent's improvement comes from better team building or better battle decisions, use **Controlled Evaluation**. This feature runs matches where both agents use the same fixed team, isolating playing skill from team building.
+
+See [docs/CONTROLLED_EVALUATION.md](docs/CONTROLLED_EVALUATION.md) for detailed documentation.
+
+**Quick Start:**
+```python
+# In your config
+learner_config = Porygon2LearnerConfig(
+    num_controlled_eval_actors=1,  # Enable controlled evaluation
+)
+```
+
+This will track two metrics in Weights & Biases:
+- `league_main_v_{checkpoint}_winrate` - Standard win rate (team building + playing)
+- `league_main_v_{checkpoint}_controlled_winrate` - Controlled win rate (playing only)
+
 ## Scripts
 
 The `scripts/` directory contains helper scripts for various tasks:
