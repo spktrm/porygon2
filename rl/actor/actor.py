@@ -4,6 +4,7 @@ import numpy as np
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
+    BuilderAgentOutput,
     BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
@@ -244,7 +245,11 @@ class Actor:
         )
 
         # Create empty builder trajectory (not used in controlled eval)
-        builder_transition = get_ex_builder_step()
+        builder_input, builder_output = get_ex_builder_step()
+        builder_transition = BuilderTransition(
+            env_output=builder_input.env,
+            agent_output=BuilderAgentOutput(actor_output=builder_output),
+        )
         builder_unroll_length = self._builder_env._max_trajectory_length + 1
         builder_trajectory = jax.tree.map(
             lambda x: np.tile(x, (builder_unroll_length,) + (1,) * x.ndim),

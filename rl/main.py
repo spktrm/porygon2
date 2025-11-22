@@ -167,7 +167,7 @@ def run_controlled_eval(
             traceback.print_exc()
             continue
             
-        time.sleep(30)  # Run less frequently than regular eval
+        time.sleep(learner.learner_config.controlled_eval_interval_seconds)
 
 
 def main():

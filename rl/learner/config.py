@@ -57,6 +57,7 @@ class Porygon2LearnerConfig:
     # Controlled evaluation params
     controlled_eval_fixed_species: tuple[int, ...] = (0, 1, 2, 3, 4, 5)
     controlled_eval_fixed_sets: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
+    controlled_eval_interval_seconds: int = 30
 
     # Batch iteration params
     batch_size: int = 4
