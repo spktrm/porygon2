@@ -37,11 +37,14 @@ def run_training_actor_pair(
             player_params = player.pull_main_player()
             opponent_params, is_trainable = player.get_match()
 
-            player.set_current_ckpt(np.array(player_params.step_count).item())
-            player.set_opponent_ckpt(np.array(opponent_params.step_count).item())
+            player_ckpt = np.array(player_params.player_step_count).item()
+            opponent_ckpt = np.array(opponent_params.player_step_count).item()
 
-            opponent.set_current_ckpt(np.array(opponent_params.step_count).item())
-            opponent.set_opponent_ckpt(np.array(player_params.step_count).item())
+            player.set_current_ckpt(player_ckpt)
+            player.set_opponent_ckpt(opponent_ckpt)
+
+            opponent.set_current_ckpt(opponent_ckpt)
+            opponent.set_opponent_ckpt(player_ckpt)
 
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)

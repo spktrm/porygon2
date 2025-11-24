@@ -21,7 +21,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.learner.league import League
+from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
@@ -66,7 +66,7 @@ class Porygon2LearnerConfig:
 
     # EMA params
     player_ema_decay: float = 1e-3
-    builder_ema_decay: float = 1e-4
+    builder_ema_decay: float = 1e-3
 
     # Discount params
     player_gamma: float = 1.0
@@ -74,7 +74,7 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     player_lambda: float = 0.95
-    builder_lambda: float = 0.5
+    builder_lambda: float = 0.95
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.2
@@ -285,15 +285,25 @@ def load_train_state(
     if not latest_ckpt or from_scratch:
         if from_scratch:
             print("Starting training from scratch.")
-        initial_params = ParamsContainer(
-            frame_count=np.array(player_state.actor_steps).item(),
-            step_count=np.array(player_state.num_steps).item(),
-            player_params=player_state.params,
-            builder_params=builder_state.params,
-        )
         league = League(
-            main_player=initial_params,
-            players=[initial_params],
+            main_player=ParamsContainer(
+                player_frame_count=np.array(player_state.actor_steps).item(),
+                builder_frame_count=np.array(builder_state.actor_steps).item(),
+                player_step_count=MAIN_KEY,
+                builder_step_count=MAIN_KEY,
+                player_params=player_state.params,
+                builder_params=builder_state.params,
+            ),
+            players=[
+                ParamsContainer(
+                    player_frame_count=np.array(player_state.actor_steps).item(),
+                    builder_frame_count=np.array(builder_state.actor_steps).item(),
+                    player_step_count=np.array(player_state.num_steps).item(),
+                    builder_step_count=np.array(builder_state.num_steps).item(),
+                    player_params=player_state.params,
+                    builder_params=builder_state.params,
+                )
+            ],
             league_size=learner_config.league_size,
         )
         return player_state, builder_state, league, None
