@@ -68,7 +68,8 @@ class Actor:
     def unroll(
         self,
         rng_key: jax.Array,
-        frame_count: int,
+        player_frame_count: int,
+        builder_frame_count: int,
         player_params: Params,
         builder_params: Params,
     ) -> Trajectory:
@@ -181,7 +182,8 @@ class Actor:
         subkey = self.split_rng()
         act_out = self.unroll(
             rng_key=subkey,
-            frame_count=params_container.frame_count,
+            player_frame_count=params_container.player_frame_count,
+            builder_frame_count=params_container.builder_frame_count,
             player_params=player_params,
             builder_params=builder_params,
         )
@@ -199,7 +201,7 @@ class Actor:
         historical = [
             player
             for player in self._learner.league.players.values()
-            if player.step_count != MAIN_KEY
+            if player.get_key != (MAIN_KEY, MAIN_KEY)
         ]
         if not historical:  # No historical players to play against
             return None
@@ -218,7 +220,7 @@ class Actor:
         # We only store trajectories from the the perspective of the main player,
         # so we need to oversample playing against it such that the proportion of
         # games played against it is 50%.
-        if coin_toss < 0.667:
+        if coin_toss < 0.5:
             opponent = self._pfsp_branch()
             if opponent is not None:  # Found a historical opponent
                 return opponent, False

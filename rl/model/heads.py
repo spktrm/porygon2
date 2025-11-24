@@ -27,6 +27,7 @@ def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float =
 
     # Avoid log(0) just in case of numerical edge cases
     log_probs = jnp.log(probs)
+    log_probs = jnp.nan_to_num(log_probs, neginf=jnp.finfo(log_probs.dtype).min)
 
     return jax.random.categorical(rng_key, log_probs, axis=-1)
 

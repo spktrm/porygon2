@@ -371,6 +371,7 @@ def player_train_step(
     )
 
     training_logs = dict(
+        bootstrap_value=target_value_head[:1],  # For builder bootstrapping
         actor_steps=player_state.actor_steps,
         Step=player_state.num_steps,
     )
@@ -383,6 +384,7 @@ def player_train_step(
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Trajectory,
+    bootstrap_value: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
@@ -437,7 +439,7 @@ def builder_train_step(
     )
 
     v_tm1 = target_value_head
-    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
+    v_t = jnp.concatenate((v_tm1[1:], bootstrap_value))
     rewards_t = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
 
@@ -744,70 +746,69 @@ class Learner:
 
     def get_league_winrates(self):
         league = self.league
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
+        historical_players = [
+            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
+        ]
+        win_rates = league.get_winrate(
+            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
+        )
         return {
-            f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
+            f"league_main_v_{historical_players[i].get_key()}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
         }
 
     def ready_to_add_player(self):
         league = self.league
         latest_player = league.get_latest_player()
-        steps_passed = self.player_state.actor_steps.item() - latest_player.frame_count
+        steps_passed = (
+            self.player_state.actor_steps.item() - latest_player.player_frame_count
+        )
         if steps_passed < self.learner_config.add_player_min_frames:
             return False
 
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
-
+        historical_players = [
+            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
+        ]
+        win_rates = league.get_winrate(
+            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
+        )
         return (win_rates.min() > 0.7) | (
             steps_passed >= self.learner_config.add_player_max_frames
         )
 
-    def mix_noise(self):
-        print("Mixing noise into parameters.")
-        base_rng, player_noise_key, builder_noise_key = jax.random.split(
-            self.player_state.rng_key, 3
+    def should_update_builder(self):
+        league = self.league
+        historical_players = [
+            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
+        ]
+        win_rates = league.get_winrate(
+            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
         )
-
-        noise_player_params = self.player_state.init_fn(player_noise_key)
-        new_player_params = optax.incremental_update(
-            noise_player_params,
-            self.player_state.target_params,
-            self.learner_config.mix_noise_ratio,
-        )
-        self.player_state = self.player_state.replace(
-            params=new_player_params, target_params=new_player_params, rng_key=base_rng
-        )
-
-        noise_builder_params = self.builder_state.init_fn(builder_noise_key)
-        new_builder_params = optax.incremental_update(
-            noise_builder_params,
-            self.builder_state.target_params,
-            self.learner_config.mix_noise_ratio,
-        )
-        self.builder_state = self.builder_state.replace(
-            params=new_builder_params, target_params=new_builder_params
-        )
+        return win_rates.min() > 0.6
 
     def update_main_player(self):
         new_params = ParamsContainer(
-            frame_count=self.player_state.actor_steps.item(),
-            step_count=MAIN_KEY,  # For main agent
+            player_frame_count=np.array(self.player_state.actor_steps).item(),
+            builder_frame_count=np.array(self.builder_state.actor_steps).item(),
+            player_step_count=MAIN_KEY,  # For main agent
+            builder_step_count=MAIN_KEY,  # For main agent
             player_params=self.player_state.params,
             builder_params=self.builder_state.params,
         )
         self.league.update_main_player(new_params)
 
     def add_new_player(self):
-        num_steps = np.array(self.player_state.num_steps).item()
-        print("Adding new player to league @ step", num_steps)
-
+        player_num_steps = np.array(self.player_state.num_steps).item()
+        builder_num_steps = np.array(self.builder_state.num_steps).item()
+        print(
+            f"Adding new player to league @ ({player_num_steps}, {builder_num_steps})"
+        )
         self.league.add_player(
             ParamsContainer(
-                frame_count=self.player_state.actor_steps.item(),
-                step_count=num_steps,
+                player_frame_count=np.array(self.player_state.actor_steps).item(),
+                builder_frame_count=np.array(self.builder_state.actor_steps).item(),
+                player_step_count=player_num_steps,
+                builder_step_count=builder_num_steps,
                 player_params=self.player_state.params,
                 builder_params=self.builder_state.params,
             )
@@ -820,38 +821,52 @@ class Learner:
         player_train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
         builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
 
-        for step_idx in range(1, self.learner_config.num_steps + 1):
+        prev_add_player_check = 0
+
+        for _ in range(self.learner_config.num_steps):
 
             try:
                 batch = self.device_q.get()
                 batch: Trajectory = jax.device_put(batch)
+
                 new_player_state: Porygon2PlayerTrainState
                 new_builder_state: Porygon2BuilderTrainState
+
+                player_step = np.array(self.player_state.num_steps).item()
+                training_logs = {
+                    "player_steps": player_step,
+                    "builder_steps": np.array(self.builder_state.num_steps).item(),
+                }
 
                 with self.gpu_lock:
                     new_player_state, player_logs = player_train_step_jit(
                         self.player_state, batch, self.learner_config
                     )
+                if jnp.isfinite(player_logs["player_loss"]).item():
+                    self.player_state = new_player_state
+                else:
+                    print(
+                        "Non-finite loss detected in player @ step",
+                        training_logs["player_steps"],
+                    )
+                    continue
 
                 with self.gpu_lock:
                     new_builder_state, builder_logs = builder_train_step_jit(
-                        self.builder_state, batch, self.learner_config
+                        self.builder_state,
+                        batch,
+                        player_logs.pop("bootstrap_value"),
+                        self.learner_config,
                     )
-
-                # Safety check: only apply the update if the losses are finite.
-                if (
-                    jnp.isfinite(player_logs["player_loss"]).item()
-                    and jnp.isfinite(builder_logs["builder_loss"]).item()
-                ):
-                    self.player_state = new_player_state
+                if jnp.isfinite(builder_logs["builder_loss"]).item():
                     self.builder_state = new_builder_state
                 else:
-                    print("Non-finite loss detected @ step", step_idx)
+                    print(
+                        "Non-finite loss detected in builder @ step",
+                        training_logs["builder_steps"],
+                    )
                     continue
 
-                num_steps = np.array(self.player_state.num_steps).item()
-
-                training_logs = {"step_idx": step_idx}
                 training_logs.update(
                     jax.device_get(
                         collect_batch_telemetry_data(batch, self.learner_config)
@@ -860,11 +875,11 @@ class Learner:
                 training_logs.update(jax.device_get(player_logs))
                 training_logs.update(jax.device_get(builder_logs))
 
-                if (num_steps % self.learner_config.save_interval_steps) == 0:
+                if (player_step % self.learner_config.save_interval_steps) == 0:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)
                     training_logs.update(jax.device_get(usage_logs))
 
-                if (num_steps % self.learner_config.league_winrate_log_steps) == 0:
+                if (player_step % self.learner_config.league_winrate_log_steps) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
 
@@ -879,7 +894,7 @@ class Learner:
 
                 self.update_main_player()
 
-                if (num_steps % self.learner_config.save_interval_steps) == 0:
+                if (player_step % self.learner_config.save_interval_steps) == 0:
                     save_train_state(
                         self.wandb_run,
                         self.learner_config,
@@ -889,8 +904,14 @@ class Learner:
                         self.metadata,
                     )
 
-                if self.ready_to_add_player():
+                should_add_player = False
+                if (player_step - prev_add_player_check) >= 10:
+                    should_add_player = self.ready_to_add_player()
+                    prev_add_player_check = player_step
+
+                if should_add_player:
                     self.add_new_player()
+                    self.replay.reset_species_counts()
 
             except Exception as e:
                 logger.error(f"Learner train step failed: {e}")
