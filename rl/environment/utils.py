@@ -23,12 +23,12 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderEnvOutput,
     BuilderHistoryOutput,
-    HeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHiddenInfo,
     PlayerHistoryOutput,
+    PolicyHeadOutput,
 )
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
 from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState, ResetRequest
@@ -233,9 +233,9 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     return (
         PlayerActorInput(env=env, history=history, hidden=hidden),
         PlayerActorOutput(
-            v=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            action_head=HeadOutput(action_index=env.action_mask.argmax(-1)),
-            wildcard_head=HeadOutput(action_index=env.wildcard_mask.argmax(-1)),
+            value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
+            action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
+            wildcard_head=PolicyHeadOutput(action_index=env.wildcard_mask.argmax(-1)),
         ),
     )
 
@@ -265,9 +265,11 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             ),
         ),
         BuilderActorOutput(
-            v=np.zeros_like(done, dtype=np.float32),
-            species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            packed_set_head=HeadOutput(
+            value_head=np.zeros_like(done, dtype=np.float32),
+            species_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            packed_set_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),
@@ -279,31 +281,14 @@ def main():
     ex_player_input, ex_player_output = get_ex_player_step()
     ex_builder_input, ex_builder_output = get_ex_builder_step()
 
-    my_fainted_count = ex_player_input.env.info[
-        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    ]
-    opp_fainted_count = ex_player_input.env.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    ]
-    my_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__MY_HP_COUNT]
-    opp_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT]
-    phi_t = (
-        (opp_fainted_count - my_fainted_count) + 0.2 * (my_hp_count - opp_hp_count)
-    ) / MAX_RATIO_TOKEN
-
-    shaped_reward = phi_t[1:] - phi_t[:-1]
-    shaped_reward = np.concatenate(
-        (np.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
-    )
-
-    rewards_tm1 = (shaped_reward).squeeze(-1)
+    rewards_tm1 = ex_player_input.env.win_reward.squeeze(-1)
     valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
 
     rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
 
     oracle_value = rewards[::-1].cumsum()[::-1]
     perturbed_oracle_value = oracle_value + np.random.normal(
-        scale=1e-2, size=oracle_value.shape
+        scale=0.5, size=oracle_value.shape
     )
 
     v_tm1 = valid * perturbed_oracle_value
@@ -311,14 +296,12 @@ def main():
     discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
         v_t.dtype
     )
-    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
 
     vtrace = rlax.vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, valid, lambdas
+        v_tm1, v_t, rewards, discounts, valid, lambda_=0.95
     )
-    errors = vtrace.errors
-    errors + v_tm1
-    print(vtrace)
+    v_tm1 + vtrace.errors
+    print()
 
 
 if __name__ == "__main__":

@@ -105,6 +105,20 @@ def mse_value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     return average(mse_loss, valid)
 
 
+def clipped_value_loss(
+    *,
+    pred_v: jax.Array,
+    target_v: jax.Array,
+    old_v: jax.Array,
+    valid: jax.Array,
+    clip_val: float = 0.2,
+):
+    loss_unclipped = jnp.square(pred_v - target_v)
+    pred_v_clipped = old_v + jnp.clip(pred_v - old_v, -clip_val, clip_val)
+    loss_clipped = jnp.square(pred_v_clipped - target_v)
+    return average(jnp.maximum(loss_unclipped, loss_clipped), valid)
+
+
 def ce_value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
     mse_loss = -(pred_v * target_v).sum(axis=-1)
     return average(mse_loss, valid)
@@ -165,6 +179,26 @@ def postprocess_log_prob(log_prob: jax.Array, min_p: float = 0.03):
     )
 
 
+def scalar_to_two_hot(scalar_target: jax.Array) -> jax.Array:
+    """
+    Projects a scalar [-1, 1] into a smooth distribution over 3 bins {-1, 0, 1}.
+    """
+    val = jnp.clip(scalar_target, -1.0, 1.0)
+    val_idx = val + 1.0
+
+    lower_idx = jnp.floor(val_idx).astype(jnp.int32)
+    upper_idx = lower_idx + 1
+
+    weight = val_idx - lower_idx
+    upper_idx = jnp.minimum(upper_idx, 2)
+    lower_idx = jnp.minimum(lower_idx, 2)
+
+    probs_lower = jax.nn.one_hot(lower_idx, 3) * (1.0 - weight)[..., None]
+    probs_upper = jax.nn.one_hot(upper_idx, 3) * weight[..., None]
+
+    return probs_lower + probs_upper
+
+
 def player_train_step(
     player_state: Porygon2PlayerTrainState,
     batch: Trajectory,
@@ -190,7 +224,7 @@ def player_train_step(
     actor_action_head = player_transitions.agent_output.actor_output.action_head
     actor_wildcard_head = player_transitions.agent_output.actor_output.wildcard_head
 
-    target_value_head = player_target_pred.v
+    target_value_head = player_target_pred.value_head
     target_action_head = player_target_pred.action_head
     target_wildcard_head = player_target_pred.wildcard_head
 
@@ -214,7 +248,7 @@ def player_train_step(
     valid = jnp.bitwise_not(player_transitions.env_output.done)
     rewards_tm1 = player_transitions.env_output.win_reward
 
-    v_tm1 = target_value_head
+    v_tm1 = target_value_head.expectation
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
@@ -233,7 +267,9 @@ def player_train_step(
     vtrace = vtrace_td_error_and_advantage(
         v_tm1, v_t, rewards, discounts, target_actor_ratio
     )
-    target_v = vtrace.errors + v_tm1
+
+    target_scalar_v = vtrace.errors + v_tm1
+    target_dist = scalar_to_two_hot(target_scalar_v)
 
     player_adv_mean = average(vtrace.pg_advantage, valid)
     player_adv_std = vtrace.pg_advantage.std(where=valid)
@@ -258,14 +294,14 @@ def player_train_step(
             )
         )
 
-        pred_value_head = player_pred.v
-        pred_action_head = player_pred.action_head
-        pred_wildcard_head = player_pred.wildcard_head
+        learner_value_head = player_pred.value_head
+        learner_action_head = player_pred.action_head
+        learner_wildcard_head = player_pred.wildcard_head
 
         learner_log_prob = calculate_player_log_prob(
-            action_log_prob=pred_action_head.log_prob,
-            action_index=pred_action_head.action_index,
-            wildcard_log_prob=pred_wildcard_head.log_prob,
+            action_log_prob=learner_action_head.log_prob,
+            action_index=learner_action_head.action_index,
+            wildcard_log_prob=learner_wildcard_head.log_prob,
         )
 
         # Calculate the log ratios.
@@ -285,10 +321,13 @@ def player_train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = mse_value_loss(pred_v=pred_value_head, target_v=target_v, valid=valid)
+        # Softmax cross-entropy loss for value head
+        loss_v = average(
+            -jnp.sum(learner_value_head.log_probs * target_dist, axis=-1), valid
+        )
 
-        action_head_entropy = average(pred_action_head.entropy, valid)
-        wildcard_head_entropy = average(pred_wildcard_head.entropy, wildcard_valid)
+        action_head_entropy = average(learner_action_head.entropy, valid)
+        wildcard_head_entropy = average(learner_wildcard_head.entropy, wildcard_valid)
         loss_entropy = action_head_entropy + wildcard_head_entropy
 
         learner_actor_approx_kl = forward_kl_loss(
@@ -334,7 +373,9 @@ def player_train_step(
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
-                value_prediction=pred_value_head, value_target=target_v, mask=valid
+                value_prediction=learner_value_head.expectation,
+                value_target=target_scalar_v,
+                mask=valid,
             ),
         )
 
@@ -351,8 +392,8 @@ def player_train_step(
             player_is_ratio=average(actor_target_clipped_ratio, valid),
             player_norm_adv_mean=average(player_norm_advantages, valid),
             player_norm_adv_std=player_norm_advantages.std(where=valid),
-            player_value_target_mean=average(target_v, valid),
-            player_value_target_std=target_v.std(where=valid),
+            player_value_target_mean=average(target_scalar_v, valid),
+            player_value_target_std=target_scalar_v.std(where=valid),
         )
     )
 
@@ -371,7 +412,6 @@ def player_train_step(
     )
 
     training_logs = dict(
-        bootstrap_value=target_value_head[:1],  # For builder bootstrapping
         actor_steps=player_state.actor_steps,
         Step=player_state.num_steps,
     )
@@ -384,7 +424,6 @@ def player_train_step(
 def builder_train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Trajectory,
-    bootstrap_value: jax.Array,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
@@ -412,7 +451,7 @@ def builder_train_step(
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
-    target_value_head = builder_target_pred.v
+    target_value_head = builder_target_pred.value_head
     target_species_head = builder_target_pred.species_head
     target_packed_set_head = builder_target_pred.packed_set_head
 
@@ -433,13 +472,17 @@ def builder_train_step(
 
     valid = jnp.bitwise_not(builder_transitions.env_output.done)
     final_reward = batch.player_transitions.env_output.win_reward[-1]
+    biased_reward = (
+        final_reward
+        + batch.player_transitions.agent_output.actor_output.value_head.expectation[0]
+    ) / 2
 
     rewards_tm1 = (
-        jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * final_reward[None]
+        jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * biased_reward[None]
     )
 
-    v_tm1 = target_value_head
-    v_t = jnp.concatenate((v_tm1[1:], bootstrap_value))
+    v_tm1 = target_value_head.expectation
+    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards_t = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
 
@@ -457,7 +500,9 @@ def builder_train_step(
     vtrace = vtrace_td_error_and_advantage(
         v_tm1, v_t, rewards_t, discounts, target_actor_ratio
     )
-    target_v = vtrace.errors + v_tm1
+
+    target_scalar_v = vtrace.errors + v_tm1
+    target_dist = scalar_to_two_hot(target_scalar_v)
 
     builder_adv_mean = average(vtrace.pg_advantage, valid)
     builder_adv_std = vtrace.pg_advantage.std(where=valid)
@@ -478,7 +523,7 @@ def builder_train_step(
             )
         )
 
-        learner_value_head = builder_pred.v
+        learner_value_head = builder_pred.value_head
         learner_species_head = builder_pred.species_head
         learner_packed_set_head = builder_pred.packed_set_head
 
@@ -503,8 +548,9 @@ def builder_train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        loss_v = mse_value_loss(
-            pred_v=learner_value_head, target_v=target_v, valid=valid
+        # Softmax cross-entropy loss for value head
+        loss_v = average(
+            -jnp.sum(learner_value_head.log_probs * target_dist, axis=-1), valid
         )
 
         species_entropy = average(learner_species_head.entropy, valid)
@@ -553,7 +599,9 @@ def builder_train_step(
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             builder_value_function_r2=calculate_r2(
-                value_prediction=learner_value_head, value_target=target_v, mask=valid
+                value_prediction=learner_value_head.expectation,
+                value_target=target_scalar_v,
+                mask=valid,
             ),
         )
 
@@ -572,8 +620,8 @@ def builder_train_step(
             builder_is_ratio=average(actor_target_clipped_ratio, valid),
             builder_norm_adv_mean=average(builder_norm_advantages, valid),
             builder_norm_adv_std=builder_norm_advantages.std(where=valid),
-            builder_value_target_mean=average(target_v, valid),
-            builder_value_target_std=target_v.std(where=valid),
+            builder_value_target_mean=average(target_scalar_v, valid),
+            builder_value_target_std=target_scalar_v.std(where=valid),
         )
     )
 
@@ -853,10 +901,7 @@ class Learner:
 
                 with self.gpu_lock:
                     new_builder_state, builder_logs = builder_train_step_jit(
-                        self.builder_state,
-                        batch,
-                        player_logs.pop("bootstrap_value"),
-                        self.learner_config,
+                        self.builder_state, batch, self.learner_config
                     )
                 if jnp.isfinite(builder_logs["builder_loss"]).item():
                     self.builder_state = new_builder_state

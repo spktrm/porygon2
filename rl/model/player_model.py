@@ -8,10 +8,10 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
-    HeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
+    PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
@@ -53,7 +53,7 @@ class Porygon2PlayerModel(nn.Module):
         self,
         logits: jax.Array,
         valid_mask: jax.Array,
-        head: HeadOutput,
+        head: PolicyHeadOutput,
         train: bool,
         min_p: float,
     ):
@@ -71,7 +71,9 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+        return PolicyHeadOutput(
+            action_index=action_index, log_prob=log_prob, entropy=entropy
+        )
 
     def get_head_outputs(
         self,
@@ -106,12 +108,12 @@ class Porygon2PlayerModel(nn.Module):
             env_step.wildcard_mask,
             head_params,
         )
-        value = self.value_head(state_query)
+        value_head = self.value_head(state_query)
 
         return PlayerActorOutput(
             action_head=action_head,
             wildcard_head=wildcard_head,
-            v=value,
+            value_head=value_head,
         )
 
     def __call__(
