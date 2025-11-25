@@ -122,10 +122,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
-    cfg.value_head.final_activation = jnp.tanh
+    cfg.value_head.category_values = jnp.array([-1, 0, 1])
 
     for head, output_size in [
-        (cfg.value_head, 1),
+        (cfg.value_head, 3),
         (cfg.wildcard_head, NUM_WILDCARD_FEATURES),
     ]:
         head.logits = ConfigDict()
@@ -207,9 +207,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.final_activation = jnp.tanh
-    cfg.value_head.logits.layer_sizes = 1
-    cfg.value_head.logits.use_layer_norm = True
+    cfg.value_head.logits.layer_sizes = 3
+    cfg.value_head.category_values = jnp.array([-1, 0, 1])
 
     for head in [
         cfg.species_head,

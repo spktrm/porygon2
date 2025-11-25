@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import HeadOutput
+from rl.environment.interfaces import PolicyHeadOutput, ValueHeadOutput
 from rl.model.modules import MLP, PointerLogits, Resnet
 from rl.model.utils import legal_log_policy, legal_policy
 
@@ -57,7 +57,7 @@ class PolicyQKHead(nn.Module):
         self,
         query_embedding: jax.Array,
         key_embeddings: jax.Array,
-        head: HeadOutput,
+        head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
@@ -85,7 +85,9 @@ class PolicyQKHead(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+        return PolicyHeadOutput(
+            action_index=action_index, log_prob=log_prob, entropy=entropy
+        )
 
 
 class PolicyLogitHeadInner(nn.Module):
@@ -109,7 +111,7 @@ class PolicyLogitHead(nn.Module):
     def __call__(
         self,
         embedding: jax.Array,
-        head: HeadOutput,
+        head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
@@ -134,7 +136,9 @@ class PolicyLogitHead(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+        return PolicyHeadOutput(
+            action_index=action_index, log_prob=log_prob, entropy=entropy
+        )
 
 
 class ValueLogitHead(nn.Module):
@@ -148,8 +152,11 @@ class ValueLogitHead(nn.Module):
         x = resnet(x)
         x = logits(x)
 
-        final_act = getattr(self.cfg, "final_activation", None)
-        if final_act is not None:
-            return final_act(x.squeeze(-1))
-        else:
-            return x.squeeze(-1)
+        log_probs = nn.log_softmax(x, axis=-1)
+        probs = jnp.exp(log_probs)
+        entropy = -jnp.sum(probs * log_probs, axis=-1)
+        expectation = probs @ self.cfg.category_values
+
+        return ValueHeadOutput(
+            logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
+        )

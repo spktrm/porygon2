@@ -59,10 +59,10 @@ class Porygon2LearnerConfig:
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
-    learning_rate: float = 5e-5
+    player_learning_rate: float = 2e-5
+    builder_learning_rate: float = 2e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    mix_noise_ratio: float = 0.5
 
     # EMA params
     player_ema_decay: float = 1e-3
@@ -74,11 +74,10 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     player_lambda: float = 0.95
-    builder_lambda: float = 0.95
+    builder_lambda: float = 1.0
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.2
-    consistency_coef: float = 0.01
 
     # Loss coefficients
     player_value_loss_coef: float = 1.0
@@ -89,7 +88,7 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 0.01
 
     # Smogon Generation
     generation: GenT = 9
@@ -161,7 +160,7 @@ def create_train_state(
         tx=optax.chain(
             optax.clip_by_global_norm(config.player_clip_gradient),
             optax.adam(
-                learning_rate=config.learning_rate,
+                learning_rate=config.player_learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
@@ -187,7 +186,7 @@ def create_train_state(
         tx=optax.chain(
             optax.clip_by_global_norm(config.builder_clip_gradient),
             optax.adam(
-                learning_rate=config.learning_rate,
+                learning_rate=config.builder_learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,

@@ -3812,7 +3812,7 @@ export class StateHandler {
         if (this.player.done) {
             if (this.player.finishedEarly) {
                 // Prevent reward hacking by stalling
-                return Math.floor(MAX_RATIO_TOKEN * -0.5);
+                return 0;
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";

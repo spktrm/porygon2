@@ -247,7 +247,7 @@ class Porygon2BuilderModel(nn.Module):
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value = self._forward_value_head(current_embedding)
+        value_head = self._forward_value_head(current_embedding)
 
         species_query = current_embedding
 
@@ -282,7 +282,9 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         return BuilderActorOutput(
-            species_head=species_head, packed_set_head=packed_set_head, v=value
+            species_head=species_head,
+            packed_set_head=packed_set_head,
+            value_head=value_head,
         )
 
     def __call__(
