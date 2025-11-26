@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from rl.model.utils import ParamsContainer
+
 load_dotenv()
 import concurrent.futures
 import json
@@ -10,23 +12,31 @@ from pprint import pprint
 
 import jax
 import numpy as np
+import wandb
 import wandb.wandb_run
 
-import wandb
-from rl.actor.actor import Actor
-from rl.actor.agent import Agent
-from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.learner.config import create_train_state, get_learner_config, load_train_state
-from rl.learner.learner import Learner
+from rl.actor.actor import BuilderActor, PlayerActor
+from rl.actor.agent import BuilderAgent, PlayerAgent
+from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
+from rl.learner.config import (
+    LearnerConfig,
+    create_train_state,
+    get_learner_config,
+    load_train_state,
+    save_train_state,
+)
+from rl.learner.league import MAIN_KEY, League
+from rl.learner.learner import BuilderLearner, PlayerLearner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 
 
-def run_training_actor_pair(
-    player: Actor,
-    opponent: Actor,
+def run_builder_actor(
+    league: League,
+    learner: BuilderLearner,
+    actor: BuilderActor,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
 ):
@@ -34,74 +44,159 @@ def run_training_actor_pair(
 
     while not stop_signal[0]:
         try:
-            player_params = player.pull_main_player()
-            opponent_params, is_trainable = player.get_match()
+            main_params = league.get_main_player()
+            future = executor.submit(actor.unroll, main_params)
+            trajectory = future.result()
+            learner.enqueue_traj(trajectory)
 
-            player_ckpt = np.array(player_params.player_step_count).item()
-            opponent_ckpt = np.array(opponent_params.player_step_count).item()
+        except Exception as e:
+            traceback.print_exc()
+            raise e
 
-            player.set_current_ckpt(player_ckpt)
-            player.set_opponent_ckpt(opponent_ckpt)
 
-            opponent.set_current_ckpt(opponent_ckpt)
-            opponent.set_opponent_ckpt(player_ckpt)
+def run_player_actor_pair(
+    league: League,
+    learner: PlayerLearner,
+    actor1: PlayerActor,
+    actor2: PlayerActor,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    stop_signal: list[bool],
+):
+    while not stop_signal[0]:
+        try:
+            main_params = league.get_main_player()
+            opponent_params, is_trainable = league.get_opponent(main_params)
+
+            main_ckpt = np.array(main_params.step_count).item()
+            opponent_ckpt = np.array(opponent_params.step_count).item()
+
+            actor1.set_current_ckpt(main_ckpt)
+            actor1.set_opponent_ckpt(opponent_ckpt)
+
+            actor2.set_current_ckpt(opponent_ckpt)
+            actor2.set_opponent_ckpt(main_ckpt)
 
             # Grab the result from either self play or playing historical opponents
-            future1 = executor.submit(player.unroll_and_push, player_params)
+            future1 = executor.submit(actor1.unroll, main_params)
+            future2 = executor.submit(actor2.unroll, opponent_params)
 
-            # Will only push if is_trainable is True
-            future2 = executor.submit(
-                opponent.unroll_and_push, opponent_params, is_trainable
-            )
-            trajectory = future1.result()
-            future2.result()
+            trajectory1 = future1.result()
+            trajectory2 = future2.result()
 
-            if not is_trainable:
-                player.update_player_league_stats(
-                    player_params, opponent_params, trajectory
-                )
+            for traj, should_enqueue in zip(
+                [trajectory1, trajectory2], [True, is_trainable]
+            ):
+                if should_enqueue:
+                    learner.enqueue_traj(traj)
+                else:
+                    league.update_payoff(main_params, opponent_params, trajectory1)
+
         except Exception as e:
             traceback.print_exc()
             raise e
 
 
 def run_eval_heuristic(
-    actor: Actor,
+    league: League,
+    learner: PlayerLearner,
+    actor: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
     wandb_run: wandb.wandb_run.Run,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
-    learner = actor._learner
+    step_count = np.array(learner._state.step_count).item()
 
-    step_count = np.array(learner.player_state.num_steps).item()
-
-    session_id = actor._player_env.username
+    session_id = actor._env.username
 
     while not stop_signal[0]:
         try:
-            new_step_count = np.array(learner.player_state.num_steps).item()
+            new_step_count = np.array(learner._state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = actor.pull_main_player()
+                player = league.get_main_player()
 
-                future1 = executor.submit(actor.unroll_and_push, player)
+                future1 = executor.submit(actor.unroll, player)
                 eval_trajectory = future1.result()
 
-                payoff = eval_trajectory.player_transitions.env_output.win_reward[-1]
+                payoff = eval_trajectory.transitions.env_output.win_reward[-1]
 
                 wandb_run.log({"Step": step_count, f"wr-{session_id}": payoff})
+
+                time.sleep(5)
+
+            else:
+                time.sleep(1)
 
         except Exception:
             traceback.print_exc()
             # Dont let bad evaluation crash the whole training loop
             continue
 
-        time.sleep(5)
+
+def run_learner(learner: PlayerLearner | BuilderLearner):
+    learner.train()
 
 
-def main():
+def run_league(
+    league: League,
+    player_learner: PlayerLearner,
+    builder_learner: BuilderLearner,
+    learner_config: LearnerConfig,
+):
+    """Runs the league to manage players and opponents."""
+
+    last_save_time = time.time()
+    while True:
+        try:
+            latest_player = league.get_latest_player()
+            step_count = np.array(player_learner._state.step_count).item()
+            frame_count = np.array(player_learner._state.frame_count).item()
+
+            steps_passed = frame_count - latest_player.frame_count
+            if steps_passed < learner_config.add_player_min_frames:
+                return False
+
+            historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+            win_rates = league.get_winrate(
+                (league.players[MAIN_KEY], historical_players)
+            )
+
+            should_add_player = (win_rates.min() > 0.7) | (
+                steps_passed >= learner_config.add_player_max_frames
+            )
+
+            if should_add_player:
+                print("Adding new player to league @ step", step_count)
+                league.add_player(
+                    ParamsContainer(
+                        frame_count=frame_count,
+                        step_count=step_count,
+                        player_params=player_learner._state.params,
+                        builder_params=builder_learner._state.params,
+                    )
+                )
+
+            current_time = time.time()
+            if current_time - last_save_time > learner_config.save_interval_steps:
+                last_save_time = current_time
+                print("Saving Training ckpt at step", step_count)
+                save_train_state(
+                    learner_config,
+                    player_learner._state,
+                    builder_learner._state,
+                    league,
+                )
+
+            time.sleep(10)
+        except Exception:
+            traceback.print_exc()
+            # Dont let bad league management crash the whole training loop
+            continue
+
+
+def main(from_scratch: bool = False):
     """Main function to run the RL learner."""
 
     learner_config = get_learner_config()
@@ -125,33 +220,42 @@ def main():
     actor_player_network = get_player_model(actor_player_model_config)
     actor_builder_network = get_builder_model(actor_builder_model_config)
 
+    learner_threads: list[threading.Thread] = []
     actor_threads: list[threading.Thread] = []
+
     stop_signal = [False]
 
-    player_state, builder_state = create_train_state(
-        learner_player_network,
-        learner_builder_network,
-        jax.random.key(42),
-        learner_config,
-    )
-
     gpu_lock = threading.Lock()
-    learning_agent = Agent(
+
+    player_agent = PlayerAgent(actor_player_network.apply, gpu_lock=gpu_lock)
+    builder_agent = BuilderAgent(actor_builder_network.apply, gpu_lock=gpu_lock)
+    eval_player_agent = PlayerAgent(
         actor_player_network.apply,
-        actor_builder_network.apply,
-        gpu_lock=gpu_lock,
-    )
-    eval_agent = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
         gpu_lock=gpu_lock,
         player_head_params=HeadParams(temp=0.8, min_p=0.1),
-        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
-    player_state, builder_state, league, metadata = load_train_state(
-        learner_config, player_state, builder_state
-    )
+    if from_scratch:
+        player_state, builder_state = create_train_state(
+            learner_player_network,
+            learner_builder_network,
+            jax.random.key(42),
+            learner_config,
+        )
+        league = League(
+            main_player=ParamsContainer(
+                frame_count=0,
+                step_count=0,
+                player_params=player_state.params,
+                builder_params=builder_state.params,
+            ),
+            league_size=learner_config.league_size,
+        )
+
+    else:
+        player_state, builder_state, league = load_train_state(
+            learner_config, player_state, builder_state
+        )
 
     wandb_run = wandb.init(
         project="pokemon-rl",
@@ -168,66 +272,113 @@ def main():
         },
     )
 
-    learner = Learner(
+    player_config = learner_config.player_config
+    builder_config = learner_config.builder_config
+    player_learner = PlayerLearner(
         player_state=player_state,
-        builder_state=builder_state,
-        learner_config=learner_config,
-        league=league,
+        config=learner_config.player_config,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
-        metadata=metadata,
+    )
+    builder_learner = BuilderLearner(
+        state=builder_state,
+        config=learner_config.builder_config,
+        wandb_run=wandb_run,
+        gpu_lock=gpu_lock,
     )
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors)
+        max_workers=(
+            player_config.num_actors // 2
+            + player_config.num_eval_actors
+            + builder_config.num_actors
+        )
     ) as executor:
+        for builder_actor_id in range(builder_config.num_actors):
+            actor = BuilderActor(
+                agent=builder_agent,
+                env=TeamBuilderEnvironment(
+                    generation=learner_config.generation, smogon_format="ou_all_formats"
+                ),
+                unroll_length=builder_config.unroll_length,
+                rng_seed=len(actor_threads),
+            )
+            args = (league, builder_learner, actor, executor, stop_signal, wandb_run)
+            actor_threads.append(
+                threading.Thread(
+                    target=run_builder_actor,
+                    args=args,
+                    name=f"BuilderActor-{builder_actor_id}",
+                )
+            )
 
-        for game_id in range(learner_config.num_actors // 2):
+        for player_game_id in range(player_config.num_actors // 2):
             actors = [
-                Actor(
-                    agent=learning_agent,
+                PlayerActor(
+                    agent=player_agent,
                     env=SinglePlayerSyncEnvironment(
-                        f"train:p{player_id}g{game_id:02d}",
+                        f"train:p{player_id}g{player_game_id:02d}",
                         generation=learner_config.generation,
                     ),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
+                    unroll_length=player_config.unroll_length,
                     rng_seed=len(actor_threads),
                 )
                 for player_id in range(2)
             ]
-            args = (*actors, executor, stop_signal)
+            args = (league, player_learner, *actors, executor, stop_signal)
             actor_threads.append(
                 threading.Thread(
-                    target=run_training_actor_pair,
+                    target=run_player_actor_pair,
                     args=args,
-                    name=f"Selfplay-{game_id}",
+                    name=f"PlayerActorPair-{player_game_id}",
                 )
             )
 
-        for eval_id in range(learner_config.num_eval_actors):
-            actor = Actor(
-                agent=eval_agent,
+        for builder_actor_id in range(player_config.num_eval_actors):
+            actor = BuilderActor(
+                agent=eval_player_agent,
                 env=SinglePlayerSyncEnvironment(
-                    f"eval-heuristic:{eval_id:04d}",
+                    f"eval-heuristic:{builder_actor_id:04d}",
                     generation=learner_config.generation,
                 ),
-                unroll_length=learner_config.unroll_length,
-                learner=learner,
+                unroll_length=player_config.unroll_length,
                 rng_seed=len(actor_threads),
             )
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
                 threading.Thread(
-                    target=run_eval_heuristic, args=args, name=f"EvalActor-{eval_id}"
+                    target=run_eval_heuristic,
+                    args=args,
+                    name=f"EvalActor-{builder_actor_id}",
                 )
             )
+
+        for learner in [player_learner, builder_learner]:
+            learner_threads.append(
+                threading.Thread(
+                    target=run_learner,
+                    args=(learner,),
+                    name=f"{type(learner).__name__}-Thread",
+                )
+            )
+
+        learner_threads.append(
+            threading.Thread(
+                target=run_league,
+                args=(league, player_learner, builder_learner, learner_config),
+                name="League-Thread",
+            )
+        )
 
         # Start the actors and learner.
         for t in actor_threads:
             t.start()
 
-        learner.train()
+        for t in learner_threads:
+            t.start()
+
+        for t in learner_threads:
+            t.join()
 
         stop_signal[0] = True
         for t in actor_threads:

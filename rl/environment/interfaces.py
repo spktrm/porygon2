@@ -28,15 +28,9 @@ class PlayerHistoryOutput(NamedTuple):
     field: ArrayLike = ()
 
 
-class PlayerHiddenInfo(NamedTuple):
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
-
-
 class PlayerActorInput(NamedTuple):
     env: PlayerEnvOutput = PlayerEnvOutput()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class ValueHeadOutput(NamedTuple):
@@ -82,10 +76,14 @@ class BuilderHistoryOutput(NamedTuple):
     packed_set_tokens: ArrayLike = ()
 
 
+class BuilderPerformance(NamedTuple):
+    count: ArrayLike = ()
+    n_wins: ArrayLike = ()
+
+
 class BuilderActorInput(NamedTuple):
     env: BuilderEnvOutput = BuilderEnvOutput()
     history: BuilderHistoryOutput = BuilderHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class BuilderActorOutput(NamedTuple):
@@ -103,13 +101,15 @@ class BuilderTransition(NamedTuple):
     agent_output: BuilderAgentOutput = BuilderAgentOutput()
 
 
-class Trajectory(NamedTuple):
-    builder_transitions: BuilderTransition = BuilderTransition()
-    builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+class BuilderTrajectory(NamedTuple):
+    transitions: BuilderTransition = BuilderTransition()
+    history: BuilderHistoryOutput = BuilderHistoryOutput()
+    performance: BuilderPerformance = BuilderPerformance()
 
-    player_transitions: PlayerTransition = PlayerTransition()
-    player_history: PlayerHistoryOutput = PlayerHistoryOutput()
-    player_hidden: PlayerHiddenInfo = PlayerHiddenInfo()
+
+class PlayerTrajectory(NamedTuple):
+    transitions: PlayerTransition = PlayerTransition()
+    history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
 class SamplingConfig(NamedTuple):

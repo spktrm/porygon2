@@ -62,12 +62,7 @@ class SinglePlayerSyncEnvironment:
         environment_response = worker_response.environment_response
         self.rqid = environment_response.state.rqid
 
-        opponent_reset_request = worker_response.opponent_reset_request
-
-        self.last_state = process_state(
-            environment_response.state,
-            opponent_reset_request if opponent_reset_request.username else None,
-        )
+        self.last_state = process_state(environment_response.state)
         return self.last_state
 
     def reset(

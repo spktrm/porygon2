@@ -35,7 +35,6 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
-from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams, PolicyQKHead, ValueLogitHead
 from rl.model.modules import SumEmbeddings, TransformerEncoder, one_hot_concat_jax
@@ -312,9 +311,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = True, generation: int = 9):
-    get_learner_config()
-
+def main(debug: bool = False, generation: int = 9):
     actor_model_config = get_builder_model_config(generation, train=False)
     actor_network = get_builder_model(actor_model_config)
 
@@ -341,7 +338,7 @@ def main(debug: bool = True, generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+        # builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     builder_env = TeamBuilderEnvironment(

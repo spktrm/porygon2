@@ -5,10 +5,10 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.interfaces import Trajectory
+from rl.environment.interfaces import BuilderTrajectory
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.environment.protos.service_pb2 import WildCardEnum
-from rl.learner.config import Porygon2LearnerConfig
+from rl.learner.config import PlayerLearnerConfig
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -21,27 +21,23 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 @functools.partial(jax.jit, static_argnames=("config"))
 def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig
+    batch: BuilderTrajectory, config: PlayerLearnerConfig
 ) -> Dict[str, Any]:
     builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
     builder_lengths = builder_valid.sum(0)
 
-    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    player_valid = jnp.bitwise_not(batch.transitions.env_output.done)
     player_lengths = player_valid.sum(0)
 
-    history_lengths = batch.player_history.field[
-        ..., FieldFeature.FIELD_FEATURE__VALID
-    ].sum(0)
+    history_lengths = batch.history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0)
 
-    can_move = batch.player_transitions.env_output.action_mask[..., :4].any(-1)
-    can_switch = batch.player_transitions.env_output.action_mask[..., 4:].any(-1)
+    can_move = batch.transitions.env_output.action_mask[..., :4].any(-1)
+    can_switch = batch.transitions.env_output.action_mask[..., 4:].any(-1)
     can_act = can_move & can_switch & player_valid
 
-    action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.action_index
-    )
+    action_index = batch.transitions.agent_output.actor_output.action_head.action_index
     wildcard_index = (
-        batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
+        batch.transitions.agent_output.actor_output.wildcard_head.action_index
     )
     did_move = (action_index < 4) & can_move
     did_switch = (action_index >= 4) & can_switch
@@ -54,7 +50,7 @@ def collect_batch_telemetry_data(
         player_valid.shape[0],
     ).min(axis=0)
 
-    final_reward = batch.player_transitions.env_output.win_reward[-1]
+    final_reward = batch.transitions.env_output.win_reward[-1]
 
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),

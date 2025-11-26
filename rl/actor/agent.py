@@ -19,33 +19,24 @@ from rl.model.heads import HeadParams
 from rl.model.utils import Params
 
 
-class Agent:
+class BuilderAgent:
     """A stateless agent interface."""
 
     def __init__(
         self,
-        player_apply_fn: (
-            Callable[[Params, PlayerActorInput], PlayerActorOutput] | None
-        ) = None,
-        builder_apply_fn: (
+        apply_fn: (
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
         gpu_lock: LockType | None = None,
-        player_head_params: HeadParams = HeadParams(),
-        builder_head_params: HeadParams = HeadParams(),
+        head_params: HeadParams = HeadParams(),
     ):
         """Constructs an Agent object."""
-        if player_apply_fn is None and builder_apply_fn is None:
-            raise ValueError(
-                "At least one of player_apply_fn or builder_apply_fn must be provided."
-            )
+        if apply_fn is None:
+            raise ValueError("At least one of builder_apply_fn must be provided.")
 
         dummy_func = lambda *args, **kwargs: None
-        self._player_apply_fn = functools.partial(
-            player_apply_fn or dummy_func, head_params=player_head_params
-        )
-        self._builder_apply_fn = functools.partial(
-            builder_apply_fn or dummy_func, head_params=builder_head_params
+        self._apply_fn = functools.partial(
+            apply_fn or dummy_func, head_params=head_params
         )
         self._gpu_lock = gpu_lock or nullcontext()
 
@@ -54,12 +45,6 @@ class Agent:
     ) -> BuilderAgentOutput:
         with self._gpu_lock:
             return self._step_builder(rng_key, params, actor_input)
-
-    def step_player(
-        self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
-    ) -> PlayerAgentOutput:
-        with self._gpu_lock:
-            return self._step_player(rng_key, params, actor_input)
 
     @overload
     def _step_builder(
@@ -81,7 +66,7 @@ class Agent:
             history=jax.tree.map(lambda x: x[:, ...], actor_input.history),
         )
 
-        actor_output = self._builder_apply_fn(
+        actor_output = self._apply_fn(
             params,
             actor_input,
             BuilderActorOutput(),
@@ -93,6 +78,32 @@ class Agent:
         )
 
         return BuilderAgentOutput(actor_output=actor_output)
+
+
+class PlayerAgent:
+    """A stateless agent interface."""
+
+    def __init__(
+        self,
+        apply_fn: Callable[[Params, PlayerActorInput], PlayerActorOutput] | None = None,
+        gpu_lock: LockType | None = None,
+        head_params: HeadParams = HeadParams(),
+    ):
+        """Constructs an Agent object."""
+        if apply_fn is None:
+            raise ValueError("player_apply_fn must be provided.")
+
+        dummy_func = lambda *args, **kwargs: None
+        self._apply_fn = functools.partial(
+            apply_fn or dummy_func, head_params=head_params
+        )
+        self._gpu_lock = gpu_lock or nullcontext()
+
+    def step_player(
+        self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
+    ) -> PlayerAgentOutput:
+        with self._gpu_lock:
+            return self._step_player(rng_key, params, actor_input)
 
     @overload
     def _step_player(
@@ -116,7 +127,7 @@ class Agent:
             history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
         )
 
-        actor_output = self._player_apply_fn(
+        actor_output = self._apply_fn(
             params,
             actor_input,
             PlayerActorOutput(),
