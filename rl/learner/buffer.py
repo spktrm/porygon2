@@ -1,11 +1,13 @@
 import random
 import threading
 from collections import deque
+from typing import NamedTuple
 
 import numpy as np
 
 from rl.environment.data import NUM_SPECIES
-from rl.environment.interfaces import Trajectory
+from rl.environment.interfaces import BuilderTrajectory
+from rl.learner.league import pfsp
 
 
 class ReplayRatioTokenBucket:
@@ -119,31 +121,18 @@ def calculate_tracking(old: np.ndarray, new: np.ndarray, tau: float, minlength: 
     return (1 - tau) * old + tau * np.bincount(new.reshape(-1), minlength=minlength)
 
 
-class ReplayBuffer:
+class PlayerReplayBuffer:
     """Thread-safe uniform replay for [T, ...] trajectories."""
 
     def __init__(self, capacity: int):
-        self._buf: deque[Trajectory] = deque(maxlen=capacity)
+        self._buf: deque[BuilderTrajectory] = deque(maxlen=capacity)
         self._size = 0
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
 
-        # Tracking
-        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
-        self._tau = 1e-3
-
-    def reset_species_counts(self):
+    def add(self, traj: BuilderTrajectory):
         with self._lock:
-            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
 
-    def add(self, traj: Trajectory):
-        with self._lock:
-            self._species_counts = calculate_tracking(
-                self._species_counts,
-                traj.builder_history.species_tokens.reshape(-1),
-                self._tau,
-                NUM_SPECIES,
-            )
             if self._size == len(self._buf):  # buffer full and maxlen hit
                 # deque will evict leftmost; keep _size consistent with len
                 pass
@@ -169,3 +158,90 @@ class ReplayBuffer:
     def __len__(self):
         with self._lock:
             return self._size
+
+
+class BuilderMetadata(NamedTuple):
+    winrate: int = 0.5
+
+
+class BuilderReplayBuffer:
+    def __init__(self, capacity: int):
+        self._active_items: dict[int, BuilderTrajectory] = {}
+        self._cache: dict[int, BuilderMetadata] = {}
+
+        self._counter = 0
+        self._mod = capacity
+
+        self._size = 0
+
+        self._lock = threading.Lock()
+        self._not_empty = threading.Condition(self._lock)
+
+        # Tracking
+        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+        self._tau = 1e-3
+
+    def reset_species_counts(self):
+        with self._lock:
+            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+
+    def _get_next_free_id(self):
+        candidate_id = self._counter % self._mod
+        self._counter += 1
+        return candidate_id
+
+    def add(self, item_data: BuilderTrajectory) -> int:
+        with self._lock:
+            new_id = self._get_next_free_id()
+
+            self._species_counts = calculate_tracking(
+                self._species_counts,
+                item_data.history.species_tokens.reshape(-1),
+                self._tau,
+                NUM_SPECIES,
+            )
+
+            self._active_items[new_id] = item_data
+            self._cache[new_id] = BuilderMetadata()
+            self._size += 1
+
+            self._not_empty.notify()
+            return new_id
+
+    def sample_for_player(self):
+        with self._lock:
+            self._not_empty.wait_for(lambda: len(self._active_items) > 0)
+
+            active_keys = list(self._active_items.keys())
+            winrates = np.array([self._cache[key].winrate for key in active_keys])
+
+            pick_idx = np.random.choice(
+                len(active_keys), p=pfsp(winrates, weighting="squared")
+            )
+            selected_key = active_keys[pick_idx]
+
+            return (
+                selected_key,
+                self._active_items[selected_key],
+                self._cache[selected_key],
+            )
+
+    def sample_for_learner(self, n: int):
+        with self._lock:
+            while self._size < n:
+                self._not_empty.wait()
+            # Uniform without replacement
+            idxs = random.sample(range(self._size), n)
+            out = [self._active_items[i] for i in idxs]
+            return out
+
+    def update(self, internal_id: int, metadata: BuilderMetadata):
+        """
+        Updates item by the internal_id retrieved from sample_active.
+        """
+        with self._lock:
+            if internal_id not in self._cache:
+                # Item might have been moved to mature buffer by another thread already
+                return
+
+            self._cache[internal_id] = metadata
