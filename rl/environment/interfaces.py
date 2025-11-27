@@ -109,7 +109,6 @@ class Trajectory(NamedTuple):
 
     player_transitions: PlayerTransition = PlayerTransition()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
-    player_hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class SamplingConfig(NamedTuple):

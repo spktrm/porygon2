@@ -41,8 +41,8 @@ class League:
         self.decay = tau
         self.lock = threading.Lock()
 
-        self.players = {p.get_key(): p for p in players}
-        self.players[(MAIN_KEY, MAIN_KEY)] = main_player
+        self.players = {p.step_count: p for p in players}
+        self.players[MAIN_KEY] = main_player
         self.wins = collections.defaultdict(lambda: 0)
         self.draws = collections.defaultdict(lambda: 0)
         self.losses = collections.defaultdict(lambda: 0)
@@ -69,8 +69,8 @@ class League:
     @classmethod
     def deserialize(cls, data: bytes) -> "League":
         state = pickle.loads(data)
-        players: dict[tuple[int, int], ParamsContainer] = state["players"]
-        main_player = players.pop((MAIN_KEY, MAIN_KEY), players)
+        players: dict[int, ParamsContainer] = state["players"]
+        main_player = players.pop(MAIN_KEY, players)
         league = cls(
             main_player,
             list(players.values()),
@@ -110,8 +110,8 @@ class League:
         return win_rates
 
     def _win_rate(self, sender: ParamsContainer, receiver: ParamsContainer) -> float:
-        home = sender.get_key()
-        away = receiver.get_key()
+        home = sender.step_count
+        away = receiver.step_count
 
         numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
         denom = self.games[home, away] + 1
@@ -120,22 +120,22 @@ class League:
 
     def add_player(self, player: ParamsContainer):
         # self.remove_weakest_players()
-        self.players[player.get_key()] = player
+        self.players[player.step_count] = player
 
-    def update_player(self, key: tuple[int, int], player: ParamsContainer):
+    def update_player(self, key: int, player: ParamsContainer):
         with self.lock:
             self.players[key] = player
 
     def update_main_player(self, main_player: ParamsContainer):
-        self.update_player((MAIN_KEY, MAIN_KEY), main_player)
+        self.update_player(MAIN_KEY, main_player)
 
     def update_payoff(
         self, sender: ParamsContainer, receiver: ParamsContainer, payoff: float
     ):
         with self.lock:
             # Ignore updates for players that may have been removed
-            home = sender.get_key()
-            away = receiver.get_key()
+            home = sender.step_count
+            away = receiver.step_count
 
             if home not in self.players or away not in self.players:
                 return
@@ -157,32 +157,9 @@ class League:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
 
-    def remove_weakest_players(self) -> ParamsContainer:
-        with self.lock:
-            historical_players = [
-                v for k, v in self.players.items() if k != (MAIN_KEY, MAIN_KEY)
-            ]
-            win_rates = self.get_winrate(
-                (self.players[(MAIN_KEY, MAIN_KEY)], historical_players)
-            )
-
-            indices_to_remove = np.argwhere(win_rates >= 0.9).reshape(-1)
-            for idx in indices_to_remove:
-                weakest_player = historical_players[idx].get_key()
-                print("Removing player with step count: ", weakest_player)
-                self.players.pop(weakest_player)
-
-                keys_to_pop = []
-                for home, away in self.wins.keys():
-                    if weakest_player in (home, away):
-                        keys_to_pop.append((home, away))
-                for stats in (self.games, self.wins, self.draws, self.losses):
-                    for key in keys_to_pop:
-                        stats.pop(key)
-
     def get_main_player(self) -> ParamsContainer:
         with self.lock:
-            return self.players[(MAIN_KEY, MAIN_KEY)]
+            return self.players[MAIN_KEY]
 
 
 def main():
