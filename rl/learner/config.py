@@ -42,7 +42,7 @@ GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
-    num_eval_actors: int = 0
+    num_eval_actors: int = 2
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
 
@@ -293,7 +293,7 @@ def load_train_state(
             ],
             league_size=learner_config.league_size,
         )
-        return player_state, builder_state, league, None
+        return player_state, builder_state, league
 
     print(f"loading checkpoint from {latest_ckpt}")
     with open(latest_ckpt, "rb") as f:
@@ -307,7 +307,6 @@ def load_train_state(
     if ckpt_league_bytes is not None:
         league = League.deserialize(ckpt_league_bytes)
     else:
-
         league = League(
             main_player=ParamsContainer(
                 player_frame_count=np.array(player_state.frame_count).item(),
