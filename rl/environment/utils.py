@@ -105,9 +105,7 @@ def get_tera_mask(state: EnvironmentState, num_active: int):
 
 
 def process_state(
-    state: EnvironmentState,
-    opponent_team: ResetRequest = None,
-    max_history: int = NUM_HISTORY,
+    state: EnvironmentState, max_history: int = NUM_HISTORY
 ) -> PlayerActorInput:
     history_length = state.history_length
 
@@ -195,22 +193,7 @@ def process_state(
         field=history_field,
     )
 
-    species_tokens = np.zeros(6, dtype=np.int32)
-    packed_set_tokens = np.zeros(6, dtype=np.int32)
-    if opponent_team is not None:
-        species_tokens = np.array(
-            list(opponent_team.species_indices), dtype=np.int32
-        ).reshape(6)
-        packed_set_tokens = np.array(
-            list(opponent_team.packed_set_indices), dtype=np.int32
-        ).reshape(6)
-
-    hidden = PlayerHiddenInfo(
-        species_tokens=species_tokens,
-        packed_set_tokens=packed_set_tokens,
-    )
-
-    return PlayerActorInput(env=env_step, history=history_step, hidden=hidden)
+    return PlayerActorInput(env=env_step, history=history_step)
 
 
 def get_ex_trajectory() -> PlayerActorInput:

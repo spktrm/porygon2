@@ -28,15 +28,9 @@ class PlayerHistoryOutput(NamedTuple):
     field: ArrayLike = ()
 
 
-class PlayerHiddenInfo(NamedTuple):
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
-
-
 class PlayerActorInput(NamedTuple):
     env: PlayerEnvOutput = PlayerEnvOutput()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class ValueHeadOutput(NamedTuple):
@@ -85,7 +79,6 @@ class BuilderHistoryOutput(NamedTuple):
 class BuilderActorInput(NamedTuple):
     env: BuilderEnvOutput = BuilderEnvOutput()
     history: BuilderHistoryOutput = BuilderHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class BuilderActorOutput(NamedTuple):
