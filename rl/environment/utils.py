@@ -203,7 +203,6 @@ def get_ex_trajectory() -> PlayerActorInput:
     return PlayerActorInput(
         env=jax.tree.map(lambda *xs: np.stack(xs), *states),
         history=processed_state.history,
-        hidden=processed_state.hidden,
     )
 
 
