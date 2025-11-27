@@ -111,6 +111,11 @@ class BuilderTrajectory(NamedTuple):
     performance: BuilderPerformance = BuilderPerformance()
 
 
+class TokenizedTeam(NamedTuple):
+    species_tokens: list[int] | None
+    packed_set_tokens: list[int] | None
+
+
 class PlayerTrajectory(NamedTuple):
     transitions: PlayerTransition = PlayerTransition()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
