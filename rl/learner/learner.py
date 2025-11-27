@@ -866,7 +866,7 @@ class Learner:
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
 
-        player_train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
+        train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
         builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
 
         prev_add_player_check = 0
@@ -887,8 +887,13 @@ class Learner:
                 }
 
                 with self.gpu_lock:
-                    new_player_state, player_logs = player_train_step_jit(
-                        self.player_state, batch, self.learner_config
+                    new_builder_state, builder_logs, new_player_state, player_logs = (
+                        train_step_jit(
+                            self.player_state,
+                            self.builder_state,
+                            batch,
+                            self.learner_config,
+                        )
                     )
                 if jnp.isfinite(player_logs["player_loss"]).item():
                     self.player_state = new_player_state
@@ -899,10 +904,6 @@ class Learner:
                     )
                     continue
 
-                with self.gpu_lock:
-                    new_builder_state, builder_logs = builder_train_step_jit(
-                        self.builder_state, batch, self.learner_config
-                    )
                 if jnp.isfinite(builder_logs["builder_loss"]).item():
                     self.builder_state = new_builder_state
                 else:
