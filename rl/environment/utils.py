@@ -26,7 +26,6 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
-    PlayerHiddenInfo,
     PlayerHistoryOutput,
     PolicyHeadOutput,
 )
@@ -212,7 +211,6 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-    hidden: PlayerHiddenInfo = jax.tree.map(lambda x: x[:, None, ...], ts.hidden)
     return (
         PlayerActorInput(env=env, history=history, hidden=hidden),
         PlayerActorOutput(
@@ -237,10 +235,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 ),
                 ts=ts,
                 done=done,
-            ),
-            hidden=PlayerHiddenInfo(
-                species_tokens=np.zeros((6, 1), dtype=np.int32),
-                packed_set_tokens=np.zeros((6, 1), dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 species_tokens=np.zeros((history_length, 1), dtype=np.int32),
