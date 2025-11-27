@@ -31,7 +31,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState, ResetRequest
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState
 
 T = TypeVar("T")
 
