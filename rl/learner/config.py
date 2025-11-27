@@ -68,13 +68,9 @@ class Porygon2LearnerConfig:
     player_ema_decay: float = 1e-3
     builder_ema_decay: float = 1e-3
 
-    # Discount params
-    player_gamma: float = 1.0
-    builder_gamma: float = 1.0
-
     # Vtrace params
-    player_lambda: float = 0.95
-    builder_lambda: float = 1.0
+    gamma: float = 1.0
+    lambda_: float = 0.95
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.2
@@ -106,8 +102,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    num_steps: int = 0
-    actor_steps: int = 0
+    step_count: int = 0
+    frame_count: int = 0
 
     target_adv_mean: float = 0
     target_adv_std: float = 1
@@ -121,11 +117,8 @@ class Porygon2BuilderTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    num_steps: int = 0
-    actor_steps: int = 0
-
-    target_adv_mean: float = 0
-    target_adv_std: float = 1
+    step_count: int = 0
+    frame_count: int = 0
 
 
 def create_train_state(
@@ -223,7 +216,7 @@ def save_train_state_locally(
     metadata: dict | None = None,
 ):
     save_path = os.path.abspath(
-        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.num_steps:08}"
+        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
     )
     return save_state(
         save_path, learner_config, player_state, builder_state, league, metadata
@@ -246,8 +239,8 @@ def save_state(
             params=player_state.params,
             target_params=player_state.target_params,
             opt_state=player_state.opt_state,
-            num_steps=player_state.num_steps,
-            actor_steps=player_state.actor_steps,
+            step_count=player_state.step_count,
+            frame_count=player_state.frame_count,
             target_adv_mean=player_state.target_adv_mean,
             target_adv_std=player_state.target_adv_std,
         )
@@ -256,9 +249,7 @@ def save_state(
             params=builder_state.params,
             target_params=builder_state.target_params,
             opt_state=builder_state.opt_state,
-            actor_steps=builder_state.actor_steps,
-            target_adv_mean=builder_state.target_adv_mean,
-            target_adv_std=builder_state.target_adv_std,
+            actor_steps=builder_state.frame_count,
         )
     if league is not None:
         data["league"] = league.serialize()
@@ -274,8 +265,7 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     from_scratch: bool = False,
-    metadata: dict | None = None,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, dict | None]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -286,19 +276,17 @@ def load_train_state(
             print("Starting training from scratch.")
         league = League(
             main_player=ParamsContainer(
-                player_frame_count=np.array(player_state.actor_steps).item(),
-                builder_frame_count=np.array(builder_state.actor_steps).item(),
-                player_step_count=MAIN_KEY,
-                builder_step_count=MAIN_KEY,
+                player_frame_count=np.array(player_state.frame_count).item(),
+                builder_frame_count=np.array(builder_state.frame_count).item(),
+                step_count=MAIN_KEY,
                 player_params=player_state.params,
                 builder_params=builder_state.params,
             ),
             players=[
                 ParamsContainer(
-                    player_frame_count=np.array(player_state.actor_steps).item(),
-                    builder_frame_count=np.array(builder_state.actor_steps).item(),
-                    player_step_count=np.array(player_state.num_steps).item(),
-                    builder_step_count=np.array(builder_state.num_steps).item(),
+                    player_frame_count=np.array(player_state.frame_count).item(),
+                    builder_frame_count=np.array(builder_state.frame_count).item(),
+                    step_count=np.array(player_state.step_count).item(),
                     player_params=player_state.params,
                     builder_params=builder_state.params,
                 )
@@ -319,15 +307,24 @@ def load_train_state(
     if ckpt_league_bytes is not None:
         league = League.deserialize(ckpt_league_bytes)
     else:
-        initial_params = ParamsContainer(
-            frame_count=np.array(player_state.actor_steps).item(),
-            step_count=np.array(player_state.num_steps).item(),
-            player_params=player_state.params,
-            builder_params=builder_state.params,
-        )
+
         league = League(
-            main_player=initial_params,
-            players=[initial_params],
+            main_player=ParamsContainer(
+                player_frame_count=np.array(player_state.frame_count).item(),
+                builder_frame_count=np.array(builder_state.frame_count).item(),
+                step_count=MAIN_KEY,
+                player_params=player_state.params,
+                builder_params=builder_state.params,
+            ),
+            players=[
+                ParamsContainer(
+                    player_frame_count=np.array(player_state.frame_count).item(),
+                    builder_frame_count=np.array(builder_state.frame_count).item(),
+                    step_count=np.array(player_state.step_count).item(),
+                    player_params=player_state.params,
+                    builder_params=builder_state.params,
+                )
+            ],
             league_size=learner_config.league_size,
         )
 
@@ -350,8 +347,8 @@ def load_train_state(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
-        num_steps=ckpt_player_state["num_steps"],
-        actor_steps=ckpt_player_state["actor_steps"],
+        step_count=ckpt_player_state["step_count"],
+        frame_count=ckpt_player_state["frame_count"],
         target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
     )
@@ -360,11 +357,8 @@ def load_train_state(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
-        actor_steps=ckpt_builder_state["actor_steps"],
-        target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
-        target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
+        step_count=ckpt_builder_state["step_count"],
+        frame_count=ckpt_builder_state["frame_count"],
     )
 
-    metadata = ckpt_data.get("metadata", None)
-
-    return player_state, builder_state, league, metadata
+    return player_state, builder_state, league
