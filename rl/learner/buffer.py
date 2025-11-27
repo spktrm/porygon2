@@ -7,7 +7,11 @@ import numpy as np
 
 from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import BuilderTrajectory
-from rl.learner.league import pfsp
+
+
+def softmax(x: np.ndarray, axis: int | None = None) -> np.ndarray:
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum(axis=axis, keepdims=True)
 
 
 class ReplayRatioTokenBucket:
@@ -201,9 +205,8 @@ class BuilderReplayBuffer:
                 new_id = self._get_next_free_id()
                 self._size += 1
             else:
-                new_id = min(
-                    self._active_items.keys(), key=lambda k: self._cache[k].avg_reward
-                )
+                candidates = list(self._active_items.keys())
+                new_id = min(candidates, key=lambda k: self._cache[k].avg_reward.item())
 
             self._species_counts = calculate_tracking(
                 self._species_counts,
@@ -223,19 +226,18 @@ class BuilderReplayBuffer:
             self._not_empty.wait_for(lambda: len(self._active_items) > 0)
 
             active_keys = list(self._active_items.keys())
-            coin_toss = np.random.random()
 
-            if coin_toss < 0.5:
-                winrates = np.array(
-                    [self._cache[key].avg_reward for key in active_keys]
-                ).reshape(-1)
+            avg_reward = np.array(
+                [self._cache[k].avg_reward.item() for k in active_keys]
+            )
+            n = np.array([self._cache[k].n_sampled.item() for k in active_keys])
+            log_total = np.log(max(np.sum(n), 1))
 
-                pick_idx = np.random.choice(
-                    len(active_keys), p=pfsp(winrates, weighting="squared")
-                )
-                selected_key = active_keys[pick_idx]
-            else:
-                selected_key = random.choice(active_keys)
+            scores = avg_reward + np.sqrt(log_total / (n + 1e-5))
+            probs = softmax(scores)
+            selected_idx = np.random.choice(len(active_keys), p=probs)
+
+            selected_key = active_keys[selected_idx]
 
             return (
                 selected_key,

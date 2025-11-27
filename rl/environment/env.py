@@ -67,8 +67,8 @@ class SinglePlayerSyncEnvironment:
 
     def reset(
         self,
-        species_indices: list[int],
-        packed_set_indices: list[int],
+        species_indices: list[int] | None,
+        packed_set_indices: list[int] | None,
     ):
         self.rqid = None
         reset_message = ClientRequest(

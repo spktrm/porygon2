@@ -41,8 +41,12 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
+        self.move_bias = self.param("move_bias", nn.initializers.zeros, (1,))
         self.move_head = HeadlessPolicyQKHead(self.cfg.move_head)
+
+        self.switch_bias = self.param("switch_bias", nn.initializers.zeros, (1,))
         self.switch_head = HeadlessPolicyQKHead(self.cfg.switch_head)
+
         self.wildcard_merge = SumEmbeddings(
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )

@@ -77,7 +77,7 @@ class BuilderLearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 4
     unroll_length: int = 7
-    replay_buffer_capacity: int = 512
+    replay_buffer_capacity: int = 1024
 
     # Batch iteration params
     batch_size: int = 4
@@ -119,7 +119,10 @@ class LearnerConfig:
     generation: GenT = 9
 
     # Self-play evaluation params
-    save_interval_steps: int = 20_000
+    model_update_interval_secs: int = 1
+    add_player_interval_secs: int = 60
+    save_interval_secs: int = 30 * 60  # every 30 minutes
+
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e8)

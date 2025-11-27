@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from rl.environment.interfaces import PlayerTrajectory, TokenizedTeam
+from rl.learner.buffer import BuilderMetadata, BuilderReplayBuffer
 from rl.model.utils import ParamsContainer
 
 load_dotenv()
@@ -60,6 +62,8 @@ def run_player_actor_pair(
     learner: PlayerLearner,
     actor1: PlayerActor,
     actor2: PlayerActor,
+    builder_actor: BuilderActor,
+    builder_replay_buffer: BuilderReplayBuffer,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
 ):
@@ -77,20 +81,48 @@ def run_player_actor_pair(
             actor2.set_current_ckpt(opponent_ckpt)
             actor2.set_opponent_ckpt(main_ckpt)
 
-            # Grab the result from either self play or playing historical opponents
-            future1 = executor.submit(actor1.unroll, main_params)
-            future2 = executor.submit(actor2.unroll, opponent_params)
-
-            trajectory1 = future1.result()
-            trajectory2 = future2.result()
-
-            for traj, should_enqueue in zip(
-                [trajectory1, trajectory2], [True, is_trainable]
+            futures: list[
+                tuple[concurrent.futures.Future[PlayerTrajectory], int, BuilderMetadata]
+            ] = []
+            for actor, param_container, should_sample_team in zip(
+                [actor1, actor2], [main_params, opponent_params], [True, is_trainable]
             ):
-                if should_enqueue:
+                builder_key, builder_metadata = None, None
+                if should_sample_team:
+                    builder_key, builder_trajectory, builder_metadata = (
+                        builder_replay_buffer.sample_for_player()
+                    )
+                else:
+                    bulilder_future = executor.submit(
+                        builder_actor.unroll, param_container
+                    )
+                    builder_trajectory = bulilder_future.result()
+
+                tokenized_team = TokenizedTeam(
+                    builder_trajectory.history.species_tokens.reshape(-1).tolist(),
+                    builder_trajectory.history.packed_set_tokens.reshape(-1).tolist(),
+                )
+                future = executor.submit(actor.unroll, param_container, tokenized_team)
+
+                futures.append((future, builder_key, builder_metadata))
+
+            for future, builder_key, builder_metadata in futures:
+                traj = future.result()
+                payoff = traj.transitions.env_output.win_reward[-1].item()
+
+                if builder_key is not None:
+                    update_ema = 1e-2
+                    new_avg_reward = (
+                        update_ema * payoff
+                        + (1 - update_ema) * builder_metadata.avg_reward
+                    )
+                    new_metadata = BuilderMetadata(
+                        n_sampled=builder_metadata.n_sampled + 1,
+                        avg_reward=new_avg_reward,
+                    )
+                    builder_replay_buffer.update(builder_key, new_metadata)
                     learner.enqueue_traj(traj)
                 else:
-                    payoff = trajectory1.transitions.env_output.win_reward[-1].item()
                     league.update_payoff(main_params, opponent_params, payoff)
 
         except Exception as e:
@@ -149,40 +181,64 @@ def run_league(
 ):
     """Runs the league to manage players and opponents."""
 
-    last_save_time = time.time()
+    current_time = time.time()
+
+    last_model_update_time = current_time
+    last_add_player_time = current_time
+    last_save_time = current_time
+
     while True:
         try:
-            latest_player = league.get_latest_player()
+            current_time = time.time()
+
             step_count = np.array(player_learner._state.step_count).item()
             frame_count = np.array(player_learner._state.frame_count).item()
 
-            steps_passed = frame_count - latest_player.frame_count
-            if steps_passed < learner_config.add_player_min_frames:
-                return False
-
-            historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-            win_rates = league.get_winrate(
-                (league.players[MAIN_KEY], historical_players)
-            )
-
-            should_add_player = (win_rates.min() > 0.7) | (
-                steps_passed >= learner_config.add_player_max_frames
-            )
-
-            if should_add_player:
-                print("Adding new player to league @ step", step_count)
-                league.add_player(
+            if (
+                current_time - last_model_update_time
+            ) > learner_config.model_update_interval_secs:
+                league.update_main_player(
                     ParamsContainer(
                         frame_count=frame_count,
-                        step_count=step_count,
+                        step_count=MAIN_KEY,
                         player_params=player_learner._state.params,
                         builder_params=builder_learner._state.params,
                     )
                 )
+                last_model_update_time = current_time
 
-            current_time = time.time()
-            if current_time - last_save_time > learner_config.save_interval_steps:
-                last_save_time = current_time
+            if (
+                current_time - last_add_player_time
+            ) > learner_config.add_player_interval_secs:
+                latest_player = league.get_latest_player()
+
+                steps_passed = frame_count - latest_player.frame_count
+                if steps_passed < learner_config.add_player_min_frames:
+                    return False
+
+                historical_players = [
+                    v for k, v in league.players.items() if k != MAIN_KEY
+                ]
+                win_rates = league.get_winrate(
+                    (league.players[MAIN_KEY], historical_players)
+                )
+
+                should_add_player = (win_rates.min() > 0.7) | (
+                    steps_passed >= learner_config.add_player_max_frames
+                )
+
+                if should_add_player:
+                    print("Adding new player to league @ step", step_count)
+                    league.add_player(
+                        ParamsContainer(
+                            frame_count=frame_count,
+                            step_count=step_count,
+                            player_params=player_learner._state.params,
+                            builder_params=builder_learner._state.params,
+                        )
+                    )
+
+            if (current_time - last_save_time) > learner_config.save_interval_secs:
                 print("Saving Training ckpt at step", step_count)
                 save_train_state(
                     learner_config,
@@ -190,18 +246,10 @@ def run_league(
                     builder_learner._state,
                     league,
                 )
+                last_save_time = current_time
 
-            league.update_player(
-                MAIN_KEY,
-                ParamsContainer(
-                    frame_count=frame_count,
-                    step_count=MAIN_KEY,
-                    player_params=player_learner._state.params,
-                    builder_params=builder_learner._state.params,
-                ),
-            )
+            time.sleep(1)
 
-            time.sleep(10)
         except Exception:
             traceback.print_exc()
             # Dont let bad league management crash the whole training loop
@@ -331,6 +379,14 @@ def main(from_scratch: bool = True):
                 )
             )
 
+        historical_builder_actor = BuilderActor(
+            agent=builder_agent,
+            env=TeamBuilderEnvironment(
+                generation=learner_config.generation, smogon_format="ou_all_formats"
+            ),
+            unroll_length=builder_config.unroll_length,
+            rng_seed=len(actor_threads),
+        )
         for player_game_id in range(player_config.num_actors // 2):
             actors = [
                 PlayerActor(
@@ -339,13 +395,20 @@ def main(from_scratch: bool = True):
                         f"train:p{player_id}g{player_game_id:02d}",
                         generation=learner_config.generation,
                     ),
-                    builder_replay_buffer=builder_learner._replay_buffer,
                     unroll_length=player_config.unroll_length,
                     rng_seed=len(actor_threads),
                 )
                 for player_id in range(2)
             ]
-            args = (league, player_learner, *actors, executor, stop_signal)
+            args = (
+                league,
+                player_learner,
+                *actors,
+                historical_builder_actor,
+                builder_learner._replay_buffer,
+                executor,
+                stop_signal,
+            )
             actor_threads.append(
                 threading.Thread(
                     target=run_player_actor_pair,
@@ -355,7 +418,7 @@ def main(from_scratch: bool = True):
             )
 
         for builder_actor_id in range(player_config.num_eval_actors):
-            actor = BuilderActor(
+            actor = PlayerActor(
                 agent=eval_player_agent,
                 env=SinglePlayerSyncEnvironment(
                     f"eval-heuristic:{builder_actor_id:04d}",

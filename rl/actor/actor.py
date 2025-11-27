@@ -10,10 +10,10 @@ from rl.environment.interfaces import (
     PlayerAgentOutput,
     PlayerTrajectory,
     PlayerTransition,
+    TokenizedTeam,
 )
 from rl.environment.protos.service_pb2 import Action, ActionEnum
 from rl.environment.utils import clip_history, split_rng
-from rl.learner.buffer import BuilderMetadata, BuilderReplayBuffer
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 ACTION_MAPPING = {
@@ -109,13 +109,11 @@ class PlayerActor:
         self,
         agent: PlayerAgent,
         env: SinglePlayerSyncEnvironment,
-        builder_replay_buffer: BuilderReplayBuffer,
         unroll_length: int,
         rng_seed: int = 42,
     ):
         self._agent = agent
         self._env = env
-        self._builder_replay_buffer = builder_replay_buffer
         self._unroll_length = unroll_length
         self._rng_key = jax.random.key(rng_seed)
 
@@ -134,19 +132,21 @@ class PlayerActor:
             wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
         )
 
-    def _unroll(self, rng_key: jax.Array, frame_count: int, params: Params):
+    def _unroll(
+        self,
+        rng_key: jax.Array,
+        frame_count: int,
+        params: Params,
+        tokenized_team: TokenizedTeam,
+    ):
         """Run unroll_length agent/environment steps, returning the trajectory."""
         player_subkeys = split_rng(rng_key, self._unroll_length)
 
         player_traj = []
 
         # Sample a builder trajectory to condition on.
-        builder_key, builder_trajectory, builder_metadata = (
-            self._builder_replay_buffer.sample_for_player()
-        )
         player_actor_input = self._env.reset(
-            builder_trajectory.history.species_tokens.reshape(-1).tolist(),
-            builder_trajectory.history.packed_set_tokens.reshape(-1).tolist(),
+            tokenized_team.species_tokens, tokenized_team.packed_set_tokens
         )
 
         # Rollout the player environment.
@@ -167,20 +167,6 @@ class PlayerActor:
 
             action = self.player_agent_output_to_action(player_agent_output)
             player_actor_input = self._env.step(action)
-
-        # Update winrate of team
-        update_ema = 1e-2
-        win_reward = player_transition.env_output.win_reward.item()
-        new_avg_reward = (
-            update_ema * win_reward + (1 - update_ema) * builder_metadata.avg_reward
-        )
-
-        self._builder_replay_buffer.update(
-            builder_key,
-            BuilderMetadata(
-                n_sampled=builder_metadata.n_sampled + 1, avg_reward=new_avg_reward
-            ),
-        )
 
         if len(player_traj) < self._unroll_length:
             player_traj += [player_transition] * (
@@ -210,13 +196,14 @@ class PlayerActor:
     def reset_ckpts(self):
         self._env._reset_ckpts()
 
-    def unroll(self, params_container: ParamsContainer):
+    def unroll(self, params_container: ParamsContainer, tokenized_team: TokenizedTeam):
         params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
         act_out = self._unroll(
             rng_key=subkey,
             frame_count=params_container.frame_count,
             params=params,
+            tokenized_team=tokenized_team,
         )
         self.reset_ckpts()
         return act_out
