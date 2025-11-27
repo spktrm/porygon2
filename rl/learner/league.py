@@ -30,7 +30,7 @@ def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndar
 MAIN_KEY = -1
 
 
-class League:
+class PlayerLeague:
     def __init__(
         self,
         main_player: ParamsContainer,
@@ -72,7 +72,7 @@ class League:
         )
 
     @classmethod
-    def deserialize(cls, data: bytes) -> "League":
+    def deserialize(cls, data: bytes) -> "PlayerLeague":
         state = pickle.loads(data)
         players: dict[int, ParamsContainer] = state["players"]
         main_player = players.pop(MAIN_KEY, players)

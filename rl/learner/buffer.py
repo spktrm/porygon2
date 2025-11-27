@@ -161,7 +161,8 @@ class PlayerReplayBuffer:
 
 
 class BuilderMetadata(NamedTuple):
-    winrate: int = 0.5
+    n_sampled: np.ndarray = np.array([0], dtype=np.int32)
+    avg_reward: np.ndarray = np.array([0], dtype=np.float32)
 
 
 class BuilderReplayBuffer:
@@ -181,6 +182,10 @@ class BuilderReplayBuffer:
         self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
         self._tau = 1e-3
 
+    def __len__(self):
+        with self._lock:
+            return self._size
+
     def reset_species_counts(self):
         with self._lock:
             self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
@@ -192,7 +197,13 @@ class BuilderReplayBuffer:
 
     def add(self, item_data: BuilderTrajectory) -> int:
         with self._lock:
-            new_id = self._get_next_free_id()
+            if self._size < self._mod:
+                new_id = self._get_next_free_id()
+                self._size += 1
+            else:
+                new_id = min(
+                    self._active_items.keys(), key=lambda k: self._cache[k].avg_reward
+                )
 
             self._species_counts = calculate_tracking(
                 self._species_counts,
@@ -203,7 +214,6 @@ class BuilderReplayBuffer:
 
             self._active_items[new_id] = item_data
             self._cache[new_id] = BuilderMetadata()
-            self._size += 1
 
             self._not_empty.notify()
             return new_id
@@ -213,12 +223,19 @@ class BuilderReplayBuffer:
             self._not_empty.wait_for(lambda: len(self._active_items) > 0)
 
             active_keys = list(self._active_items.keys())
-            winrates = np.array([self._cache[key].winrate for key in active_keys])
+            coin_toss = np.random.random()
 
-            pick_idx = np.random.choice(
-                len(active_keys), p=pfsp(winrates, weighting="squared")
-            )
-            selected_key = active_keys[pick_idx]
+            if coin_toss < 0.5:
+                winrates = np.array(
+                    [self._cache[key].avg_reward for key in active_keys]
+                ).reshape(-1)
+
+                pick_idx = np.random.choice(
+                    len(active_keys), p=pfsp(winrates, weighting="squared")
+                )
+                selected_key = active_keys[pick_idx]
+            else:
+                selected_key = random.choice(active_keys)
 
             return (
                 selected_key,
@@ -232,8 +249,9 @@ class BuilderReplayBuffer:
                 self._not_empty.wait()
             # Uniform without replacement
             idxs = random.sample(range(self._size), n)
-            out = [self._active_items[i] for i in idxs]
-            return out
+            trajectories = [self._active_items[i] for i in idxs]
+            metadatas = [self._cache[i] for i in idxs]
+            return trajectories, metadatas
 
     def update(self, internal_id: int, metadata: BuilderMetadata):
         """

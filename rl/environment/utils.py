@@ -26,12 +26,11 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
-    PlayerHiddenInfo,
     PlayerHistoryOutput,
     PolicyHeadOutput,
 )
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState, ResetRequest
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState
 
 T = TypeVar("T")
 
@@ -105,9 +104,7 @@ def get_tera_mask(state: EnvironmentState, num_active: int):
 
 
 def process_state(
-    state: EnvironmentState,
-    opponent_team: ResetRequest = None,
-    max_history: int = NUM_HISTORY,
+    state: EnvironmentState, max_history: int = NUM_HISTORY
 ) -> PlayerActorInput:
     history_length = state.history_length
 
@@ -195,22 +192,7 @@ def process_state(
         field=history_field,
     )
 
-    species_tokens = np.zeros(6, dtype=np.int32)
-    packed_set_tokens = np.zeros(6, dtype=np.int32)
-    if opponent_team is not None:
-        species_tokens = np.array(
-            list(opponent_team.species_indices), dtype=np.int32
-        ).reshape(6)
-        packed_set_tokens = np.array(
-            list(opponent_team.packed_set_indices), dtype=np.int32
-        ).reshape(6)
-
-    hidden = PlayerHiddenInfo(
-        species_tokens=species_tokens,
-        packed_set_tokens=packed_set_tokens,
-    )
-
-    return PlayerActorInput(env=env_step, history=history_step, hidden=hidden)
+    return PlayerActorInput(env=env_step, history=history_step)
 
 
 def get_ex_trajectory() -> PlayerActorInput:
@@ -221,7 +203,6 @@ def get_ex_trajectory() -> PlayerActorInput:
     return PlayerActorInput(
         env=jax.tree.map(lambda *xs: np.stack(xs), *states),
         history=processed_state.history,
-        hidden=processed_state.hidden,
     )
 
 
@@ -229,9 +210,8 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-    hidden: PlayerHiddenInfo = jax.tree.map(lambda x: x[:, None, ...], ts.hidden)
     return (
-        PlayerActorInput(env=env, history=history, hidden=hidden),
+        PlayerActorInput(env=env, history=history),
         PlayerActorOutput(
             value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
             action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
@@ -254,10 +234,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 ),
                 ts=ts,
                 done=done,
-            ),
-            hidden=PlayerHiddenInfo(
-                species_tokens=np.zeros((6, 1), dtype=np.int32),
-                packed_set_tokens=np.zeros((6, 1), dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 species_tokens=np.zeros((history_length, 1), dtype=np.int32),

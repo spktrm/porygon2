@@ -207,8 +207,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.layer_sizes = 3
-    cfg.value_head.category_values = jnp.array([-1, 0, 1])
+    cfg.value_head.logits.layer_sizes = 1
 
     for head in [
         cfg.species_head,

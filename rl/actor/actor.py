@@ -170,12 +170,16 @@ class PlayerActor:
 
         # Update winrate of team
         update_ema = 1e-2
-        new_winrate = (
-            (1 - update_ema) * builder_metadata.winrate
-            + update_ema * player_transition.env_output.win_reward.item()
+        win_reward = player_transition.env_output.win_reward.item()
+        new_avg_reward = (
+            update_ema * win_reward + (1 - update_ema) * builder_metadata.avg_reward
         )
+
         self._builder_replay_buffer.update(
-            builder_key, BuilderMetadata(winrate=new_winrate)
+            builder_key,
+            BuilderMetadata(
+                n_sampled=builder_metadata.n_sampled + 1, avg_reward=new_avg_reward
+            ),
         )
 
         if len(player_traj) < self._unroll_length:
