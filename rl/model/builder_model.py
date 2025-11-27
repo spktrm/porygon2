@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from rl.actor.agent import Agent
+from rl.actor.agent import BuilderAgent
 from rl.environment.data import (
     ITOS,
     NUM_SPECIES,
@@ -36,7 +36,7 @@ from rl.environment.protos.enums_pb2 import (
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.model.config import get_builder_model_config
-from rl.model.heads import HeadParams, PolicyQKHead, ValueLogitHead
+from rl.model.heads import HeadParams, PolicyQKHead, RegressionValueHead
 from rl.model.modules import SumEmbeddings, TransformerEncoder, one_hot_concat_jax
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -99,7 +99,7 @@ class Porygon2BuilderModel(nn.Module):
         self.species_head = PolicyQKHead(self.cfg.species_head)
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
 
-        self.value_head = ValueLogitHead(self.cfg.value_head)
+        self.value_head = RegressionValueHead(self.cfg.value_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -336,9 +336,8 @@ def main(debug: bool = False, generation: int = 9):
 
     pprint(get_num_params(builder_params))
 
-    agent = Agent(
-        builder_apply_fn=actor_network.apply,
-        # builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+    agent = BuilderAgent(
+        apply_fn=actor_network.apply, head_params=HeadParams(temp=0.8, min_p=0.1)
     )
 
     builder_env = TeamBuilderEnvironment(

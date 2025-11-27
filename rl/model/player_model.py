@@ -17,10 +17,10 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
+    DistributionalValueHead,
     HeadlessPolicyQKHead,
     HeadParams,
     PolicyLogitHead,
-    ValueLogitHead,
     sample_categorical,
 )
 from rl.model.modules import SumEmbeddings
@@ -47,7 +47,7 @@ class Porygon2PlayerModel(nn.Module):
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )
         self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
-        self.value_head = ValueLogitHead(self.cfg.value_head)
+        self.value_head = DistributionalValueHead(self.cfg.value_head)
 
     def post_head(
         self,

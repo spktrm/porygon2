@@ -12,20 +12,21 @@ from pprint import pprint
 
 import jax
 import numpy as np
-import wandb
 import wandb.wandb_run
 
+import wandb
 from rl.actor.actor import BuilderActor, PlayerActor
 from rl.actor.agent import BuilderAgent, PlayerAgent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.learner.config import (
     LearnerConfig,
-    create_train_state,
+    create_builder_train_state,
+    create_player_train_state,
     get_learner_config,
     load_train_state,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import MAIN_KEY, PlayerLeague
 from rl.learner.learner import BuilderLearner, PlayerLearner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -34,7 +35,7 @@ from rl.model.player_model import get_num_params, get_player_model
 
 
 def run_builder_actor(
-    league: League,
+    league: PlayerLeague,
     learner: BuilderLearner,
     actor: BuilderActor,
     executor: concurrent.futures.ThreadPoolExecutor,
@@ -55,7 +56,7 @@ def run_builder_actor(
 
 
 def run_player_actor_pair(
-    league: League,
+    league: PlayerLeague,
     learner: PlayerLearner,
     actor1: PlayerActor,
     actor2: PlayerActor,
@@ -89,7 +90,8 @@ def run_player_actor_pair(
                 if should_enqueue:
                     learner.enqueue_traj(traj)
                 else:
-                    league.update_payoff(main_params, opponent_params, trajectory1)
+                    payoff = trajectory1.transitions.env_output.win_reward[-1].item()
+                    league.update_payoff(main_params, opponent_params, payoff)
 
         except Exception as e:
             traceback.print_exc()
@@ -97,7 +99,7 @@ def run_player_actor_pair(
 
 
 def run_eval_heuristic(
-    league: League,
+    league: PlayerLeague,
     learner: PlayerLearner,
     actor: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
@@ -140,7 +142,7 @@ def run_learner(learner: PlayerLearner | BuilderLearner):
 
 
 def run_league(
-    league: League,
+    league: PlayerLeague,
     player_learner: PlayerLearner,
     builder_learner: BuilderLearner,
     learner_config: LearnerConfig,
@@ -189,6 +191,16 @@ def run_league(
                     league,
                 )
 
+            league.update_player(
+                MAIN_KEY,
+                ParamsContainer(
+                    frame_count=frame_count,
+                    step_count=MAIN_KEY,
+                    player_params=player_learner._state.params,
+                    builder_params=builder_learner._state.params,
+                ),
+            )
+
             time.sleep(10)
         except Exception:
             traceback.print_exc()
@@ -196,7 +208,7 @@ def run_league(
             continue
 
 
-def main(from_scratch: bool = False):
+def main(from_scratch: bool = True):
     """Main function to run the RL learner."""
 
     learner_config = get_learner_config()
@@ -232,27 +244,34 @@ def main(from_scratch: bool = False):
     eval_player_agent = PlayerAgent(
         actor_player_network.apply,
         gpu_lock=gpu_lock,
-        player_head_params=HeadParams(temp=0.8, min_p=0.1),
+        head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
-    if from_scratch:
-        player_state, builder_state = create_train_state(
-            learner_player_network,
-            learner_builder_network,
-            jax.random.key(42),
-            learner_config,
-        )
-        league = League(
-            main_player=ParamsContainer(
+    init_key = jax.random.key(42)
+    player_state = create_player_train_state(
+        learner_player_network, init_key, learner_config.player_config
+    )
+    builder_state = create_builder_train_state(
+        learner_builder_network, init_key, learner_config.builder_config
+    )
+    league = PlayerLeague(
+        main_player=ParamsContainer(
+            frame_count=0,
+            step_count=MAIN_KEY,
+            player_params=player_state.params,
+            builder_params=builder_state.params,
+        ),
+        players=[
+            ParamsContainer(
                 frame_count=0,
                 step_count=0,
                 player_params=player_state.params,
                 builder_params=builder_state.params,
-            ),
-            league_size=learner_config.league_size,
-        )
-
-    else:
+            )
+        ],
+        league_size=learner_config.league_size,
+    )
+    if not from_scratch:
         player_state, builder_state, league = load_train_state(
             learner_config, player_state, builder_state
         )
@@ -275,7 +294,7 @@ def main(from_scratch: bool = False):
     player_config = learner_config.player_config
     builder_config = learner_config.builder_config
     player_learner = PlayerLearner(
-        player_state=player_state,
+        state=player_state,
         config=learner_config.player_config,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
@@ -303,7 +322,7 @@ def main(from_scratch: bool = False):
                 unroll_length=builder_config.unroll_length,
                 rng_seed=len(actor_threads),
             )
-            args = (league, builder_learner, actor, executor, stop_signal, wandb_run)
+            args = (league, builder_learner, actor, executor, stop_signal)
             actor_threads.append(
                 threading.Thread(
                     target=run_builder_actor,
@@ -320,6 +339,7 @@ def main(from_scratch: bool = False):
                         f"train:p{player_id}g{player_game_id:02d}",
                         generation=learner_config.generation,
                     ),
+                    builder_replay_buffer=builder_learner._replay_buffer,
                     unroll_length=player_config.unroll_length,
                     rng_seed=len(actor_threads),
                 )

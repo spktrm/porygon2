@@ -33,7 +33,11 @@ class PlayerActorInput(NamedTuple):
     history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
-class ValueHeadOutput(NamedTuple):
+class RegressionValueHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+
+
+class DistributionalValueHeadOutput(NamedTuple):
     logits: ArrayLike = ()
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
@@ -47,7 +51,7 @@ class PolicyHeadOutput(NamedTuple):
 
 
 class PlayerActorOutput(NamedTuple):
-    value_head: ValueHeadOutput = ValueHeadOutput()
+    value_head: DistributionalValueHeadOutput = DistributionalValueHeadOutput()
     action_head: PolicyHeadOutput = PolicyHeadOutput()
     wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
 
@@ -77,8 +81,8 @@ class BuilderHistoryOutput(NamedTuple):
 
 
 class BuilderPerformance(NamedTuple):
-    count: ArrayLike = ()
-    n_wins: ArrayLike = ()
+    n_sampled: ArrayLike = ()
+    winrate: ArrayLike = ()
 
 
 class BuilderActorInput(NamedTuple):
@@ -87,7 +91,7 @@ class BuilderActorInput(NamedTuple):
 
 
 class BuilderActorOutput(NamedTuple):
-    value_head: ValueHeadOutput = ValueHeadOutput()
+    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
     species_head: PolicyHeadOutput = PolicyHeadOutput()
     packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
 

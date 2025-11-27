@@ -19,7 +19,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.learner.league import League
+from rl.learner.league import PlayerLeague
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, get_most_recent_file
 
@@ -82,6 +82,9 @@ class BuilderLearnerConfig:
     # Batch iteration params
     batch_size: int = 4
     target_replay_ratio: float = 4
+
+    # Logging intervals
+    usage_count_interval: int = 1_000
 
     # Learning params
     adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
@@ -156,30 +159,26 @@ class BuilderTrainState(train_state.TrainState):
     target_adv_mean: float = 0
     target_adv_std: float = 1
 
+    winrate_mean: float = 0
+    winrate_std: float = 1
 
-def create_train_state(
-    player_network: nn.Module,
-    builder_network: nn.Module,
-    rng: jax.Array,
-    config: PlayerLearnerConfig,
+
+def create_player_train_state(
+    network: nn.Module, rng: jax.Array, config: PlayerLearnerConfig
 ):
     """Creates an initial `TrainState`."""
     ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
         lambda x: jnp.asarray(x[:, 0]), get_ex_player_step()
     )
-    ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
-        lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
-    )
-
     player_params_init_fn = functools.partial(
-        player_network.init,
+        network.init,
         head_params=HeadParams(),
         actor_input=ex_player_actor_inp,
         actor_output=ex_player_actor_out,
     )
-    player_train_state = PlayerTrainState.create(
+    return PlayerTrainState.create(
         apply_fn=jax.vmap(
-            player_network.apply,
+            network.apply,
             in_axes=(None, 1, 1, None),
             out_axes=1,
         ),
@@ -197,15 +196,23 @@ def create_train_state(
         ),
     )
 
+
+def create_builder_train_state(
+    network: nn.Module, rng: jax.Array, config: BuilderLearnerConfig
+):
+    """Creates an initial `TrainState`."""
+    ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
+        lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
+    )
     builder_params_init_fn = functools.partial(
-        builder_network.init,
+        network.init,
         actor_input=ex_builder_actor_inp,
         actor_output=ex_builder_actor_out,
         head_params=HeadParams(),
     )
-    builder_train_state = BuilderTrainState.create(
+    return BuilderTrainState.create(
         apply_fn=jax.vmap(
-            builder_network.apply,
+            network.apply,
             in_axes=(None, 1, 1, None),
             out_axes=1,
         ),
@@ -223,14 +230,12 @@ def create_train_state(
         ),
     )
 
-    return player_train_state, builder_train_state
-
 
 def save_train_state(
     learner_config: PlayerLearnerConfig,
     player_state: PlayerTrainState,
     builder_state: BuilderTrainState,
-    league: League,
+    league: PlayerLeague,
 ):
     save_train_state_locally(learner_config, player_state, builder_state, league)
 
@@ -239,7 +244,7 @@ def save_train_state_locally(
     learner_config: LearnerConfig,
     player_state: PlayerTrainState,
     builder_state: BuilderTrainState,
-    league: League,
+    league: PlayerLeague,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
@@ -252,7 +257,7 @@ def save_state(
     learner_config: PlayerLearnerConfig,
     player_state: PlayerTrainState,
     builder_state: BuilderTrainState,
-    league: League,
+    league: PlayerLeague,
 ):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -276,6 +281,8 @@ def save_state(
         frame_count=builder_state.frame_count,
         target_adv_mean=builder_state.target_adv_mean,
         target_adv_std=builder_state.target_adv_std,
+        winrate_mean=builder_state.winrate_mean,
+        winrate_std=builder_state.winrate_std,
     )
     data["league"] = league.serialize()
 
@@ -288,8 +295,9 @@ def load_train_state(
     learner_config: LearnerConfig,
     player_state: PlayerTrainState,
     builder_state: BuilderTrainState,
-) -> tuple[PlayerTrainState, BuilderTrainState, League]:
+) -> tuple[PlayerTrainState, BuilderTrainState, PlayerLeague]:
     save_path = f"./ckpts/gen{learner_config.generation}/"
+
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -303,7 +311,7 @@ def load_train_state(
     ckpt_builder_state = ckpt_data.get("builder_state")
     ckpt_league_bytes = ckpt_data.get("league")
 
-    league = League.deserialize(ckpt_league_bytes)
+    league = PlayerLeague.deserialize(ckpt_league_bytes)
 
     print("Checkpoint data:")
     pprint(
@@ -339,6 +347,8 @@ def load_train_state(
         frame_count=ckpt_builder_state["frame_count"],
         target_adv_mean=ckpt_builder_state.get("target_adv_mean", 0.0),
         target_adv_std=ckpt_builder_state.get("target_adv_std", 1.0),
+        winrate_mean=ckpt_builder_state.get("winrate_mean", 0.0),
+        winrate_std=ckpt_builder_state.get("winrate_std", 1.0),
     )
 
     return player_state, builder_state, league
