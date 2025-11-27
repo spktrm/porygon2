@@ -1,5 +1,6 @@
 import collections
 import threading
+from typing import Literal
 
 import cloudpickle as pickle
 import numpy as np
@@ -14,7 +15,10 @@ _psfp_weightings = {
 }
 
 
-def pfsp(win_rates: np.ndarray, weighting: str = "squared") -> np.ndarray:
+PsfpWeighting = Literal["variance", "linear", "linear_capped", "squared"]
+
+
+def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndarray:
     fn = _psfp_weightings[weighting]
     probs = fn(np.asarray(win_rates))
     norm = probs.sum()
@@ -26,7 +30,7 @@ def pfsp(win_rates: np.ndarray, weighting: str = "squared") -> np.ndarray:
 MAIN_KEY = -1
 
 
-class League:
+class PlayerLeague:
     def __init__(
         self,
         main_player: ParamsContainer,
@@ -41,8 +45,9 @@ class League:
         self.decay = tau
         self.lock = threading.Lock()
 
-        self.players = {p.step_count: p for p in players}
+        self.players = {p.get_key(): p for p in players}
         self.players[MAIN_KEY] = main_player
+
         self.wins = collections.defaultdict(lambda: 0)
         self.draws = collections.defaultdict(lambda: 0)
         self.losses = collections.defaultdict(lambda: 0)
@@ -67,12 +72,10 @@ class League:
         )
 
     @classmethod
-    def deserialize(cls, data: bytes) -> "League":
+    def deserialize(cls, data: bytes) -> "PlayerLeague":
         state = pickle.loads(data)
-        players = state["players"]
-        main_player = players.pop(
-            MAIN_KEY, max(players.values(), key=lambda p: p.step_count)
-        )
+        players: dict[int, ParamsContainer] = state["players"]
+        main_player = players.pop(MAIN_KEY, players)
         league = cls(
             main_player,
             list(players.values()),
@@ -90,6 +93,43 @@ class League:
         with self.lock:
             latest_step = max(self.players.keys())
             return self.players[latest_step]
+
+    def get_main_player(self) -> ParamsContainer:
+        with self.lock:
+            return self.players[MAIN_KEY]
+
+    def _pfsp_branch(
+        self, exclude_main: bool = False, weighting: PsfpWeighting = "squared"
+    ) -> ParamsContainer:
+        keys = list(self.players.keys())
+        if exclude_main:
+            keys = [k for k in keys if k != MAIN_KEY]
+        win_rates = np.array(
+            [self._win_rate(self.players[MAIN_KEY], self.players[k]) for k in keys]
+        )
+        probs = pfsp(win_rates, weighting=weighting)
+        chosen_key = np.random.choice(keys, p=probs)
+        return self.players[chosen_key]
+
+    def get_opponent(
+        self, exclude_main: bool = False, weighting: PsfpWeighting = "squared"
+    ) -> tuple[ParamsContainer, bool]:
+        coin_toss = np.random.random()
+
+        if coin_toss < 0.5:
+            with self.lock:
+                return self._pfsp_branch(exclude_main, weighting), False
+
+        return self.get_main_player(), True
+
+    def _win_rate(self, sender: ParamsContainer, receiver: ParamsContainer) -> float:
+        home = sender.get_key()
+        away = receiver.get_key()
+
+        numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
+        denom = self.games[home, away] + 1
+
+        return numer / denom
 
     def get_winrate(
         self,
@@ -111,18 +151,8 @@ class League:
 
         return win_rates
 
-    def _win_rate(self, sender: ParamsContainer, receiver: ParamsContainer) -> float:
-        home = sender.step_count
-        away = receiver.step_count
-
-        numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
-        denom = self.games[home, away] + 1
-
-        return numer / denom
-
     def add_player(self, player: ParamsContainer):
-        # self.remove_weakest_players()
-        self.players[player.step_count] = player
+        self.players[player.get_key()] = player
 
     def update_player(self, key: int, player: ParamsContainer):
         with self.lock:
@@ -136,8 +166,8 @@ class League:
     ):
         with self.lock:
             # Ignore updates for players that may have been removed
-            home = sender.step_count
-            away = receiver.step_count
+            home = sender.get_key()
+            away = receiver.get_key()
 
             if home not in self.players or away not in self.players:
                 return
@@ -158,29 +188,6 @@ class League:
             else:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
-
-    def remove_weakest_players(self) -> ParamsContainer:
-        with self.lock:
-            historical_players = [v for k, v in self.players.items() if k != MAIN_KEY]
-            win_rates = self.get_winrate((self.players[MAIN_KEY], historical_players))
-
-            indices_to_remove = np.argwhere(win_rates >= 0.9).reshape(-1)
-            for idx in indices_to_remove:
-                weakest_player = historical_players[idx].step_count
-                print("Removing player with step count: ", weakest_player)
-                self.players.pop(weakest_player)
-
-                keys_to_pop = []
-                for home, away in self.wins.keys():
-                    if weakest_player in (home, away):
-                        keys_to_pop.append((home, away))
-                for stats in (self.games, self.wins, self.draws, self.losses):
-                    for key in keys_to_pop:
-                        stats.pop(key)
-
-    def get_main_player(self) -> ParamsContainer:
-        with self.lock:
-            return self.players[MAIN_KEY]
 
 
 def main():

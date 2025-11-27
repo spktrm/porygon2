@@ -9,7 +9,5 @@ class ResetResponse(BaseModel):
 
 class StepResponse(BaseModel):
     v: float
-    action_type: int
-    move_slot: int
-    switch_slot: int
-    wildcard_slot: int
+    action: int
+    wildcard: int

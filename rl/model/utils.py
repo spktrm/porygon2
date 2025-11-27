@@ -12,8 +12,12 @@ import jax.numpy as jnp
 class ParamsContainer(NamedTuple):
     step_count: int
     frame_count: int
+
     player_params: chex.ArrayTree
     builder_params: chex.ArrayTree
+
+    def get_key(self) -> int:
+        return self.step_count
 
     def __repr__(self):
         return f"ParamsContainer(step_count={self.step_count}, frame_count={self.frame_count})"

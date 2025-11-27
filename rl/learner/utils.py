@@ -5,9 +5,10 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.interfaces import Trajectory
+from rl.environment.interfaces import BuilderTrajectory, PlayerTrajectory
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.learner.config import Porygon2LearnerConfig
+from rl.environment.protos.service_pb2 import WildCardEnum
+from rl.learner.config import BuilderLearnerConfig, PlayerLearnerConfig
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -19,63 +20,62 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 @functools.partial(jax.jit, static_argnames=("config"))
-def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig
+def collect_player_batch_telemetry_data(
+    batch: PlayerTrajectory, config: PlayerLearnerConfig
 ) -> Dict[str, Any]:
-    builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
-    builder_lengths = builder_valid.sum(0)
-
-    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    player_valid = jnp.bitwise_not(batch.transitions.env_output.done)
     player_lengths = player_valid.sum(0)
 
-    history_lengths = batch.player_history.field[
-        ..., FieldFeature.FIELD_FEATURE__VALID
-    ].sum(0)
+    history_lengths = batch.history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0)
 
-    can_move = batch.player_transitions.env_output.action_type_mask[..., 0]
-    can_switch = batch.player_transitions.env_output.action_type_mask[..., 1]
+    can_move = batch.transitions.env_output.action_mask[..., :4].any(-1)
+    can_switch = batch.transitions.env_output.action_mask[..., 4:].any(-1)
     can_act = can_move & can_switch & player_valid
 
-    action_type_index = (
-        batch.player_transitions.agent_output.actor_output.action_type_head.action_index
-    )
+    action_index = batch.transitions.agent_output.actor_output.action_head.action_index
     wildcard_index = (
-        batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
+        batch.transitions.agent_output.actor_output.wildcard_head.action_index
     )
-    move_ratio = renormalize(action_type_index == 0, can_act)
-    switch_ratio = renormalize(action_type_index == 1, can_act)
+    did_move = (action_index < 4) & can_move
+    did_switch = (action_index >= 4) & can_switch
+    move_ratio = renormalize(did_move, can_act)
+    switch_ratio = renormalize(did_switch, can_act)
 
-    wildcard_turn = (
-        jnp.where(
-            (action_type_index == 0) & (wildcard_index != 0),
-            jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
-            jnp.iinfo(action_type_index.dtype).max,
-        )
-        .clip(max=action_type_index.shape[0])
-        .min(axis=0)
-    )
+    wildcard_turn = jnp.where(
+        did_move & (wildcard_index != WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL),
+        jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
+        player_valid.shape[0],
+    ).min(axis=0)
 
-    final_reward = batch.player_transitions.env_output.win_reward[-1]
+    final_reward = batch.transitions.env_output.win_reward[-1]
 
     return dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
-        builder_trajectory_length_mean=builder_lengths.mean(),
-        builder_trajectory_length_min=builder_lengths.min(),
-        builder_trajectory_length_max=builder_lengths.max(),
-        builder_species_reward_sum=batch.builder_transitions.env_output.cum_species_reward[
-            -1
-        ].mean(),
-        builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
-            -1
-        ].mean(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=final_reward.mean(),
         early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("config"))
+def collect_builder_batch_telemetry_data(
+    batch: BuilderTrajectory, config: BuilderLearnerConfig
+) -> Dict[str, Any]:
+    builder_valid = jnp.bitwise_not(batch.transitions.env_output.done)
+    builder_lengths = builder_valid.sum(0)
+
+    avg_n_sampled = batch.performance.n_sampled.mean()
+
+    return dict(
+        builder_avg_n_sampled=avg_n_sampled,
+        builder_trajectory_length_mean=builder_lengths.mean(),
+        builder_trajectory_length_min=builder_lengths.min(),
+        builder_trajectory_length_max=builder_lengths.max(),
     )
 
 

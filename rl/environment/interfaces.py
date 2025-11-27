@@ -17,9 +17,7 @@ class PlayerEnvOutput(NamedTuple):
     moveset: ArrayLike = ()
     private_team: ArrayLike = ()
 
-    action_type_mask: ArrayLike = ()
-    move_mask: ArrayLike = ()
-    switch_mask: ArrayLike = ()
+    action_mask: ArrayLike = ()
     wildcard_mask: ArrayLike = ()
 
 
@@ -30,30 +28,32 @@ class PlayerHistoryOutput(NamedTuple):
     field: ArrayLike = ()
 
 
-class PlayerHiddenInfo(NamedTuple):
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
-
-
 class PlayerActorInput(NamedTuple):
     env: PlayerEnvOutput = PlayerEnvOutput()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
-class HeadOutput(NamedTuple):
+class RegressionValueHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+
+
+class DistributionalValueHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+    log_probs: ArrayLike = ()
+    entropy: ArrayLike = ()
+    expectation: ArrayLike = ()
+
+
+class PolicyHeadOutput(NamedTuple):
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
 
 
 class PlayerActorOutput(NamedTuple):
-    v: ArrayLike = ()
-
-    action_type_head: HeadOutput = HeadOutput()
-    move_head: HeadOutput = HeadOutput()
-    switch_head: HeadOutput = HeadOutput()
-    wildcard_head: HeadOutput = HeadOutput()
+    value_head: DistributionalValueHeadOutput = DistributionalValueHeadOutput()
+    action_head: PolicyHeadOutput = PolicyHeadOutput()
+    wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
 
 
 class PlayerAgentOutput(NamedTuple):
@@ -80,17 +80,20 @@ class BuilderHistoryOutput(NamedTuple):
     packed_set_tokens: ArrayLike = ()
 
 
+class BuilderPerformance(NamedTuple):
+    n_sampled: ArrayLike = ()
+    winrate: ArrayLike = ()
+
+
 class BuilderActorInput(NamedTuple):
     env: BuilderEnvOutput = BuilderEnvOutput()
     history: BuilderHistoryOutput = BuilderHistoryOutput()
-    hidden: PlayerHiddenInfo = PlayerHiddenInfo()
 
 
 class BuilderActorOutput(NamedTuple):
-    v: ArrayLike = ()
-
-    species_head: HeadOutput = HeadOutput()
-    packed_set_head: HeadOutput = HeadOutput()
+    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
+    species_head: PolicyHeadOutput = PolicyHeadOutput()
+    packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
 
 
 class BuilderAgentOutput(NamedTuple):
@@ -102,13 +105,20 @@ class BuilderTransition(NamedTuple):
     agent_output: BuilderAgentOutput = BuilderAgentOutput()
 
 
-class Trajectory(NamedTuple):
-    builder_transitions: BuilderTransition = BuilderTransition()
-    builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+class BuilderTrajectory(NamedTuple):
+    transitions: BuilderTransition = BuilderTransition()
+    history: BuilderHistoryOutput = BuilderHistoryOutput()
+    performance: BuilderPerformance = BuilderPerformance()
 
-    player_transitions: PlayerTransition = PlayerTransition()
-    player_history: PlayerHistoryOutput = PlayerHistoryOutput()
-    player_hidden: PlayerHiddenInfo = PlayerHiddenInfo()
+
+class TokenizedTeam(NamedTuple):
+    species_tokens: list[int] | None
+    packed_set_tokens: list[int] | None
+
+
+class PlayerTrajectory(NamedTuple):
+    transitions: PlayerTransition = PlayerTransition()
+    history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
 class SamplingConfig(NamedTuple):
