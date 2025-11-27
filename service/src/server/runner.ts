@@ -332,6 +332,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                     const switchIndex =
                         actionIndex - ActionEnum.ACTION_ENUM__SWITCH_1;
                     order.push(switchIndex + 1);
+                } else if (actionIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
+                    return "default";
                 } else {
                     throw new Error(
                         `Invalid team preview action index: ${actionIndex}`,

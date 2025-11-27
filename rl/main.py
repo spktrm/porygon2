@@ -10,9 +10,9 @@ from pprint import pprint
 
 import jax
 import numpy as np
-import wandb
 import wandb.wandb_run
 
+import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
@@ -37,8 +37,8 @@ def run_training_actor_pair(
             player_params = player.pull_main_player()
             opponent_params, is_trainable = player.get_match()
 
-            player_ckpt = np.array(player_params.player_step_count).item()
-            opponent_ckpt = np.array(opponent_params.player_step_count).item()
+            player_ckpt = np.array(player_params.step_count).item()
+            opponent_ckpt = np.array(opponent_params.step_count).item()
 
             player.set_current_ckpt(player_ckpt)
             player.set_opponent_ckpt(opponent_ckpt)
@@ -91,7 +91,7 @@ def run_eval_heuristic(
 
                 payoff = eval_trajectory.player_transitions.env_output.win_reward[-1]
 
-                wandb_run.log({"Step": step_count, f"wr-{session_id}": payoff})
+                wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
 
         except Exception:
             traceback.print_exc()

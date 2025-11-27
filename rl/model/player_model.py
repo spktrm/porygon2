@@ -171,7 +171,7 @@ def main(generation: int = 9):
         params,
         ex_actor_input,
         PlayerActorOutput(),
-        HeadParams(),
+        HeadParams(temp=0.8, min_p=0.1),
         rngs={"sampling": key},
     )
     pprint(actor_output)

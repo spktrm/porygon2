@@ -1,4 +1,3 @@
-import functools
 from typing import Any, Dict
 
 import chex
@@ -19,7 +18,6 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
     return loss / (normalization + (normalization == 0.0))
 
 
-@functools.partial(jax.jit, static_argnames=("config"))
 def collect_batch_telemetry_data(
     batch: Trajectory, config: Porygon2LearnerConfig
 ) -> Dict[str, Any]:
