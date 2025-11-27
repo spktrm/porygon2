@@ -97,9 +97,10 @@ class Actor:
                 agent_output=builder_agent_output,
             )
             build_traj.append(builder_transition)
+            builder_actor_input = self._builder_env.step(builder_agent_output)
+            # Swap when we break since we want a continuous trajectory
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = self._builder_env.step(builder_agent_output)
 
         if len(build_traj) < builder_unroll_length:
             build_traj += [builder_transition] * (
@@ -119,8 +120,6 @@ class Actor:
             builder_actor_input.history.species_tokens.reshape(-1).tolist(),
             builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
         )
-        # Extract opponent hidden info to better inform builder value function.
-        player_hidden = player_actor_input.hidden
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
@@ -157,7 +156,6 @@ class Actor:
             builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
             player_history=player_actor_input.history,
-            player_hidden=player_hidden,
         )
 
         return promote_map(trajectory)
@@ -201,7 +199,7 @@ class Actor:
         historical = [
             player
             for player in self._learner.league.players.values()
-            if player.get_key != (MAIN_KEY, MAIN_KEY)
+            if player.step_count != MAIN_KEY
         ]
         if not historical:  # No historical players to play against
             return None

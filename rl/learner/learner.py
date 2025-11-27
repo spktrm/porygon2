@@ -199,8 +199,9 @@ def scalar_to_two_hot(scalar_target: jax.Array) -> jax.Array:
     return probs_lower + probs_upper
 
 
-def player_train_step(
+def train_step(
     player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
     batch: Trajectory,
     config: Porygon2LearnerConfig,
 ):
@@ -208,6 +209,8 @@ def player_train_step(
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
+    builder_transitions = batch.builder_transitions
+    builder_history = batch.builder_history
 
     player_actor_input = PlayerActorInput(
         env=player_transitions.env_output, history=player_history
@@ -221,22 +224,64 @@ def player_train_step(
         )
     )
 
-    actor_action_head = player_transitions.agent_output.actor_output.action_head
-    actor_wildcard_head = player_transitions.agent_output.actor_output.wildcard_head
-
-    target_value_head = player_target_pred.value_head
-    target_action_head = player_target_pred.action_head
-    target_wildcard_head = player_target_pred.wildcard_head
-
-    actor_log_prob = calculate_player_log_prob(
-        action_log_prob=actor_action_head.log_prob,
-        action_index=actor_action_head.action_index,
-        wildcard_log_prob=actor_wildcard_head.log_prob,
+    builder_actor_input = BuilderActorInput(
+        env=builder_transitions.env_output,
+        history=builder_history,
     )
-    target_log_prob = calculate_player_log_prob(
-        action_log_prob=target_action_head.log_prob,
-        action_index=target_action_head.action_index,
-        wildcard_log_prob=target_wildcard_head.log_prob,
+    builder_target_pred = promote_map(
+        builder_state.apply_fn(
+            builder_state.target_params,
+            builder_actor_input,
+            builder_transitions.agent_output.actor_output,
+            HeadParams(),
+        )
+    )
+
+    player_actor_action_head = player_transitions.agent_output.actor_output.action_head
+    player_actor_wildcard_head = (
+        player_transitions.agent_output.actor_output.wildcard_head
+    )
+
+    player_target_value_head = player_target_pred.value_head
+    player_target_action_head = player_target_pred.action_head
+    player_target_wildcard_head = player_target_pred.wildcard_head
+
+    player_actor_log_prob = calculate_player_log_prob(
+        action_log_prob=player_actor_action_head.log_prob,
+        action_index=player_actor_action_head.action_index,
+        wildcard_log_prob=player_actor_wildcard_head.log_prob,
+    )
+    player_target_log_prob = calculate_player_log_prob(
+        action_log_prob=player_target_action_head.log_prob,
+        action_index=player_target_action_head.action_index,
+        wildcard_log_prob=player_target_wildcard_head.log_prob,
+    )
+
+    builder_actor_species_head = (
+        builder_transitions.agent_output.actor_output.species_head
+    )
+    builder_actor_packed_set_head = (
+        builder_transitions.agent_output.actor_output.packed_set_head
+    )
+
+    builder_target_value_head = builder_target_pred.value_head
+    builder_target_species_head = builder_target_pred.species_head
+    builder_target_packed_set_head = builder_target_pred.packed_set_head
+
+    builder_actor_log_prob = calculate_builder_log_prob(
+        species_log_prob=builder_actor_species_head.log_prob,
+        packed_set_log_prob=builder_actor_packed_set_head.log_prob,
+    )
+    builder_target_log_prob = calculate_builder_log_prob(
+        species_log_prob=builder_target_species_head.log_prob,
+        packed_set_log_prob=builder_target_packed_set_head.log_prob,
+    )
+
+    actor_log_prob = jnp.concatenate(
+        (builder_actor_log_prob, player_actor_log_prob), axis=0
+    )
+    target_log_prob = jnp.concatenate(
+        (builder_target_log_prob, player_target_log_prob), axis=0
     )
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
@@ -245,10 +290,19 @@ def player_train_step(
 
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
 
-    valid = jnp.bitwise_not(player_transitions.env_output.done)
-    rewards_tm1 = player_transitions.env_output.win_reward
+    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
+    builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+    valid = jnp.concatenate((builder_valid, player_valid), axis=0)
 
-    v_tm1 = target_value_head.expectation
+    rewards_tm1 = jnp.concatenate(
+        (jnp.zeros_like(builder_valid), player_transitions.env_output.win_reward),
+        axis=0,
+    )
+
+    v_tm1 = jnp.concatenate(
+        (builder_target_value_head.expectation, player_target_value_head.expectation),
+        axis=0,
+    )
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards = shift_left_with_zeros(rewards_tm1)
     discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
@@ -269,17 +323,25 @@ def player_train_step(
     )
 
     target_scalar_v = vtrace.errors + v_tm1
+    builder_target_scalar_v = target_scalar_v[: builder_valid.shape[0]]
+    player_target_scalar_v = target_scalar_v[builder_valid.shape[0] :]
     target_dist = scalar_to_two_hot(target_scalar_v)
 
-    player_adv_mean = average(vtrace.pg_advantage, valid)
-    player_adv_std = vtrace.pg_advantage.std(where=valid)
+    adv_mean = average(vtrace.pg_advantage, player_valid)
+    adv_std = vtrace.pg_advantage.std(where=player_valid)
 
     # Normalize by the ema mean and std of the advantages.
-    player_norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
+    norm_advantages = (vtrace.pg_advantage - player_state.target_adv_mean) / (
         player_state.target_adv_std + 1e-8
     )
 
-    wildcard_valid = valid & (
+    builder_norm_advantages = norm_advantages[: builder_valid.shape[0]]
+    player_norm_advantages = norm_advantages[builder_valid.shape[0] :]
+
+    builder_target_dist = target_dist[: builder_valid.shape[0]]
+    player_target_dist = target_dist[builder_valid.shape[0] :]
+
+    wildcard_valid = player_valid & (
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
     )
 
@@ -305,10 +367,10 @@ def player_train_step(
         )
 
         # Calculate the log ratios.
-        learner_actor_log_ratio = learner_log_prob - actor_log_prob
+        learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        learner_target_log_ratio = learner_log_prob - target_log_prob
+        learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         ratio = actor_target_clipped_ratio * learner_actor_ratio
@@ -317,33 +379,34 @@ def player_train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
             advantages=player_norm_advantages,
-            valid=valid,
+            valid=player_valid,
             clip_ppo=config.clip_ppo,
         )
 
         # Softmax cross-entropy loss for value head
         loss_v = average(
-            -jnp.sum(learner_value_head.log_probs * target_dist, axis=-1), valid
+            -jnp.sum(learner_value_head.log_probs * player_target_dist, axis=-1),
+            player_valid,
         )
 
-        action_head_entropy = average(learner_action_head.entropy, valid)
+        action_head_entropy = average(learner_action_head.entropy, player_valid)
         wildcard_head_entropy = average(learner_wildcard_head.entropy, wildcard_valid)
         loss_entropy = action_head_entropy + wildcard_head_entropy
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=valid,
+            valid=player_valid,
         )
         learner_target_approx_kl = forward_kl_loss(
             policy_ratio=learner_target_ratio,
             log_policy_ratio=learner_target_log_ratio,
-            valid=valid,
+            valid=player_valid,
         )
         loss_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=valid,
+            valid=player_valid,
         )
 
         loss = (
@@ -364,153 +427,20 @@ def player_train_step(
             player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=valid, clip_ppo=config.clip_ppo
+                policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo
             ),
-            player_learner_actor_ratio=average(learner_actor_ratio, valid),
-            player_learner_target_ratio=average(learner_target_ratio, valid),
+            player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
+            player_learner_target_ratio=average(learner_target_ratio, player_valid),
             # Approx KL values
             player_learner_actor_approx_kl=learner_actor_approx_kl,
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
-                value_target=target_scalar_v,
-                mask=valid,
+                value_target=player_target_scalar_v,
+                mask=player_valid,
             ),
         )
-
-    player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
-    (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
-
-    player_logs.update(
-        dict(
-            player_loss=player_loss_val,
-            player_param_norm=optax.global_norm(player_state.params),
-            player_gradient_norm=optax.global_norm(player_grads),
-            player_adv_mean=player_adv_mean,
-            player_adv_std=player_adv_std,
-            player_is_ratio=average(actor_target_clipped_ratio, valid),
-            player_norm_adv_mean=average(player_norm_advantages, valid),
-            player_norm_adv_std=player_norm_advantages.std(where=valid),
-            player_value_target_mean=average(target_scalar_v, valid),
-            player_value_target_std=target_scalar_v.std(where=valid),
-        )
-    )
-
-    player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.replace(
-        # Update target params and adv mean/std.
-        target_params=optax.incremental_update(
-            player_state.params, player_state.target_params, config.player_ema_decay
-        ),
-        target_adv_mean=player_state.target_adv_mean * (1 - config.player_ema_decay)
-        + player_adv_mean * config.player_ema_decay,
-        target_adv_std=player_state.target_adv_std * (1 - config.player_ema_decay)
-        + player_adv_std * config.player_ema_decay,
-        num_steps=player_state.num_steps + 1,
-        actor_steps=player_state.actor_steps + valid.sum(),
-    )
-
-    training_logs = dict(
-        actor_steps=player_state.actor_steps,
-        Step=player_state.num_steps,
-    )
-
-    training_logs.update(player_logs)
-
-    return player_state, training_logs
-
-
-def builder_train_step(
-    builder_state: Porygon2BuilderTrainState,
-    batch: Trajectory,
-    config: Porygon2LearnerConfig,
-):
-    """Train for a single step."""
-
-    builder_transitions = batch.builder_transitions
-    builder_history = batch.builder_history
-    player_hidden = batch.player_hidden
-
-    builder_actor_input = BuilderActorInput(
-        env=builder_transitions.env_output,
-        hidden=player_hidden,
-        history=builder_history,
-    )
-    builder_target_pred = promote_map(
-        builder_state.apply_fn(
-            builder_state.target_params,
-            builder_actor_input,
-            builder_transitions.agent_output.actor_output,
-            HeadParams(),
-        )
-    )
-
-    actor_species_head = builder_transitions.agent_output.actor_output.species_head
-    actor_packed_set_head = (
-        builder_transitions.agent_output.actor_output.packed_set_head
-    )
-
-    target_value_head = builder_target_pred.value_head
-    target_species_head = builder_target_pred.species_head
-    target_packed_set_head = builder_target_pred.packed_set_head
-
-    actor_log_prob = calculate_builder_log_prob(
-        species_log_prob=actor_species_head.log_prob,
-        packed_set_log_prob=actor_packed_set_head.log_prob,
-    )
-    target_log_prob = calculate_builder_log_prob(
-        species_log_prob=target_species_head.log_prob,
-        packed_set_log_prob=target_packed_set_head.log_prob,
-    )
-
-    actor_target_log_ratio = actor_log_prob - target_log_prob
-    actor_target_ratio = jnp.exp(actor_target_log_ratio)
-    target_actor_ratio = jnp.exp(-actor_target_log_ratio)
-
-    actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
-
-    valid = jnp.bitwise_not(builder_transitions.env_output.done)
-    final_reward = batch.player_transitions.env_output.win_reward[-1]
-    biased_reward = (
-        final_reward
-        + batch.player_transitions.agent_output.actor_output.value_head.expectation[0]
-    ) / 2
-
-    rewards_tm1 = (
-        jax.nn.one_hot(valid.sum(axis=0), valid.shape[0], axis=0) * biased_reward[None]
-    )
-
-    v_tm1 = target_value_head.expectation
-    v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
-    rewards_t = shift_left_with_zeros(rewards_tm1)
-    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
-
-    # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
-    vtrace_td_error_and_advantage = jax.vmap(
-        functools.partial(
-            rlax.vtrace_td_error_and_advantage,
-            lambda_=config.builder_lambda,
-            clip_rho_threshold=config.clip_rho_threshold,
-            clip_pg_rho_threshold=config.clip_pg_rho_threshold,
-        ),
-        in_axes=1,
-        out_axes=1,
-    )
-    vtrace = vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards_t, discounts, target_actor_ratio
-    )
-
-    target_scalar_v = vtrace.errors + v_tm1
-    target_dist = scalar_to_two_hot(target_scalar_v)
-
-    builder_adv_mean = average(vtrace.pg_advantage, valid)
-    builder_adv_std = vtrace.pg_advantage.std(where=valid)
-
-    # Normalize by the ema mean and std of the advantages.
-    builder_norm_advantages = (vtrace.pg_advantage - builder_state.target_adv_mean) / (
-        builder_state.target_adv_std + 1e-8
-    )
 
     def builder_loss_fn(params: Params):
 
@@ -550,7 +480,7 @@ def builder_train_step(
 
         # Softmax cross-entropy loss for value head
         loss_v = average(
-            -jnp.sum(learner_value_head.log_probs * target_dist, axis=-1), valid
+            -jnp.sum(learner_value_head.log_probs * builder_target_dist, axis=-1), valid
         )
 
         species_entropy = average(learner_species_head.entropy, valid)
@@ -600,14 +530,30 @@ def builder_train_step(
             # Extra stats
             builder_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
-                value_target=target_scalar_v,
+                value_target=builder_target_scalar_v,
                 mask=valid,
             ),
         )
 
+    player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
+    (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
+
     builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
     (builder_loss_val, training_logs), builder_grads = builder_grad_fn(
         builder_state.params
+    )
+
+    player_logs.update(
+        dict(
+            player_loss=player_loss_val,
+            player_param_norm=optax.global_norm(player_state.params),
+            player_gradient_norm=optax.global_norm(player_grads),
+            player_is_ratio=average(actor_target_clipped_ratio, player_valid),
+            player_norm_adv_mean=average(player_norm_advantages, player_valid),
+            player_norm_adv_std=player_norm_advantages.std(where=player_valid),
+            player_value_target_mean=average(player_target_scalar_v, player_valid),
+            player_value_target_std=player_target_scalar_v.std(where=player_valid),
+        )
     )
 
     training_logs.update(
@@ -615,14 +561,26 @@ def builder_train_step(
             builder_loss=builder_loss_val,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
-            builder_adv_mean=builder_adv_mean,
-            builder_adv_std=builder_adv_std,
             builder_is_ratio=average(actor_target_clipped_ratio, valid),
             builder_norm_adv_mean=average(builder_norm_advantages, valid),
             builder_norm_adv_std=builder_norm_advantages.std(where=valid),
-            builder_value_target_mean=average(target_scalar_v, valid),
-            builder_value_target_std=target_scalar_v.std(where=valid),
+            builder_value_target_mean=average(builder_target_scalar_v, valid),
+            builder_value_target_std=builder_target_scalar_v.std(where=valid),
         )
+    )
+
+    player_state = player_state.apply_gradients(grads=player_grads)
+    player_state = player_state.replace(
+        # Update target params and adv mean/std.
+        target_params=optax.incremental_update(
+            player_state.params, player_state.target_params, config.player_ema_decay
+        ),
+        target_adv_mean=player_state.target_adv_mean * (1 - config.player_ema_decay)
+        + adv_mean * config.player_ema_decay,
+        target_adv_std=player_state.target_adv_std * (1 - config.player_ema_decay)
+        + adv_std * config.player_ema_decay,
+        num_steps=player_state.num_steps + 1,
+        actor_steps=player_state.actor_steps + player_valid.sum(),
     )
 
     builder_state = builder_state.apply_gradients(grads=builder_grads)
@@ -631,15 +589,19 @@ def builder_train_step(
         target_params=optax.incremental_update(
             builder_state.params, builder_state.target_params, config.builder_ema_decay
         ),
-        target_adv_mean=builder_state.target_adv_mean * (1 - config.builder_ema_decay)
-        + builder_adv_mean * config.builder_ema_decay,
-        target_adv_std=builder_state.target_adv_std * (1 - config.builder_ema_decay)
-        + builder_adv_std * config.builder_ema_decay,
         num_steps=builder_state.num_steps + 1,
         actor_steps=builder_state.actor_steps + valid.sum(),
     )
 
-    return builder_state, training_logs
+    training_logs = dict(
+        player_actor_steps=player_state.actor_steps,
+        builder_actor_steps=builder_state.actor_steps,
+        training_step=player_state.num_steps,
+    )
+
+    training_logs.update(player_logs)
+
+    return player_state, builder_state, training_logs
 
 
 class Learner:
@@ -746,7 +708,6 @@ class Learner:
             player_history=clip_history(
                 stacked_trajectory.player_history, resolution=player_history_resolution
             ),
-            player_hidden=stacked_trajectory.player_hidden,
         )
 
         return clipped_trajectory
@@ -794,12 +755,8 @@ class Learner:
 
     def get_league_winrates(self):
         league = self.league
-        historical_players = [
-            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
-        ]
-        win_rates = league.get_winrate(
-            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
-        )
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
         return {
             f"league_main_v_{historical_players[i].get_key()}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
@@ -814,49 +771,30 @@ class Learner:
         if steps_passed < self.learner_config.add_player_min_frames:
             return False
 
-        historical_players = [
-            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
-        ]
-        win_rates = league.get_winrate(
-            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
-        )
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
         return (win_rates.min() > 0.7) | (
             steps_passed >= self.learner_config.add_player_max_frames
         )
-
-    def should_update_builder(self):
-        league = self.league
-        historical_players = [
-            v for k, v in league.players.items() if k != (MAIN_KEY, MAIN_KEY)
-        ]
-        win_rates = league.get_winrate(
-            (league.players[(MAIN_KEY, MAIN_KEY)], historical_players)
-        )
-        return win_rates.min() > 0.6
 
     def update_main_player(self):
         new_params = ParamsContainer(
             player_frame_count=np.array(self.player_state.actor_steps).item(),
             builder_frame_count=np.array(self.builder_state.actor_steps).item(),
-            player_step_count=MAIN_KEY,  # For main agent
-            builder_step_count=MAIN_KEY,  # For main agent
+            step_count=MAIN_KEY,  # For main agent
             player_params=self.player_state.params,
             builder_params=self.builder_state.params,
         )
         self.league.update_main_player(new_params)
 
     def add_new_player(self):
-        player_num_steps = np.array(self.player_state.num_steps).item()
-        builder_num_steps = np.array(self.builder_state.num_steps).item()
-        print(
-            f"Adding new player to league @ ({player_num_steps}, {builder_num_steps})"
-        )
+        num_steps = np.array(self.player_state.num_steps).item()
+        print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
             ParamsContainer(
                 player_frame_count=np.array(self.player_state.actor_steps).item(),
                 builder_frame_count=np.array(self.builder_state.actor_steps).item(),
-                player_step_count=player_num_steps,
-                builder_step_count=builder_num_steps,
+                step_count=num_steps,
                 player_params=self.player_state.params,
                 builder_params=self.builder_state.params,
             )
@@ -866,8 +804,7 @@ class Learner:
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
 
-        train_step_jit = jax.jit(player_train_step, static_argnames=["config"])
-        builder_train_step_jit = jax.jit(builder_train_step, static_argnames=["config"])
+        train_step_jit = jax.jit(train_step, static_argnames=["config"])
 
         prev_add_player_check = 0
 
@@ -881,13 +818,10 @@ class Learner:
                 new_builder_state: Porygon2BuilderTrainState
 
                 player_step = np.array(self.player_state.num_steps).item()
-                training_logs = {
-                    "player_steps": player_step,
-                    "builder_steps": np.array(self.builder_state.num_steps).item(),
-                }
+                training_logs = {"training_step": player_step}
 
                 with self.gpu_lock:
-                    new_builder_state, builder_logs, new_player_state, player_logs = (
+                    new_player_state, new_builder_state, player_logs, builder_logs = (
                         train_step_jit(
                             self.player_state,
                             self.builder_state,

@@ -172,7 +172,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 2
+    num_layers = 4
     num_heads = num_heads
     hidden_size_scale = 1
     hidden_size = int(hidden_size_scale * entity_size)
