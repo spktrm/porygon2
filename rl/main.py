@@ -10,9 +10,9 @@ from pprint import pprint
 
 import jax
 import numpy as np
+import wandb
 import wandb.wandb_run
 
-import wandb
 from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
@@ -74,13 +74,13 @@ def run_eval_heuristic(
     """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
 
-    step_count = np.array(learner.player_state.num_steps).item()
+    step_count = np.array(learner.player_state.step_count).item()
 
     session_id = actor._player_env.username
 
     while not stop_signal[0]:
         try:
-            new_step_count = np.array(learner.player_state.num_steps).item()
+            new_step_count = np.array(learner.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
 
@@ -149,7 +149,7 @@ def main():
         builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
-    player_state, builder_state, league, metadata = load_train_state(
+    player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state
     )
 
@@ -175,7 +175,6 @@ def main():
         league=league,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
-        metadata=metadata,
     )
 
     with concurrent.futures.ThreadPoolExecutor(

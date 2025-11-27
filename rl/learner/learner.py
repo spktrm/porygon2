@@ -11,11 +11,11 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import rlax
+import wandb
 import wandb.wandb_run
 from loguru import logger
 from tqdm import tqdm
 
-import wandb
 from rl.environment.data import STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history
@@ -305,13 +305,13 @@ def train_step(
     )
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards = shift_left_with_zeros(rewards_tm1)
-    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.player_gamma
+    discounts = shift_left_with_zeros(valid).astype(v_t.dtype) * config.gamma
 
     # Ratio taken from IMPACT paper: https://arxiv.org/pdf/1912.00167.pdf
     vtrace_td_error_and_advantage = jax.vmap(
         functools.partial(
             rlax.vtrace_td_error_and_advantage,
-            lambda_=config.player_lambda,
+            lambda_=config.lambda_,
             clip_rho_threshold=config.clip_rho_threshold,
             clip_pg_rho_threshold=config.clip_pg_rho_threshold,
         ),
@@ -579,8 +579,8 @@ def train_step(
         + adv_mean * config.player_ema_decay,
         target_adv_std=player_state.target_adv_std * (1 - config.player_ema_decay)
         + adv_std * config.player_ema_decay,
-        num_steps=player_state.num_steps + 1,
-        actor_steps=player_state.actor_steps + player_valid.sum(),
+        num_steps=player_state.step_count + 1,
+        actor_steps=player_state.frame_count + player_valid.sum(),
     )
 
     builder_state = builder_state.apply_gradients(grads=builder_grads)
@@ -589,14 +589,14 @@ def train_step(
         target_params=optax.incremental_update(
             builder_state.params, builder_state.target_params, config.builder_ema_decay
         ),
-        num_steps=builder_state.num_steps + 1,
-        actor_steps=builder_state.actor_steps + valid.sum(),
+        num_steps=builder_state.step_count + 1,
+        actor_steps=builder_state.frame_count + valid.sum(),
     )
 
     training_logs = dict(
-        player_actor_steps=player_state.actor_steps,
-        builder_actor_steps=builder_state.actor_steps,
-        training_step=player_state.num_steps,
+        player_actor_steps=player_state.frame_count,
+        builder_actor_steps=builder_state.frame_count,
+        training_step=player_state.step_count,
     )
 
     training_logs.update(player_logs)
@@ -613,12 +613,10 @@ class Learner:
         wandb_run: wandb.wandb_run.Run,
         league: League | None = None,
         gpu_lock: LockType | None = None,
-        metadata: dict | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
         self.learner_config = learner_config
-        self.metadata = metadata or {}
         self.wandb_run = wandb_run
         self.gpu_lock = gpu_lock or nullcontext()
 
@@ -641,11 +639,11 @@ class Learner:
         )
 
         try:
-            init_frame_count = player_state.actor_steps.item()
-            init_step_count = player_state.num_steps.item()
+            init_frame_count = player_state.frame_count.item()
+            init_step_count = player_state.step_count.item()
         except:
-            init_frame_count = int(player_state.actor_steps)
-            init_step_count = int(player_state.num_steps)
+            init_frame_count = int(player_state.frame_count)
+            init_step_count = int(player_state.step_count)
 
         if league is not None:
             self.league = league
@@ -766,7 +764,7 @@ class Learner:
         league = self.league
         latest_player = league.get_latest_player()
         steps_passed = (
-            self.player_state.actor_steps.item() - latest_player.player_frame_count
+            self.player_state.frame_count.item() - latest_player.player_frame_count
         )
         if steps_passed < self.learner_config.add_player_min_frames:
             return False
@@ -779,8 +777,8 @@ class Learner:
 
     def update_main_player(self):
         new_params = ParamsContainer(
-            player_frame_count=np.array(self.player_state.actor_steps).item(),
-            builder_frame_count=np.array(self.builder_state.actor_steps).item(),
+            player_frame_count=np.array(self.player_state.frame_count).item(),
+            builder_frame_count=np.array(self.builder_state.frame_count).item(),
             step_count=MAIN_KEY,  # For main agent
             player_params=self.player_state.params,
             builder_params=self.builder_state.params,
@@ -788,12 +786,12 @@ class Learner:
         self.league.update_main_player(new_params)
 
     def add_new_player(self):
-        num_steps = np.array(self.player_state.num_steps).item()
+        num_steps = np.array(self.player_state.step_count).item()
         print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
             ParamsContainer(
-                player_frame_count=np.array(self.player_state.actor_steps).item(),
-                builder_frame_count=np.array(self.builder_state.actor_steps).item(),
+                player_frame_count=np.array(self.player_state.frame_count).item(),
+                builder_frame_count=np.array(self.builder_state.frame_count).item(),
                 step_count=num_steps,
                 player_params=self.player_state.params,
                 builder_params=self.builder_state.params,
@@ -817,7 +815,7 @@ class Learner:
                 new_player_state: Porygon2PlayerTrainState
                 new_builder_state: Porygon2BuilderTrainState
 
-                player_step = np.array(self.player_state.num_steps).item()
+                player_step = np.array(self.player_state.step_count).item()
                 training_logs = {"training_step": player_step}
 
                 with self.gpu_lock:
@@ -881,7 +879,6 @@ class Learner:
                         self.player_state,
                         self.builder_state,
                         self.league,
-                        self.metadata,
                     )
 
                 should_add_player = False
