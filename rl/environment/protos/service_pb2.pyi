@@ -190,13 +190,11 @@ class WorkerRequest(_message.Message):
     def __init__(self, task_id: _Optional[int] = ..., step_request: _Optional[_Union[StepRequest, _Mapping]] = ..., reset_request: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
 class WorkerResponse(_message.Message):
-    __slots__ = ("task_id", "environment_response", "error_response", "opponent_reset_request")
+    __slots__ = ("task_id", "environment_response", "error_response")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     ENVIRONMENT_RESPONSE_FIELD_NUMBER: _ClassVar[int]
     ERROR_RESPONSE_FIELD_NUMBER: _ClassVar[int]
-    OPPONENT_RESET_REQUEST_FIELD_NUMBER: _ClassVar[int]
     task_id: int
     environment_response: EnvironmentResponse
     error_response: ErrorResponse
-    opponent_reset_request: ResetRequest
-    def __init__(self, task_id: _Optional[int] = ..., environment_response: _Optional[_Union[EnvironmentResponse, _Mapping]] = ..., error_response: _Optional[_Union[ErrorResponse, _Mapping]] = ..., opponent_reset_request: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
+    def __init__(self, task_id: _Optional[int] = ..., environment_response: _Optional[_Union[EnvironmentResponse, _Mapping]] = ..., error_response: _Optional[_Union[ErrorResponse, _Mapping]] = ...) -> None: ...
