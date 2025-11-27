@@ -212,7 +212,7 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
     return (
-        PlayerActorInput(env=env, history=history, hidden=hidden),
+        PlayerActorInput(env=env, history=history),
         PlayerActorOutput(
             value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
             action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
