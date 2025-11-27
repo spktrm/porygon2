@@ -1,5 +1,6 @@
 import collections
 import threading
+from typing import Literal
 
 import cloudpickle as pickle
 import numpy as np
@@ -13,8 +14,10 @@ _psfp_weightings = {
     "squared": lambda x: (1 - x) ** 2,
 }
 
+PsfpWeighting = Literal["variance", "linear", "linear_capped", "squared"]
 
-def pfsp(win_rates: np.ndarray, weighting: str = "squared") -> np.ndarray:
+
+def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndarray:
     fn = _psfp_weightings[weighting]
     probs = fn(np.asarray(win_rates))
     norm = probs.sum()
