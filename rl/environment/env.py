@@ -62,12 +62,7 @@ class SinglePlayerSyncEnvironment:
         environment_response = worker_response.environment_response
         self.rqid = environment_response.state.rqid
 
-        opponent_reset_request = worker_response.opponent_reset_request
-
-        self.last_state = process_state(
-            environment_response.state,
-            opponent_reset_request if opponent_reset_request.username else None,
-        )
+        self.last_state = process_state(environment_response.state)
         return self.last_state
 
     def reset(
@@ -98,7 +93,7 @@ class SinglePlayerSyncEnvironment:
         if self._is_done():
             return self.last_state
         step_message = ClientRequest(
-            step=StepRequest(action=action, username=self.username, rqid=self.rqid),
+            step=StepRequest(actions=[action], username=self.username, rqid=self.rqid),
         )
         self.websocket.send(step_message.SerializeToString())
         return self._recv()

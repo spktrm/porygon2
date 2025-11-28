@@ -37,11 +37,14 @@ def run_training_actor_pair(
             player_params = player.pull_main_player()
             opponent_params, is_trainable = player.get_match()
 
-            player.set_current_ckpt(np.array(player_params.step_count).item())
-            player.set_opponent_ckpt(np.array(opponent_params.step_count).item())
+            player_ckpt = np.array(player_params.step_count).item()
+            opponent_ckpt = np.array(opponent_params.step_count).item()
 
-            opponent.set_current_ckpt(np.array(opponent_params.step_count).item())
-            opponent.set_opponent_ckpt(np.array(player_params.step_count).item())
+            player.set_current_ckpt(player_ckpt)
+            player.set_opponent_ckpt(opponent_ckpt)
+
+            opponent.set_current_ckpt(opponent_ckpt)
+            opponent.set_opponent_ckpt(player_ckpt)
 
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)
@@ -71,13 +74,13 @@ def run_eval_heuristic(
     """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
 
-    step_count = np.array(learner.player_state.num_steps).item()
+    step_count = np.array(learner.player_state.step_count).item()
 
     session_id = actor._player_env.username
 
     while not stop_signal[0]:
         try:
-            new_step_count = np.array(learner.player_state.num_steps).item()
+            new_step_count = np.array(learner.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
 
@@ -88,7 +91,7 @@ def run_eval_heuristic(
 
                 payoff = eval_trajectory.player_transitions.env_output.win_reward[-1]
 
-                wandb_run.log({"Step": step_count, f"wr-{session_id}": payoff})
+                wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
 
         except Exception:
             traceback.print_exc()
@@ -147,7 +150,7 @@ def main():
     )
 
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state, from_scratch=True
+        learner_config, player_state, builder_state
     )
 
     wandb_run = wandb.init(

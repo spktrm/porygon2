@@ -10,17 +10,23 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import ActionType
-from rl.environment.protos.service_pb2 import Action
+from rl.environment.protos.service_pb2 import Action, ActionEnum
 from rl.environment.utils import clip_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
-ACTION_TYPE_MAPPING = {
-    0: ActionType.ACTION_TYPE__MOVE,
-    1: ActionType.ACTION_TYPE__SWITCH,
-    2: ActionType.ACTION_TYPE__TEAMPREVIEW,
+ACTION_MAPPING = {
+    0: ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
+    1: ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
+    2: ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
+    3: ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
+    4: ActionEnum.ACTION_ENUM__SWITCH_1,
+    5: ActionEnum.ACTION_ENUM__SWITCH_2,
+    6: ActionEnum.ACTION_ENUM__SWITCH_3,
+    7: ActionEnum.ACTION_ENUM__SWITCH_4,
+    8: ActionEnum.ACTION_ENUM__SWITCH_5,
+    9: ActionEnum.ACTION_ENUM__SWITCH_6,
 }
 
 
@@ -53,18 +59,17 @@ class Actor:
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(
-            action_type=ACTION_TYPE_MAPPING[
-                agent_output.actor_output.action_type_head.action_index.item()
+            action=ACTION_MAPPING[
+                agent_output.actor_output.action_head.action_index.item()
             ],
-            move_slot=agent_output.actor_output.move_head.action_index.item(),
-            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
-            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
+            wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
         )
 
     def unroll(
         self,
         rng_key: jax.Array,
-        frame_count: int,
+        player_frame_count: int,
+        builder_frame_count: int,
         player_params: Params,
         builder_params: Params,
     ) -> Trajectory:
@@ -92,9 +97,10 @@ class Actor:
                 agent_output=builder_agent_output,
             )
             build_traj.append(builder_transition)
+            builder_actor_input = self._builder_env.step(builder_agent_output)
+            # Swap when we break since we want a continuous trajectory
             if builder_actor_input.env.done.item():
                 break
-            builder_actor_input = self._builder_env.step(builder_agent_output)
 
         if len(build_traj) < builder_unroll_length:
             build_traj += [builder_transition] * (
@@ -114,8 +120,6 @@ class Actor:
             builder_actor_input.history.species_tokens.reshape(-1).tolist(),
             builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
         )
-        # Extract opponent hidden info to better inform builder value function.
-        player_hidden = player_actor_input.hidden
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
@@ -152,7 +156,6 @@ class Actor:
             builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
             player_history=player_actor_input.history,
-            player_hidden=player_hidden,
         )
 
         return promote_map(trajectory)
@@ -177,7 +180,8 @@ class Actor:
         subkey = self.split_rng()
         act_out = self.unroll(
             rng_key=subkey,
-            frame_count=params_container.frame_count,
+            player_frame_count=params_container.player_frame_count,
+            builder_frame_count=params_container.builder_frame_count,
             player_params=player_params,
             builder_params=builder_params,
         )
@@ -211,6 +215,9 @@ class Actor:
         coin_toss = np.random.random()
 
         # Make sure you can beat the League (PFSP)
+        # We only store trajectories from the the perspective of the main player,
+        # so we need to oversample playing against it such that the proportion of
+        # games played against it is 50%.
         if coin_toss < 0.5:
             opponent = self._pfsp_branch()
             if opponent is not None:  # Found a historical opponent

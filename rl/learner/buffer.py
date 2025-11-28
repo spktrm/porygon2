@@ -130,7 +130,11 @@ class ReplayBuffer:
 
         # Tracking
         self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
-        self._tau = 1
+        self._tau = 1e-3
+
+    def reset_species_counts(self):
+        with self._lock:
+            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
 
     def add(self, traj: Trajectory):
         with self._lock:
@@ -140,7 +144,6 @@ class ReplayBuffer:
                 self._tau,
                 NUM_SPECIES,
             )
-            self._tau = max(1e-3, self._tau - 1e-3)
             if self._size == len(self._buf):  # buffer full and maxlen hit
                 # deque will evict leftmost; keep _size consistent with len
                 pass

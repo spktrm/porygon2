@@ -1,5 +1,6 @@
 import collections
 import threading
+from typing import Literal
 
 import cloudpickle as pickle
 import numpy as np
@@ -13,8 +14,10 @@ _psfp_weightings = {
     "squared": lambda x: (1 - x) ** 2,
 }
 
+PsfpWeighting = Literal["variance", "linear", "linear_capped", "squared"]
 
-def pfsp(win_rates: np.ndarray, weighting: str = "squared") -> np.ndarray:
+
+def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndarray:
     fn = _psfp_weightings[weighting]
     probs = fn(np.asarray(win_rates))
     norm = probs.sum()
@@ -69,10 +72,8 @@ class League:
     @classmethod
     def deserialize(cls, data: bytes) -> "League":
         state = pickle.loads(data)
-        players = state["players"]
-        main_player = players.pop(
-            MAIN_KEY, max(players.values(), key=lambda p: p.step_count)
-        )
+        players: dict[int, ParamsContainer] = state["players"]
+        main_player = players.pop(MAIN_KEY, players)
         league = cls(
             main_player,
             list(players.values()),
@@ -158,25 +159,6 @@ class League:
             else:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
-
-    def remove_weakest_players(self) -> ParamsContainer:
-        with self.lock:
-            historical_players = [v for k, v in self.players.items() if k != MAIN_KEY]
-            win_rates = self.get_winrate((self.players[MAIN_KEY], historical_players))
-
-            indices_to_remove = np.argwhere(win_rates >= 0.9).reshape(-1)
-            for idx in indices_to_remove:
-                weakest_player = historical_players[idx].step_count
-                print("Removing player with step count: ", weakest_player)
-                self.players.pop(weakest_player)
-
-                keys_to_pop = []
-                for home, away in self.wins.keys():
-                    if weakest_player in (home, away):
-                        keys_to_pop.append((home, away))
-                for stats in (self.games, self.wins, self.draws, self.losses):
-                    for key in keys_to_pop:
-                        stats.pop(key)
 
     def get_main_player(self) -> ParamsContainer:
         with self.lock:

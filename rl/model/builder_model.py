@@ -84,6 +84,11 @@ class Porygon2BuilderModel(nn.Module):
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
         self.packed_set_query_merge = SumEmbeddings(entity_size, dtype=dtype)
 
+        self.sos_embedding = self.param(
+            "sos_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
         self.unk_embedding = self.param(
             "unk_embedding",
             nn.initializers.truncated_normal(stddev=0.02),
@@ -200,18 +205,14 @@ class Porygon2BuilderModel(nn.Module):
 
         return embedding
 
-    def _forward_value_head(self, my_embedding: jax.Array, opp_embedding: jax.Array):
-        hidden = jnp.concatenate([my_embedding, opp_embedding], axis=-1)
-        return self.value_head(hidden)
+    def _forward_value_head(self, my_embedding: jax.Array):
+        return self.value_head(my_embedding)
 
     def _encode_team(
         self,
         species_tokens: jax.Array,
         packed_set_tokens: jax.Array,
     ):
-        seq_len = species_tokens.shape[0]
-        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
-        causal_mask = jnp.expand_dims(causal_mask, axis=0)
 
         valid_packed_sets = jnp.take(
             SET_TOKENS[self.cfg.generation]["ou_all_formats"], species_tokens, axis=0
@@ -225,6 +226,13 @@ class Porygon2BuilderModel(nn.Module):
             self.unk_embedding.astype(self.cfg.dtype),
             set_embeddings,
         )
+        set_embeddings = jnp.concatenate(
+            (self.sos_embedding.astype(self.cfg.dtype), set_embeddings), axis=0
+        )
+
+        seq_len = set_embeddings.shape[0]
+        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
+        causal_mask = jnp.expand_dims(causal_mask, axis=0)
 
         positions = jnp.arange(set_embeddings.shape[0], dtype=jnp.int32)
 
@@ -236,11 +244,10 @@ class Porygon2BuilderModel(nn.Module):
         actor_env: BuilderEnvOutput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
-        opp_embedding: jax.Array,
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value = self._forward_value_head(current_embedding, opp_embedding)
+        value_head = self._forward_value_head(current_embedding)
 
         species_query = current_embedding
 
@@ -275,7 +282,9 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         return BuilderActorOutput(
-            species_head=species_head, packed_set_head=packed_set_head, v=value
+            species_head=species_head,
+            packed_set_head=packed_set_head,
+            value_head=value_head,
         )
 
     def __call__(
@@ -289,26 +298,12 @@ class Porygon2BuilderModel(nn.Module):
         my_embeddings = self._encode_team(
             actor_input.history.species_tokens, actor_input.history.packed_set_tokens
         )
+        hidden_states = jnp.take(my_embeddings, actor_input.env.ts.reshape(-1), axis=0)
 
-        train = self.cfg.get("train", False)
-        if train:
-            opp_embeddings = self._encode_team(
-                actor_input.hidden.species_tokens, actor_input.hidden.packed_set_tokens
-            )
-            opp_embedding = opp_embeddings[-1]
-        else:
-            opp_embedding = jnp.zeros_like(my_embeddings[0], dtype=my_embeddings.dtype)
-
-        ts_m1 = actor_input.env.ts - 1
-        hidden_states = jnp.take(
-            my_embeddings,
-            ts_m1.reshape(-1).clip(min=0, max=my_embeddings.shape[0] - 1),
-            axis=0,
-        )
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
-            in_axes=(0, 0, 0, None, None),
-        )(hidden_states, actor_input.env, actor_output, species_keys, opp_embedding)
+            in_axes=(0, 0, 0, None),
+        )(hidden_states, actor_input.env, actor_output, species_keys)
 
 
 def get_builder_model(config: ConfigDict = None) -> nn.Module:
@@ -317,7 +312,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = False, generation: int = 9):
+def main(debug: bool = True, generation: int = 9):
     get_learner_config()
 
     actor_model_config = get_builder_model_config(generation, train=False)
@@ -346,7 +341,7 @@ def main(debug: bool = False, generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        builder_head_params=HeadParams(temp=0.8),
+        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     builder_env = TeamBuilderEnvironment(

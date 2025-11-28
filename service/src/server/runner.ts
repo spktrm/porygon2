@@ -14,12 +14,33 @@ import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, RewardTracker, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
-import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
+import {
+    Action,
+    ActionEnum,
+    EnvironmentState,
+    StepRequest,
+    WildCardEnum,
+} from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
-import { ActionMaskFeature, ActionType } from "../../protos/features_pb";
 
 Teams.setGeneratorFactory(TeamGenerators);
+
+function splitFirst(str: string, delimiter: string, limit = 1) {
+    const splitStr = [];
+    while (splitStr.length < limit) {
+        const delimiterIndex = str.indexOf(delimiter);
+        if (delimiterIndex >= 0) {
+            splitStr.push(str.slice(0, delimiterIndex));
+            str = str.slice(delimiterIndex + delimiter.length);
+        } else {
+            splitStr.push(str);
+            str = "";
+        }
+    }
+    splitStr.push(str);
+    return splitStr;
+}
 
 async function withTimeoutWarning<T>(
     fn: () => Promise<T>,
@@ -121,12 +142,6 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
-const ACTION_TYPES = new Map<number, string>();
-ACTION_TYPES.set(ActionType.ACTION_TYPE__MOVE, "move");
-ACTION_TYPES.set(ActionType.ACTION_TYPE__SWITCH, "switch");
-ACTION_TYPES.set(ActionType.ACTION_TYPE__TEAMPREVIEW, "team");
-ACTION_TYPES.set(ActionType.ACTION_TYPE__DEFAULT, "default");
-
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
@@ -147,7 +162,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     isBaseline: boolean;
     baselineIndex: number;
-    earliestTeraTurn: number;
 
     constructor(
         userName: string,
@@ -159,7 +173,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         } = {},
         debug: boolean = false,
         sets?: PokemonSet[],
-        earliestTeraTurn: number = 0,
     ) {
         super(playerStream, options, debug);
 
@@ -178,7 +191,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.requestCount = 0;
         this.finishedEarly = false;
         this.rqid = -1;
-        this.earliestTeraTurn = earliestTeraTurn;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -252,68 +264,100 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
-    choiceFromAction(action: Action) {
-        const actionTypeIndex = action.getActionType();
-        const moveSlotIndex = action.getMoveSlot()! + 1;
-        const switchSlotIndex = action.getSwitchSlot()! + 1;
-        const wildCardSlot = action.getWildcardSlot();
+    choiceFromAction(action: Action, isSingles: boolean = true): string {
+        const actionIndex = action.getAction();
+        if (
+            ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA <= actionIndex &&
+            actionIndex <= ActionEnum.ACTION_ENUM__MOVE_4_TARGET_4
+        ) {
+            const moveIndex = Math.floor((actionIndex - 1) / 5);
+            const targetIndex = (actionIndex - 1) % 5;
+            const wildCardIndex = action.getWildcard();
 
-        if (actionTypeIndex === undefined) {
-            throw new Error(
-                "Action type index is undefined. Ensure the action is properly defined.",
-            );
-        }
-        const actionType = ACTION_TYPES.get(actionTypeIndex);
-        if (actionType === undefined) {
-            throw new Error(
-                `Invalid action type index: ${actionTypeIndex}. Must be one of ${Array.from(
-                    ACTION_TYPES.keys(),
-                )}.`,
-            );
-        }
-        if (actionType === "default") {
+            let moveCommand = `move ${moveIndex + 1}`;
+            if (targetIndex !== 0 && !isSingles) {
+                const showdownFormat =
+                    targetIndex <= 2 ? -targetIndex : targetIndex - 2;
+                moveCommand += ` ${showdownFormat}`;
+            }
+            if (wildCardIndex !== WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL) {
+                switch (wildCardIndex) {
+                    case WildCardEnum.WILD_CARD_ENUM__CAN_MEGA:
+                        moveCommand += " mega";
+                        break;
+                    case WildCardEnum.WILD_CARD_ENUM__CAN_ZMOVE:
+                        moveCommand += " zmove";
+                        break;
+                    case WildCardEnum.WILD_CARD_ENUM__CAN_MAX:
+                        moveCommand += " dynamax";
+                        break;
+                    case WildCardEnum.WILD_CARD_ENUM__CAN_TERA:
+                        moveCommand += " terastallize";
+                        break;
+                    default:
+                        throw new Error(
+                            `Invalid wildcard index: ${wildCardIndex}`,
+                        );
+                }
+            }
+
+            return moveCommand;
+        } else if (
+            ActionEnum.ACTION_ENUM__SWITCH_1 <= actionIndex &&
+            actionIndex <= ActionEnum.ACTION_ENUM__SWITCH_6
+        ) {
+            const switchIndex = actionIndex - ActionEnum.ACTION_ENUM__SWITCH_1;
+            return `switch ${switchIndex + 1}`;
+        } else if (actionIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
+        } else if (actionIndex === ActionEnum.ACTION_ENUM__PASS) {
+            return "pass";
+        } else {
+            throw new Error(`Invalid action index: ${actionIndex}`);
         }
-        if (actionType === "move" && moveSlotIndex !== undefined) {
-            let moveString = `${actionType} ${moveSlotIndex}`;
-            if (
-                wildCardSlot ===
-                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MEGA -
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
-            ) {
-                moveString += " mega";
+    }
+
+    choicesFromActions(
+        actions: Action[],
+        isTeamPreview: boolean = false,
+    ): string {
+        if (isTeamPreview) {
+            const order: number[] = [];
+            for (const action of actions) {
+                const actionIndex = action.getAction();
+                if (
+                    ActionEnum.ACTION_ENUM__SWITCH_1 <= actionIndex &&
+                    actionIndex <= ActionEnum.ACTION_ENUM__SWITCH_6
+                ) {
+                    const switchIndex =
+                        actionIndex - ActionEnum.ACTION_ENUM__SWITCH_1;
+                    order.push(switchIndex + 1);
+                } else if (actionIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
+                    return "default";
+                } else {
+                    throw new Error(
+                        `Invalid team preview action index: ${actionIndex}`,
+                    );
+                }
             }
-            if (
-                wildCardSlot ===
-                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_ZMOVE -
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
-            ) {
-                moveString += " zmove";
+            // Numbers excluding those chosen
+            const rest = [1, 2, 3, 4, 5, 6]
+                .filter((n) => !order.includes(n))
+                .map((n) => n.toString())
+                .join("");
+            return `team ${order.join("")}${rest}`;
+        }
+        const choiceList: string[] = [];
+        const isSingles = !!this.privateBattle.gameType?.includes("singles");
+        if (actions.length === 1 || actions.length === 2) {
+            for (const action of actions) {
+                const choice = this.choiceFromAction(action, isSingles);
+                choiceList.push(choice);
             }
-            if (
-                wildCardSlot ===
-                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX -
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
-            ) {
-                moveString += " dynamax";
-            }
-            if (
-                wildCardSlot ===
-                ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA -
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL
-            ) {
-                moveString += " terastallize";
-            }
-            return moveString;
-        } else if (actionType === "switch" && switchSlotIndex !== undefined) {
-            return `${actionType} ${switchSlotIndex}`;
-        } else if (actionType === "team" && switchSlotIndex !== undefined) {
-            const rest = [1, 2, 3, 4, 5, 6];
-            rest.splice(rest.indexOf(switchSlotIndex), 1);
-            return `${actionType} ${switchSlotIndex}${rest.join("")}`;
+            return choiceList.join(",");
         } else {
             throw new Error(
-                `Invalid action: ${actionType} with moveSlot: ${moveSlotIndex} and switchSlot: ${switchSlotIndex}.`,
+                `Expected actions length of 1 or 2, but got ${actions.length}`,
             );
         }
     }
@@ -353,8 +397,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             );
         }
 
-        const action = stepRequest.getAction()!;
-        return this.choiceFromAction(action);
+        const actions = stepRequest.getActionsList()!;
+        return this.choicesFromActions(
+            actions,
+            !!this.getRequest()?.teamPreview,
+        );
     }
 
     private getEvalActorChoice() {
@@ -374,10 +421,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 `No eval function found for username: ${this.userName}`,
             );
         }
-        const action = evalFn({
+        const actions = evalFn({
             player: this,
         });
-        return this.choiceFromAction(action);
+        return this.choicesFromActions(
+            actions,
+            !!this.getRequest()?.teamPreview,
+        );
     }
 
     async getChoice(): Promise<string> {
@@ -401,7 +451,17 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         };
     }
 
+    receiveLine(line: string) {
+        if (this.debug) console.log(line);
+        if (!line.startsWith("|")) return;
+        const [cmd, rest] = splitFirst(line.slice(1), "|");
+        if (cmd === "request") return this.receiveRequest(JSON.parse(rest));
+        if (cmd === "error") return this.receiveError(new Error(rest));
+        this.log.push(line);
+    }
+
     override async start() {
+        const choices = [];
         for await (const chunk of this.stream) {
             if (chunk.includes("error|")) {
                 console.log(`Error in stream: ${chunk}`);
@@ -433,6 +493,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                             1000,
                             "getChoice",
                         );
+                        choices.push(choice);
 
                         // Process the received action
                         try {
@@ -463,33 +524,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 }
 
 let totalBattles = 0;
-
-function sampleEarliestTeraTurn(
-    minTurn: number = 2,
-    maxTurn: number = 20,
-    scale: number = 500,
-): number {
-    if (minTurn > maxTurn) {
-        throw new Error("minTurn must be ≤ maxTurn");
-    }
-
-    // Compute a shape parameter. As totalBattles grows, alpha grows and
-    // the distribution becomes more skewed toward smaller values.
-    const alpha = 1 + totalBattles / Math.max(1, scale);
-
-    // Draw a uniform random number U in (0, 1)
-    const u = Math.random();
-
-    // Transform U to follow a Beta(1, alpha) distribution.
-    // Beta(1, alpha) is skewed toward 0 for alpha > 1.
-    const x = 1 - Math.pow(u, 1 / alpha);
-
-    // Map x ∈ [0, 1) to an integer turn in [minTurn, maxTurn].
-    const range = maxTurn - minTurn + 1;
-    const turn = minTurn + Math.floor(x * range);
-
-    return turn;
-}
 
 export function createBattle(
     options: {
@@ -537,7 +571,6 @@ export function createBattle(
         {},
         debug,
         p1Sets,
-        sampleEarliestTeraTurn(),
     );
     const p2 = new TrainablePlayerAI(
         p2spec.name,
@@ -545,7 +578,6 @@ export function createBattle(
         {},
         debug,
         p2Sets,
-        sampleEarliestTeraTurn(),
     );
 
     p1.start();
