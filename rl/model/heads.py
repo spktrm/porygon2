@@ -1,4 +1,3 @@
-import math
 from typing import NamedTuple
 
 import flax.linen as nn
@@ -6,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import HeadOutput
+from rl.environment.interfaces import PolicyHeadOutput, ValueHeadOutput
 from rl.model.modules import MLP, PointerLogits, Resnet
 from rl.model.utils import legal_log_policy, legal_policy
 
@@ -16,20 +15,38 @@ class HeadParams(NamedTuple):
     min_p: float = 0.0
 
 
-def sample_categorical(
-    logits: jax.Array,
-    log_policy: jax.Array,
-    mask: jax.Array,
-    rng_key: jax.random.PRNGKey,
-    min_p: float = 0,
-):
-    masked_logits = jnp.where(mask, logits, -jnp.inf)
-    if 0.0 < min_p < 1.0:
-        masked_log_policy = jnp.where(mask, log_policy, -jnp.inf)
-        max_logp = masked_log_policy.max(keepdims=True, axis=-1)
-        keep = masked_log_policy >= (max_logp + math.log(min_p))
-        masked_logits = jnp.where(keep & mask, masked_logits, -jnp.inf)
-    return jax.random.categorical(rng_key, masked_logits.astype(jnp.float32), axis=-1)
+def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float = 0):
+    # Fast path: no min_p adjustment, sample directly from logits.
+    if min_p <= 0.0:
+        return jax.random.categorical(rng_key, log_policy, axis=-1)
+
+    # Convert to probs, clamp, renormalize, then go back to log-space for sampling.
+    probs = jnp.exp(log_policy)
+    probs = jnp.where(probs >= min_p * probs.max(), probs, 0)
+    probs = probs / probs.sum(axis=-1, keepdims=True)
+
+    # Avoid log(0) just in case of numerical edge cases
+    log_probs = jnp.log(probs)
+    log_probs = jnp.nan_to_num(log_probs, neginf=jnp.finfo(log_probs.dtype).min)
+
+    return jax.random.categorical(rng_key, log_probs, axis=-1)
+
+
+class HeadlessPolicyQKHead(nn.Module):
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        query_embedding: jax.Array,
+        key_embeddings: jax.Array,
+        head_params: HeadParams = HeadParams(),
+    ):
+        resnet = Resnet(**self.cfg.resnet.to_dict())
+        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
+
+        logits = qk_logits(resnet(query_embedding), key_embeddings)
+        return logits / head_params.temp
 
 
 class PolicyQKHead(nn.Module):
@@ -40,7 +57,7 @@ class PolicyQKHead(nn.Module):
         self,
         query_embedding: jax.Array,
         key_embeddings: jax.Array,
-        head: HeadOutput,
+        head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
@@ -54,38 +71,37 @@ class PolicyQKHead(nn.Module):
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
+        policy = legal_policy(logits, valid_mask)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        entropy = ()
         train = self.cfg.get("train", False)
         if train:
             action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
-                logits,
-                log_policy,
-                valid_mask,
+                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
                 self.make_rng("sampling"),
                 min_p=head_params.min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+        return PolicyHeadOutput(
+            action_index=action_index, log_prob=log_prob, entropy=entropy
+        )
 
 
 class PolicyLogitHeadInner(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, embedding: jax.Array):
+    def __call__(self, x: jax.Array):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
             **self.cfg.logits.to_dict()
         )
-        embedding = resnet(embedding)
-        return logits(embedding)
+        x = resnet(x)
+        return logits(x)
 
 
 class PolicyLogitHead(nn.Module):
@@ -95,7 +111,7 @@ class PolicyLogitHead(nn.Module):
     def __call__(
         self,
         embedding: jax.Array,
-        head: HeadOutput,
+        head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
@@ -106,34 +122,41 @@ class PolicyLogitHead(nn.Module):
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
         log_policy = legal_log_policy(logits, valid_mask)
+        policy = legal_policy(logits, valid_mask)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        entropy = ()
         train = self.cfg.get("train", False)
         if train:
             action_index = head.action_index
-            policy = legal_policy(logits, valid_mask)
-            entropy = -jnp.sum(policy * log_policy, axis=-1)
         else:
             action_index = sample_categorical(
-                logits,
-                log_policy,
-                valid_mask,
+                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
                 self.make_rng("sampling"),
                 min_p=head_params.min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return HeadOutput(action_index=action_index, log_prob=log_prob, entropy=entropy)
+        return PolicyHeadOutput(
+            action_index=action_index, log_prob=log_prob, entropy=entropy
+        )
 
 
 class ValueLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, embedding: jax.Array):
+    def __call__(self, x: jax.Array):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(**self.cfg.logits.to_dict())
 
-        embedding = resnet(embedding)
-        logits = logits(embedding)
-        return jnp.tanh(logits.squeeze(-1))
+        x = resnet(x)
+        x = logits(x)
+
+        log_probs = nn.log_softmax(x, axis=-1)
+        probs = jnp.exp(log_probs)
+        entropy = -jnp.sum(probs * log_probs, axis=-1)
+        expectation = probs @ self.cfg.category_values
+
+        return ValueHeadOutput(
+            logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
+        )

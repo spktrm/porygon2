@@ -24,31 +24,35 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rservice.proto\x12\tservicev2\"q\n\rClientRequest\x12&\n\x04step\x18\x01 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12(\n\x05reset\x18\x02 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\x0e\n\x0cmessage_type\"\\\n\x06\x41\x63tion\x12\x13\n\x0b\x61\x63tion_type\x18\x01 \x01(\x05\x12\x11\n\tmove_slot\x18\x02 \x01(\x05\x12\x13\n\x0bswitch_slot\x18\x03 \x01(\x05\x12\x15\n\rwildcard_slot\x18\x04 \x01(\x05\"P\n\x0bStepRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12!\n\x06\x61\x63tion\x18\x02 \x01(\x0b\x32\x11.servicev2.Action\x12\x0c\n\x04rqid\x18\x03 \x01(\x05\"\x99\x01\n\x0cResetRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x17\n\x0fspecies_indices\x18\x02 \x03(\x05\x12\x1a\n\x12packed_set_indices\x18\x03 \x03(\x05\x12\x15\n\rsmogon_format\x18\x04 \x01(\t\x12\x14\n\x0c\x63urrent_ckpt\x18\x05 \x01(\x05\x12\x15\n\ropponent_ckpt\x18\x06 \x01(\x05\"\xb2\x02\n\x10\x45nvironmentState\x12\x0c\n\x04info\x18\x01 \x01(\x0c\x12\x13\n\x0b\x61\x63tion_mask\x18\x02 \x01(\x0c\x12\x1d\n\x15history_entity_public\x18\x03 \x01(\x0c\x12\x1f\n\x17history_entity_revealed\x18\x04 \x01(\x0c\x12\x1c\n\x14history_entity_edges\x18\x05 \x01(\x0c\x12\x15\n\rhistory_field\x18\x06 \x01(\x0c\x12\x16\n\x0ehistory_length\x18\x07 \x01(\x05\x12\x0f\n\x07moveset\x18\x08 \x01(\x0c\x12\x13\n\x0bpublic_team\x18\t \x01(\x0c\x12\x15\n\rrevealed_team\x18\n \x01(\x0c\x12\x14\n\x0cprivate_team\x18\x0b \x01(\x0c\x12\r\n\x05\x66ield\x18\x0c \x01(\x0c\x12\x0c\n\x04rqid\x18\r \x01(\x05\"D\n\x15\x45nvironmentTrajectory\x12+\n\x06states\x18\x01 \x03(\x0b\x32\x1b.servicev2.EnvironmentState\"S\n\x13\x45nvironmentResponse\x12\x10\n\x08username\x18\x01 \x01(\t\x12*\n\x05state\x18\x02 \x01(\x0b\x32\x1b.servicev2.EnvironmentState\"\x1e\n\rErrorResponse\x12\r\n\x05trace\x18\x01 \x01(\t\"\x8d\x01\n\rWorkerRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12.\n\x0cstep_request\x18\x02 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12\x30\n\rreset_request\x18\x03 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\t\n\x07request\"\xea\x01\n\x0eWorkerResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12<\n\x14\x65nvironment_response\x18\x02 \x01(\x0b\x32\x1e.servicev2.EnvironmentResponse\x12\x30\n\x0e\x65rror_response\x18\x03 \x01(\x0b\x32\x18.servicev2.ErrorResponse\x12<\n\x16opponent_reset_request\x18\x04 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x88\x01\x01\x42\x19\n\x17_opponent_reset_requestb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rservice.proto\x12\tservicev2\"q\n\rClientRequest\x12&\n\x04step\x18\x01 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12(\n\x05reset\x18\x02 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\x0e\n\x0cmessage_type\"Z\n\x06\x41\x63tion\x12%\n\x06\x61\x63tion\x18\x01 \x01(\x0e\x32\x15.servicev2.ActionEnum\x12)\n\x08wildcard\x18\x02 \x01(\x0e\x32\x17.servicev2.WildCardEnum\"f\n\x0bStepRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\"\n\x07\x61\x63tions\x18\x02 \x03(\x0b\x32\x11.servicev2.Action\x12\x0c\n\x04rqid\x18\x03 \x01(\x05\x12\x13\n\x0bteampreview\x18\x04 \x01(\x08\"\x99\x01\n\x0cResetRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x17\n\x0fspecies_indices\x18\x02 \x03(\x05\x12\x1a\n\x12packed_set_indices\x18\x03 \x03(\x05\x12\x15\n\rsmogon_format\x18\x04 \x01(\t\x12\x14\n\x0c\x63urrent_ckpt\x18\x05 \x01(\x05\x12\x15\n\ropponent_ckpt\x18\x06 \x01(\x05\"\xc9\x02\n\x10\x45nvironmentState\x12\x0c\n\x04info\x18\x01 \x01(\x0c\x12\x13\n\x0b\x61\x63tion_mask\x18\x02 \x01(\x0c\x12\x15\n\rwildcard_mask\x18\x03 \x01(\x0c\x12\x1d\n\x15history_entity_public\x18\x04 \x01(\x0c\x12\x1f\n\x17history_entity_revealed\x18\x05 \x01(\x0c\x12\x1c\n\x14history_entity_edges\x18\x06 \x01(\x0c\x12\x15\n\rhistory_field\x18\x07 \x01(\x0c\x12\x16\n\x0ehistory_length\x18\x08 \x01(\x05\x12\x0f\n\x07moveset\x18\t \x01(\x0c\x12\x13\n\x0bpublic_team\x18\n \x01(\x0c\x12\x15\n\rrevealed_team\x18\x0b \x01(\x0c\x12\x14\n\x0cprivate_team\x18\x0c \x01(\x0c\x12\r\n\x05\x66ield\x18\r \x01(\x0c\x12\x0c\n\x04rqid\x18\x0e \x01(\x05\"D\n\x15\x45nvironmentTrajectory\x12+\n\x06states\x18\x01 \x03(\x0b\x32\x1b.servicev2.EnvironmentState\"S\n\x13\x45nvironmentResponse\x12\x10\n\x08username\x18\x01 \x01(\t\x12*\n\x05state\x18\x02 \x01(\x0b\x32\x1b.servicev2.EnvironmentState\"\x1e\n\rErrorResponse\x12\r\n\x05trace\x18\x01 \x01(\t\"\x8d\x01\n\rWorkerRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12.\n\x0cstep_request\x18\x02 \x01(\x0b\x32\x16.servicev2.StepRequestH\x00\x12\x30\n\rreset_request\x18\x03 \x01(\x0b\x32\x17.servicev2.ResetRequestH\x00\x42\t\n\x07request\"\x91\x01\n\x0eWorkerResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\x05\x12<\n\x14\x65nvironment_response\x18\x02 \x01(\x0b\x32\x1e.servicev2.EnvironmentResponse\x12\x30\n\x0e\x65rror_response\x18\x03 \x01(\x0b\x32\x18.servicev2.ErrorResponse*\xaa\x07\n\nActionEnum\x12\x1d\n\x19\x41\x43TION_ENUM___UNSPECIFIED\x10\x00\x12!\n\x1d\x41\x43TION_ENUM__MOVE_1_TARGET_NA\x10\x01\x12 \n\x1c\x41\x43TION_ENUM__MOVE_1_TARGET_1\x10\x02\x12 \n\x1c\x41\x43TION_ENUM__MOVE_1_TARGET_2\x10\x03\x12 \n\x1c\x41\x43TION_ENUM__MOVE_1_TARGET_3\x10\x04\x12 \n\x1c\x41\x43TION_ENUM__MOVE_1_TARGET_4\x10\x05\x12!\n\x1d\x41\x43TION_ENUM__MOVE_2_TARGET_NA\x10\x06\x12 \n\x1c\x41\x43TION_ENUM__MOVE_2_TARGET_1\x10\x07\x12 \n\x1c\x41\x43TION_ENUM__MOVE_2_TARGET_2\x10\x08\x12 \n\x1c\x41\x43TION_ENUM__MOVE_2_TARGET_3\x10\t\x12 \n\x1c\x41\x43TION_ENUM__MOVE_2_TARGET_4\x10\n\x12!\n\x1d\x41\x43TION_ENUM__MOVE_3_TARGET_NA\x10\x0b\x12 \n\x1c\x41\x43TION_ENUM__MOVE_3_TARGET_1\x10\x0c\x12 \n\x1c\x41\x43TION_ENUM__MOVE_3_TARGET_2\x10\r\x12 \n\x1c\x41\x43TION_ENUM__MOVE_3_TARGET_3\x10\x0e\x12 \n\x1c\x41\x43TION_ENUM__MOVE_3_TARGET_4\x10\x0f\x12!\n\x1d\x41\x43TION_ENUM__MOVE_4_TARGET_NA\x10\x10\x12 \n\x1c\x41\x43TION_ENUM__MOVE_4_TARGET_1\x10\x11\x12 \n\x1c\x41\x43TION_ENUM__MOVE_4_TARGET_2\x10\x12\x12 \n\x1c\x41\x43TION_ENUM__MOVE_4_TARGET_3\x10\x13\x12 \n\x1c\x41\x43TION_ENUM__MOVE_4_TARGET_4\x10\x14\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_1\x10\x15\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_2\x10\x16\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_3\x10\x17\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_4\x10\x18\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_5\x10\x19\x12\x19\n\x15\x41\x43TION_ENUM__SWITCH_6\x10\x1a\x12\x18\n\x14\x41\x43TION_ENUM__DEFAULT\x10\x1b\x12\x15\n\x11\x41\x43TION_ENUM__PASS\x10\x1c*\xc8\x01\n\x0cWildCardEnum\x12 \n\x1cWILD_CARD_ENUM___UNSPECIFIED\x10\x00\x12\x1e\n\x1aWILD_CARD_ENUM__CAN_NORMAL\x10\x01\x12\x1c\n\x18WILD_CARD_ENUM__CAN_MEGA\x10\x02\x12\x1d\n\x19WILD_CARD_ENUM__CAN_ZMOVE\x10\x03\x12\x1b\n\x17WILD_CARD_ENUM__CAN_MAX\x10\x04\x12\x1c\n\x18WILD_CARD_ENUM__CAN_TERA\x10\x05\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'service_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_ACTIONENUM']._serialized_start=1307
+  _globals['_ACTIONENUM']._serialized_end=2245
+  _globals['_WILDCARDENUM']._serialized_start=2248
+  _globals['_WILDCARDENUM']._serialized_end=2448
   _globals['_CLIENTREQUEST']._serialized_start=28
   _globals['_CLIENTREQUEST']._serialized_end=141
   _globals['_ACTION']._serialized_start=143
-  _globals['_ACTION']._serialized_end=235
-  _globals['_STEPREQUEST']._serialized_start=237
-  _globals['_STEPREQUEST']._serialized_end=317
-  _globals['_RESETREQUEST']._serialized_start=320
-  _globals['_RESETREQUEST']._serialized_end=473
-  _globals['_ENVIRONMENTSTATE']._serialized_start=476
-  _globals['_ENVIRONMENTSTATE']._serialized_end=782
-  _globals['_ENVIRONMENTTRAJECTORY']._serialized_start=784
-  _globals['_ENVIRONMENTTRAJECTORY']._serialized_end=852
-  _globals['_ENVIRONMENTRESPONSE']._serialized_start=854
-  _globals['_ENVIRONMENTRESPONSE']._serialized_end=937
-  _globals['_ERRORRESPONSE']._serialized_start=939
-  _globals['_ERRORRESPONSE']._serialized_end=969
-  _globals['_WORKERREQUEST']._serialized_start=972
-  _globals['_WORKERREQUEST']._serialized_end=1113
-  _globals['_WORKERRESPONSE']._serialized_start=1116
-  _globals['_WORKERRESPONSE']._serialized_end=1350
+  _globals['_ACTION']._serialized_end=233
+  _globals['_STEPREQUEST']._serialized_start=235
+  _globals['_STEPREQUEST']._serialized_end=337
+  _globals['_RESETREQUEST']._serialized_start=340
+  _globals['_RESETREQUEST']._serialized_end=493
+  _globals['_ENVIRONMENTSTATE']._serialized_start=496
+  _globals['_ENVIRONMENTSTATE']._serialized_end=825
+  _globals['_ENVIRONMENTTRAJECTORY']._serialized_start=827
+  _globals['_ENVIRONMENTTRAJECTORY']._serialized_end=895
+  _globals['_ENVIRONMENTRESPONSE']._serialized_start=897
+  _globals['_ENVIRONMENTRESPONSE']._serialized_end=980
+  _globals['_ERRORRESPONSE']._serialized_start=982
+  _globals['_ERRORRESPONSE']._serialized_end=1012
+  _globals['_WORKERREQUEST']._serialized_start=1015
+  _globals['_WORKERREQUEST']._serialized_end=1156
+  _globals['_WORKERRESPONSE']._serialized_start=1159
+  _globals['_WORKERRESPONSE']._serialized_end=1304
 # @@protoc_insertion_point(module_scope)

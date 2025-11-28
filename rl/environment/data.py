@@ -29,7 +29,6 @@ from rl.environment.protos.enums_pb2 import (
     WeatherEnum,
 )
 from rl.environment.protos.features_pb2 import (
-    ActionMaskFeature,
     ActionType,
     EntityEdgeFeature,
     EntityPrivateNodeFeature,
@@ -40,7 +39,11 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import EnvironmentTrajectory
+from rl.environment.protos.service_pb2 import (
+    ActionEnum,
+    EnvironmentTrajectory,
+    WildCardEnum,
+)
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -72,7 +75,8 @@ NUM_FIELD_FEATURES = len(FieldFeature.keys())
 NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
-NUM_ACTION_MASK_FEATURES = len(ActionMaskFeature.keys())
+NUM_ACTION_FEATURES = len(ActionEnum.keys())
+NUM_WILDCARD_FEATURES = len(WildCardEnum.keys())
 
 NUM_HISTORY = 128 * 3
 
@@ -135,6 +139,7 @@ ACTION_MAX_VALUES = {
     MovesetFeature.MOVESET_FEATURE__HAS_PP: NUM_HAS_PP,
     MovesetFeature.MOVESET_FEATURE__PP: 64,
     MovesetFeature.MOVESET_FEATURE__MAXPP: 64,
+    MovesetFeature.MOVESET_FEATURE__DISABLED: 2,
 }
 
 with open("data/data/data.json", "r") as f:

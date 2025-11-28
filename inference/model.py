@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import ResetResponse, StepResponse
-from rl.actor.actor import ACTION_TYPE_MAPPING
+from rl.actor.actor import ACTION_MAPPING
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
@@ -118,7 +118,7 @@ class InferenceModel:
             packed_set_indices=builder_actor_input.history.packed_set_tokens.reshape(
                 -1
             ).tolist(),
-            v=builder_agent_output.actor_output.v.item(),
+            v=builder_agent_output.actor_output.value_head.item(),
         )
 
     def step(self, timestep: PlayerActorInput):
@@ -127,11 +127,9 @@ class InferenceModel:
         agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
-            v=actor_output.v.item(),
-            action_type=ACTION_TYPE_MAPPING[
-                agent_output.actor_output.action_type_head.action_index.item()
+            v=actor_output.value_head.item(),
+            action=ACTION_MAPPING[
+                agent_output.actor_output.action_head.action_index.item()
             ],
-            move_slot=agent_output.actor_output.move_head.action_index.item(),
-            switch_slot=agent_output.actor_output.switch_head.action_index.item(),
-            wildcard_slot=agent_output.actor_output.wildcard_head.action_index.item(),
+            wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
         )

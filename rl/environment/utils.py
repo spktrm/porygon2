@@ -7,7 +7,7 @@ import rlax
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
-    NUM_ACTION_MASK_FEATURES,
+    NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
     NUM_ENTITY_PUBLIC_FEATURES,
@@ -16,25 +16,21 @@ from rl.environment.data import (
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
     NUM_SPECIES,
+    NUM_WILDCARD_FEATURES,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
     BuilderEnvOutput,
     BuilderHistoryOutput,
-    HeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
-    PlayerHiddenInfo,
     PlayerHistoryOutput,
+    PolicyHeadOutput,
 )
-from rl.environment.protos.features_pb2 import (
-    ActionMaskFeature,
-    FieldFeature,
-    InfoFeature,
-)
-from rl.environment.protos.service_pb2 import EnvironmentState, ResetRequest
+from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState
 
 T = TypeVar("T")
 
@@ -77,52 +73,38 @@ def clip_history(
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def get_action_mask(state: EnvironmentState):
+def get_action_mask(state: EnvironmentState, num_active: int):
     buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)
-    return mask[:NUM_ACTION_MASK_FEATURES].astype(bool)
+    return np.take(
+        mask[: num_active * NUM_ACTION_FEATURES].astype(bool),
+        [
+            ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
+            ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
+            ActionEnum.ACTION_ENUM__SWITCH_1,
+            ActionEnum.ACTION_ENUM__SWITCH_2,
+            ActionEnum.ACTION_ENUM__SWITCH_3,
+            ActionEnum.ACTION_ENUM__SWITCH_4,
+            ActionEnum.ACTION_ENUM__SWITCH_5,
+            ActionEnum.ACTION_ENUM__SWITCH_6,
+        ],
+    ).reshape(10)
 
 
-def get_action_type_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_move_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_4
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_switch_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 : ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_6
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
-
-
-def get_tera_mask(mask: jax.Array):
-    mask = mask[
-        ...,
-        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL : ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA
-        + 1,
-    ]
-    return mask | (~mask).all(axis=-1, keepdims=True)
+def get_tera_mask(state: EnvironmentState, num_active: int):
+    buffer = np.frombuffer(state.wildcard_mask, dtype=np.uint8)
+    mask = np.unpackbits(buffer, axis=-1)
+    return (
+        mask[: num_active * NUM_WILDCARD_FEATURES]
+        .astype(bool)
+        .reshape(NUM_WILDCARD_FEATURES)
+    )
 
 
 def process_state(
-    state: EnvironmentState,
-    opponent_team: ResetRequest = None,
-    max_history: int = NUM_HISTORY,
+    state: EnvironmentState, max_history: int = NUM_HISTORY
 ) -> PlayerActorInput:
     history_length = state.history_length
 
@@ -188,7 +170,7 @@ def process_state(
     # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
     fib_reward = fib_reward_token / MAX_RATIO_TOKEN
 
-    action_mask = get_action_mask(state)
+    num_active = info[InfoFeature.INFO_FEATURE__NUM_ACTIVE].item()
 
     env_step = PlayerEnvOutput(
         info=info,
@@ -200,10 +182,8 @@ def process_state(
         revealed_team=revealed_team,
         field=field,
         moveset=moveset,
-        action_type_mask=get_action_type_mask(action_mask),
-        move_mask=get_move_mask(action_mask),
-        switch_mask=get_switch_mask(action_mask),
-        wildcard_mask=get_tera_mask(action_mask),
+        action_mask=get_action_mask(state, num_active),
+        wildcard_mask=get_tera_mask(state, num_active),
     )
     history_step = PlayerHistoryOutput(
         public=history_entity_public,
@@ -212,22 +192,7 @@ def process_state(
         field=history_field,
     )
 
-    species_tokens = np.zeros(6, dtype=np.int32)
-    packed_set_tokens = np.zeros(6, dtype=np.int32)
-    if opponent_team is not None:
-        species_tokens = np.array(
-            list(opponent_team.species_indices), dtype=np.int32
-        ).reshape(6)
-        packed_set_tokens = np.array(
-            list(opponent_team.packed_set_indices), dtype=np.int32
-        ).reshape(6)
-
-    hidden = PlayerHiddenInfo(
-        species_tokens=species_tokens,
-        packed_set_tokens=packed_set_tokens,
-    )
-
-    return PlayerActorInput(env=env_step, history=history_step, hidden=hidden)
+    return PlayerActorInput(env=env_step, history=history_step)
 
 
 def get_ex_trajectory() -> PlayerActorInput:
@@ -238,7 +203,6 @@ def get_ex_trajectory() -> PlayerActorInput:
     return PlayerActorInput(
         env=jax.tree.map(lambda *xs: np.stack(xs), *states),
         history=processed_state.history,
-        hidden=processed_state.hidden,
     )
 
 
@@ -246,15 +210,12 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
-    hidden: PlayerHiddenInfo = jax.tree.map(lambda x: x[:, None, ...], ts.hidden)
     return (
-        PlayerActorInput(env=env, history=history, hidden=hidden),
+        PlayerActorInput(env=env, history=history),
         PlayerActorOutput(
-            v=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            action_type_head=HeadOutput(action_index=env.action_type_mask.argmax(-1)),
-            move_head=HeadOutput(action_index=env.move_mask.argmax(-1)),
-            wildcard_head=HeadOutput(action_index=env.wildcard_mask.argmax(-1)),
-            switch_head=HeadOutput(action_index=env.switch_mask.argmax(-1)),
+            value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
+            action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
+            wildcard_head=PolicyHeadOutput(action_index=env.wildcard_mask.argmax(-1)),
         ),
     )
 
@@ -274,19 +235,17 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 ts=ts,
                 done=done,
             ),
-            hidden=PlayerHiddenInfo(
-                species_tokens=np.zeros((6, 1), dtype=np.int32),
-                packed_set_tokens=np.zeros((6, 1), dtype=np.int32),
-            ),
             history=BuilderHistoryOutput(
                 species_tokens=np.zeros((history_length, 1), dtype=np.int32),
                 packed_set_tokens=np.zeros((history_length, 1), dtype=np.int32),
             ),
         ),
         BuilderActorOutput(
-            v=np.zeros_like(done, dtype=np.float32),
-            species_head=HeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            packed_set_head=HeadOutput(
+            value_head=np.zeros_like(done, dtype=np.float32),
+            species_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            packed_set_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),
@@ -298,31 +257,14 @@ def main():
     ex_player_input, ex_player_output = get_ex_player_step()
     ex_builder_input, ex_builder_output = get_ex_builder_step()
 
-    my_fainted_count = ex_player_input.env.info[
-        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    ]
-    opp_fainted_count = ex_player_input.env.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    ]
-    my_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__MY_HP_COUNT]
-    opp_hp_count = ex_player_input.env.info[..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT]
-    phi_t = (
-        (opp_fainted_count - my_fainted_count) + 0.2 * (my_hp_count - opp_hp_count)
-    ) / MAX_RATIO_TOKEN
-
-    shaped_reward = phi_t[1:] - phi_t[:-1]
-    shaped_reward = np.concatenate(
-        (np.zeros_like(shaped_reward[:1]), shaped_reward), axis=0
-    )
-
-    rewards_tm1 = (shaped_reward).squeeze(-1)
+    rewards_tm1 = ex_player_input.env.win_reward.squeeze(-1)
     valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
 
     rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
 
     oracle_value = rewards[::-1].cumsum()[::-1]
     perturbed_oracle_value = oracle_value + np.random.normal(
-        scale=1e-2, size=oracle_value.shape
+        scale=0.5, size=oracle_value.shape
     )
 
     v_tm1 = valid * perturbed_oracle_value
@@ -330,14 +272,12 @@ def main():
     discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
         v_t.dtype
     )
-    lambdas = ((rewards + discounts * v_t) >= v_tm1).astype(v_t.dtype)
 
     vtrace = rlax.vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, valid, lambdas
+        v_tm1, v_t, rewards, discounts, valid, lambda_=0.95
     )
-    errors = vtrace.errors
-    errors + v_tm1
-    print(vtrace)
+    v_tm1 + vtrace.errors
+    print()
 
 
 if __name__ == "__main__":

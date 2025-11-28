@@ -39,17 +39,11 @@ export namespace ClientRequest {
 }
 
 export class Action extends jspb.Message {
-  getActionType(): number;
-  setActionType(value: number): void;
+  getAction(): ActionEnumMap[keyof ActionEnumMap];
+  setAction(value: ActionEnumMap[keyof ActionEnumMap]): void;
 
-  getMoveSlot(): number;
-  setMoveSlot(value: number): void;
-
-  getSwitchSlot(): number;
-  setSwitchSlot(value: number): void;
-
-  getWildcardSlot(): number;
-  setWildcardSlot(value: number): void;
+  getWildcard(): WildCardEnumMap[keyof WildCardEnumMap];
+  setWildcard(value: WildCardEnumMap[keyof WildCardEnumMap]): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
@@ -63,10 +57,8 @@ export class Action extends jspb.Message {
 
 export namespace Action {
   export type AsObject = {
-    actionType: number,
-    moveSlot: number,
-    switchSlot: number,
-    wildcardSlot: number,
+    action: ActionEnumMap[keyof ActionEnumMap],
+    wildcard: WildCardEnumMap[keyof WildCardEnumMap],
   }
 }
 
@@ -74,13 +66,16 @@ export class StepRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  hasAction(): boolean;
-  clearAction(): void;
-  getAction(): Action | undefined;
-  setAction(value?: Action): void;
+  clearActionsList(): void;
+  getActionsList(): Array<Action>;
+  setActionsList(value: Array<Action>): void;
+  addActions(value?: Action, index?: number): Action;
 
   getRqid(): number;
   setRqid(value: number): void;
+
+  getTeampreview(): boolean;
+  setTeampreview(value: boolean): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): StepRequest.AsObject;
@@ -95,8 +90,9 @@ export class StepRequest extends jspb.Message {
 export namespace StepRequest {
   export type AsObject = {
     username: string,
-    action?: Action.AsObject,
+    actionsList: Array<Action.AsObject>,
     rqid: number,
+    teampreview: boolean,
   }
 }
 
@@ -154,6 +150,11 @@ export class EnvironmentState extends jspb.Message {
   getActionMask_asU8(): Uint8Array;
   getActionMask_asB64(): string;
   setActionMask(value: Uint8Array | string): void;
+
+  getWildcardMask(): Uint8Array | string;
+  getWildcardMask_asU8(): Uint8Array;
+  getWildcardMask_asB64(): string;
+  setWildcardMask(value: Uint8Array | string): void;
 
   getHistoryEntityPublic(): Uint8Array | string;
   getHistoryEntityPublic_asU8(): Uint8Array;
@@ -220,6 +221,7 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     actionMask: Uint8Array | string,
+    wildcardMask: Uint8Array | string,
     historyEntityPublic: Uint8Array | string,
     historyEntityRevealed: Uint8Array | string,
     historyEntityEdges: Uint8Array | string,
@@ -355,11 +357,6 @@ export class WorkerResponse extends jspb.Message {
   getErrorResponse(): ErrorResponse | undefined;
   setErrorResponse(value?: ErrorResponse): void;
 
-  hasOpponentResetRequest(): boolean;
-  clearOpponentResetRequest(): void;
-  getOpponentResetRequest(): ResetRequest | undefined;
-  setOpponentResetRequest(value?: ResetRequest): void;
-
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): WorkerResponse.AsObject;
   static toObject(includeInstance: boolean, msg: WorkerResponse): WorkerResponse.AsObject;
@@ -375,7 +372,51 @@ export namespace WorkerResponse {
     taskId: number,
     environmentResponse?: EnvironmentResponse.AsObject,
     errorResponse?: ErrorResponse.AsObject,
-    opponentResetRequest?: ResetRequest.AsObject,
   }
 }
+
+export interface ActionEnumMap {
+  ACTION_ENUM___UNSPECIFIED: 0;
+  ACTION_ENUM__MOVE_1_TARGET_NA: 1;
+  ACTION_ENUM__MOVE_1_TARGET_1: 2;
+  ACTION_ENUM__MOVE_1_TARGET_2: 3;
+  ACTION_ENUM__MOVE_1_TARGET_3: 4;
+  ACTION_ENUM__MOVE_1_TARGET_4: 5;
+  ACTION_ENUM__MOVE_2_TARGET_NA: 6;
+  ACTION_ENUM__MOVE_2_TARGET_1: 7;
+  ACTION_ENUM__MOVE_2_TARGET_2: 8;
+  ACTION_ENUM__MOVE_2_TARGET_3: 9;
+  ACTION_ENUM__MOVE_2_TARGET_4: 10;
+  ACTION_ENUM__MOVE_3_TARGET_NA: 11;
+  ACTION_ENUM__MOVE_3_TARGET_1: 12;
+  ACTION_ENUM__MOVE_3_TARGET_2: 13;
+  ACTION_ENUM__MOVE_3_TARGET_3: 14;
+  ACTION_ENUM__MOVE_3_TARGET_4: 15;
+  ACTION_ENUM__MOVE_4_TARGET_NA: 16;
+  ACTION_ENUM__MOVE_4_TARGET_1: 17;
+  ACTION_ENUM__MOVE_4_TARGET_2: 18;
+  ACTION_ENUM__MOVE_4_TARGET_3: 19;
+  ACTION_ENUM__MOVE_4_TARGET_4: 20;
+  ACTION_ENUM__SWITCH_1: 21;
+  ACTION_ENUM__SWITCH_2: 22;
+  ACTION_ENUM__SWITCH_3: 23;
+  ACTION_ENUM__SWITCH_4: 24;
+  ACTION_ENUM__SWITCH_5: 25;
+  ACTION_ENUM__SWITCH_6: 26;
+  ACTION_ENUM__DEFAULT: 27;
+  ACTION_ENUM__PASS: 28;
+}
+
+export const ActionEnum: ActionEnumMap;
+
+export interface WildCardEnumMap {
+  WILD_CARD_ENUM___UNSPECIFIED: 0;
+  WILD_CARD_ENUM__CAN_NORMAL: 1;
+  WILD_CARD_ENUM__CAN_MEGA: 2;
+  WILD_CARD_ENUM__CAN_ZMOVE: 3;
+  WILD_CARD_ENUM__CAN_MAX: 4;
+  WILD_CARD_ENUM__CAN_TERA: 5;
+}
+
+export const WildCardEnum: WildCardEnumMap;
 

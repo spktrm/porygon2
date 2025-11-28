@@ -835,17 +835,13 @@ class Encoder(nn.Module):
             env_step.public_team, env_step.revealed_team
         )
 
-    def _embed_private_entities(
-        self, env_step: PlayerEnvOutput, switch_mask: jax.Array
-    ):
+    def _embed_private_entities(self, private_team: jax.Array):
         entity_embeddings, entity_mask = jax.vmap(self._embed_private_entity)(
-            env_step.private_team
+            private_team
         )
-        entity_mask = switch_mask & entity_mask
-        entity_embeddings = self.switch_encoder(
+        return self.switch_encoder(
             entity_embeddings, create_attention_mask(entity_mask)
         )
-        return entity_embeddings, entity_mask
 
     # Encode each timestep's features, including nodes and edges.
     def _embed_local_timestep(self, history: PlayerHistoryOutput):
@@ -942,6 +938,9 @@ class Encoder(nn.Module):
                     action, MovesetFeature.MOVESET_FEATURE__MAXPP, dtype=self.cfg.dtype
                 ),
                 _encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
+                _encode_one_hot_action(
+                    action, MovesetFeature.MOVESET_FEATURE__DISABLED
+                ),
             ],
             dtype=self.cfg.dtype,
         )
@@ -985,13 +984,11 @@ class Encoder(nn.Module):
                 env_step.field, public_team_side_token
             )
 
-            move_mask = env_step.action_type_mask[0] * env_step.move_mask
-            switch_mask = env_step.action_type_mask[1] * env_step.switch_mask
+            move_mask = jnp.ones_like(env_step.action_mask[:4])
+            switch_mask = jnp.ones_like(env_step.action_mask[4:])
 
             move_embeddings = self._embed_moves(env_step.moveset, move_mask)
-            switch_embeddings, switch_mask = self._embed_private_entities(
-                env_step, switch_mask
-            )
+            switch_embeddings = self._embed_private_entities(env_step.private_team)
 
             upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
             latest_timestep_indices = upper_index - jnp.arange(32)

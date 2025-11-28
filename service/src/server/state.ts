@@ -41,6 +41,7 @@ import {
     numPrivateEntityNodeFeatures,
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
+    numWildcardMaskFeatures,
     sets,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
@@ -49,7 +50,6 @@ import { ID, MoveTarget, SideID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
 import { OneDBoolean, TypedArray } from "./utils";
 import {
-    ActionMaskFeature,
     ActionType,
     EntityEdgeFeature,
     EntityEdgeFeatureMap,
@@ -63,7 +63,12 @@ import {
     MovesetHasPP,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
-import { EnvironmentState } from "../../protos/service_pb";
+import {
+    ActionEnum,
+    ActionEnumMap,
+    EnvironmentState,
+    WildCardEnum,
+} from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
@@ -754,26 +759,20 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
+        0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
+        0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -1071,8 +1070,19 @@ function getArrayFromPublicPokemon(
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
         IndexValueFromEnum(GendernameEnum, pokemon.gender);
-    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-        +candidate.isActive();
+
+    const position = candidate.ident.at(2);
+    if (position === "a") {
+        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+            1;
+    } else if (position === "b") {
+        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+            2;
+    } else {
+        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+            0;
+    }
+
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
         +candidate.fainted;
 
@@ -1239,13 +1249,13 @@ class Edge {
     }
 
     updateSideData() {
-        const playerIndex = this.player.getPlayerIndex()!;
+        const playerIndex = this.player.getPlayerIndex();
 
         let publicOffset = 0;
         let revealedOffset = 0;
 
         for (const side of this.player.publicBattle.sides) {
-            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+            const relativeSide = isMySide(side.n, playerIndex);
 
             this.updateEntityData(side, relativeSide);
             this.updateSideConditionData(side, relativeSide);
@@ -1255,7 +1265,7 @@ class Edge {
             revealedOffset += teamLength * numRevealedEntityNodeFeatures;
         }
         for (const side of this.player.publicBattle.sides) {
-            const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
+            const relativeSide = isMySide(side.n, playerIndex);
 
             const team = side.team.slice(0, 6);
             const { revealedData, publicData } = relativeSide
@@ -3081,6 +3091,13 @@ class PrivateActionHandler {
             index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
             value: ActionType.ACTION_TYPE__MOVE,
         });
+        if ("disabled" in move) {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__DISABLED,
+                value: move.disabled ? 1 : 0,
+            });
+        }
     }
 
     build() {
@@ -3327,162 +3344,320 @@ export class StateHandler {
 
     static getActionMask(args: {
         request?: AnyObject | null;
-        maskMoves?: boolean | null;
-        maskTera?: boolean | null;
+        format?: string;
     }): {
         actionMask: OneDBoolean;
+        wildCardMask: OneDBoolean;
         isStruggling: boolean;
     } {
-        const { request } = args;
-        const maskMoves = args.maskMoves ?? false;
-        const maskTera = args.maskTera ?? false;
+        const { request, format } = args;
 
-        const actionMask = new OneDBoolean(numActionMaskFeatures, Uint8Array);
+        const numActive = format && format.includes("doubles") ? 2 : 1;
+
+        const actionMask = new OneDBoolean(
+            numActive * numActionMaskFeatures,
+            Uint8Array,
+        );
+        const wildCardMask = new OneDBoolean(
+            numActive * numWildcardMaskFeatures,
+            Uint8Array,
+        );
         let isStruggling = false;
 
-        actionMask.set(ActionMaskFeature.ACTION_MASK_FEATURE__CAN_NORMAL, true);
-
-        const setAllTrue = () => {
-            for (let i = 0; i < numActionMaskFeatures; i++) {
-                actionMask.set(i, true);
+        const setAll = (val: boolean) => {
+            for (let i = 0; i < numActive * numActionMaskFeatures; i++) {
+                actionMask.set(i, val);
+            }
+            for (let i = 0; i < numActive * numWildcardMaskFeatures; i++) {
+                wildCardMask.set(i, val);
             }
         };
+        setAll(false);
+
+        for (let i = 0; i < numActive; i++)
+            wildCardMask.set(
+                i * numWildcardMaskFeatures +
+                    WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL,
+                true,
+            );
 
         if (request === undefined || request === null) {
-            setAllTrue();
+            setAll(true);
         } else {
             if (request.wait) {
-                setAllTrue();
+                setAll(true);
             } else if (request.forceSwitch) {
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
-                    false,
-                );
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
-                    true,
-                );
-
                 const pokemon = request.side
                     .pokemon as Protocol.Request.SideInfo["pokemon"];
-                const forceSwitchLength = request.forceSwitch.length;
-                const isReviving = !!pokemon[0].reviving;
 
-                for (let j = 0; j < 6; j++) {
-                    const currentPokemon = pokemon[j];
-                    if (
-                        currentPokemon &&
-                        j >= forceSwitchLength &&
-                        (isReviving ? 1 : 0) ^
-                            (currentPokemon.condition.endsWith(" fnt") ? 0 : 1)
-                    ) {
+                for (const [i, mustSwitch] of request.forceSwitch.entries()) {
+                    if (!mustSwitch) {
+                        actionMask.set(
+                            i * numActionMaskFeatures +
+                                ActionEnum.ACTION_ENUM__PASS,
+                            true,
+                        );
+                        continue;
+                    }
+                    const canSwitch = Array.from(pokemon.entries()).filter(
+                        ([j, p]) => {
+                            return (
+                                p &&
+                                j >= request.forceSwitch.length &&
+                                !p.condition.endsWith(" fnt") ===
+                                    !pokemon[i].reviving
+                            );
+                        },
+                    );
+                    if (canSwitch.length === 0) {
+                        actionMask.set(
+                            i * numActionMaskFeatures +
+                                ActionEnum.ACTION_ENUM__PASS,
+                            true,
+                        );
+                        continue;
+                    }
+                    for (const [j, _] of canSwitch) {
                         const switchIndex =
-                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
+                            i * numActionMaskFeatures +
+                            ActionEnum.ACTION_ENUM__SWITCH_1 +
                             j;
                         actionMask.set(switchIndex, true);
                     }
                 }
             } else if (request.active) {
-                const pokemon = request.side.pokemon;
-                const active = request.active[0];
+                let [
+                    canMegaEvo,
+                    canUltraBurst,
+                    canZMove,
+                    canDynamax,
+                    canTerastallize,
+                ] = [true, true, true, true, true];
 
-                const { canMegaEvo, canDynamax, canTerastallize } = active;
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MEGA,
-                    !!canMegaEvo,
-                );
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MAX,
-                    !!canDynamax,
-                );
+                const pokemon = request.side
+                    .pokemon as Protocol.Request.SideInfo["pokemon"];
 
-                const noOtherTeras = !pokemon.some(
-                    (x: { terastallized?: string }) =>
-                        (x?.terastallized ?? "") !== "",
-                );
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TERA,
-                    !!canTerastallize && noOtherTeras && !maskTera,
-                );
-
-                const possibleMoves = active.moves ?? [];
-                const canSwitch = [];
-
-                for (let j = 0; j < 6; j++) {
-                    const currentPokemon = pokemon[j];
+                for (const [i, active] of request.active.entries()) {
                     if (
-                        currentPokemon &&
-                        !currentPokemon.active &&
-                        !currentPokemon.condition.endsWith(" fnt")
+                        pokemon[i].condition.endsWith(` fnt`) ||
+                        pokemon[i].commanding
                     ) {
-                        const switchIndex =
-                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
-                            j;
-                        canSwitch.push(switchIndex);
+                        actionMask.set(
+                            i * numActionMaskFeatures +
+                                ActionEnum.ACTION_ENUM__PASS,
+                            true,
+                        );
+                        continue;
                     }
-                }
 
-                const switches = active.trapped ? [] : canSwitch;
-                const canAddMove = !maskMoves || switches.length === 0;
-                let canMove = false;
+                    canMegaEvo = canMegaEvo && active.canMegaEvo;
+                    canUltraBurst = canUltraBurst && active.canUltraBurst;
+                    canZMove = canZMove && !!active.canZMove;
+                    canDynamax = canDynamax && !!active.canDynamax;
+                    canTerastallize =
+                        canTerastallize && !!active.canTerastallize;
 
-                for (let j = 0; j < possibleMoves.length; j++) {
-                    const currentMove = possibleMoves[j];
-                    if (currentMove.id === "struggle") {
-                        isStruggling = true;
-                    }
-                    if ((!currentMove.disabled && canAddMove) || isStruggling) {
-                        const moveIndex =
-                            ActionMaskFeature.ACTION_MASK_FEATURE__MOVE_SLOT_1 +
-                            j;
-                        actionMask.set(moveIndex, true);
-                        canMove = true;
-                    }
-                }
-                if (canMove) {
-                    actionMask.set(
-                        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
-                        true,
+                    const useMaxMoves =
+                        (!active.canDynamax && active.maxMoves) || canDynamax;
+                    const possibleMoves = (
+                        useMaxMoves ? active.maxMoves.maxMoves : active.moves
+                    ) as Protocol.Request.ActivePokemon["moves"];
+
+                    let canMove = Array.from(possibleMoves.entries()).filter(
+                        ([_, move]) => !("disabled" in move) || !move.disabled,
                     );
-                }
+                    const hasAlly =
+                        pokemon.length > 1 &&
+                        !pokemon[i ^ 1].condition.endsWith(` fnt`);
+                    const filtered = canMove.filter(([_, move]) => {
+                        if (!("target" in move)) {
+                            // move has no target property (e.g. Recharge), keep it
+                            return true;
+                        }
+                        return move.target !== `adjacentAlly` || hasAlly;
+                    });
+                    canMove = filtered.length ? filtered : canMove;
 
-                if (switches.length > 0) {
-                    actionMask.set(
-                        ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
-                        true,
+                    for (const [j, move] of canMove) {
+                        const actionIndices: number[] = [];
+                        if (request.active.length > 1 && "target" in move) {
+                            switch (move.target) {
+                                case "any":
+                                case "normal":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_${
+                                                2 - i
+                                            }` as keyof typeof ActionEnum
+                                        ],
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_3` as keyof typeof ActionEnum
+                                        ],
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_4` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+
+                                case "adjacentAlly":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_${
+                                                2 - i
+                                            }` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+
+                                case "adjacentFoe":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_3` as keyof typeof ActionEnum
+                                        ],
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_4` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+
+                                case "adjacentAllyOrSelf":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_${
+                                                i + 1
+                                            }` as keyof typeof ActionEnum
+                                        ],
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_${
+                                                2 - i
+                                            }` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+                                case "self":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_NA` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+                                case "all":
+                                case "allySide":
+                                case "foeSide":
+                                case "allyTeam":
+                                case "randomNormal":
+                                case "allAdjacent":
+                                case "allAdjacentFoes":
+                                case "allies":
+                                case "scripted":
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_NA` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+                                default:
+                                    actionIndices.push(
+                                        ActionEnum[
+                                            `ACTION_ENUM__MOVE_${
+                                                j + 1
+                                            }_TARGET_NA` as keyof typeof ActionEnum
+                                        ],
+                                    );
+                                    break;
+                            }
+                        } else {
+                            actionIndices.push(
+                                ActionEnum[
+                                    `ACTION_ENUM__MOVE_${
+                                        j + 1
+                                    }_TARGET_NA` as keyof typeof ActionEnum
+                                ],
+                            );
+                        }
+                        for (const actionIndex of actionIndices) {
+                            if (actionIndex === undefined) {
+                                throw new Error(
+                                    `Undefined action index for move ${j} with target ${
+                                        "target" in move ? move.target : "N/A"
+                                    }`,
+                                );
+                            }
+                            const moveIndex =
+                                i * numActionMaskFeatures + actionIndex;
+                            actionMask.set(moveIndex, true);
+                        }
+                    }
+
+                    wildCardMask.set(
+                        i * numWildcardMaskFeatures +
+                            WildCardEnum.WILD_CARD_ENUM__CAN_MEGA,
+                        !!canMegaEvo,
                     );
-                }
-                for (const switchIndex of switches) {
-                    actionMask.set(switchIndex, true);
+                    wildCardMask.set(
+                        i * numWildcardMaskFeatures +
+                            WildCardEnum.WILD_CARD_ENUM__CAN_MAX,
+                        !!canDynamax,
+                    );
+                    wildCardMask.set(
+                        i * numWildcardMaskFeatures +
+                            WildCardEnum.WILD_CARD_ENUM__CAN_TERA,
+                        !!canTerastallize,
+                    );
+
+                    const canSwitch = Array.from(pokemon.entries()).filter(
+                        ([j, p]) => {
+                            return (
+                                p && !p.active && !p.condition.endsWith(" fnt")
+                            );
+                        },
+                    );
+                    const switches = active.trapped ? [] : canSwitch;
+
+                    if (switches.length > 0) {
+                        for (const [j, _] of switches) {
+                            const switchIndex =
+                                i * numActionMaskFeatures +
+                                ActionEnum.ACTION_ENUM__SWITCH_1 +
+                                j;
+                            actionMask.set(switchIndex, true);
+                        }
+                    }
                 }
             } else if (request.teamPreview) {
                 const pokemon = request.side.pokemon;
-
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_MOVE,
-                    false,
-                );
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_SWITCH,
-                    false,
-                );
-                actionMask.set(
-                    ActionMaskFeature.ACTION_MASK_FEATURE__CAN_TEAMPREVIEW,
-                    true,
-                );
 
                 for (let j = 0; j < 6; j++) {
                     const currentPokemon = pokemon[j];
                     if (currentPokemon) {
                         const switchIndex =
-                            ActionMaskFeature.ACTION_MASK_FEATURE__SWITCH_SLOT_1 +
-                            j;
+                            ActionEnum.ACTION_ENUM__SWITCH_1 + j;
                         actionMask.set(switchIndex, true);
                     }
                 }
             }
         }
-        return { actionMask, isStruggling };
+        return { actionMask, wildCardMask, isStruggling };
     }
 
     getMoveset(): Uint8Array {
@@ -3637,7 +3812,7 @@ export class StateHandler {
         if (this.player.done) {
             if (this.player.finishedEarly) {
                 // Prevent reward hacking by stalling
-                return Math.floor(MAX_RATIO_TOKEN * -0.5);
+                return 0;
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";
@@ -3723,6 +3898,8 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__OPP_HP_COUNT] = Math.floor(
             (MAX_RATIO_TOKEN * oppHpCount) / oppSide.totalPokemon,
         );
+
+        infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
 
         return new Uint8Array(infoBuffer.buffer);
     }
@@ -3843,14 +4020,12 @@ export class StateHandler {
         const info = this.getInfo();
         state.setInfo(info);
 
-        const maskTera = false;
-        // const maskTera =
-        //     this.player.publicBattle.turn < this.player.earliestTeraTurn;
-        const { actionMask } = StateHandler.getActionMask({
+        const { actionMask, wildCardMask } = StateHandler.getActionMask({
             request,
-            maskTera,
+            format: this.player.privateBattle.gameType,
         });
         state.setActionMask(actionMask.buffer);
+        state.setWildcardMask(wildCardMask.buffer);
 
         const {
             historyEntityPublic,

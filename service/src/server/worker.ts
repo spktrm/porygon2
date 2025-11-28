@@ -303,22 +303,6 @@ export class WorkerHandler {
 
         const workerResponse = new WorkerResponse();
         workerResponse.setEnvironmentResponse(environmentResponse);
-        if (opponentDetails) {
-            const opponentResetRequest = new ResetRequest();
-            opponentResetRequest.setUsername(opponentDetails.userName);
-            opponentResetRequest.setSmogonFormat(opponentDetails.smogonFormat);
-            if (opponentDetails.speciesIndices) {
-                opponentResetRequest.setSpeciesIndicesList(
-                    opponentDetails.speciesIndices,
-                );
-            }
-            if (opponentDetails.packedSetIndices) {
-                opponentResetRequest.setPackedSetIndicesList(
-                    opponentDetails.packedSetIndices,
-                );
-            }
-            workerResponse.setOpponentResetRequest(opponentResetRequest);
-        }
 
         this.sendMessage(taskId, workerResponse);
     }

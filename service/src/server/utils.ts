@@ -88,7 +88,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
     private readonly data: T;
     private readonly bitsPerElement: number;
     private readonly mask: number;
-    sum: number;
 
     constructor(
         length: number,
@@ -104,7 +103,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         this.data = new bufferConstructor(
             Math.ceil(length / this.bitsPerElement),
         );
-        this.sum = 0;
     }
 
     setBuffer(buffer: T): void {
@@ -126,11 +124,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         if (index < 0 || index >= this.length)
             throw new RangeError("Index out of bounds");
         const [element, bit] = this.getElementAndBit(index);
-        if (bit === 0) {
-            this.sum += 1;
-        } else {
-            this.sum -= 1;
-        }
         this.data[element] ^= 1 << bit;
     }
 
@@ -146,10 +139,8 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
             throw new RangeError("Index out of bounds");
         const [element, bit] = this.getElementAndBit(index);
         if (value) {
-            this.sum += 1;
             this.data[element] |= 1 << bit;
         } else {
-            this.sum -= 1;
             this.data[element] &= ~(1 << bit);
         }
     }
@@ -163,6 +154,53 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         for (let i = 0; i < this.length; i++) {
             result[i] = this.get(i) ? 1 : 0;
         }
+        return result;
+    }
+
+    sum() {
+        let total = 0;
+        for (let i = 0; i < this.length; i++) {
+            if (this.get(i)) {
+                total += 1;
+            }
+        }
+        return total;
+    }
+
+    split(parts: number): OneDBoolean<T>[] {
+        if (!Number.isInteger(parts) || parts <= 0) {
+            throw new RangeError("parts must be a positive integer");
+        }
+
+        const result: OneDBoolean<T>[] = [];
+
+        const baseSize = Math.floor(this.length / parts);
+        const remainder = this.length % parts;
+
+        // Use the same buffer constructor as the original
+        const bufferConstructor = this.data.constructor as {
+            new (length: number): T;
+        };
+
+        let offset = 0;
+
+        for (let i = 0; i < parts; i++) {
+            const segmentLength = baseSize + (i < remainder ? 1 : 0);
+
+            const segment = new OneDBoolean<T>(
+                segmentLength,
+                bufferConstructor,
+            );
+
+            for (let j = 0; j < segmentLength; j++) {
+                const value = this.get(offset + j);
+                segment.set(j, value);
+            }
+
+            result.push(segment);
+            offset += segmentLength;
+        }
+
         return result;
     }
 }
