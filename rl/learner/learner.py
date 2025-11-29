@@ -621,7 +621,7 @@ def train_step(
             builder_state.params, builder_state.target_params, config.builder_ema_decay
         ),
         step_count=builder_state.step_count + 1,
-        frame_count=builder_state.frame_count + valid.sum(),
+        frame_count=builder_state.frame_count + builder_valid.sum(),
     )
 
     training_logs.update(collect_batch_telemetry_data(batch, config))

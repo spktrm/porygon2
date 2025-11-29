@@ -222,7 +222,7 @@ class Porygon2BuilderModel(nn.Module):
     def _forward_discriminator_head(self, embedding: jax.Array):
         return self.discriminator_head(embedding)
 
-    def _encode_team_with_niche(
+    def _encode_team(
         self,
         niche_id: jax.Array,
         species_tokens: jax.Array,
@@ -326,7 +326,7 @@ class Porygon2BuilderModel(nn.Module):
     ) -> BuilderActorOutput:
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
 
-        team_embeddings_with_niche = self._encode_team_with_niche(
+        team_embeddings_with_niche = self._encode_team(
             actor_input.history.niche_id,
             actor_input.history.species_tokens,
             actor_input.history.packed_set_tokens,
@@ -335,7 +335,7 @@ class Porygon2BuilderModel(nn.Module):
             team_embeddings_with_niche, actor_input.env.ts.reshape(-1), axis=0
         )
 
-        team_embeddings_without_niche = self._encode_team_with_niche(
+        team_embeddings_without_niche = self._encode_team(
             actor_input.history.niche_id,
             actor_input.history.species_tokens,
             actor_input.history.packed_set_tokens,
