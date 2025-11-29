@@ -1,3 +1,5 @@
+from typing import Literal
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,7 +16,6 @@ from inference.interfaces import ResetResponse, StepResponse
 from inference.model import InferenceModel
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
-from rl.model.heads import HeadParams
 
 app = FastAPI()
 
@@ -23,22 +24,22 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=secrets.randbits(32),
-    player_head_params=HeadParams(temp=0.8, min_p=0.03),
-    builder_head_params=HeadParams(temp=0.8, min_p=0.03),
+    # player_head_params=HeadParams(min_p=0.03),
+    # builder_head_params=HeadParams(min_p=0.03),
 )
 
 
-def pprint_nparray(arr: np.ndarray):
+def pprint_nparray(arr: np.ndarray) -> None:
     print(np.array2string(arr, precision=3, suppress_small=True))
 
 
 @app.get("/ping", response_class=PlainTextResponse)
-async def ping():
+async def ping() -> Literal["pong"]:
     return "pong"
 
 
 @app.post("/reset", response_model=ResetResponse)
-async def reset(request: Request):
+async def reset(request: Request) -> ResetResponse:
     await request.body()
 
     response = await run_in_threadpool(model.reset)
@@ -49,11 +50,11 @@ async def reset(request: Request):
 
 
 @app.post("/step", response_model=StepResponse)
-async def step(request: Request):
+async def step(request: Request) -> StepResponse:
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
-    ts = process_state(state, None, max_history=512)
+    ts = process_state(state, max_history=512)
     response = await run_in_threadpool(model.step, ts)
     pprint(response)
 

@@ -249,7 +249,8 @@ def save_state(
             params=builder_state.params,
             target_params=builder_state.target_params,
             opt_state=builder_state.opt_state,
-            actor_steps=builder_state.frame_count,
+            step_count=builder_state.step_count,
+            frame_count=builder_state.frame_count,
         )
     if league is not None:
         data["league"] = league.serialize()
@@ -356,8 +357,8 @@ def load_train_state(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
-        step_count=ckpt_builder_state["step_count"],
-        frame_count=ckpt_builder_state["frame_count"],
+        step_count=ckpt_builder_state.get("step_count", 0),
+        frame_count=ckpt_builder_state.get("frame_count", 0),
     )
 
     return player_state, builder_state, league
