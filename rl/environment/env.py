@@ -142,8 +142,8 @@ class TeamBuilderEnvironment:
 
         self.ex = get_ex_builder_step()
 
-    def reset(self) -> BuilderActorInput:
-        self.state = self._reset()
+    def reset(self, niche_id: jax.Array) -> BuilderActorInput:
+        self.state = self._reset(niche_id)
         return self.state
 
     def step(self, agent_output: BuilderAgentOutput) -> BuilderActorInput:
@@ -157,7 +157,7 @@ class TeamBuilderEnvironment:
         return self.state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self) -> BuilderActorInput:
+    def _reset(self, niche_id: jax.Array) -> BuilderActorInput:
         species_mask = self.start_mask
 
         species_tokens = (
@@ -175,6 +175,7 @@ class TeamBuilderEnvironment:
                 cum_species_reward=jnp.array(0, dtype=jnp.float32),
             ),
             history=BuilderHistoryOutput(
+                niche_id=niche_id,
                 species_tokens=species_tokens,
                 packed_set_tokens=packed_set_tokens,
             ),
@@ -254,6 +255,7 @@ class TeamBuilderEnvironment:
                 cum_species_reward=self._calculate_species_rewards(species_tokens),
             ),
             history=BuilderHistoryOutput(
+                niche_id=state.history.niche_id,
                 species_tokens=species_tokens,
                 packed_set_tokens=packed_set_tokens,
             ),

@@ -264,6 +264,7 @@ def train_step(
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
+    builder_target_discriminator_head = builder_target_pred.discriminator_head
     builder_target_value_head = builder_target_pred.value_head
     builder_target_species_head = builder_target_pred.species_head
     builder_target_packed_set_head = builder_target_pred.packed_set_head
@@ -286,11 +287,12 @@ def train_step(
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
-    valid = jnp.concatenate((builder_valid, player_valid), axis=0)
+    valid = jnp.concatenate((jnp.ones_like(builder_valid), player_valid), axis=0)
 
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
+    target_actor_ratio = target_actor_ratio.at[6].set(1.0)  # Hack
 
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
     builder_actor_target_clipped_ratio = actor_target_clipped_ratio[
@@ -300,14 +302,22 @@ def train_step(
         builder_valid.shape[0] :
     ]
 
+    num_niches = builder_target_discriminator_head.log_probs.shape[-1]
+    skill_reward = config.diversity_reward_scale * (
+        jnp.take_along_axis(
+            builder_target_discriminator_head.log_probs,
+            builder_history.niche_id[..., None],
+            axis=-1,
+        )
+        + jnp.log(num_niches)
+    ).squeeze(-1)
+
     rewards_tm1 = jnp.concatenate(
-        (jnp.zeros_like(builder_valid), player_transitions.env_output.win_reward),
-        axis=0,
+        (skill_reward, player_transitions.env_output.win_reward), axis=0
     )
 
     v_tm1 = jnp.concatenate(
-        (builder_target_value_head.expectation, player_target_value_head.expectation),
-        axis=0,
+        (builder_target_value_head.logits, player_target_value_head.logits), axis=0
     )
     v_t = jnp.concatenate((v_tm1[1:], v_tm1[-1:]))
     rewards = shift_left_with_zeros(rewards_tm1)
@@ -331,7 +341,6 @@ def train_step(
     target_scalar_v = vtrace.errors + v_tm1
     builder_target_scalar_v = target_scalar_v[: builder_valid.shape[0]]
     player_target_scalar_v = target_scalar_v[builder_valid.shape[0] :]
-    target_dist = scalar_to_two_hot(target_scalar_v)
 
     adv_mean = average(vtrace.pg_advantage, valid)
     adv_std = vtrace.pg_advantage.std(where=valid)
@@ -343,9 +352,6 @@ def train_step(
 
     builder_norm_advantages = norm_advantages[: builder_valid.shape[0]]
     player_norm_advantages = norm_advantages[builder_valid.shape[0] :]
-
-    builder_target_dist = target_dist[: builder_valid.shape[0]]
-    player_target_dist = target_dist[builder_valid.shape[0] :]
 
     wildcard_valid = player_valid & (
         player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
@@ -390,9 +396,10 @@ def train_step(
         )
 
         # Softmax cross-entropy loss for value head
-        loss_v = average(
-            -jnp.sum(learner_value_head.log_probs * player_target_dist, axis=-1),
-            player_valid,
+        loss_v = mse_value_loss(
+            pred_v=learner_value_head.logits,
+            target_v=player_target_scalar_v,
+            valid=player_valid,
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
@@ -450,7 +457,7 @@ def train_step(
 
     def builder_loss_fn(params: Params):
 
-        builder_pred = promote_map(
+        pred = promote_map(
             builder_state.apply_fn(
                 params,
                 builder_actor_input,
@@ -459,13 +466,14 @@ def train_step(
             )
         )
 
-        learner_value_head = builder_pred.value_head
-        learner_species_head = builder_pred.species_head
-        learner_packed_set_head = builder_pred.packed_set_head
+        value_head = pred.value_head
+        discriminator_head = pred.discriminator_head
+        species_head = pred.species_head
+        packed_set_head = pred.packed_set_head
 
         learner_log_prob = calculate_builder_log_prob(
-            species_log_prob=learner_species_head.log_prob,
-            packed_set_log_prob=learner_packed_set_head.log_prob,
+            species_log_prob=species_head.log_prob,
+            packed_set_log_prob=packed_set_head.log_prob,
         )
 
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
@@ -484,14 +492,23 @@ def train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        # Softmax cross-entropy loss for value head
-        loss_v = average(
-            -jnp.sum(learner_value_head.log_probs * builder_target_dist, axis=-1),
-            builder_valid,
+        loss_v = mse_value_loss(
+            pred_v=value_head.logits,
+            target_v=builder_target_scalar_v,
+            valid=jnp.ones_like(builder_valid),
         )
 
-        species_entropy = average(learner_species_head.entropy, builder_valid)
-        packed_set_entropy = average(learner_packed_set_head.entropy, builder_valid)
+        loss_disc = -average(
+            jnp.take_along_axis(
+                discriminator_head.log_probs,
+                builder_history.niche_id[..., None],
+                axis=-1,
+            ).squeeze(-1),
+            jnp.ones_like(builder_valid),
+        )
+
+        species_entropy = average(species_head.entropy, builder_valid)
+        packed_set_entropy = average(packed_set_head.entropy, builder_valid)
         loss_entropy = -average(
             learner_log_prob, builder_valid
         )  # Estimator for entropy
@@ -517,6 +534,7 @@ def train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_loss_coef * loss_kl
             - config.builder_entropy_loss_coef * loss_entropy
+            + config.builder_discriminator_loss_coef * loss_disc
         )
 
         return loss, dict(
@@ -524,6 +542,7 @@ def train_step(
             builder_loss_v=loss_v,
             builder_loss_kl=loss_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_discriminator=loss_disc,
             # Head entropies
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
@@ -538,7 +557,7 @@ def train_step(
             builder_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             builder_value_function_r2=calculate_r2(
-                value_prediction=learner_value_head.expectation,
+                value_prediction=value_head.logits,
                 value_target=builder_target_scalar_v,
                 mask=builder_valid,
             ),
@@ -577,6 +596,7 @@ def train_step(
             builder_norm_adv_std=builder_norm_advantages.std(where=builder_valid),
             builder_value_target_mean=average(builder_target_scalar_v, builder_valid),
             builder_value_target_std=builder_target_scalar_v.std(where=builder_valid),
+            builder_skill_reward_sum=skill_reward[1:].sum(axis=0).mean(),
         )
     )
 
@@ -621,24 +641,24 @@ class Learner:
         self,
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
-        learner_config: Porygon2LearnerConfig,
+        config: Porygon2LearnerConfig,
         wandb_run: wandb.wandb_run.Run,
         league: League | None = None,
         gpu_lock: LockType | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
-        self.learner_config = learner_config
+        self.config = config
         self.wandb_run = wandb_run
         self.gpu_lock = gpu_lock or nullcontext()
 
         self.done = False
-        self.replay = ReplayBuffer(self.learner_config.replay_buffer_capacity)
+        self.replay = ReplayBuffer(self.config.replay_buffer_capacity)
 
         self.controller = DirectRatioLimiter(
-            target_rr=self.learner_config.target_replay_ratio,
-            batch_size=self.learner_config.batch_size,
-            warmup_trajectories=self.learner_config.batch_size * 16,
+            target_rr=self.config.target_replay_ratio,
+            batch_size=self.config.batch_size,
+            warmup_trajectories=self.config.batch_size * 16,
         )
         self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
 
@@ -669,7 +689,7 @@ class Learner:
             self.league = League(
                 main_player=init_params,
                 players=[init_params],
-                league_size=self.learner_config.league_size,
+                league_size=self.config.league_size,
             )
 
         # progress bars
@@ -724,7 +744,7 @@ class Learner:
 
     def host_to_device_worker(self):
         max_burst = 8
-        batch_size = self.learner_config.batch_size
+        batch_size = self.config.batch_size
 
         while not self.done:
             taken = 0
@@ -739,7 +759,7 @@ class Learner:
                     break
 
                 # Sample & execute one update outside the lock.
-                batch = self.replay.sample(self.learner_config.batch_size)
+                batch = self.replay.sample(self.config.batch_size)
                 self.consumer_progress.update(batch_size)
 
                 stacked = self.stack_batch(batch)
@@ -778,13 +798,13 @@ class Learner:
         steps_passed = (
             self.player_state.frame_count.item() - latest_player.player_frame_count
         )
-        if steps_passed < self.learner_config.add_player_min_frames:
+        if steps_passed < self.config.add_player_min_frames:
             return False
 
         historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
         win_rates = league.get_winrate((league.players[MAIN_KEY], historical_players))
         return (win_rates.min() > 0.7) | (
-            steps_passed >= self.learner_config.add_player_max_frames
+            steps_passed >= self.config.add_player_max_frames
         )
 
     def update_main_player(self):
@@ -818,7 +838,7 @@ class Learner:
 
         prev_add_player_check = 0
 
-        for _ in range(self.learner_config.num_steps):
+        for _ in range(self.config.num_steps):
 
             try:
                 batch = self.device_q.get()
@@ -833,7 +853,7 @@ class Learner:
                         self.player_state,
                         self.builder_state,
                         batch,
-                        self.learner_config,
+                        self.config,
                     )
                 if jnp.isfinite(training_logs["player_loss"]).item():
                     self.player_state = new_player_state
@@ -855,11 +875,11 @@ class Learner:
 
                 player_step = np.array(self.player_state.step_count).item()
 
-                if (player_step % self.learner_config.save_interval_steps) == 0:
+                if (player_step % self.config.save_interval_steps) == 0:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)
                     training_logs.update(jax.device_get(usage_logs))
 
-                if (player_step % self.learner_config.league_winrate_log_steps) == 0:
+                if (player_step % self.config.league_winrate_log_steps) == 0:
                     league_winrates = self.get_league_winrates()
                     training_logs.update(jax.device_get(league_winrates))
 
@@ -874,10 +894,10 @@ class Learner:
 
                 self.update_main_player()
 
-                if (player_step % self.learner_config.save_interval_steps) == 0:
+                if (player_step % self.config.save_interval_steps) == 0:
                     save_train_state(
                         self.wandb_run,
-                        self.learner_config,
+                        self.config,
                         self.player_state,
                         self.builder_state,
                         self.league,

@@ -171,7 +171,7 @@ def main():
     learner = Learner(
         player_state=player_state,
         builder_state=builder_state,
-        learner_config=learner_config,
+        config=learner_config,
         league=league,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
