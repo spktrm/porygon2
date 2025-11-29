@@ -449,7 +449,7 @@ def train_step(
             player_learner_target_approx_kl=learner_target_approx_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
-                value_prediction=learner_value_head.expectation,
+                value_prediction=learner_value_head.logits,
                 value_target=player_target_scalar_v,
                 mask=player_valid,
             ),
