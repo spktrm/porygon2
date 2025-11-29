@@ -1,4 +1,5 @@
 import functools
+import math
 import os
 from pprint import pprint
 from typing import Any, Callable, Literal
@@ -38,6 +39,35 @@ class AdamConfig:
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 
+def get_diversity_alpha(
+    num_niches: int, team_size: int = 6, target_ratio: float = 0.25
+) -> float:
+    """
+    Calculates the alpha scaling factor for diversity rewards.
+
+    Args:
+        num_niches: The number of distinct niches/archetypes (N).
+        team_size: The number of steps in the builder episode (L), usually 6.
+        target_ratio: The fraction of the Win Reward (1.0) that the total
+                      Diversity Reward should equate to.
+                      Recommended: 0.1 to 0.25.
+
+    Returns:
+        alpha: The scalar to multiply with the raw diversity reward.
+    """
+    if num_niches <= 1:
+        return 0.0
+
+    # Max raw reward per step is log(N)
+    max_step_reward = math.log(num_niches)
+
+    # Max raw return over the episode
+    max_episode_return = team_size * max_step_reward
+
+    # Solve for alpha: alpha * max_return = target_ratio
+    return target_ratio / max_episode_return
+
+
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
@@ -45,6 +75,7 @@ class Porygon2LearnerConfig:
     num_eval_actors: int = 2
     unroll_length: int = 128
     replay_buffer_capacity: int = 512
+    num_niches: int = 8
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -63,6 +94,9 @@ class Porygon2LearnerConfig:
     builder_learning_rate: float = 2e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
+    diversity_reward_scale: float = get_diversity_alpha(
+        num_niches=num_niches, team_size=6, target_ratio=0.25
+    )
 
     # EMA params
     player_ema_decay: float = 1e-3
@@ -85,6 +119,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_loss_coef: float = 0.1
     builder_entropy_loss_coef: float = 0.01
+    builder_discriminator_loss_coef: float = 1.0
 
     # Smogon Generation
     generation: GenT = 9
@@ -349,16 +384,16 @@ def load_train_state(
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
-        target_adv_mean=ckpt_player_state.get("target_adv_mean", 0.0),
-        target_adv_std=ckpt_player_state.get("target_adv_std", 1.0),
+        target_adv_mean=ckpt_player_state["target_adv_mean"],
+        target_adv_std=ckpt_player_state["target_adv_std"],
     )
 
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
-        step_count=ckpt_builder_state.get("step_count", 0),
-        frame_count=ckpt_builder_state.get("frame_count", 0),
+        step_count=ckpt_builder_state["step_count"],
+        frame_count=ckpt_builder_state["frame_count"],
     )
 
     return player_state, builder_state, league
