@@ -5,7 +5,11 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import PolicyHeadOutput, ValueHeadOutput
+from rl.environment.interfaces import (
+    CategoricalValueHeadOutput,
+    PolicyHeadOutput,
+    RegressionValueHeadOutput,
+)
 from rl.model.modules import MLP, PointerLogits, Resnet
 from rl.model.utils import legal_log_policy, legal_policy
 
@@ -141,7 +145,7 @@ class PolicyLogitHead(nn.Module):
         )
 
 
-class ValueLogitHead(nn.Module):
+class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
@@ -157,6 +161,20 @@ class ValueLogitHead(nn.Module):
         entropy = -jnp.sum(probs * log_probs, axis=-1)
         expectation = probs @ self.cfg.category_values
 
-        return ValueHeadOutput(
+        return CategoricalValueHeadOutput(
             logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
         )
+
+
+class RegressionValueLogitHead(nn.Module):
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, x: jax.Array):
+        resnet = Resnet(**self.cfg.resnet.to_dict())
+        logits = MLP(**self.cfg.logits.to_dict())
+
+        x = resnet(x)
+        x = logits(x)
+
+        return RegressionValueHeadOutput(logits=x.squeeze(-1))

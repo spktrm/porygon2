@@ -37,7 +37,12 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import HeadParams, PolicyQKHead, ValueLogitHead
+from rl.model.heads import (
+    CategoricalValueLogitHead,
+    HeadParams,
+    PolicyQKHead,
+    RegressionValueLogitHead,
+)
 from rl.model.modules import SumEmbeddings, TransformerEncoder, one_hot_concat_jax
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -89,6 +94,11 @@ class Porygon2BuilderModel(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (1, entity_size),
         )
+        self.niche_embeddings = self.param(
+            "niche_embeddings",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (self.cfg.num_niches, entity_size),
+        )
         self.unk_embedding = self.param(
             "unk_embedding",
             nn.initializers.truncated_normal(stddev=0.02),
@@ -100,7 +110,8 @@ class Porygon2BuilderModel(nn.Module):
         self.species_head = PolicyQKHead(self.cfg.species_head)
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
 
-        self.value_head = ValueLogitHead(self.cfg.value_head)
+        self.value_head = RegressionValueLogitHead(self.cfg.value_head)
+        self.discriminator_head = CategoricalValueLogitHead(self.cfg.discriminator_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -205,13 +216,18 @@ class Porygon2BuilderModel(nn.Module):
 
         return embedding
 
-    def _forward_value_head(self, my_embedding: jax.Array):
-        return self.value_head(my_embedding)
+    def _forward_value_head(self, embedding: jax.Array):
+        return self.value_head(embedding)
 
-    def _encode_team(
+    def _forward_discriminator_head(self, embedding: jax.Array):
+        return self.discriminator_head(embedding)
+
+    def _encode_team_with_niche(
         self,
+        niche_id: jax.Array,
         species_tokens: jax.Array,
         packed_set_tokens: jax.Array,
+        use_niche: bool = True,
     ):
 
         valid_packed_sets = jnp.take(
@@ -226,30 +242,44 @@ class Porygon2BuilderModel(nn.Module):
             self.unk_embedding.astype(self.cfg.dtype),
             set_embeddings,
         )
-        set_embeddings = jnp.concatenate(
-            (self.sos_embedding.astype(self.cfg.dtype), set_embeddings), axis=0
+
+        niche_embedding = jnp.take(self.niche_embeddings, niche_id, axis=0).astype(
+            self.cfg.dtype
         )
+        if not use_niche:
+            niche_embedding = self.sos_embedding.astype(self.cfg.dtype)
+
+        set_embeddings = jnp.concatenate((niche_embedding, set_embeddings), axis=0)
 
         seq_len = set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
         causal_mask = jnp.expand_dims(causal_mask, axis=0)
 
-        positions = jnp.arange(set_embeddings.shape[0], dtype=jnp.int32)
+        if self.cfg.generation < 4:
+            positions = jnp.arange(set_embeddings.shape[0], dtype=jnp.int32).clip(
+                min=0, max=1
+            )
+        else:
+            positions = None
 
         return self.encoder(set_embeddings, causal_mask, qkv_positions=positions)
 
     def _forward(
         self,
-        current_embedding: jax.Array,
+        current_embedding_with_niche: jax.Array,
+        current_embedding_without_niche: jax.Array,
         actor_env: BuilderEnvOutput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value_head = self._forward_value_head(current_embedding)
+        value_head = self._forward_value_head(current_embedding_with_niche)
+        discriminator_head = self._forward_discriminator_head(
+            current_embedding_without_niche
+        )
 
-        species_query = current_embedding
+        species_query = current_embedding_with_niche
 
         species_head = self.species_head(
             species_query,
@@ -285,6 +315,7 @@ class Porygon2BuilderModel(nn.Module):
             species_head=species_head,
             packed_set_head=packed_set_head,
             value_head=value_head,
+            discriminator_head=discriminator_head,
         )
 
     def __call__(
@@ -295,15 +326,35 @@ class Porygon2BuilderModel(nn.Module):
     ) -> BuilderActorOutput:
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
 
-        my_embeddings = self._encode_team(
-            actor_input.history.species_tokens, actor_input.history.packed_set_tokens
+        team_embeddings_with_niche = self._encode_team_with_niche(
+            actor_input.history.niche_id,
+            actor_input.history.species_tokens,
+            actor_input.history.packed_set_tokens,
         )
-        hidden_states = jnp.take(my_embeddings, actor_input.env.ts.reshape(-1), axis=0)
+        hidden_states_with_niche = jnp.take(
+            team_embeddings_with_niche, actor_input.env.ts.reshape(-1), axis=0
+        )
+
+        team_embeddings_without_niche = self._encode_team_with_niche(
+            actor_input.history.niche_id,
+            actor_input.history.species_tokens,
+            actor_input.history.packed_set_tokens,
+            use_niche=False,
+        )
+        hidden_states_without_niche = jnp.take(
+            team_embeddings_without_niche, actor_input.env.ts.reshape(-1), axis=0
+        )
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
-            in_axes=(0, 0, 0, None),
-        )(hidden_states, actor_input.env, actor_output, species_keys)
+            in_axes=(0, 0, 0, 0, None),
+        )(
+            hidden_states_with_niche,
+            hidden_states_without_niche,
+            actor_input.env,
+            actor_output,
+            species_keys,
+        )
 
 
 def get_builder_model(config: ConfigDict = None) -> nn.Module:
@@ -341,7 +392,7 @@ def main(debug: bool = True, generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+        # builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     builder_env = TeamBuilderEnvironment(
@@ -351,20 +402,23 @@ def main(debug: bool = True, generation: int = 9):
     with open(f"data/data/gen{generation}/{builder_env._smogon_format}.json", "r") as f:
         packed_sets = json.load(f)
 
-    species_reward_bounds = (0, 0)
-    teammate_reward_bounds = (0, 0)
-
     while True:
 
-        rng_key, key = jax.random.split(key)
+        niche_key, rng_key, key = jax.random.split(key, 3)
         builder_subkeys = jax.random.split(
             rng_key, builder_env._max_trajectory_length + 1
         )
 
         build_traj = []
 
+        niche_key, key = jax.random.split(key)
+        niche_id = jax.random.randint(
+            niche_key, shape=(1,), minval=0, maxval=learner_model_config.num_niches
+        )
+
         with jax.disable_jit(debug):
-            builder_actor_input = builder_env.reset()
+            builder_actor_input = builder_env.reset(niche_id)
+
         for builder_step_index in range(builder_subkeys.shape[0]):
             with jax.disable_jit(debug):
                 builder_agent_output = agent.step_builder(
@@ -385,35 +439,6 @@ def main(debug: bool = True, generation: int = 9):
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
         )
-
-        species_reward_sum = (
-            builder_trajectory.env_output.cum_species_reward[1:]
-            - builder_trajectory.env_output.cum_species_reward[:-1]
-        ).sum()
-        new_species_reward_bounds = (
-            min(species_reward_sum.item(), species_reward_bounds[0]),
-            max(species_reward_sum.item(), species_reward_bounds[1]),
-        )
-        if new_species_reward_bounds != species_reward_bounds:
-            species_reward_bounds = new_species_reward_bounds
-
-        teammate_reward_sum = builder_trajectory.env_output.cum_teammate_reward.sum()
-        new_teammate_reward_bounds = (
-            min(teammate_reward_sum.item(), teammate_reward_bounds[0]),
-            max(teammate_reward_sum.item(), teammate_reward_bounds[1]),
-        )
-        if new_teammate_reward_bounds != teammate_reward_bounds:
-            teammate_reward_bounds = new_teammate_reward_bounds
-
-        # learner_output = learner_network.apply(
-        #     builder_params,
-        #     BuilderActorInput(env=builder_trajectory.env_output),
-        #     builder_trajectory.agent_output.actor_output,
-        # )
-
-        # print(
-        #     "value:", builder_trajectory.agent_output.actor_output.v.astype(jnp.float32)
-        # )
 
         assert np.all(
             builder_actor_input.history.species_tokens > SpeciesEnum.SPECIES_ENUM___UNK
