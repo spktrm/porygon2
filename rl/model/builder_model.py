@@ -326,14 +326,18 @@ class Porygon2BuilderModel(nn.Module):
     ) -> BuilderActorOutput:
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
 
+        num_team = actor_input.history.species_tokens.shape[0] + 1
+        mean_mask_shape = (num_team, num_team)
+        mean_masks = jnp.tril(jnp.ones(mean_mask_shape, dtype=jnp.bool))
+        denom = (actor_input.env.ts.reshape(-1) + 1)[..., None]
+        mean_mask = jnp.take(mean_masks, actor_input.env.ts.reshape(-1), axis=0)
+
         team_embeddings_with_niche = self._encode_team(
             actor_input.history.niche_id,
             actor_input.history.species_tokens,
             actor_input.history.packed_set_tokens,
         )
-        hidden_states_with_niche = jnp.take(
-            team_embeddings_with_niche, actor_input.env.ts.reshape(-1), axis=0
-        )
+        hidden_states_with_niche = (mean_mask @ team_embeddings_with_niche) / denom
 
         team_embeddings_without_niche = self._encode_team(
             actor_input.history.niche_id,
@@ -341,9 +345,9 @@ class Porygon2BuilderModel(nn.Module):
             actor_input.history.packed_set_tokens,
             use_niche=False,
         )
-        hidden_states_without_niche = jnp.take(
-            team_embeddings_without_niche, actor_input.env.ts.reshape(-1), axis=0
-        )
+        hidden_states_without_niche = (
+            mean_mask @ team_embeddings_without_niche
+        ) / denom
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
@@ -363,7 +367,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = True, generation: int = 9):
+def main(debug: bool = False, generation: int = 9):
     get_learner_config()
 
     actor_model_config = get_builder_model_config(generation, train=False)
