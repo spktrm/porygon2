@@ -186,35 +186,21 @@ class TeamBuilderEnvironment:
             where=species_tokens != SpeciesEnum.SPECIES_ENUM___UNK
         )
 
-    def _calculate_teammate_rewards(
-        self, species_token: jax.Array, team_tokens: jax.Array, species_mask: jax.Array
-    ):
-        forward_teammate_rewards = jnp.take(
+    def _calculate_teammate_rewards(self, team_tokens: jax.Array):
+        pairwise_rewards = jnp.take(
             jnp.take(self.teammate_rewards, team_tokens, axis=0),
-            species_token,
+            team_tokens,
             axis=1,
-        ).reshape(-1)
+        )
 
-        unk_mask = team_tokens == SpeciesEnum.SPECIES_ENUM___UNK
         not_unk_mask = team_tokens != SpeciesEnum.SPECIES_ENUM___UNK
+        mask = jnp.outer(not_unk_mask, not_unk_mask) - jnp.eye(self._num_team_members)
+        mask = jnp.clip(mask, 0, 1)
 
-        vacuum_rewards = (
-            jnp.take(self.teammate_rewards, species_token, axis=1)
-            .reshape(-1)
-            .sum(where=species_mask)
-        )
+        mask_sum = mask.sum().clip(min=1)
+        teammate_reward = jnp.where(mask, pairwise_rewards, 0).sum() / mask_sum
 
-        teammate_reward = (
-            forward_teammate_rewards.sum(where=not_unk_mask)
-        ) / not_unk_mask.sum().clip(min=1)
-
-        vacuum_reward = (
-            (unk_mask.sum() / self._num_team_members)
-            * vacuum_rewards
-            / species_mask.sum().clip(min=1)
-        )
-
-        return teammate_reward + vacuum_reward
+        return teammate_reward
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
@@ -250,7 +236,7 @@ class TeamBuilderEnvironment:
                 ts=next_ts,
                 # Prevent reward hacking by choosing common species
                 cum_teammate_reward=self._calculate_teammate_rewards(
-                    species_token, state.history.species_tokens, species_mask
+                    state.history.species_tokens
                 ),
                 cum_species_reward=self._calculate_species_rewards(species_tokens),
             ),

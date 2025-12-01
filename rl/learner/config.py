@@ -95,8 +95,9 @@ class Porygon2LearnerConfig:
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     diversity_reward_scale: float = get_diversity_alpha(
-        num_niches=num_niches, team_size=6, target_ratio=0.25
+        num_niches=num_niches, team_size=6, target_ratio=0.1
     )
+    human_prior_reward_scale: float = 0.25 * 0.2
 
     # EMA params
     player_ema_decay: float = 1e-3

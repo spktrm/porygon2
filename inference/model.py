@@ -80,21 +80,24 @@ class InferenceModel:
         )  # warm up the model
         print("model initialized!")
 
-    def split_rng(self) -> jax.Array:
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-        return subkey
+    def split_rng(self, num_splits: int = 1) -> tuple[jax.Array]:
+        self._rng_key, *subkeys = jax.random.split(self._rng_key, num_splits + 1)
+        if num_splits == 1:
+            return subkeys[0]
+        return tuple(subkeys)
 
     def reset(self):
 
-        rng_key = self.split_rng()
+        niche_key, rng_key = self.split_rng(2)
 
         builder_subkeys = jax.random.split(
             rng_key, self._builder_env._max_trajectory_length + 1
         )
+        niche_id = jax.random.randint(niche_key, shape=(1,), minval=0, maxval=8)
 
         build_traj = []
 
-        builder_actor_input = self._builder_env.reset()
+        builder_actor_input = self._builder_env.reset(niche_id)
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
@@ -118,7 +121,7 @@ class InferenceModel:
             packed_set_indices=builder_actor_input.history.packed_set_tokens.reshape(
                 -1
             ).tolist(),
-            v=builder_agent_output.actor_output.value_head.expectation.item(),
+            v=builder_agent_output.actor_output.value_head.logits.item(),
         )
 
     def step(self, timestep: PlayerActorInput):
@@ -127,7 +130,7 @@ class InferenceModel:
         agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
-            v=actor_output.value_head.expectation.item(),
+            v=actor_output.value_head.logits.item(),
             action=ACTION_MAPPING[
                 agent_output.actor_output.action_head.action_index.item()
             ],

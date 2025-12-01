@@ -312,8 +312,14 @@ def train_step(
         + jnp.log(num_niches)
     ).squeeze(-1)
 
+    builder_phi = builder_transitions.env_output.cum_teammate_reward
+    potential_reward = config.human_prior_reward_scale * jnp.concatenate(
+        (jnp.zeros_like(builder_phi[:1]), builder_phi[1:] - builder_phi[:-1])
+    )
+
+    builder_reward = skill_reward + potential_reward
     rewards_tm1 = jnp.concatenate(
-        (skill_reward, player_transitions.env_output.win_reward), axis=0
+        (builder_reward, player_transitions.env_output.win_reward), axis=0
     )
 
     v_tm1 = jnp.concatenate(
