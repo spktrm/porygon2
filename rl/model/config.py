@@ -164,14 +164,12 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     base_size = 64
     num_heads = 4
     scale = 1
-    num_niches = 8
 
     entity_size = int(scale * base_size * num_heads)
 
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
-    cfg.num_niches = num_niches
 
     num_layers = 4
     num_heads = num_heads
@@ -202,7 +200,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     if generation < 4:
         cfg.encoder.need_pos = True
 
-    for name in ["species_head", "packed_set_head", "value_head", "discriminator_head"]:
+    for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
         head_cfg.resnet = ConfigDict()
         head_cfg.resnet.num_resblocks = 1
@@ -210,10 +208,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.layer_sizes = 1
-
-    cfg.discriminator_head.logits = ConfigDict()
-    cfg.discriminator_head.logits.layer_sizes = num_niches
-    cfg.discriminator_head.category_values = jnp.arange(num_niches)
 
     for head in [
         cfg.species_head,

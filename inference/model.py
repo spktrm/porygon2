@@ -88,16 +88,14 @@ class InferenceModel:
 
     def reset(self):
 
-        niche_key, rng_key = self.split_rng(2)
+        rng_key = self.split_rng()
 
         builder_subkeys = jax.random.split(
             rng_key, self._builder_env._max_trajectory_length + 1
         )
-        niche_id = jax.random.randint(niche_key, shape=(1,), minval=0, maxval=8)
-
         build_traj = []
 
-        builder_actor_input = self._builder_env.reset(niche_id)
+        builder_actor_input = self._builder_env.reset()
         for builder_step_index in range(builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],

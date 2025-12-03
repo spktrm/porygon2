@@ -74,7 +74,7 @@ class Actor:
         builder_params: Params,
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
-        niche_key, builder_key, player_key = split_rng(rng_key, 3)
+        builder_key, player_key = split_rng(rng_key, 2)
         builder_unroll_length = self._builder_env._max_trajectory_length + 1
 
         builder_subkeys = split_rng(builder_key, builder_unroll_length)
@@ -83,10 +83,7 @@ class Actor:
         build_traj = []
 
         # Reset the builder environment.
-        niche_id = jax.random.randint(
-            niche_key, shape=(1,), minval=0, maxval=self._learner.config.num_niches
-        )
-        builder_actor_input = self._builder_env.reset(niche_id)
+        builder_actor_input = self._builder_env.reset()
 
         # Rollout the builder environment.
         for builder_step_index in range(builder_subkeys.shape[0]):
