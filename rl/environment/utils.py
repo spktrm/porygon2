@@ -236,7 +236,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 done=done,
             ),
             history=BuilderHistoryOutput(
-                niche_id=np.zeros((1, 1), dtype=np.int32),
                 species_tokens=np.zeros((history_length, 1), dtype=np.int32),
                 packed_set_tokens=np.zeros((history_length, 1), dtype=np.int32),
             ),

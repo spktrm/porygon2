@@ -264,7 +264,6 @@ def train_step(
         builder_transitions.agent_output.actor_output.packed_set_head
     )
 
-    builder_target_discriminator_head = builder_target_pred.discriminator_head
     builder_target_value_head = builder_target_pred.value_head
     builder_target_species_head = builder_target_pred.species_head
     builder_target_packed_set_head = builder_target_pred.packed_set_head
@@ -302,24 +301,9 @@ def train_step(
         builder_valid.shape[0] :
     ]
 
-    num_niches = builder_target_discriminator_head.log_probs.shape[-1]
-    skill_reward = config.diversity_reward_scale * (
-        jnp.take_along_axis(
-            builder_target_discriminator_head.log_probs,
-            builder_history.niche_id[..., None],
-            axis=-1,
-        )
-        + jnp.log(num_niches)
-    ).squeeze(-1)
-
-    builder_phi = builder_transitions.env_output.cum_teammate_reward
-    potential_reward = config.human_prior_reward_scale * jnp.concatenate(
-        (jnp.zeros_like(builder_phi[:1]), builder_phi[1:] - builder_phi[:-1])
-    )
-
-    builder_reward = skill_reward + potential_reward
     rewards_tm1 = jnp.concatenate(
-        (builder_reward, player_transitions.env_output.win_reward), axis=0
+        (jnp.zeros_like(builder_valid), player_transitions.env_output.win_reward),
+        axis=0,
     )
 
     v_tm1 = jnp.concatenate(
@@ -461,6 +445,12 @@ def train_step(
             ),
         )
 
+    builder_prior_log_prob = jnp.take(
+        builder_transitions.env_output.target_species_log_probs,
+        builder_transitions.agent_output.actor_output.species_head.action_index,
+        axis=-1,
+    )
+
     def builder_loss_fn(params: Params):
 
         pred = promote_map(
@@ -473,7 +463,6 @@ def train_step(
         )
 
         value_head = pred.value_head
-        discriminator_head = pred.discriminator_head
         species_head = pred.species_head
         packed_set_head = pred.packed_set_head
 
@@ -484,6 +473,9 @@ def train_step(
 
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
+
+        learner_prior_log_ratio = learner_log_prob - builder_prior_log_prob
+        learner_prior_ratio = jnp.exp(learner_prior_log_ratio)
 
         learner_target_log_ratio = learner_log_prob - builder_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
@@ -504,15 +496,6 @@ def train_step(
             valid=jnp.ones_like(builder_valid),
         )
 
-        loss_disc = -average(
-            jnp.take_along_axis(
-                discriminator_head.log_probs,
-                builder_history.niche_id[..., None],
-                axis=-1,
-            ).squeeze(-1),
-            jnp.ones_like(builder_valid),
-        )
-
         species_entropy = average(species_head.entropy, builder_valid)
         packed_set_entropy = average(packed_set_head.entropy, builder_valid)
         loss_entropy = -average(
@@ -529,26 +512,31 @@ def train_step(
             log_policy_ratio=learner_target_log_ratio,
             valid=builder_valid,
         )
-        loss_kl = backward_kl_loss(
+        loss_kl_rl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
+            valid=builder_valid,
+        )
+        loss_kl_prior = forward_kl_loss(
+            policy_ratio=learner_prior_ratio,
+            log_policy_ratio=learner_prior_log_ratio,
             valid=builder_valid,
         )
 
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + config.builder_kl_loss_loss_coef * loss_kl
+            + config.builder_kl_loss_coef * loss_kl_rl
+            + config.builder_kl_prior_loss_coef * loss_kl_prior
             - config.builder_entropy_loss_coef * loss_entropy
-            + config.builder_discriminator_loss_coef * loss_disc
         )
 
         return loss, dict(
             builder_loss_pg=loss_pg,
             builder_loss_v=loss_v,
-            builder_loss_kl=loss_kl,
+            builder_loss_kl_rl=loss_kl_rl,
+            builder_loss_kl_prior=loss_kl_prior,
             builder_loss_entropy=loss_entropy,
-            builder_loss_discriminator=loss_disc,
             # Head entropies
             builder_species_entropy=species_entropy,
             builder_packed_set_entropy=packed_set_entropy,
@@ -602,7 +590,6 @@ def train_step(
             builder_norm_adv_std=builder_norm_advantages.std(where=builder_valid),
             builder_value_target_mean=average(builder_target_scalar_v, builder_valid),
             builder_value_target_std=builder_target_scalar_v.std(where=builder_valid),
-            builder_skill_reward_sum=skill_reward[1:].sum(axis=0).mean(),
         )
     )
 
@@ -861,25 +848,22 @@ class Learner:
                         batch,
                         self.config,
                     )
+
+                training_step = training_logs["training_step"]
+
                 if jnp.isfinite(training_logs["player_loss"]).item():
                     self.player_state = new_player_state
                 else:
-                    print(
-                        "Non-finite loss detected in player @ step",
-                        training_logs["player_steps"],
-                    )
+                    print("Non-finite loss detected in player @ step", training_step)
                     continue
 
                 if jnp.isfinite(training_logs["builder_loss"]).item():
                     self.builder_state = new_builder_state
                 else:
-                    print(
-                        "Non-finite loss detected in builder @ step",
-                        training_logs["builder_steps"],
-                    )
+                    print("Non-finite loss detected in builder @ step", training_step)
                     continue
 
-                player_step = np.array(self.player_state.step_count).item()
+                player_step = training_step.item()
 
                 if (player_step % self.config.save_interval_steps) == 0:
                     usage_logs = self.get_usage_counts(self.replay._species_counts)

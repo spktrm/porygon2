@@ -74,9 +74,10 @@ class BuilderEnvOutput(NamedTuple):
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
 
+    target_species_log_probs: ArrayLike = ()
+
 
 class BuilderHistoryOutput(NamedTuple):
-    niche_id: ArrayLike = ()
     species_tokens: ArrayLike = ()
     packed_set_tokens: ArrayLike = ()
 
@@ -88,7 +89,6 @@ class BuilderActorInput(NamedTuple):
 
 class BuilderActorOutput(NamedTuple):
     value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
-    discriminator_head: CategoricalValueHeadOutput = CategoricalValueHeadOutput()
     species_head: PolicyHeadOutput = PolicyHeadOutput()
     packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
 
