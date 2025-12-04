@@ -445,11 +445,13 @@ def train_step(
             ),
         )
 
-    builder_prior_log_prob = jnp.take(
-        builder_transitions.env_output.target_species_log_probs,
-        builder_transitions.agent_output.actor_output.species_head.action_index,
-        axis=-1,
-    )
+    builder_prior_log_prob = (
+        builder_transitions.env_output.target_species_log_probs
+        * jax.nn.one_hot(
+            builder_transitions.agent_output.actor_output.species_head.action_index,
+            builder_transitions.env_output.target_species_log_probs.shape[-1],
+        )
+    ).sum(axis=-1)
 
     def builder_loss_fn(params: Params):
 
