@@ -18,6 +18,9 @@ class ParamsContainer(NamedTuple):
     player_params: chex.ArrayTree
     builder_params: chex.ArrayTree
 
+    def __repr__(self) -> str:
+        return f"ParamsContainer(step_count={self.step_count})"
+
 
 Params = chex.ArrayTree
 Optimizer = Callable[[Params, Params], Params]  # (params, grads) -> params
