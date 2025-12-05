@@ -48,6 +48,7 @@ class PolicyHeadOutput(NamedTuple):
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
+    log_policy: ArrayLike = ()
 
 
 class PlayerActorOutput(NamedTuple):
@@ -74,7 +75,7 @@ class BuilderEnvOutput(NamedTuple):
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
 
-    target_species_log_probs: ArrayLike = ()
+    target_species_probs: ArrayLike = ()
 
 
 class BuilderHistoryOutput(NamedTuple):

@@ -166,6 +166,9 @@ class TeamBuilderEnvironment:
         )
         packed_set_tokens = jnp.zeros_like(species_tokens)
 
+        start_target = self.species_probs * species_mask
+        start_target = start_target / (start_target.sum() + 1e-8)
+
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=species_mask,
@@ -173,9 +176,7 @@ class TeamBuilderEnvironment:
                 ts=jnp.array(0, dtype=jnp.int32),
                 cum_teammate_reward=jnp.array(0, dtype=jnp.float32),
                 cum_species_reward=jnp.array(0, dtype=jnp.float32),
-                target_species_log_probs=jnp.log(
-                    (self.species_probs / self.species_probs.sum()) + 1e-8
-                ),
+                target_species_probs=start_target,
             ),
             history=BuilderHistoryOutput(
                 species_tokens=species_tokens,
@@ -234,7 +235,6 @@ class TeamBuilderEnvironment:
         completed_count = (species_tokens != SpeciesEnum.SPECIES_ENUM___UNK).sum()
         conditional = jnp.take(self.teammate_probs, species_tokens, axis=0)
         teammate_conditionals = conditional.sum(axis=0) / completed_count.clip(min=1)
-        teammate_conditionals = jnp.where(species_mask, teammate_conditionals, 0)
 
         # So it favours teammates more as time goes on
         alpha = (next_ts / (state.history.species_tokens.shape[0] - 1)).clip(0, 1) ** (
@@ -243,8 +243,10 @@ class TeamBuilderEnvironment:
         target_species_probs = (
             1 - alpha
         ) * self.species_probs + alpha * teammate_conditionals
-        target_species_log_probs = jnp.log(
-            (target_species_probs / target_species_probs.sum().clip(min=1e-6)) + 1e-8
+
+        target_species_probs = jnp.where(species_mask, target_species_probs, 0)
+        target_species_probs = target_species_probs / (
+            target_species_probs.sum() + 1e-8
         )
 
         return BuilderActorInput(
@@ -257,7 +259,7 @@ class TeamBuilderEnvironment:
                     state.history.species_tokens
                 ),
                 cum_species_reward=self._calculate_species_rewards(species_tokens),
-                target_species_log_probs=target_species_log_probs,
+                target_species_probs=target_species_probs,
             ),
             history=BuilderHistoryOutput(
                 species_tokens=species_tokens,

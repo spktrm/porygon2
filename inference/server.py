@@ -2,6 +2,8 @@ from typing import Literal
 
 from dotenv import load_dotenv
 
+from rl.model.heads import HeadParams
+
 load_dotenv()
 import secrets
 
@@ -24,7 +26,7 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=secrets.randbits(32),
-    # player_head_params=HeadParams(min_p=0.03),
+    player_head_params=HeadParams(min_p=0.03),
     # builder_head_params=HeadParams(min_p=0.03),
 )
 

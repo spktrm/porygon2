@@ -90,7 +90,10 @@ class PolicyQKHead(nn.Module):
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
         return PolicyHeadOutput(
-            action_index=action_index, log_prob=log_prob, entropy=entropy
+            action_index=action_index,
+            log_prob=log_prob,
+            entropy=entropy,
+            log_policy=log_policy,
         )
 
 
@@ -141,7 +144,10 @@ class PolicyLogitHead(nn.Module):
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
         return PolicyHeadOutput(
-            action_index=action_index, log_prob=log_prob, entropy=entropy
+            action_index=action_index,
+            log_prob=log_prob,
+            entropy=entropy,
+            log_policy=log_policy,
         )
 
 

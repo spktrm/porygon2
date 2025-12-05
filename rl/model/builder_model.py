@@ -402,6 +402,8 @@ def main(debug: bool = False, generation: int = 9):
             builder_actor_input.history.species_tokens > SpeciesEnum.SPECIES_ENUM___UNK
         ).item()
 
+        assert np.all(builder_actor_input.env.target_species_probs >= 0).item()
+
         for st, pst in zip(
             builder_actor_input.history.species_tokens.reshape(-1).tolist(),
             builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
@@ -411,7 +413,7 @@ def main(debug: bool = False, generation: int = 9):
 
             print(species, packed_set)
 
-        reward_sum = builder_trajectory.env_output.target_species_log_probs.sum().item()
+        reward_sum = builder_trajectory.env_output.target_species_probs.sum().item()
         if reward_sum > max_reward:
             max_reward = reward_sum
 
