@@ -170,18 +170,6 @@ def make_species_count(generation: int, smogon_format: str):
     data = do_request(
         f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
     )
-    total_count = sum(d["count"] for d in data["pokemon"].values())
-    species_count = np.zeros(NUM_SPECIES, dtype=np.float32)
-    for k, v in data["pokemon"].items():
-        species_id = STOI["species"].get(toid(k), 0)
-        species_count[species_id] = v["count"] / total_count
-    return species_count
-
-
-def make_species_count(generation: int, smogon_format: str):
-    data = do_request(
-        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
-    )
     species_count = np.zeros(NUM_SPECIES, dtype=np.float32)
     for k, v in data["pokemon"].items():
         species_id = STOI["species"][toid(k)]
@@ -199,7 +187,7 @@ def make_teammate_count(generation: int, smogon_format: str):
         for teammate, rew in v["teammates"].items():
             teammate_id = STOI["species"][toid(teammate)]
             teammate_count[species_id, teammate_id] = rew
-    return (teammate_count + teammate_count.T) / 2
+    return teammate_count
 
 
 VALID_GENERATIONS = [1, 9]

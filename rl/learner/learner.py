@@ -445,14 +445,6 @@ def train_step(
             ),
         )
 
-    builder_prior_log_prob = (
-        builder_transitions.env_output.target_species_log_probs
-        * jax.nn.one_hot(
-            builder_transitions.agent_output.actor_output.species_head.action_index,
-            builder_transitions.env_output.target_species_log_probs.shape[-1],
-        )
-    ).sum(axis=-1)
-
     def builder_loss_fn(params: Params):
 
         pred = promote_map(
@@ -475,9 +467,6 @@ def train_step(
 
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
-
-        learner_prior_log_ratio = learner_log_prob - builder_prior_log_prob
-        learner_prior_ratio = jnp.exp(learner_prior_log_ratio)
 
         learner_target_log_ratio = learner_log_prob - builder_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
@@ -519,10 +508,12 @@ def train_step(
             log_policy_ratio=learner_actor_log_ratio,
             valid=builder_valid,
         )
-        loss_kl_prior = forward_kl_loss(
-            policy_ratio=learner_prior_ratio,
-            log_policy_ratio=learner_prior_log_ratio,
-            valid=builder_valid,
+        loss_kl_prior = average(
+            optax.kl_divergence(
+                species_head.log_policy,
+                builder_transitions.env_output.target_species_probs,
+            ),
+            builder_valid,
         )
 
         loss = (
