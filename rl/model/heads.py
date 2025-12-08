@@ -105,7 +105,7 @@ class PolicyLogitHeadInner(nn.Module):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
-            **self.cfg.logits.to_dict()
+            **self.cfg.logits.to_dict(),
         )
         x = resnet(x)
         return logits(x)

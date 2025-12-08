@@ -1064,6 +1064,7 @@ class Encoder(nn.Module):
             )
 
             state_query = state_embeddings.reshape(-1)
+            state_query = self.state_proj(state_query)
             state_query = self.state_resnet(state_query)
 
             return state_query, contextual_moves, contextual_switches

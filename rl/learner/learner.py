@@ -18,7 +18,7 @@ from tqdm import tqdm
 import wandb
 from rl.environment.data import STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
-from rl.environment.utils import clip_history
+from rl.environment.utils import InfoFeature, clip_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -172,6 +172,10 @@ def shift_left_with_zeros(tensor: jax.Array):
     return jnp.concatenate((tensor[1:], jnp.zeros_like(tensor[-1:])), axis=0)
 
 
+def shift_right_with_zeros(tensor: jax.Array):
+    return jnp.concatenate((jnp.zeros_like(tensor[:1]), tensor[:-1]), axis=0)
+
+
 def postprocess_log_prob(log_prob: jax.Array, min_p: float = 0.03):
     """Postprocess log probabilities to avoid extremely small values."""
     return jnp.where(
@@ -197,6 +201,37 @@ def scalar_to_two_hot(scalar_target: jax.Array) -> jax.Array:
     probs_upper = jax.nn.one_hot(upper_idx, 3) * weight[..., None]
 
     return probs_lower + probs_upper
+
+
+def calculate_player_shaped_reward(
+    batch: Trajectory, config: Porygon2LearnerConfig
+) -> jax.Array:
+    """Calculate potential-based shaped reward for player transitions."""
+    player_transitions = batch.player_transitions
+
+    my_hp_t = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__MY_HP_COUNT
+    ]
+    opp_hp_t = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
+    ]
+    my_fainted_t = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
+    ]
+    opp_fainted_t = player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
+    ]
+
+    # 1. Calculate Potential (Phi) for the current timestep t
+    phi_t = config.shaped_reward_hp_scale * (my_hp_t - opp_hp_t) + (
+        config.shaped_reward_fainted_scale * (opp_fainted_t - my_fainted_t)
+    )
+
+    # 2. Calculate Potential for the next_timestep
+    phi_tp1 = jnp.concatenate((phi_t[1:], phi_t[-1:]))
+
+    # 3. Return the difference: Current Potential - Previous Potential
+    return shift_right_with_zeros(config.gamma * phi_tp1 - phi_t)
 
 
 def train_step(
@@ -291,7 +326,7 @@ def train_step(
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
-    target_actor_ratio = target_actor_ratio.at[6].set(1.0)  # Hack
+    target_actor_ratio = target_actor_ratio.at[6].set(1.0)  # Hack to continue trace
 
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
     builder_actor_target_clipped_ratio = actor_target_clipped_ratio[
@@ -301,9 +336,14 @@ def train_step(
         builder_valid.shape[0] :
     ]
 
+    shaped_reward = calculate_player_shaped_reward(batch)
+    player_reward = (
+        player_transitions.env_output.win_reward
+        + config.shaped_reward_scale * shaped_reward
+    )
+
     rewards_tm1 = jnp.concatenate(
-        (jnp.zeros_like(builder_valid), player_transitions.env_output.win_reward),
-        axis=0,
+        (jnp.zeros_like(builder_valid), player_reward), axis=0
     )
 
     v_tm1 = jnp.concatenate(
@@ -489,9 +529,9 @@ def train_step(
 
         species_entropy = average(species_head.entropy, builder_valid)
         packed_set_entropy = average(packed_set_head.entropy, builder_valid)
-        loss_entropy = -average(
-            learner_log_prob, builder_valid
-        )  # Estimator for entropy
+
+        # Estimator for entropy
+        loss_entropy = -average(learner_log_prob, builder_valid)
 
         learner_actor_approx_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,

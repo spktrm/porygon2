@@ -77,15 +77,17 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        state_query: jax.Array,
+        state_queries: jax.Array,
         contextual_moves: jax.Array,
         contextual_switches: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_query, contextual_moves, head_params)
-        switch_logits = self.switch_head(state_query, contextual_switches, head_params)
+        move_logits = self.move_head(state_queries, contextual_moves, head_params)
+        switch_logits = self.switch_head(
+            state_queries, contextual_switches, head_params
+        )
         action_logits = jnp.concatenate([move_logits, switch_logits], axis=-1)
 
         action_head = self.post_head(
@@ -101,14 +103,14 @@ class Porygon2PlayerModel(nn.Module):
             action_head.action_index.clip(max=move_logits.shape[-1] - 1),
             axis=0,
         )
-        wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
+        wildcard_merge = self.wildcard_merge(state_queries, selected_move_embedding)
         wildcard_head = self.wildcard_head(
             wildcard_merge,
             actor_output.wildcard_head,
             env_step.wildcard_mask,
             head_params,
         )
-        value_head = self.value_head(state_query)
+        value_head = self.value_head(state_queries)
 
         return PlayerActorOutput(
             action_head=action_head,
