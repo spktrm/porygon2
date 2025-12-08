@@ -26,7 +26,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg = ConfigDict()
 
     base_size = 64
-    num_heads = 4
+    num_heads = 6
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -42,7 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
-    encoder_hidden_size_scale = 1
+    encoder_hidden_size_scale = 4
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
@@ -53,7 +53,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 1
+    decoder_hidden_size_scale = 4
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -111,6 +111,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
     )
     cfg.encoder.entity_timestep_transformer.num_layers = 4
+    cfg.encoder.entity_timestep_transformer.resblocks_hidden_size = entity_size * 2
     cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
     cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
 
@@ -162,7 +163,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg = ConfigDict()
 
     base_size = 64
-    num_heads = 4
+    num_heads = 6
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -171,9 +172,9 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 4
+    num_layers = 2
     num_heads = num_heads
-    hidden_size_scale = 1
+    hidden_size_scale = 4
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)

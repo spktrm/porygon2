@@ -323,9 +323,7 @@ class TransformerEncoder(nn.Module):
             mha = layer_norm(mha)
         qkv = qkv + mha
         qkv_ln = layer_norm(qkv)
-        ffn = MLP(
-            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
-        )(qkv_ln)
+        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
         qkv = qkv + ffn
@@ -410,9 +408,7 @@ class TransformerDecoder(nn.Module):
             mha = layer_norm(mha)
         q = q + mha
         q_ln = layer_norm(q)
-        ffn = MLP(
-            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
-        )(q_ln)
+        ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
         q = q + ffn
@@ -473,7 +469,7 @@ class Transformer(nn.Module):
     use_post_attn_norm: bool = False
     use_post_ffw_norm: bool = False
 
-    def encoder_layer(
+    def encoder_attn(
         self,
         qkv: jax.Array,
         attn_mask: jax.Array,
@@ -499,15 +495,7 @@ class Transformer(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        qkv = qkv + mha
-        qkv_ln = layer_norm(qkv)
-        ffn = MLP(
-            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
-        )(qkv_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        qkv = qkv + ffn
-        return jnp.where(positionwise_mask, qkv, 0)
+        return jnp.where(positionwise_mask, mha, 0)
 
     def decoder_attn(
         self,
@@ -540,11 +528,9 @@ class Transformer(nn.Module):
             mha = layer_norm(mha)
         return jnp.where(positionwise_mask, mha, 0)
 
-    def decoder_mlp(self, q: jax.Array, positionwise_mask: jax.Array):
+    def ffn_mlp(self, q: jax.Array, positionwise_mask: jax.Array):
         q_ln = layer_norm(q)
-        ffn = MLP(
-            self.resblocks_hidden_size, input_activation=False, use_layer_norm=False
-        )(q_ln)
+        ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
         return jnp.where(positionwise_mask, ffn, 0)
@@ -557,6 +543,8 @@ class Transformer(nn.Module):
         encoder_attn_mask: jax.Array | None = None,
         q_positions: jax.Array | None = None,
     ):
+        """Flamingo-style transformer with interleaved encoder/decoder attention."""
+
         if encoder_attn_mask is None:
             qkv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
             encoder_attn_mask = create_attention_mask(qkv_mask, qkv_mask)
@@ -583,11 +571,15 @@ class Transformer(nn.Module):
         dense_gates = jnp.tanh(alpha_dense)
 
         for layer_idx in range(self.num_layers):
-            q = self.encoder_layer(q, encoder_attn_mask, positionwise_mask, q_positions)
+            # Encoder self-attention
+            q = q + self.encoder_attn(
+                q, encoder_attn_mask, positionwise_mask, q_positions
+            )
+            q = q + self.ffn_mlp(q, positionwise_mask)
 
+            # Decoder cross-attention
             res = q
             layer_gates = xattn_gates[layer_idx]
-
             for layer_gate, (kv, decoder_attn_mask, kv_position) in zip(
                 layer_gates, contexts
             ):
@@ -599,9 +591,7 @@ class Transformer(nn.Module):
                     q_positions,
                     kv_position,
                 )
-
-            ffn = self.decoder_mlp(q, positionwise_mask)
-            q = q + dense_gates[layer_idx] * ffn
+            q = q + dense_gates[layer_idx] * self.ffn_mlp(q, positionwise_mask)
 
         return q
 
@@ -644,6 +634,38 @@ class MLP(nn.Module):
                 if self.final_kernel_init is not None:
                     dense_kwargs["kernel_init"] = self.final_kernel_init
             x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
+        return x
+
+
+def ffw_activation(x: jax.Array) -> jax.Array:
+    return nn.relu(x) ** 2
+
+
+class FFWMLP(nn.Module):
+    """Feed-Forward Network (FFN) MLP module."""
+
+    hidden_size: int
+    output_size: int = None
+    use_layer_norm: bool = False
+    activation: callable = ffw_activation
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """
+        Apply Feed-Forward Network (FFN) MLP to the inputs.
+
+        Args:
+            x (jax.Array): Input array.
+
+        Returns:
+            jax.Array: Output array.
+        """
+        inp_size = x.shape[-1]
+        x = nn.Dense(self.hidden_size, dtype=x.dtype)(x)
+        if self.use_layer_norm:
+            x = layer_norm(x)
+        x = self.activation(x)
+        x = nn.Dense(self.output_size or inp_size, dtype=x.dtype)(x)
         return x
 
 

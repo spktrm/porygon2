@@ -27,12 +27,13 @@ from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
 
 @chex.dataclass(frozen=True)
-class AdamConfig:
+class AdamWConfig:
     """Adam optimizer related params."""
 
     b1: float
     b2: float
     eps: float
+    weight_decay: float
 
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -48,6 +49,7 @@ class Porygon2LearnerConfig:
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
+    cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
@@ -58,9 +60,9 @@ class Porygon2LearnerConfig:
     target_replay_ratio: float = 4
 
     # Learning params
-    adam: AdamConfig = AdamConfig(b1=0, b2=0.99, eps=1e-6)
-    player_learning_rate: float = 2e-5
-    builder_learning_rate: float = 2e-5
+    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-6, weight_decay=0.01)
+    player_learning_rate: float = 3e-5
+    builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
 
@@ -73,10 +75,15 @@ class Porygon2LearnerConfig:
     lambda_: float = 0.95
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
-    clip_ppo: float = 0.2
+    clip_ppo: float = 0.3
+
+    # Shaped Reward params
+    shaped_reward_scale: float = 1.0
+    shaped_reward_fainted_scale: float = 0.1
+    shaped_reward_hp_scale: float = 0.01
 
     # Loss coefficients
-    player_value_loss_coef: float = 1.0
+    player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.01
     player_entropy_loss_coef: float = 0.01
@@ -153,11 +160,12 @@ def create_train_state(
         target_params=player_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.player_clip_gradient),
-            optax.adam(
+            optax.adamw(
                 learning_rate=config.player_learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
+                weight_decay=config.adam.weight_decay,
             ),
         ),
     )
@@ -179,11 +187,12 @@ def create_train_state(
         target_params=builder_params_init_fn(rng),
         tx=optax.chain(
             optax.clip_by_global_norm(config.builder_clip_gradient),
-            optax.adam(
+            optax.adamw(
                 learning_rate=config.builder_learning_rate,
                 b1=config.adam.b1,
                 b2=config.adam.b2,
                 eps=config.adam.eps,
+                weight_decay=config.adam.weight_decay,
             ),
         ),
     )
@@ -197,66 +206,57 @@ def save_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
-    metadata: dict | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league, metadata
+        learner_config, player_state, builder_state, league
     )
-    wandb_run.log_artifact(
-        artifact_or_path=save_path,
-        name=f"latest-gen{learner_config.generation}",
-        type="model",
-    )
+    if player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0:
+        wandb_run.log_artifact(
+            artifact_or_path=save_path,
+            name=f"latest-gen{learner_config.generation}",
+            type="model",
+        )
 
 
 def save_train_state_locally(
     learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState = None,
-    builder_state: Porygon2BuilderTrainState = None,
-    league: League = None,
-    metadata: dict | None = None,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+    league: League,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
     )
-    return save_state(
-        save_path, learner_config, player_state, builder_state, league, metadata
-    )
+    return save_state(save_path, learner_config, player_state, builder_state, league)
 
 
 def save_state(
     save_path: str,
     learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState = None,
-    builder_state: Porygon2BuilderTrainState = None,
-    league: League = None,
-    metadata: dict | None = None,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+    league: League,
 ):
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
     data = dict(learner_config=learner_config)
-    if player_state is not None:
-        data["player_state"] = dict(
-            params=player_state.params,
-            target_params=player_state.target_params,
-            opt_state=player_state.opt_state,
-            step_count=player_state.step_count,
-            frame_count=player_state.frame_count,
-            target_adv_mean=player_state.target_adv_mean,
-            target_adv_std=player_state.target_adv_std,
-        )
-    if builder_state is not None:
-        data["builder_state"] = dict(
-            params=builder_state.params,
-            target_params=builder_state.target_params,
-            opt_state=builder_state.opt_state,
-            step_count=builder_state.step_count,
-            frame_count=builder_state.frame_count,
-        )
-    if league is not None:
-        data["league"] = league.serialize()
-    if metadata is not None:
-        data["metadata"] = metadata
+    data["player_state"] = dict(
+        params=player_state.params,
+        target_params=player_state.target_params,
+        opt_state=player_state.opt_state,
+        step_count=player_state.step_count,
+        frame_count=player_state.frame_count,
+        target_adv_mean=player_state.target_adv_mean,
+        target_adv_std=player_state.target_adv_std,
+    )
+    data["builder_state"] = dict(
+        params=builder_state.params,
+        target_params=builder_state.target_params,
+        opt_state=builder_state.opt_state,
+        step_count=builder_state.step_count,
+        frame_count=builder_state.frame_count,
+    )
+    data["league"] = league.serialize()
     with open(save_path, "wb") as f:
         pickle.dump(data, f)
     return save_path
@@ -302,9 +302,9 @@ def load_train_state(
         ckpt_data = pickle.load(f)
 
     print("Checkpoint data:")
-    ckpt_player_state = ckpt_data.get("player_state", {})
-    ckpt_builder_state = ckpt_data.get("builder_state", {})
-    ckpt_league_bytes = ckpt_data.get("league", None)
+    ckpt_player_state = ckpt_data.get("player_state")
+    ckpt_builder_state = ckpt_data.get("builder_state")
+    ckpt_league_bytes = ckpt_data.get("league")
 
     if ckpt_league_bytes is not None:
         league = League.deserialize(ckpt_league_bytes)
