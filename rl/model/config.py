@@ -26,7 +26,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg = ConfigDict()
 
     base_size = 64
-    num_heads = 6
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -42,7 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
-    encoder_hidden_size_scale = 4
+    encoder_hidden_size_scale = 2
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
@@ -53,7 +53,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 4
+    decoder_hidden_size_scale = 2
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -163,7 +163,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg = ConfigDict()
 
     base_size = 64
-    num_heads = 6
+    num_heads = 4
     scale = 1
 
     entity_size = int(scale * base_size * num_heads)
@@ -174,7 +174,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     num_layers = 2
     num_heads = num_heads
-    hidden_size_scale = 4
+    hidden_size_scale = 2
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)

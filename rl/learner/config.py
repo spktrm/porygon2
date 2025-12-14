@@ -60,7 +60,7 @@ class Porygon2LearnerConfig:
     target_replay_ratio: float = 4
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-6, weight_decay=0.01)
+    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-6, weight_decay=1e-2)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0

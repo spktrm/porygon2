@@ -16,7 +16,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import STOI
+from rl.environment.data import MAX_RATIO_TOKEN, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import InfoFeature, clip_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
@@ -207,25 +207,18 @@ def calculate_player_shaped_reward(
     batch: Trajectory, config: Porygon2LearnerConfig
 ) -> jax.Array:
     """Calculate potential-based shaped reward for player transitions."""
-    player_transitions = batch.player_transitions
+    env_output = batch.player_transitions.env_output
 
-    my_hp_t = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_HP_COUNT
-    ]
-    opp_hp_t = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT
-    ]
-    my_fainted_t = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT
-    ]
-    opp_fainted_t = player_transitions.env_output.info[
-        ..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT
-    ]
+    my_hp_t = env_output.info[..., InfoFeature.INFO_FEATURE__MY_HP_COUNT]
+    opp_hp_t = env_output.info[..., InfoFeature.INFO_FEATURE__OPP_HP_COUNT]
+    my_fainted_t = env_output.info[..., InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT]
+    opp_fainted_t = env_output.info[..., InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT]
 
     # 1. Calculate Potential (Phi) for the current timestep t
-    phi_t = config.shaped_reward_hp_scale * (my_hp_t - opp_hp_t) + (
-        config.shaped_reward_fainted_scale * (opp_fainted_t - my_fainted_t)
-    )
+    phi_t = (
+        config.shaped_reward_hp_scale * (my_hp_t - opp_hp_t)
+        + config.shaped_reward_fainted_scale * (opp_fainted_t - my_fainted_t)
+    ) / MAX_RATIO_TOKEN  # Normalize to [-1, 1]
 
     # 2. Calculate Potential for the next_timestep
     phi_tp1 = jnp.concatenate((phi_t[1:], phi_t[-1:]))
@@ -336,7 +329,7 @@ def train_step(
         builder_valid.shape[0] :
     ]
 
-    shaped_reward = calculate_player_shaped_reward(batch)
+    shaped_reward = calculate_player_shaped_reward(batch, config)
     player_reward = (
         player_transitions.env_output.win_reward
         + config.shaped_reward_scale * shaped_reward

@@ -238,7 +238,6 @@ class Encoder(nn.Module):
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
         )
-        self.public_entity_glu = GLU()
         self.side_embedding = nn.Embed(
             num_embeddings=2, name="side_embedding", **embed_kwargs
         )
@@ -492,15 +491,14 @@ class Encoder(nn.Module):
             axis=-1,
         )
 
-        revealed_embedding = self.public_entity_sum(
+        embedding = self.public_entity_sum(
             self._embed_species(species_token),
             self._embed_learnset(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             move_embeddings.sum(axis=0),
+            public_encoding,
         )
-
-        embedding = self.public_entity_glu(public_encoding, revealed_embedding)
 
         embedding = embedding + self.side_embedding(
             public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE]
@@ -510,7 +508,7 @@ class Encoder(nn.Module):
         mask = get_public_entity_mask(revealed)
         embedding = mask * embedding
 
-        return embedding, mask
+        return jnp.tanh(embedding), mask
 
     def _embed_private_entity(self, private: jax.Array):
         move_indices = np.array(
@@ -588,7 +586,7 @@ class Encoder(nn.Module):
         mask = get_private_entity_mask(private)
         embedding = mask * embedding
 
-        return embedding, mask
+        return jnp.tanh(embedding), mask
 
     def _embed_edge(self, edge: jax.Array):
         _encode_hex = jax.vmap(

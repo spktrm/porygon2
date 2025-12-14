@@ -3811,8 +3811,8 @@ export class StateHandler {
     getWinReward() {
         if (this.player.done) {
             if (this.player.finishedEarly) {
-                // Prevent reward hacking by stalling
-                return 0;
+                // Incentivize finishing the battle
+                return -MAX_RATIO_TOKEN;
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";
