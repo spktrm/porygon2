@@ -556,19 +556,14 @@ class Transformer(nn.Module):
 
         alpha_xattn = self.param(
             "alpha_xattn",
-            nn.initializers.zeros_init(),
+            nn.initializers.ones_init(),
             (self.num_layers, len(contexts)),
-            q.dtype,
         )
         alpha_dense = self.param(
             "alpha_dense",
-            nn.initializers.zeros_init(),
-            (self.num_layers,),
-            q.dtype,
+            nn.initializers.ones_init(),
+            (self.num_layers, len(contexts)),
         )
-
-        xattn_gates = jnp.tanh(alpha_xattn)
-        dense_gates = jnp.tanh(alpha_dense)
 
         for layer_idx in range(self.num_layers):
             # Encoder self-attention
@@ -578,20 +573,29 @@ class Transformer(nn.Module):
             q = q + self.ffn_mlp(q, positionwise_mask)
 
             # Decoder cross-attention
-            res = q
-            layer_gates = xattn_gates[layer_idx]
-            for layer_gate, (kv, decoder_attn_mask, kv_position) in zip(
-                layer_gates, contexts
-            ):
-                q = q + layer_gate * self.decoder_attn(
-                    res,
+            layer_attn_gates = alpha_xattn[layer_idx].astype(q.dtype)
+            layer_dense_gates = alpha_dense[layer_idx].astype(q.dtype)
+
+            outs = []
+
+            for (
+                layer_attn_gate,
+                layer_dense_gate,
+                (kv, decoder_attn_mask, kv_position),
+            ) in zip(layer_attn_gates, layer_dense_gates, contexts):
+
+                q_c = q + layer_attn_gate * self.decoder_attn(
+                    q,
                     kv,
                     decoder_attn_mask,
                     positionwise_mask,
                     q_positions,
                     kv_position,
                 )
-            q = q + dense_gates[layer_idx] * self.ffn_mlp(q, positionwise_mask)
+                q_c = q_c + layer_dense_gate * self.ffn_mlp(q_c, positionwise_mask)
+                outs.append(q_c)
+
+            q = sum(outs) / len(contexts)
 
         return q
 
@@ -799,9 +803,6 @@ class PointerLogits(nn.Module):
 
     @nn.compact
     def __call__(self, q: jax.Array, k: jax.Array) -> jax.Array:
-        if q.ndim < 2:
-            q = jnp.expand_dims(q, axis=0)
-
         *q_leading_dims, _ = q.shape
         *kv_leading_dims, _ = k.shape
 
@@ -832,7 +833,7 @@ class PointerLogits(nn.Module):
         attn_logits = attn_logits.mean(axis=0)  # mean over heads
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        return attn_logits.reshape(*kv_leading_dims)
+        return attn_logits
 
 
 def one_hot_concat_jax(

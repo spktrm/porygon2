@@ -36,23 +36,6 @@ def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float =
     return jax.random.categorical(rng_key, log_probs, axis=-1)
 
 
-class HeadlessPolicyQKHead(nn.Module):
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        query_embedding: jax.Array,
-        key_embeddings: jax.Array,
-        head_params: HeadParams = HeadParams(),
-    ):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
-
-        logits = qk_logits(resnet(query_embedding), key_embeddings)
-        return logits / head_params.temp
-
-
 class PolicyQKHead(nn.Module):
     cfg: ConfigDict
 
@@ -68,7 +51,7 @@ class PolicyQKHead(nn.Module):
         resnet = Resnet(**self.cfg.resnet.to_dict())
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(resnet(query_embedding), key_embeddings)
+        logits = qk_logits(resnet(query_embedding)[None], key_embeddings).squeeze(0)
         logits = logits / head_params.temp
 
         if valid_mask is None:

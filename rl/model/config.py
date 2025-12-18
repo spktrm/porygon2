@@ -25,7 +25,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 32
     num_heads = 4
     scale = 1
 
@@ -53,7 +53,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 2
+    decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -106,19 +106,18 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
-    cfg.encoder.entity_timestep_transformer = ConfigDict()
+    cfg.encoder.entity_everything_transformer = ConfigDict()
     set_attributes(
-        cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
+        cfg.encoder.entity_everything_transformer, **transformer_decoder_kwargs
     )
-    cfg.encoder.entity_timestep_transformer.num_layers = 4
-    cfg.encoder.entity_timestep_transformer.resblocks_hidden_size = entity_size * 2
-    cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
-    cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
+    cfg.encoder.entity_everything_transformer.num_layers = 4
+    cfg.encoder.entity_everything_transformer.encoder_need_pos = True
+    cfg.encoder.entity_everything_transformer.decoder_need_pos = True
 
     cfg.encoder.action_entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
     cfg.encoder.action_entity_decoder.num_layers = 2
-    cfg.encoder.action_entity_decoder.need_pos = False
+    cfg.encoder.action_entity_decoder.need_pos = True
 
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
