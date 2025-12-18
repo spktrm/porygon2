@@ -18,8 +18,8 @@ from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    HeadlessPolicyQKHead,
     HeadParams,
+    PointerLogits,
     PolicyLogitHead,
     sample_categorical,
 )
@@ -41,8 +41,8 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.move_head = HeadlessPolicyQKHead(self.cfg.move_head)
-        self.switch_head = HeadlessPolicyQKHead(self.cfg.switch_head)
+        self.move_head = PointerLogits(**self.cfg.move_head.qk_logits.to_dict())
+        self.switch_head = PointerLogits(**self.cfg.switch_head.qk_logits.to_dict())
         self.wildcard_merge = SumEmbeddings(
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )
@@ -78,17 +78,18 @@ class Porygon2PlayerModel(nn.Module):
     def get_head_outputs(
         self,
         state_queries: jax.Array,
-        contextual_moves: jax.Array,
-        contextual_switches: jax.Array,
+        move_embeddings: jax.Array,
+        switch_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_queries, contextual_moves, head_params)
-        switch_logits = self.switch_head(
-            state_queries, contextual_switches, head_params
-        )
-        action_logits = jnp.concatenate([move_logits, switch_logits], axis=-1)
+        move_logits = self.move_head(state_queries, move_embeddings)
+        switch_logits = self.switch_head(state_queries, switch_embeddings)
+
+        action_logits = (
+            jnp.concatenate([move_logits, switch_logits], axis=-1).mean(0)
+        ) / head_params.temp
 
         action_head = self.post_head(
             action_logits,
@@ -98,19 +99,24 @@ class Porygon2PlayerModel(nn.Module):
             min_p=head_params.min_p,
         )
 
+        pooled_queries = jnp.take(
+            state_queries, jnp.arange(12) * (state_queries.shape[0] // 12), axis=0
+        )
+        state_query = pooled_queries.mean(0)
+
         selected_move_embedding = jnp.take(
-            contextual_moves,
+            move_embeddings,
             action_head.action_index.clip(max=move_logits.shape[-1] - 1),
             axis=0,
         )
-        wildcard_merge = self.wildcard_merge(state_queries, selected_move_embedding)
+        wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
         wildcard_head = self.wildcard_head(
             wildcard_merge,
             actor_output.wildcard_head,
             env_step.wildcard_mask,
             head_params,
         )
-        value_head = self.value_head(state_queries)
+        value_head = self.value_head(state_query)
 
         return PlayerActorOutput(
             action_head=action_head,
@@ -128,7 +134,7 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_queries, contextual_moves, contextual_switches = self.encoder(
+        state_queries, move_embeddings, switch_embeddings = self.encoder(
             actor_input.env, actor_input.history
         )
 
@@ -136,8 +142,8 @@ class Porygon2PlayerModel(nn.Module):
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
             state_queries,
-            contextual_moves,
-            contextual_switches,
+            move_embeddings,
+            switch_embeddings,
             actor_input.env,
             actor_output,
         )

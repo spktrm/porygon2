@@ -733,7 +733,7 @@ class Learner:
         self,
         batch: list[Trajectory],
         player_transition_resolution: int = 64,
-        player_history_resolution: int = 128,
+        player_history_resolution: int = 96,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
