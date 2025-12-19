@@ -1037,13 +1037,13 @@ class Encoder(nn.Module):
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
         timestep_arange: jax.Array,
+        private_embeddings: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
         move_mask = jnp.ones_like(env_step.action_mask[:4])
         move_embeddings = self._embed_moves(env_step.moveset, move_mask)
 
-        private_embeddings = self._embed_private_entities(env_step.private_team)
         private_mask = jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool)
 
         latest_timestep_embeddings, latest_timestep_mask, latest_timestep_positions = (
@@ -1081,6 +1081,19 @@ class Encoder(nn.Module):
             private_embeddings, jnp.arange(6) * private_embeddings.shape[0] // 6, axis=0
         )
 
+        switch_order_indices = np.array(
+            [
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE1,
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE2,
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE3,
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE4,
+                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE5,
+            ]
+        )
+        switch_order_values = env_step.info[switch_order_indices]
+        private_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
+
         return entity_embeddings, move_embeddings, switch_embeddings
 
     def __call__(self, env_step: PlayerEnvOutput, history_step: PlayerHistoryOutput):
@@ -1100,8 +1113,10 @@ class Encoder(nn.Module):
         )
         timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
+        private_embeddings = self._embed_private_entities(env_step.private_team[0])
+
         state_queries, move_embeddings, switch_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
         )(
             env_step,
             timestep_mask,
@@ -1109,6 +1124,7 @@ class Encoder(nn.Module):
             timestep_embeddings,
             timestep_positions,
             timestep_arange,
+            private_embeddings,
         )
 
         return state_queries, move_embeddings, switch_embeddings

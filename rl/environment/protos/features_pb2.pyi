@@ -182,6 +182,12 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__MY_HP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__OPP_HP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__NUM_ACTIVE: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE0: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE1: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE2: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE3: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE4: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE5: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -372,6 +378,12 @@ INFO_FEATURE__OPP_FAINTED_COUNT: InfoFeature
 INFO_FEATURE__MY_HP_COUNT: InfoFeature
 INFO_FEATURE__OPP_HP_COUNT: InfoFeature
 INFO_FEATURE__NUM_ACTIVE: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE0: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE1: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE2: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE3: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE4: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE5: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType

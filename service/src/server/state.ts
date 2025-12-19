@@ -3748,7 +3748,9 @@ export class StateHandler {
         if (requestPokemon === undefined) {
             throw new Error("Request pokemon is undefined");
         } else {
-            for (const member of requestPokemon) {
+            for (const member of [...requestPokemon].sort((a, b) => {
+                return a.ident.localeCompare(b.ident);
+            })) {
                 const name = toID(member.speciesForme);
                 const matchedSet = sets.find((set) => {
                     const setSpecies = toID(set.species);
@@ -3900,6 +3902,36 @@ export class StateHandler {
         );
 
         infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
+
+        const request = this.player.getRequest();
+        if (request === undefined) {
+            throw new Error("Request is undefined");
+        }
+        const requestPokemon = request.side?.pokemon as
+            | Protocol.Request.SideInfo["pokemon"]
+            | undefined;
+
+        if (requestPokemon !== undefined) {
+            for (const [sortedIdx, sortedMember] of [...requestPokemon]
+                .sort((a, b) => {
+                    return a.ident.localeCompare(b.ident);
+                })
+                .entries()) {
+                for (const [
+                    unsortedIdx,
+                    unsortedMember,
+                ] of requestPokemon.entries()) {
+                    if (sortedMember.ident === unsortedMember.ident) {
+                        infoBuffer[
+                            InfoFeature[
+                                `INFO_FEATURE__SWITCH_ORDER_VALUE${unsortedIdx}` as keyof typeof InfoFeature
+                            ]
+                        ] = sortedIdx;
+                        break;
+                    }
+                }
+            }
+        }
 
         return new Uint8Array(infoBuffer.buffer);
     }
