@@ -77,19 +77,20 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        state_queries: jax.Array,
+        state_embedding: jax.Array,
         move_embeddings: jax.Array,
         switch_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_queries, move_embeddings)
-        switch_logits = self.switch_head(state_queries, switch_embeddings)
+        move_logits = self.move_head(state_embedding[None], move_embeddings)
+        switch_logits = self.switch_head(state_embedding[None], switch_embeddings)
 
         action_logits = (
-            jnp.concatenate([move_logits, switch_logits], axis=-1).mean(0)
-        ) / head_params.temp
+            jnp.concatenate([move_logits, switch_logits], axis=-1).squeeze(0)
+            / head_params.temp
+        )
 
         action_head = self.post_head(
             action_logits,
@@ -99,24 +100,19 @@ class Porygon2PlayerModel(nn.Module):
             min_p=head_params.min_p,
         )
 
-        pooled_queries = jnp.take(
-            state_queries, jnp.arange(12) * (state_queries.shape[0] // 12), axis=0
-        )
-        state_query = pooled_queries.mean(0)
-
         selected_move_embedding = jnp.take(
             move_embeddings,
             action_head.action_index.clip(max=move_logits.shape[-1] - 1),
             axis=0,
         )
-        wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
+        wildcard_merge = self.wildcard_merge(state_embedding, selected_move_embedding)
         wildcard_head = self.wildcard_head(
             wildcard_merge,
             actor_output.wildcard_head,
             env_step.wildcard_mask,
             head_params,
         )
-        value_head = self.value_head(state_query)
+        value_head = self.value_head(state_embedding)
 
         return PlayerActorOutput(
             action_head=action_head,
@@ -134,14 +130,14 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_queries, move_embeddings, switch_embeddings = self.encoder(
+        state_embedding, move_embeddings, switch_embeddings = self.encoder(
             actor_input.env, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            state_queries,
+            state_embedding,
             move_embeddings,
             switch_embeddings,
             actor_input.env,
