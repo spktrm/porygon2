@@ -42,6 +42,7 @@ from rl.model.modules import (
     GatNet,
     SumEmbeddings,
     Transformer,
+    TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
     one_hot_concat_jax,
@@ -279,6 +280,7 @@ class Encoder(nn.Module):
         self.entity_everything_transformer = Transformer(
             **self.cfg.entity_everything_transformer.to_dict()
         )
+        self.entity_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1094,7 +1096,18 @@ class Encoder(nn.Module):
         switch_order_values = env_step.info[switch_order_indices]
         private_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
 
-        return entity_embeddings, move_embeddings, switch_embeddings
+        important_indices = jnp.arange(12) * (entity_embeddings.shape[0] // 12)
+        entity_embeddings = jnp.take(entity_embeddings, important_indices, axis=0)
+        entity_mask = jnp.take(entity_mask, important_indices, axis=0)
+
+        query_mask = jnp.ones_like(self.state_queries[..., 0], dtype=jnp.bool)
+        state_embedding = self.entity_decoder(
+            q=self.state_queries,
+            kv=entity_embeddings,
+            attn_mask=create_attention_mask(query_mask, entity_mask),
+        ).reshape(-1)
+
+        return state_embedding, move_embeddings, switch_embeddings
 
     def __call__(self, env_step: PlayerEnvOutput, history_step: PlayerHistoryOutput):
         (
@@ -1115,7 +1128,7 @@ class Encoder(nn.Module):
 
         private_embeddings = self._embed_private_entities(env_step.private_team[0])
 
-        state_queries, move_embeddings, switch_embeddings = jax.vmap(
+        state_embedding, move_embeddings, switch_embeddings = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
         )(
             env_step,
@@ -1127,4 +1140,4 @@ class Encoder(nn.Module):
             private_embeddings,
         )
 
-        return state_queries, move_embeddings, switch_embeddings
+        return state_embedding, move_embeddings, switch_embeddings

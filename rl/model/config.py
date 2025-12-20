@@ -114,10 +114,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.entity_everything_transformer.encoder_need_pos = True
     cfg.encoder.entity_everything_transformer.decoder_need_pos = True
 
-    cfg.encoder.action_entity_decoder = ConfigDict()
-    set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.action_entity_decoder.num_layers = 2
-    cfg.encoder.action_entity_decoder.need_pos = True
+    cfg.encoder.entity_decoder = ConfigDict()
+    set_attributes(cfg.encoder.entity_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.entity_decoder.num_layers = 2
+    cfg.encoder.entity_decoder.need_pos = True
 
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
