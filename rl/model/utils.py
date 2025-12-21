@@ -85,13 +85,13 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
                 num_params = math.prod(value.shape)
                 param_dict[key] = {
                     "num_params": num_params,
-                    "ratio": num_params / total_params,
+                    "ratio": f"{num_params / total_params:.3f}",
                 }
             else:
                 nested_params = calculate_params(key, value)
                 param_entry = {
                     "num_params": nested_params,
-                    "ratio": nested_params / total_params,
+                    "ratio": f"{nested_params / total_params:.3f}",
                 }
                 if current_depth < n - 1:
                     param_entry["details"] = build_param_dict(

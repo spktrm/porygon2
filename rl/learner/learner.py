@@ -732,8 +732,8 @@ class Learner:
     def stack_batch(
         self,
         batch: list[Trajectory],
-        player_transition_resolution: int = 64,
-        player_history_resolution: int = 96,
+        player_transition_resolution: int = 50,
+        player_history_resolution: int = 256,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch

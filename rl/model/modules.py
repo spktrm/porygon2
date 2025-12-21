@@ -455,7 +455,7 @@ class TransformerDecoder(nn.Module):
         return q
 
 
-class Transformer(nn.Module):
+class Perceiver(nn.Module):
     qk_size: int
     v_size: int
     model_size: int

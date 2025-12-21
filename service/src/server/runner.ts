@@ -523,7 +523,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 }
 
-let totalBattles = 0;
+const MAX_REQUEST_COUNT = 32 * 3;
 
 export function createBattle(
     options: {
@@ -537,7 +537,7 @@ export function createBattle(
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? 120;
+    const maxRequestCount = options.maxRequestCount ?? MAX_REQUEST_COUNT;
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
@@ -562,8 +562,6 @@ export function createBattle(
         name: p2Name,
         team: Teams.pack(p2Sets),
     };
-
-    totalBattles += 1;
 
     const p1 = new TrainablePlayerAI(
         p1spec.name,
