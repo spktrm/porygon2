@@ -759,20 +759,26 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = 0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -1073,14 +1079,17 @@ function getArrayFromPublicPokemon(
 
     const position = candidate.ident.at(2);
     if (position === "a") {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            1;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 1;
     } else if (position === "b") {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            2;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 2;
     } else {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            0;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 0;
     }
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
@@ -1543,6 +1552,28 @@ function getVolatileStatusToken(id: string): number {
         }
     }
     throw new Error("Volatile status token not found");
+}
+
+class DynamicArray {
+    buffer: Int16Array;
+    currentCursor: number = 0;
+    prevCursor: number = 0;
+
+    constructor(length: number, increment: number) {
+        this.buffer = new Int16Array(length * increment);
+        this.currentCursor = 0;
+        this.prevCursor = 0;
+    }
+
+    setNextSlice(data: Int16Array) {
+        this.buffer.set(data, this.currentCursor);
+        this.prevCursor = this.currentCursor;
+        this.currentCursor += data.length;
+    }
+
+    setValue(index: number, value: number) {
+        this.buffer[this.prevCursor + index] = value;
+    }
 }
 
 export class EdgeBuffer {

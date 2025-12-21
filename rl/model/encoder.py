@@ -1,6 +1,7 @@
 import functools
 import math
 from functools import partial
+from venv import create
 
 import chex
 import flax.linen as nn
@@ -41,7 +42,7 @@ from rl.environment.protos.features_pb2 import (
 from rl.model.modules import (
     GatNet,
     SumEmbeddings,
-    Transformer,
+    Perceiver,
     TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
@@ -263,13 +264,21 @@ class Encoder(nn.Module):
 
         # Timestep wise graph attention layers
         self.local_timestep_encoder = GatNet(**self.cfg.timestep_gat.to_dict())
-
-        # Transformer encoders for processing sequences of entities and edges.
-        self.move_encoder = TransformerEncoder(**self.cfg.move_encoder.to_dict())
-        self.switch_encoder = TransformerEncoder(**self.cfg.switch_encoder.to_dict())
-        self.timestep_encoder = TransformerEncoder(
+        self.global_timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
+        self.public_latent_queries = self.param(
+            "public_latent_queries",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (16, entity_size),
+        )
+        self.public_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
+        self.private_latent_queries = self.param(
+            "private_latent_queries",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (16, entity_size),
+        )
+        self.private_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
 
         # Transformer Decoders
         self.state_queries = self.param(
@@ -277,10 +286,9 @@ class Encoder(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (4, entity_size),
         )
-        self.entity_everything_transformer = Transformer(
-            **self.cfg.entity_everything_transformer.to_dict()
-        )
-        self.entity_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
+        self.state_perceiver = Perceiver(**self.cfg.state_perceiver.to_dict())
+        self.state_decoder = TransformerDecoder(**self.cfg.state_decoder.to_dict())
+        self.action_decoder = TransformerDecoder(**self.cfg.action_decoder.to_dict())
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -865,7 +873,17 @@ class Encoder(nn.Module):
             ).reshape(-1, self.cfg.entity_size),
             0,
         )
-        return entity_embeddings, entity_mask
+
+        public_latent_mask = jnp.ones(
+            self.public_latent_queries.shape[0], dtype=jnp.bool
+        )
+        entity_embeddings = self.public_decoder(
+            self.public_latent_queries,
+            entity_embeddings,
+            create_attention_mask(public_latent_mask, entity_mask),
+        )
+
+        return entity_embeddings, public_latent_mask
 
     def _embed_private_entities(self, private_team: jax.Array):
         private_embeddings, private_context, mask = jax.vmap(
@@ -885,9 +903,21 @@ class Encoder(nn.Module):
             0,
         )
 
-        return self.switch_encoder(
-            entity_embeddings, create_attention_mask(entity_mask)
+        private_latent_mask = jnp.ones(
+            self.private_latent_queries.shape[0], dtype=jnp.bool
         )
+
+        latent_entity_embeddings = self.private_decoder(
+            self.private_latent_queries,
+            entity_embeddings,
+            create_attention_mask(private_latent_mask, entity_mask),
+        )
+
+        switch_embeddings = jnp.take(
+            entity_embeddings, jnp.arange(6) * entity_embeddings.shape[0] // 6, axis=0
+        )
+
+        return latent_entity_embeddings, switch_embeddings
 
     # Encode each timestep's features, including nodes and edges.
     def _embed_local_timestep(self, history: PlayerHistoryOutput):
@@ -963,7 +993,7 @@ class Encoder(nn.Module):
         attn_mask = create_attention_mask(valid_timestep_mask)
         attn_mask = attn_mask & jnp.expand_dims(causal_mask, axis=0)
 
-        global_timestep_embedding = self.timestep_encoder(
+        global_timestep_embedding = self.global_timestep_encoder(
             local_timestep_embedding,
             attn_mask=attn_mask,
             qkv_positions=timestep_positions,
@@ -1003,8 +1033,7 @@ class Encoder(nn.Module):
         return embedding
 
     def _embed_moves(self, moveset: jax.Array, move_mask: jax.Array) -> jax.Array:
-        move_embeddings = jax.vmap(self._embed_action)(moveset)
-        return self.move_encoder(move_embeddings, create_attention_mask(move_mask))
+        return jax.vmap(self._embed_action)(moveset)
 
     def _get_latest_timestep_embeddings(
         self,
@@ -1012,9 +1041,10 @@ class Encoder(nn.Module):
         timestep_mask: jax.Array,
         timestep_positions: jax.Array,
         timestep_arange: jax.Array,
+        num_timesteps: int = 16,
     ):
         upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
-        latest_timestep_indices = upper_index - jnp.arange(32)
+        latest_timestep_indices = upper_index - jnp.arange(num_timesteps)
         latest_timestep_indices_clipped = latest_timestep_indices.clip(min=0)
         latest_timestep_embeddings = jnp.take(
             timestep_embeddings, latest_timestep_indices_clipped, axis=0
@@ -1040,6 +1070,7 @@ class Encoder(nn.Module):
         timestep_positions: jax.Array,
         timestep_arange: jax.Array,
         private_embeddings: jax.Array,
+        switch_embeddings: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
@@ -1054,7 +1085,7 @@ class Encoder(nn.Module):
             )
         )
 
-        entity_embeddings = self.entity_everything_transformer(
+        state_embeddings = self.state_perceiver(
             entity_embeddings,
             contexts=[
                 (
@@ -1079,10 +1110,6 @@ class Encoder(nn.Module):
             ),
         )
 
-        switch_embeddings = jnp.take(
-            private_embeddings, jnp.arange(6) * private_embeddings.shape[0] // 6, axis=0
-        )
-
         switch_order_indices = np.array(
             [
                 InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
@@ -1094,18 +1121,22 @@ class Encoder(nn.Module):
             ]
         )
         switch_order_values = env_step.info[switch_order_indices]
-        private_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
-
-        important_indices = jnp.arange(12) * (entity_embeddings.shape[0] // 12)
-        entity_embeddings = jnp.take(entity_embeddings, important_indices, axis=0)
-        entity_mask = jnp.take(entity_mask, important_indices, axis=0)
+        switch_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
 
         query_mask = jnp.ones_like(self.state_queries[..., 0], dtype=jnp.bool)
-        state_embedding = self.entity_decoder(
+        state_embeddings = self.state_decoder(
             q=self.state_queries,
-            kv=entity_embeddings,
+            kv=state_embeddings,
             attn_mask=create_attention_mask(query_mask, entity_mask),
-        ).reshape(-1)
+        )
+        state_embedding = state_embeddings.reshape(-1)
+
+        action_embeddings = jnp.concatenate(
+            [move_embeddings, switch_embeddings], axis=0
+        )
+        action_embeddings = self.action_decoder(action_embeddings, state_embeddings)
+        move_embeddings = action_embeddings[: move_embeddings.shape[0]]
+        switch_embeddings = action_embeddings[move_embeddings.shape[0] :]
 
         return state_embedding, move_embeddings, switch_embeddings
 
@@ -1126,10 +1157,12 @@ class Encoder(nn.Module):
         )
         timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
-        private_embeddings = self._embed_private_entities(env_step.private_team[0])
+        private_embeddings, switch_embeddings = self._embed_private_entities(
+            env_step.private_team[0]
+        )
 
         state_embedding, move_embeddings, switch_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None, None)
         )(
             env_step,
             timestep_mask,
@@ -1138,6 +1171,7 @@ class Encoder(nn.Module):
             timestep_positions,
             timestep_arange,
             private_embeddings,
+            switch_embeddings,
         )
 
         return state_embedding, move_embeddings, switch_embeddings

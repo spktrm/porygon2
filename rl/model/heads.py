@@ -85,12 +85,10 @@ class PolicyLogitHeadInner(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(
             final_kernel_init=nn.initializers.orthogonal(1e-2),
             **self.cfg.logits.to_dict(),
         )
-        x = resnet(x)
         return logits(x)
 
 
