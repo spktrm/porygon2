@@ -264,18 +264,6 @@ class Encoder(nn.Module):
         self.global_timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
         )
-        self.public_latent_queries = self.param(
-            "public_latent_queries",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (16, entity_size),
-        )
-        self.public_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
-        self.private_latent_queries = self.param(
-            "private_latent_queries",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (16, entity_size),
-        )
-        self.private_decoder = TransformerDecoder(**self.cfg.entity_decoder.to_dict())
 
         # Transformer Decoders
         self.state_queries = self.param(
@@ -842,61 +830,11 @@ class Encoder(nn.Module):
         ]
         field_embedding, *_ = self._embed_field(env_step.field, public_team_side_token)
 
-        entity_mask = (
-            jnp.ones_like(revealed_embedding[..., 0], dtype=jnp.bool) & mask[..., None]
-        ).reshape(-1)
-        entity_embeddings = jnp.where(
-            entity_mask[:, None],
-            (revealed_embedding + field_embedding[:, None, :]).reshape(
-                -1, self.cfg.entity_size
-            ),
-            0,
-        )
-
-        public_latent_mask = jnp.ones(
-            self.public_latent_queries.shape[0], dtype=jnp.bool
-        )
-        entity_embeddings = self.public_decoder(
-            self.public_latent_queries,
-            entity_embeddings,
-            create_attention_mask(public_latent_mask, entity_mask),
-        )
-
-        return entity_embeddings, public_latent_mask
+        return revealed_embedding + field_embedding, mask
 
     def _embed_private_entities(self, private_team: jax.Array):
-        private_embeddings, private_context, mask = jax.vmap(
-            self._embed_private_entity
-        )(private_team)
-
-        entity_mask = (
-            jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool) & mask[..., None]
-        ).reshape(-1)
-        entity_embeddings = jnp.where(
-            entity_mask[:, None],
-            (
-                private_embeddings
-                + private_context[:, None, :]
-                + self.private_position_embedding
-            ).reshape(-1, self.cfg.entity_size),
-            0,
-        )
-
-        private_latent_mask = jnp.ones(
-            self.private_latent_queries.shape[0], dtype=jnp.bool
-        )
-
-        latent_entity_embeddings = self.private_decoder(
-            self.private_latent_queries,
-            entity_embeddings,
-            create_attention_mask(private_latent_mask, entity_mask),
-        )
-
-        switch_embeddings = jnp.take(
-            entity_embeddings, jnp.arange(6) * entity_embeddings.shape[0] // 6, axis=0
-        )
-
-        return latent_entity_embeddings, switch_embeddings
+        private_embeddings, mask = jax.vmap(self._embed_private_entity)(private_team)
+        return private_embeddings
 
     # Encode each timestep's features, including nodes and edges.
     def _embed_local_timestep(
@@ -1068,7 +1006,6 @@ class Encoder(nn.Module):
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
         timestep_arange: jax.Array,
-        private_embeddings: jax.Array,
         switch_embeddings: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
@@ -1076,7 +1013,7 @@ class Encoder(nn.Module):
         move_mask = jnp.ones_like(env_step.action_mask[:4])
         move_embeddings = self._embed_moves(env_step.moveset, move_mask)
 
-        private_mask = jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool)
+        private_mask = jnp.ones_like(switch_embeddings[..., 0], dtype=jnp.bool)
 
         latest_timestep_embeddings, latest_timestep_mask, latest_timestep_positions = (
             self._get_latest_timestep_embeddings(
@@ -1098,9 +1035,9 @@ class Encoder(nn.Module):
                     jnp.broadcast_to(current_position, move_embeddings.shape[:-1]),
                 ),
                 (
-                    private_embeddings,
+                    switch_embeddings,
                     create_attention_mask(entity_mask, private_mask),
-                    jnp.broadcast_to(current_position, private_embeddings.shape[:-1]),
+                    jnp.broadcast_to(current_position, switch_embeddings.shape[:-1]),
                 ),
             ],
             encoder_attn_mask=create_attention_mask(entity_mask, entity_mask),
@@ -1161,12 +1098,10 @@ class Encoder(nn.Module):
         )
         timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
-        private_embeddings, switch_embeddings = self._embed_private_entities(
-            env_step.private_team[0]
-        )
+        switch_embeddings = self._embed_private_entities(env_step.private_team[0])
 
         state_embedding, move_embeddings, switch_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
         )(
             env_step,
             timestep_mask,
@@ -1174,7 +1109,6 @@ class Encoder(nn.Module):
             timestep_embeddings,
             timestep_positions,
             timestep_arange,
-            private_embeddings,
             switch_embeddings,
         )
 

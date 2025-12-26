@@ -1961,7 +1961,6 @@ export class EventHandler implements Protocol.Handler {
         this.prevEdge = currentEdge.clone();
         this.latestEdge = new Edge(this.player);
 
-        console.log(this.turnOrder);
         const preprocessedEdge = this._preprocessEdge(currentEdge);
         this.turnOrder += 1;
         this.edgeBuffer.addEdge(preprocessedEdge);
