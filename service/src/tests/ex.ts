@@ -47,16 +47,13 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
 
 async function runBattle() {
     console.log("Creating battle...");
-    const { p1, p2 } = createBattle(
-        {
-            p1Name: "Bot1",
-            p2Name: "Bot2",
-            p1team: getSampleTeam("gen9ou"),
-            p2team: getSampleTeam("gen9ou"),
-            smogonFormat: "gen9ou",
-        },
-        true,
-    );
+    const { p1, p2 } = createBattle({
+        p1Name: "Bot1",
+        p2Name: "Bot2",
+        p1team: getSampleTeam("gen9ou"),
+        p2team: getSampleTeam("gen9ou"),
+        smogonFormat: "gen9ou",
+    });
 
     console.log("Starting asynchronous player controllers...");
     let trajectories: EnvironmentTrajectory[] = [];
