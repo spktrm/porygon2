@@ -178,9 +178,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.userName = userName;
 
-        this.eventHandler = new EventHandler(this);
         this.privateBattle = new Battle(new Generations(Dex), null, sets);
         this.publicBattle = new Battle(new Generations(Dex), null);
+        this.eventHandler = new EventHandler(this);
         this.done = false;
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
@@ -235,6 +235,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
         if (!key) return;
+
         if (key in this.eventHandler) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (this.eventHandler as any)[key](args, kwArgs);

@@ -128,7 +128,7 @@ class ResetRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ..., current_ckpt: _Optional[int] = ..., opponent_ckpt: _Optional[int] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
-    __slots__ = ("info", "action_mask", "wildcard_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid")
+    __slots__ = ("info", "action_mask", "wildcard_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
     INFO_FIELD_NUMBER: _ClassVar[int]
     ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
     WILDCARD_MASK_FIELD_NUMBER: _ClassVar[int]
@@ -143,6 +143,7 @@ class EnvironmentState(_message.Message):
     PRIVATE_TEAM_FIELD_NUMBER: _ClassVar[int]
     FIELD_FIELD_NUMBER: _ClassVar[int]
     RQID_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_PACKED_LENGTH_FIELD_NUMBER: _ClassVar[int]
     info: bytes
     action_mask: bytes
     wildcard_mask: bytes
@@ -157,7 +158,8 @@ class EnvironmentState(_message.Message):
     private_team: bytes
     field: bytes
     rqid: int
-    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., wildcard_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ...) -> None: ...
+    history_packed_length: int
+    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., wildcard_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
 
 class EnvironmentTrajectory(_message.Message):
     __slots__ = ("states",)

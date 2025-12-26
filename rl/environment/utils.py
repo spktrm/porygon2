@@ -27,6 +27,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
+    PlayerPackedHistoryOutput,
     PolicyHeadOutput,
 )
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
@@ -107,26 +108,28 @@ def process_state(
     state: EnvironmentState, max_history: int = NUM_HISTORY
 ) -> PlayerActorInput:
     history_length = state.history_length
+    history_packed_length = max(1, state.history_packed_length)
 
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
+    max_packed_history = 2 * max_history
 
     history_entity_public = padnstack(
         np.frombuffer(state.history_entity_public, dtype=np.int16).reshape(
-            (history_length, 12, NUM_ENTITY_PUBLIC_FEATURES)
+            (history_packed_length, NUM_ENTITY_PUBLIC_FEATURES)
         ),
-        max_history,
+        max_packed_history,
     ).astype(np.int32)
     history_entity_revealed = padnstack(
         np.frombuffer(state.history_entity_revealed, dtype=np.int16).reshape(
-            (history_length, 12, NUM_ENTITY_REVEALED_FEATURES)
+            (history_packed_length, NUM_ENTITY_REVEALED_FEATURES)
         ),
-        max_history,
+        max_packed_history,
     ).astype(np.int32)
     history_entity_edges = padnstack(
         np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
-            (history_length, 12, NUM_ENTITY_EDGE_FEATURES)
+            (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
         ),
-        max_history,
+        max_packed_history,
     ).astype(np.int32)
     history_field = padnstack(
         np.frombuffer(state.history_field, dtype=np.int16).reshape(
@@ -185,14 +188,16 @@ def process_state(
         action_mask=get_action_mask(state, num_active),
         wildcard_mask=get_tera_mask(state, num_active),
     )
-    history_step = PlayerHistoryOutput(
+    packed_history_step = PlayerPackedHistoryOutput(
         public=history_entity_public,
         revealed=history_entity_revealed,
         edges=history_entity_edges,
-        field=history_field,
     )
+    history_step = PlayerHistoryOutput(field=history_field)
 
-    return PlayerActorInput(env=env_step, history=history_step)
+    return PlayerActorInput(
+        env=env_step, packed_history=packed_history_step, history=history_step
+    )
 
 
 def get_ex_trajectory() -> PlayerActorInput:
@@ -202,6 +207,7 @@ def get_ex_trajectory() -> PlayerActorInput:
         states.append(processed_state.env)
     return PlayerActorInput(
         env=jax.tree.map(lambda *xs: np.stack(xs), *states),
+        packed_history=processed_state.packed_history,
         history=processed_state.history,
     )
 
@@ -209,9 +215,12 @@ def get_ex_trajectory() -> PlayerActorInput:
 def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     ts = get_ex_trajectory()
     env: PlayerEnvOutput = jax.tree.map(lambda x: x[:, None, ...], ts.env)
+    packed_history: PlayerPackedHistoryOutput = jax.tree.map(
+        lambda x: x[:, None, ...], ts.packed_history
+    )
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
     return (
-        PlayerActorInput(env=env, history=history),
+        PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
             value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
             action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),

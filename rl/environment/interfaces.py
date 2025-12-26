@@ -21,15 +21,19 @@ class PlayerEnvOutput(NamedTuple):
     wildcard_mask: ArrayLike = ()
 
 
-class PlayerHistoryOutput(NamedTuple):
+class PlayerPackedHistoryOutput(NamedTuple):
     public: ArrayLike = ()
     revealed: ArrayLike = ()
     edges: ArrayLike = ()
+
+
+class PlayerHistoryOutput(NamedTuple):
     field: ArrayLike = ()
 
 
 class PlayerActorInput(NamedTuple):
     env: PlayerEnvOutput = PlayerEnvOutput()
+    packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
@@ -108,6 +112,7 @@ class Trajectory(NamedTuple):
     builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
 
     player_transitions: PlayerTransition = PlayerTransition()
+    player_packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
