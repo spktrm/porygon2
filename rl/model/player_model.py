@@ -131,7 +131,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         # Get current state and action embeddings from the encoder
         state_embedding, move_embeddings, switch_embeddings = self.encoder(
-            actor_input.env, actor_input.history
+            actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(

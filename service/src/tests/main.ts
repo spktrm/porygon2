@@ -78,9 +78,10 @@ async function runBattle() {
         p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou"),
-        smogonFormat: "gen9randomdoublesbattle",
+        // smogonFormat: "gen9randomdoublesbattle",
+        smogonFormat: "gen9ou",
     };
-    const { p1, p2 } = createBattle(battleOptions, false);
+    const { p1, p2 } = createBattle(battleOptions, true);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);

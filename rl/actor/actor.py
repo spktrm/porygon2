@@ -53,6 +53,7 @@ class Actor:
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
             env=timestep.env,
+            packed_history=clip_history(timestep.packed_history, resolution=128),
             history=clip_history(timestep.history, resolution=128),
         )
 

@@ -86,6 +86,7 @@ message EnvironmentState {
   bytes private_team = 12;
   bytes field = 13;
   int32 rqid = 14;
+  int32 history_packed_length = 15;
 }
 
 message EnvironmentTrajectory {

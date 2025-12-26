@@ -96,7 +96,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.timestep_encoder.need_pos = False
+    cfg.encoder.timestep_encoder.need_pos = True
 
     cfg.encoder.entity_decoder = ConfigDict()
     set_attributes(cfg.encoder.entity_decoder, **transformer_decoder_kwargs)

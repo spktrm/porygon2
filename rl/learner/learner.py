@@ -237,11 +237,14 @@ def train_step(
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
+    player_packed_history = batch.player_packed_history
     builder_transitions = batch.builder_transitions
     builder_history = batch.builder_history
 
     player_actor_input = PlayerActorInput(
-        env=player_transitions.env_output, history=player_history
+        env=player_transitions.env_output,
+        packed_history=player_packed_history,
+        history=player_history,
     )
     player_target_pred = promote_map(
         player_state.apply_fn(
@@ -733,7 +736,7 @@ class Learner:
         self,
         batch: list[Trajectory],
         player_transition_resolution: int = 50,
-        player_history_resolution: int = 256,
+        player_history_resolution: int = 128,
     ):
         stacked_trajectory: Trajectory = jax.tree.map(
             lambda *xs: np.stack(xs, axis=1), *batch
@@ -753,7 +756,10 @@ class Learner:
             player_transitions=jax.tree.map(
                 lambda x: x[:num_valid], stacked_trajectory.player_transitions
             ),
-            # builder_history=stacked_trajectory.builder_history,
+            player_packed_history=clip_history(
+                stacked_trajectory.player_packed_history,
+                resolution=player_history_resolution,
+            ),
             player_history=clip_history(
                 stacked_trajectory.player_history, resolution=player_history_resolution
             ),
