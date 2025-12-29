@@ -24,12 +24,7 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import (
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -160,7 +155,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

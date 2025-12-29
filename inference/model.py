@@ -75,6 +75,7 @@ class InferenceModel:
         self.step(
             PlayerActorInput(
                 env=jax.tree.map(lambda x: x[0], ex_actor_input.env),
+                packed_history=ex_actor_input.packed_history,
                 history=ex_actor_input.history,
             )
         )  # warm up the model

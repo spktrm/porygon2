@@ -88,25 +88,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_post_ffw_norm=decoder_use_post_ffw_norm,
     )
 
-    cfg.encoder.timestep_gat = ConfigDict()
-    cfg.encoder.timestep_gat.out_dim = entity_size
-    cfg.encoder.timestep_gat.num_layers = 1
-    cfg.encoder.timestep_gat.num_heads = num_heads
-    cfg.encoder.timestep_gat.max_edges = 4
-
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
-    cfg.encoder.entity_decoder = ConfigDict()
-    set_attributes(cfg.encoder.entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.entity_decoder.need_pos = False
-
     cfg.encoder.state_perceiver = ConfigDict()
     set_attributes(cfg.encoder.state_perceiver, **transformer_decoder_kwargs)
-    cfg.encoder.state_perceiver.num_layers = 4
+    cfg.encoder.state_perceiver.num_layers = 2
     cfg.encoder.state_perceiver.encoder_need_pos = True
     cfg.encoder.state_perceiver.decoder_need_pos = True
+    cfg.encoder.state_perceiver.share_weights = True
 
     cfg.encoder.state_decoder = ConfigDict()
     set_attributes(cfg.encoder.state_decoder, **transformer_decoder_kwargs)

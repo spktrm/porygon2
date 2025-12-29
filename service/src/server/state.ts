@@ -1336,15 +1336,19 @@ class Edge {
 
         this.entity2Idx = new Map<string, number>();
 
+        const numLocalEdges = 8;
         this.entityPublicData = new DynamicArray(
-            12,
+            numLocalEdges,
             numPublicEntityNodeFeatures,
         );
         this.entityRevealedData = new DynamicArray(
-            12,
+            numLocalEdges,
             numRevealedEntityNodeFeatures,
         );
-        this.entityEdgeData = new DynamicArray(12, numEntityEdgeFeatures);
+        this.entityEdgeData = new DynamicArray(
+            numLocalEdges,
+            numEntityEdgeFeatures,
+        );
         this.fieldData = new DynamicArray(1, numFieldFeatures);
 
         this.unkEntityIndex = 0;
@@ -2602,17 +2606,22 @@ export class EventHandler implements Protocol.Handler {
     }
 
     "|-sidestart|"(args: Args["|-sidestart|"]) {
-        // const [argName, sideId, conditionId] = args;
-        // const playerIndex = this.player.getPlayerIndex();
-        // if (playerIndex === undefined) {
-        //     throw new Error();
-        // }
-        // const side = this.getSide(sideId);
-        // const effect = this.getCondition(conditionId);
-        // for (const pokemon of side.team) {
-        //     this.latestEdge.updateMinorArgs({ argName, pokemon });
-        //     this.latestEdge.updateEdgeFromOf({ effect, pokemon });
-        // }
+        const [argName, sideId, conditionId] = args;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+
+        const side = this.getSide(sideId);
+        const effect = this.getCondition(conditionId);
+
+        for (const pokemon of side.active) {
+            if (!pokemon) {
+                continue;
+            }
+            this.latestEdge.updateMinorArgs({ argName, pokemon });
+            this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        }
     }
 
     "|-sideend|"(args: Args["|-sideend|"]) {
@@ -2626,7 +2635,10 @@ export class EventHandler implements Protocol.Handler {
         const side = this.getSide(sideId);
         const effect = this.getCondition(conditionId);
 
-        for (const pokemon of side.team) {
+        for (const pokemon of side.active) {
+            if (!pokemon) {
+                continue;
+            }
             this.latestEdge.updateMinorArgs({ argName, pokemon });
             this.latestEdge.updateEdgeFromOf({ effect, pokemon });
         }
@@ -3774,9 +3786,7 @@ export class StateHandler {
     }
 
     getPrivateTeam(playerIndex: number): Int16Array {
-        let sets =
-            this.player.privateBattle.sides[playerIndex].sets ??
-            this.player.privateBattle.sides[1 - playerIndex].sets;
+        let sets = this.player.sets;
         if (sets === undefined) {
             throw new Error("Team is undefined");
         }
@@ -3799,7 +3809,7 @@ export class StateHandler {
                 return a.ident.localeCompare(b.ident);
             })) {
                 const name = toID(member.speciesForme);
-                const matchedSet = sets.find((set) => {
+                const matchedSet = this.player.sets?.find((set) => {
                     const setSpecies = toID(set.species);
                     return (
                         setSpecies === name ||

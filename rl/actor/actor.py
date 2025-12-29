@@ -13,7 +13,7 @@ from rl.environment.interfaces import (
 from rl.environment.protos.service_pb2 import Action, ActionEnum
 from rl.environment.utils import clip_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
-from rl.learner.learner import Learner
+from rl.learner.learner import Learner, clip_packed_history
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 ACTION_MAPPING = {
@@ -53,7 +53,7 @@ class Actor:
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
             env=timestep.env,
-            packed_history=clip_history(timestep.packed_history, resolution=128),
+            packed_history=clip_packed_history(timestep.packed_history, resolution=128),
             history=clip_history(timestep.history, resolution=128),
         )
 
@@ -155,6 +155,7 @@ class Actor:
             builder_transitions=builder_trajectory,
             builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
+            player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
         )
 
