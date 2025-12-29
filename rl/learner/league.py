@@ -12,9 +12,12 @@ _psfp_weightings = {
     "linear": lambda x: 1 - x,
     "linear_capped": lambda x: np.minimum(0.5, 1 - x),
     "squared": lambda x: (1 - x) ** 2,
+    "inverse_squared": lambda x: x**2,
 }
 
-PsfpWeighting = Literal["variance", "linear", "linear_capped", "squared"]
+PsfpWeighting = Literal[
+    "variance", "linear", "linear_capped", "squared", "inverse_squared"
+]
 
 
 def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndarray:
@@ -166,7 +169,7 @@ class League:
 
 
 def main():
-    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="linear_capped"))
+    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="inverse_squared"))
 
 
 if __name__ == "__main__":

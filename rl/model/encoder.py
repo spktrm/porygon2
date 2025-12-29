@@ -1059,20 +1059,20 @@ class Encoder(nn.Module):
         switch_order_values = env_step.info[switch_order_indices]
         switch_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
 
-        query_mask = jnp.ones_like(self.state_queries[..., 0], dtype=jnp.bool)
-        state_embeddings = self.state_decoder(
-            q=self.state_queries,
-            kv=state_embeddings,
-            attn_mask=create_attention_mask(query_mask, entity_mask),
-        )
-        state_embedding = state_embeddings.reshape(-1)
-
         action_embeddings = jnp.concatenate(
             [move_embeddings, switch_embeddings], axis=0
         )
         action_embeddings = self.action_decoder(action_embeddings, state_embeddings)
         move_embeddings = action_embeddings[: move_embeddings.shape[0]]
         switch_embeddings = action_embeddings[move_embeddings.shape[0] :]
+
+        query_mask = jnp.ones_like(self.state_queries[..., 0], dtype=jnp.bool)
+        state_embeddings = self.state_decoder(
+            q=self.state_queries.astype(self.cfg.dtype),
+            kv=state_embeddings,
+            attn_mask=create_attention_mask(query_mask, entity_mask),
+        )
+        state_embedding = state_embeddings.reshape(-1)
 
         return state_embedding, move_embeddings, switch_embeddings
 

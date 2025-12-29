@@ -45,7 +45,7 @@ class Porygon2LearnerConfig:
     num_actors: int = 16
     num_eval_actors: int = 2
     unroll_length: int = 128
-    replay_buffer_capacity: int = 512
+    replay_buffer_capacity: int = 2048
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -53,6 +53,7 @@ class Porygon2LearnerConfig:
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
+    minimum_historical_player_steps: int = 300_000
     league_size: int = 16
 
     # Batch iteration params
@@ -86,12 +87,12 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 0.5
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.01
-    player_entropy_loss_coef: float = 0.01
+    player_entropy_loss_coef: float = 0.001
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.01
-    builder_kl_prior_loss_coef: float = 1.0
+    builder_kl_prior_loss_coef: float = 0.01
     builder_entropy_loss_coef: float = 0.01
 
     # Smogon Generation
@@ -262,43 +263,68 @@ def save_state(
     return save_path
 
 
-def load_train_state(
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    from_scratch: bool = False,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
+    """Finds the most recent checkpoint file."""
     save_path = f"./ckpts/gen{learner_config.generation}/"
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    return get_most_recent_file(save_path)
 
-    latest_ckpt = get_most_recent_file(save_path)
-    if not latest_ckpt or from_scratch:
-        if from_scratch:
-            print("Starting training from scratch.")
-        league = League(
-            main_player=ParamsContainer(
+
+def _init_league(
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+) -> League:
+    """Creates a fresh League instance."""
+    return League(
+        main_player=ParamsContainer(
+            player_frame_count=np.array(player_state.frame_count).item(),
+            builder_frame_count=np.array(builder_state.frame_count).item(),
+            step_count=MAIN_KEY,
+            player_params=player_state.params,
+            builder_params=builder_state.params,
+        ),
+        players=[
+            ParamsContainer(
                 player_frame_count=np.array(player_state.frame_count).item(),
                 builder_frame_count=np.array(builder_state.frame_count).item(),
-                step_count=MAIN_KEY,
+                step_count=np.array(player_state.step_count).item(),
                 player_params=player_state.params,
                 builder_params=builder_state.params,
-            ),
-            players=[
-                ParamsContainer(
-                    player_frame_count=np.array(player_state.frame_count).item(),
-                    builder_frame_count=np.array(builder_state.frame_count).item(),
-                    step_count=np.array(player_state.step_count).item(),
-                    player_params=player_state.params,
-                    builder_params=builder_state.params,
-                )
-            ],
-            league_size=learner_config.league_size,
-        )
-        return player_state, builder_state, league
+            )
+        ],
+        league_size=learner_config.league_size,
+    )
 
-    print(f"loading checkpoint from {latest_ckpt}")
-    with open(latest_ckpt, "rb") as f:
+
+# --- The 3 Loading Functions ---
+
+
+def load_from_scratch(
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+    """
+    No-op on state; simply initializes a fresh league.
+    """
+    print("Starting training from scratch.")
+    league = _init_league(learner_config, player_state, builder_state)
+    return player_state, builder_state, league
+
+
+def load_from_checkpoint(
+    ckpt_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+    """
+    Full restoration: loads params, target_params, opt_state, step counts, and league.
+    """
+    print(f"Loading checkpoint from {ckpt_path}")
+    with open(ckpt_path, "rb") as f:
         ckpt_data = pickle.load(f)
 
     print("Checkpoint data:")
@@ -306,29 +332,7 @@ def load_train_state(
     ckpt_builder_state = ckpt_data.get("builder_state")
     ckpt_league_bytes = ckpt_data.get("league")
 
-    if ckpt_league_bytes is not None:
-        league = League.deserialize(ckpt_league_bytes)
-    else:
-        league = League(
-            main_player=ParamsContainer(
-                player_frame_count=np.array(player_state.frame_count).item(),
-                builder_frame_count=np.array(builder_state.frame_count).item(),
-                step_count=MAIN_KEY,
-                player_params=player_state.params,
-                builder_params=builder_state.params,
-            ),
-            players=[
-                ParamsContainer(
-                    player_frame_count=np.array(player_state.frame_count).item(),
-                    builder_frame_count=np.array(builder_state.frame_count).item(),
-                    step_count=np.array(player_state.step_count).item(),
-                    player_params=player_state.params,
-                    builder_params=builder_state.params,
-                )
-            ],
-            league_size=learner_config.league_size,
-        )
-
+    # Debug prints (excluding heavy arrays)
     pprint(
         {
             k: v
@@ -344,6 +348,14 @@ def load_train_state(
         }
     )
 
+    # Restore League
+    if ckpt_league_bytes is not None:
+        league = League.deserialize(ckpt_league_bytes)
+    else:
+        # Fallback if league is missing in ckpt
+        league = _init_league(learner_config, player_state, builder_state)
+
+    # Fully replace player state
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
@@ -354,6 +366,7 @@ def load_train_state(
         target_adv_std=ckpt_player_state["target_adv_std"],
     )
 
+    # Fully replace builder state
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
@@ -363,3 +376,68 @@ def load_train_state(
     )
 
     return player_state, builder_state, league
+
+
+def load_from_params(
+    ckpt_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+    """
+    Params only: Loads ckpt params into BOTH params and target_params.
+    Resets opt_state and counts (by keeping the input state's version of those).
+    """
+    print(f"Loading params only from {ckpt_path}")
+    with open(ckpt_path, "rb") as f:
+        ckpt_data = pickle.load(f)
+
+    ckpt_player_state = ckpt_data.get("player_state")
+    ckpt_builder_state = ckpt_data.get("builder_state")
+
+    # Replace params AND target_params with the checkpoint's params
+    # We do NOT replace opt_state or frame_counts, effectively resetting training progress
+    player_state = player_state.replace(
+        params=ckpt_player_state["params"],
+        target_params=ckpt_player_state["params"],  # Init target with same params
+    )
+
+    builder_state = builder_state.replace(
+        params=ckpt_builder_state["params"],
+        target_params=ckpt_builder_state["params"],  # Init target with same params
+    )
+
+    # Initialize a fresh league since we are effectively starting a new run with existing weights
+    league = _init_league(learner_config, player_state, builder_state)
+
+    return player_state, builder_state, league
+
+
+def load_train_state(
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+    mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+
+    latest_ckpt = _get_checkpoint_path(learner_config)
+
+    # 1. Force Scratch
+    if mode == "scratch":
+        return load_from_scratch(learner_config, player_state, builder_state)
+
+    # 2. No checkpoint found -> Fallback to Scratch
+    if not latest_ckpt:
+        print("No checkpoint found. Defaulting to scratch.")
+        return load_from_scratch(learner_config, player_state, builder_state)
+
+    # 3. Load Params Only
+    if mode == "params":
+        return load_from_params(
+            latest_ckpt, learner_config, player_state, builder_state
+        )
+
+    # 4. Standard Checkpoint Load (Default)
+    return load_from_checkpoint(
+        latest_ckpt, learner_config, player_state, builder_state
+    )

@@ -150,7 +150,7 @@ def main():
     )
 
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state
+        learner_config, player_state, builder_state, mode="checkpoint"
     )
 
     wandb_run = wandb.init(

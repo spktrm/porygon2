@@ -146,6 +146,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
     publicBattle: Battle;
+    sets: PokemonSet[] | undefined;
     eventHandler: EventHandler;
 
     tasks: TaskQueueSystem<StepRequest>;
@@ -178,8 +179,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.userName = userName;
 
-        this.privateBattle = new Battle(new Generations(Dex), null, sets);
+        this.privateBattle = new Battle(new Generations(Dex), null);
         this.publicBattle = new Battle(new Generations(Dex), null);
+        this.sets = sets;
         this.eventHandler = new EventHandler(this);
         this.done = false;
 

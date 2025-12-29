@@ -19,13 +19,13 @@ class HeadParams(NamedTuple):
     min_p: float = 0.0
 
 
-def sample_categorical(log_policy: jax.Array, rng_key: jax.Array, min_p: float = 0):
+def sample_categorical(log_probs: jax.Array, rng_key: jax.Array, min_p: float = 0):
     # Fast path: no min_p adjustment, sample directly from logits.
     if min_p <= 0.0:
-        return jax.random.categorical(rng_key, log_policy, axis=-1)
+        return jax.random.categorical(rng_key, log_probs, axis=-1)
 
     # Convert to probs, clamp, renormalize, then go back to log-space for sampling.
-    probs = jnp.exp(log_policy)
+    probs = jnp.exp(log_probs)
     probs = jnp.where(probs >= min_p * probs.max(), probs, 0)
     probs = probs / probs.sum(axis=-1, keepdims=True)
 
@@ -52,7 +52,7 @@ class PolicyQKHead(nn.Module):
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
         logits = qk_logits(resnet(query_embedding)[None], key_embeddings).squeeze(0)
-        logits = logits / head_params.temp
+        logits = logits * (1 / (head_params.temp + 1e-8))
 
         if valid_mask is None:
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)

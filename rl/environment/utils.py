@@ -4,6 +4,7 @@ import jax
 import numpy as np
 import rlax
 
+from embeddings.packed_set import SpeciesEnum
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
@@ -30,7 +31,11 @@ from rl.environment.interfaces import (
     PlayerPackedHistoryOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
+from rl.environment.protos.features_pb2 import (
+    EntityRevealedNodeFeature,
+    FieldFeature,
+    InfoFeature,
+)
 from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState
 
 T = TypeVar("T")
@@ -69,9 +74,32 @@ def clip_history(
     ).item()
 
     # Round history length up to the nearest multiple of resolution
-    rounded_length = int(np.ceil(history_length / resolution) * resolution)
+    rounded_length = max(
+        resolution, int(np.ceil(history_length / resolution) * resolution)
+    )
 
     return jax.tree.map(lambda x: x[:rounded_length], history)
+
+
+def clip_packed_history(
+    packed_history: PlayerPackedHistoryOutput, resolution: int = 64
+) -> PlayerPackedHistoryOutput:
+    history_length = np.max(
+        (
+            packed_history.revealed[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum(0),
+        axis=0,
+    ).item()
+
+    # Round history length up to the nearest multiple of resolution
+    rounded_length = max(
+        resolution, int(np.ceil(history_length / resolution) * resolution)
+    )
+
+    return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 
 def get_action_mask(state: EnvironmentState, num_active: int):
