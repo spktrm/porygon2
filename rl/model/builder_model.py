@@ -38,7 +38,12 @@ from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams, PolicyQKHead, RegressionValueLogitHead
-from rl.model.modules import SumEmbeddings, TransformerEncoder, one_hot_concat_jax
+from rl.model.modules import (
+    FiLMGenerator,
+    SumEmbeddings,
+    TransformerEncoder,
+    one_hot_concat_jax,
+)
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
@@ -94,6 +99,9 @@ class Porygon2BuilderModel(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (1, entity_size),
         )
+
+        self.species_film_generator = FiLMGenerator(entity_size)
+        self.packed_set_film_generator = FiLMGenerator(entity_size)
 
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
 
@@ -251,9 +259,13 @@ class Porygon2BuilderModel(nn.Module):
 
         value_head = self._forward_value_head(current_embedding)
 
-        species_query = current_embedding
+        species_gamma, species_beta = self.species_film_generator(
+            current_embedding[None]
+        )
+        species_keys = species_gamma * species_keys + species_beta
+
         species_head = self.species_head(
-            species_query,
+            current_embedding,
             species_keys,
             actor_output.species_head,
             actor_env.species_mask,
@@ -269,13 +281,13 @@ class Porygon2BuilderModel(nn.Module):
         packed_sets = SET_TOKENS[self.cfg.generation]["ou_all_formats"][
             species_head.action_index
         ]
+        packed_set_gamma, packed_set_beta = self.packed_set_film_generator(
+            current_embedding[None]
+        )
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
-
-        species_embedding = jnp.take(species_keys, species_head.action_index, axis=0)
-        packed_set_query = self.packed_set_query_merge(species_query, species_embedding)
-
+        packed_set_keys = packed_set_keys * packed_set_gamma + packed_set_beta
         packed_set_head = self.packed_set_head(
-            packed_set_query,
+            current_embedding,
             packed_set_keys,
             actor_output.packed_set_head,
             packed_set_mask,

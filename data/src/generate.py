@@ -6,14 +6,13 @@ import math
 import os
 import re
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import requests
-from sklearn.metrics import silhouette_score
 
 # -----------------------------------------------------------------------------
 # Scikit-Learn Imports
@@ -21,12 +20,13 @@ from sklearn.metrics import silhouette_score
 try:
     import warnings
 
-    from sklearn.cluster import KMeans
+    from sklearn.cluster import MiniBatchKMeans
     from sklearn.decomposition import PCA
+    from sklearn.metrics import silhouette_score
     from sklearn.preprocessing import LabelBinarizer, MultiLabelBinarizer
 
-    # Suppress the specific convergence warning to keep output clean
-    warnings.filterwarnings("ignore", message="Number of distinct clusters")
+    # Suppress warnings for cleaner output
+    warnings.filterwarnings("ignore")
 except ImportError:
     raise ImportError(
         "This script requires scikit-learn. Please run: pip install scikit-learn"
@@ -45,53 +45,6 @@ def _esp_k(odds: np.ndarray, k: int) -> float:
         for d in range(upto, 0, -1):
             E[d] += o * E[d - 1]
     return float(E[k])
-
-
-def _esp_suffix_table(odds: np.ndarray, k: int) -> np.ndarray:
-    m = odds.shape[0]
-    S = np.zeros((m + 1, k + 1), dtype=np.float64)
-    S[m, 0] = 1.0
-    for i in range(m - 1, -1, -1):
-        S[i, 0] = 1.0
-        oi = odds[i]
-        for d in range(1, k + 1):
-            S[i, d] = S[i + 1, d] + oi * S[i + 1, d - 1]
-    return S
-
-
-def _sample_unordered_k_from_marginals(
-    moves: List[str], probs: np.ndarray, k: int, rng: np.random.Generator
-) -> Tuple[Tuple[str, ...], float]:
-    if k == 0:
-        return (), 1.0
-    p = np.clip(probs.astype(np.float64), 1e-12, 1 - 1e-12)
-    odds = p / (1.0 - p)
-    S = _esp_suffix_table(odds, k)
-    e_k_total = S[0, k]
-
-    chosen_idx = []
-    remain_to_pick = k
-    m = len(moves)
-
-    for i in range(m):
-        if remain_to_pick == 0:
-            break
-        num = odds[i] * S[i + 1, remain_to_pick - 1]
-        den = S[i, remain_to_pick]
-        take_prob = (num / den) if den > 0 else 0.0
-        if rng.random() < take_prob:
-            chosen_idx.append(i)
-            remain_to_pick -= 1
-
-    if remain_to_pick > 0:
-        remaining = [j for j in range(m) if j not in chosen_idx]
-        remaining.sort(key=lambda j: odds[j], reverse=True)
-        chosen_idx.extend(remaining[:remain_to_pick])
-
-    chosen_idx = tuple(chosen_idx)
-    chosen_moves = tuple(sorted([moves[i] for i in chosen_idx]))
-    logp = float(np.sum(np.log(odds[list(chosen_idx)]))) - math.log(e_k_total)
-    return chosen_moves, math.exp(logp)
 
 
 # -----------------------------------------------------------------------------
@@ -168,7 +121,9 @@ class PokemonSetSampler:
             return [(tuple(), 1.0)]
         L = (self.move_probs >= thresh).sum()
         L = max(L, self.k_moves)
-        L = min(L, 60)
+
+        # Optimization: Limit search space for combinations
+        L = min(L, 30)
 
         order = np.argsort(-self.move_probs)
         idxL = order[:L]
@@ -190,7 +145,7 @@ class PokemonSetSampler:
             out.append((chosen_names, p))
         return out
 
-    def _generate_raw_pool(self, N: int = 8000) -> List[Dict[str, Any]]:
+    def _generate_raw_pool(self, N: int) -> List[Dict[str, Any]]:
         if self.abilities.probs.size == 0 or self.spreads.probs.size == 0:
             return []
 
@@ -257,10 +212,13 @@ class PokemonSetSampler:
         best_score = -1.0
 
         for k in candidate_ks:
-            km = KMeans(n_clusters=k, random_state=42, n_init=3, max_iter=100)
+            km = MiniBatchKMeans(
+                n_clusters=k, random_state=42, n_init=3, batch_size=256
+            )
             labels = km.fit_predict(X)
+
             try:
-                score = silhouette_score(X, labels, sample_size=1000)
+                score = silhouette_score(X, labels, sample_size=500)
             except ValueError:
                 score = -1.0
 
@@ -270,45 +228,108 @@ class PokemonSetSampler:
 
         return int(best_k)
 
-    def sample_kmeans(
-        self, total_slots: int = 4096, variance_threshold: float = 0.90
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    def _parse_spread_features(
+        self, spread_str: str
+    ) -> Tuple[str, List[float], List[float]]:
         """
-        Clustering sampling that respects a variance (mass) threshold per cluster.
+        Parses a spread string (e.g., 'Adamant:252/0/0/252/4/0') into components.
+        Returns: (Nature, EVs[6], IVs[6])
+        """
+        parts = spread_str.split(":")
+        nature = parts[0]
+        if len(parts) > 1:
+            nums = parts[1].split("/")
+            # Parse EVs
+            evs = []
+            for n in nums:
+                try:
+                    evs.append(float(n))
+                except ValueError:
+                    evs.append(0.0)
+            # Pad to 6
+            while len(evs) < 6:
+                evs.append(0.0)
+        else:
+            evs = [0.0] * 6
 
-        Args:
-            total_slots: Hard limit on the final number of sets (safety cap).
-            variance_threshold: The percentage (0.0 - 1.0) of probability mass
-                                to capture within each cluster before stopping.
-        """
-        raw_pool = self._generate_raw_pool(N=total_slots**2)
+        # Standard stats data usually implies 31 IVs unless specified in specific formats (which this parser simplifies)
+        # We return 31s for IVs as default
+        ivs = [31.0] * 6
+
+        return nature, evs, ivs
+
+    def sample_kmeans(
+        self, total_slots: int = 1024, variance_threshold: float = 0.95
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+
+        # Adaptive sampling size
+        n_m = len(self.move_names)
+        n_i = len(self.items.names)
+        complexity = n_m * n_i
+
+        if complexity < 500:
+            N_adapt = 1500
+        elif complexity < 5000:
+            N_adapt = 3500
+        else:
+            N_adapt = 6500
+
+        raw_pool = self._generate_raw_pool(N=N_adapt)
 
         stats = {"clusters": 0, "unique": 0, "mass": 0.0, "total_sets": 0}
 
         if not raw_pool:
             return [], stats
 
-        # Vectorization
+        # ---------------------------------------------------------------------
+        # Feature Encoding
+        # ---------------------------------------------------------------------
+
+        # 1. Moves (Multi-Label)
         mlb = MultiLabelBinarizer()
         moves_matrix = mlb.fit_transform([p["moves"] for p in raw_pool])
 
+        # 2. Simple Categoricals (One-Hot)
         def encode_col(key):
             lb = LabelBinarizer()
             col_data = [p.get(key, "Nothing") for p in raw_pool]
-            mat = lb.fit_transform(col_data)
-            return mat
+            return lb.fit_transform(col_data)
 
         item_mat = encode_col("item")
         ability_mat = encode_col("ability")
-        spread_mat = encode_col("spread")
 
-        X = np.hstack((moves_matrix, item_mat, ability_mat, spread_mat))
+        # 3. Complex Spread Encoding (Numerical Split)
+        natures = []
+        ev_matrix = []
+        iv_matrix = []
 
-        # PCA & KMeans
+        for p in raw_pool:
+            spr = p.get("spread", "")
+            nat, evs, ivs = self._parse_spread_features(spr)
+            natures.append(nat)
+
+            # Normalize EVs by 512, IVs by 31
+            ev_matrix.append([x / 512.0 for x in evs])
+            iv_matrix.append([x / 31.0 for x in ivs])
+
+        lb_nature = LabelBinarizer()
+        nature_mat = lb_nature.fit_transform(natures)
+        ev_mat_np = np.array(ev_matrix, dtype=np.float32)
+        iv_mat_np = np.array(iv_matrix, dtype=np.float32)
+
+        # Concatenate all features
+        # [Moves | Items | Abilities | Nature | EVs | IVs]
+        X = np.hstack(
+            (moves_matrix, item_mat, ability_mat, nature_mat, ev_mat_np, iv_mat_np)
+        )
+
+        # ---------------------------------------------------------------------
+        # Clustering
+        # ---------------------------------------------------------------------
         n_samples = X.shape[0]
         unique_rows = np.unique(X, axis=0).shape[0]
 
-        n_components = min(n_samples, X.shape[1], 30)
+        n_components = min(n_samples, X.shape[1], 128)
         if n_components > 0:
             pca = PCA(n_components=n_components, random_state=42)
             X_reduced = pca.fit_transform(X)
@@ -323,46 +344,33 @@ class PokemonSetSampler:
             k_clusters = self._find_optimal_k(X_reduced, max_possible_k)
 
         if k_clusters > 1:
-            kmeans = KMeans(n_clusters=k_clusters, random_state=42, n_init=10)
+            kmeans = MiniBatchKMeans(
+                n_clusters=k_clusters, random_state=42, n_init=3, batch_size=256
+            )
             labels = kmeans.fit_predict(X_reduced)
         else:
             labels = np.zeros(n_samples, dtype=int)
 
-        # -------------------------------------------------------------
-        # VARIANCE CAPTURE LOGIC
-        # -------------------------------------------------------------
-
-        # Group sets by cluster ID
         clusters = defaultdict(list)
         for i, label in enumerate(labels):
             clusters[label].append(raw_pool[i])
 
         final_sets = []
 
-        # Process each cluster independently
         for _, cluster_sets in clusters.items():
-            # Sort by probability descending (most important sets first)
             cluster_sets.sort(key=lambda x: x["prob"], reverse=True)
 
-            # Calculate total mass in this specific cluster
             total_cluster_mass = sum(s["prob"] for s in cluster_sets)
-
-            # Determine cutoff mass
             target_mass = total_cluster_mass * variance_threshold
 
             current_captured = 0.0
 
-            # Select sets until we hit the threshold
             for s in cluster_sets:
                 final_sets.append(s)
                 current_captured += s["prob"]
                 if current_captured >= target_mass:
                     break
 
-        # -------------------------------------------------------------
-
-        # Optional: If we somehow exceeded the hard cap significantly, trim the lowest prob ones
-        # (Though usually variance thresholding results in fewer sets than the cap)
         if len(final_sets) > total_slots:
             final_sets.sort(key=lambda x: x["prob"], reverse=True)
             final_sets = final_sets[:total_slots]
@@ -454,8 +462,6 @@ def process_species(args: Tuple) -> Tuple[str, List[str], Dict[str, Any]]:
     species, stats, slots = args
     sampler = PokemonSetSampler(stats)
 
-    # Capture 95% of the variance (probability mass) per cluster
-    # 'slots' acts as a safety hard-cap
     many_samples, stats_info = sampler.sample_kmeans(
         total_slots=slots, variance_threshold=0.95
     )
@@ -474,7 +480,8 @@ ALL_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
 
 
 def main():
-    MAX_WORKERS = 4
+    # Reverted to ThreadPoolExecutor as requested
+    MAX_WORKERS = os.cpu_count() or 4
 
     for generation in range(9, 10):
         all_formats = {f: defaultdict(list) for f in ALL_FORMATS}
@@ -492,8 +499,8 @@ def main():
             for species, stats in pokemon_data.items():
                 tasks.append((species, stats, 1024))
 
+            # ThreadPoolExecutor used here
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                # Use as_completed to process results as they finish
                 future_to_species = {
                     executor.submit(process_species, t): t[0] for t in tasks
                 }
@@ -503,14 +510,12 @@ def main():
                         species, packed_sets, stats = future.result()
 
                         print(
-                            f"[{species:<12}] K-Means: {stats['clusters']:<2} | "
-                            f"Sets: {stats['total_sets']} | "
-                            f"Unique: {stats['unique']} | "
+                            f"[{species:<12}] K-Means: {stats['clusters']:<3} | "
+                            f"Sets: {stats['total_sets']:<4} | "
                             f"Mass: {stats['mass']:.4f}"
                         )
 
                         species_key = to_id(species)
-
                         only_format[smogon_format][species_key].extend(packed_sets)
 
                         for f in reversed(ALL_FORMATS):
