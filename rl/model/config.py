@@ -25,7 +25,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     scale = 1
 
@@ -53,7 +53,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 1
+    decoder_hidden_size_scale = 2
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -149,7 +149,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     scale = 1
 

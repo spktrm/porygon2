@@ -697,6 +697,33 @@ def ffw_activation(x: jax.Array) -> jax.Array:
     return nn.relu(x) ** 2
 
 
+class FiLMGenerator(nn.Module):
+    features: int
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> Tuple[jax.Array, jax.Array]:
+        # 1. Project to a hidden representation (optional but recommended)
+        # Using the same dimension 'features' is standard.
+        x = nn.Dense(features=self.features, dtype=x.dtype)(x)
+        x = nn.relu(x)
+
+        # 2. Project to gamma (scale) and beta (shift)
+        # We output features * 2 so we can split them later
+        stats = nn.Dense(
+            features=self.features * 2,
+            dtype=x.dtype,
+            # Initialize gamma part to 0 (so gamma+1=1) and beta part to 0
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros,
+        )(x)
+
+        # 3. Split into gamma and beta
+        gamma, beta = jnp.split(stats, 2, axis=-1)
+
+        # Add 1 to gamma so it starts as identity multiplication
+        return 1.0 + gamma, beta
+
+
 class FFWMLP(nn.Module):
     """Feed-Forward Network (FFN) MLP module."""
 
