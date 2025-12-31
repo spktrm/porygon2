@@ -44,8 +44,10 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_actors: int = 16
     num_eval_actors: int = 2
+
     unroll_length: int = 128
-    replay_buffer_capacity: int = 2048
+    replay_buffer_capacity: int = 512 * 3
+    theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -53,7 +55,7 @@ class Porygon2LearnerConfig:
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = 300_000
+    minimum_historical_player_steps: int = 100_000
     league_size: int = 16
 
     # Batch iteration params
@@ -62,8 +64,8 @@ class Porygon2LearnerConfig:
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-6, weight_decay=1e-2)
-    player_learning_rate: float = 3e-5
-    builder_learning_rate: float = 3e-5
+    player_learning_rate: float = 5e-5
+    builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
 
@@ -84,16 +86,16 @@ class Porygon2LearnerConfig:
     shaped_reward_hp_scale: float = 0.01
 
     # Loss coefficients
-    player_value_loss_coef: float = 0.5
+    player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.01
-    player_entropy_loss_coef: float = 0.001
+    player_kl_loss_coef: float = 0.1
+    player_entropy_loss_coef: float = 0.05
 
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
-    builder_kl_loss_coef: float = 0.01
-    builder_kl_prior_loss_coef: float = 0.01
-    builder_entropy_loss_coef: float = 0.01
+    builder_kl_loss_coef: float = 0.1
+    builder_kl_prior_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 1.0
 
     # Smogon Generation
     generation: GenT = 9
@@ -285,20 +287,9 @@ def _init_league(
             player_params=player_state.params,
             builder_params=builder_state.params,
         ),
-        players=[
-            ParamsContainer(
-                player_frame_count=np.array(player_state.frame_count).item(),
-                builder_frame_count=np.array(builder_state.frame_count).item(),
-                step_count=np.array(player_state.step_count).item(),
-                player_params=player_state.params,
-                builder_params=builder_state.params,
-            )
-        ],
+        players=[],
         league_size=learner_config.league_size,
     )
-
-
-# --- The 3 Loading Functions ---
 
 
 def load_from_scratch(

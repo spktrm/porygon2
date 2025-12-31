@@ -109,6 +109,7 @@ class Porygon2BuilderModel(nn.Module):
         self.packed_set_head = PolicyQKHead(self.cfg.packed_set_head)
 
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -216,6 +217,9 @@ class Porygon2BuilderModel(nn.Module):
     def _forward_value_head(self, embedding: jax.Array):
         return self.value_head(embedding)
 
+    def _forward_conditional_entropy_head(self, embedding: jax.Array):
+        return self.conditional_entropy_head(embedding)
+
     def _encode_team(self, species_tokens: jax.Array, packed_set_tokens: jax.Array):
 
         valid_packed_sets = jnp.take(
@@ -258,6 +262,9 @@ class Porygon2BuilderModel(nn.Module):
     ) -> BuilderActorOutput:
 
         value_head = self._forward_value_head(current_embedding)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            current_embedding
+        )
 
         species_gamma, species_beta = self.species_film_generator(
             current_embedding[None]
@@ -298,6 +305,7 @@ class Porygon2BuilderModel(nn.Module):
             species_head=species_head,
             packed_set_head=packed_set_head,
             value_head=value_head,
+            conditional_entropy_head=conditional_entropy_head,
         )
 
     def __call__(

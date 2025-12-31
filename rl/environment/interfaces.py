@@ -93,6 +93,7 @@ class BuilderActorInput(NamedTuple):
 
 
 class BuilderActorOutput(NamedTuple):
+    conditional_entropy_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
     value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
     species_head: PolicyHeadOutput = PolicyHeadOutput()
     packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
