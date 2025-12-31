@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import requests
 
+from rl.environment.data import STOI
+
 # -----------------------------------------------------------------------------
 # Scikit-Learn Imports
 # -----------------------------------------------------------------------------
@@ -484,8 +486,8 @@ def main():
     MAX_WORKERS = os.cpu_count() or 4
 
     for generation in range(9, 10):
-        all_formats = {f: defaultdict(list) for f in ALL_FORMATS}
-        only_format = {f: defaultdict(list) for f in ALL_FORMATS}
+        all_formats = {f: {s: [] for s in STOI["species"]} for f in ALL_FORMATS}
+        only_format = {f: {s: [] for s in STOI["species"]} for f in ALL_FORMATS}
 
         for smogon_format in reversed(ALL_FORMATS):
             print(f"\n--- Gen {generation} {smogon_format} ---")

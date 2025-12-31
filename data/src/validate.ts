@@ -72,7 +72,7 @@ function processFile(
 }
 
 function main() {
-    for (let generation = 9; generation > 0; generation--) {
+    for (let generation = 9; generation > 7; generation--) {
         for (const smogonFormat of [...ALL_FORMATS].reverse()) {
             const validator = new TeamValidator(
                 `gen${generation}${smogonFormat}`,

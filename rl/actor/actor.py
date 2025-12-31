@@ -1,7 +1,6 @@
 import jax
 import numpy as np
 
-from rl import learner
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
@@ -14,6 +13,7 @@ from rl.environment.interfaces import (
 from rl.environment.protos.service_pb2 import Action, ActionEnum
 from rl.environment.utils import clip_history, clip_packed_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
+from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 ACTION_MAPPING = {
@@ -38,7 +38,7 @@ class Actor:
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
-        learner: learner,
+        learner: Learner,
         rng_seed: int = 42,
     ):
         self._agent = agent
