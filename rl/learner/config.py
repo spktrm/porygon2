@@ -42,7 +42,7 @@ GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_actors: int = 16
+    num_actors: int = 8
     num_eval_actors: int = 2
 
     unroll_length: int = 128
@@ -94,7 +94,7 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_kl_prior_loss_coef: float = 0.1
+    builder_kl_prior_loss_coef: float = 0.01
     builder_entropy_loss_coef: float = 1.0
 
     # Smogon Generation

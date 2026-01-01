@@ -844,18 +844,25 @@ class Learner:
         latest_added_player = league.get_latest_player()
         current_main_player = league.get_main_player()
 
-        step_count = current_main_player.step_count
-        frames_passed = int(
-            current_main_player.player_frame_count
-            - latest_added_player.player_frame_count
-        )
-        if (
-            frames_passed < self.config.add_player_min_frames
-            or step_count < self.config.minimum_historical_player_steps
-        ):
+        step_count = int(self.player_state.step_count)
+
+        if latest_added_player == current_main_player:
+            latest_frame_count = 0
+        else:
+            latest_frame_count = latest_added_player.player_frame_count
+
+        frames_passed = int(current_main_player.player_frame_count - latest_frame_count)
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+
+        if frames_passed < self.config.add_player_min_frames:
             return False
 
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        if (
+            len(historical_players) == 0
+            and step_count > self.config.minimum_historical_player_steps
+        ):
+            return True
+
         win_rates = league.get_winrate((current_main_player, historical_players))
         return (win_rates.min() > 0.7) | (
             frames_passed >= self.config.add_player_max_frames
@@ -877,18 +884,15 @@ class Learner:
         league = self.league
 
         main_player = league.get_main_player()
+
         historical_players = [
             v
             for k, v in league.players.items()
             if k != MAIN_KEY
             and v.step_count > self.config.minimum_historical_player_steps
         ]
-        win_rates = league.get_winrate((main_player, historical_players))
-        pick_idx = np.random.choice(
-            len(historical_players), p=pfsp(win_rates, weighting="squared")
-        )
-        new_reset = historical_players[pick_idx]
 
+        print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
             ParamsContainer(
                 player_frame_count=np.array(self.player_state.frame_count).item(),
@@ -899,11 +903,16 @@ class Learner:
             )
         )
 
-        print(
-            f"Adding new player to league @ {num_steps}, "
-            + f"resetting main player to historical player @ step {new_reset.step_count}",
-        )
-        self.league.update_main_player(new_reset)
+        if len(historical_players) > 0:
+            win_rates = league.get_winrate((main_player, historical_players))
+            pick_idx = np.random.choice(
+                len(historical_players), p=pfsp(win_rates, weighting="squared")
+            )
+            new_reset = historical_players[pick_idx]
+            print(
+                f"Resetting main player to historical player @ step {new_reset.step_count}",
+            )
+            self.league.update_main_player(new_reset)
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
