@@ -123,10 +123,10 @@ class TeamBuilderEnvironment:
         self._max_trajectory_length = max_trajectory_length
         self._min_trajectory_length = min_trajectory_length
 
-        self.species_rewards = jnp.asarray(
+        self.species_probs = jnp.asarray(
             HUMAN_SPECIES_COUNTS[generation][smogon_format.replace("_all_formats", "")]
         )
-        self.teammate_rewards = jnp.asarray(
+        self.teammate_probs = jnp.asarray(
             HUMAN_TEAMMATE_COUNTS[generation][smogon_format.replace("_all_formats", "")]
         )
 
@@ -166,6 +166,9 @@ class TeamBuilderEnvironment:
         )
         packed_set_tokens = jnp.zeros_like(species_tokens)
 
+        start_target = self.species_probs * species_mask
+        start_target = start_target / (start_target.sum() + 1e-8)
+
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=species_mask,
@@ -173,6 +176,7 @@ class TeamBuilderEnvironment:
                 ts=jnp.array(0, dtype=jnp.int32),
                 cum_teammate_reward=jnp.array(0, dtype=jnp.float32),
                 cum_species_reward=jnp.array(0, dtype=jnp.float32),
+                target_species_probs=start_target,
             ),
             history=BuilderHistoryOutput(
                 species_tokens=species_tokens,
@@ -181,39 +185,25 @@ class TeamBuilderEnvironment:
         )
 
     def _calculate_species_rewards(self, species_tokens: jax.Array):
-        return jnp.take(self.species_rewards, species_tokens, axis=0).mean(
+        return jnp.take(self.species_probs, species_tokens, axis=0).mean(
             where=species_tokens != SpeciesEnum.SPECIES_ENUM___UNK
         )
 
-    def _calculate_teammate_rewards(
-        self, species_token: jax.Array, team_tokens: jax.Array, species_mask: jax.Array
-    ):
-        forward_teammate_rewards = jnp.take(
-            jnp.take(self.teammate_rewards, team_tokens, axis=0),
-            species_token,
+    def _calculate_teammate_rewards(self, team_tokens: jax.Array):
+        pairwise_rewards = jnp.take(
+            jnp.take(self.teammate_probs, team_tokens, axis=0),
+            team_tokens,
             axis=1,
-        ).reshape(-1)
+        )
 
-        unk_mask = team_tokens == SpeciesEnum.SPECIES_ENUM___UNK
         not_unk_mask = team_tokens != SpeciesEnum.SPECIES_ENUM___UNK
+        mask = jnp.outer(not_unk_mask, not_unk_mask)
+        mask = jnp.clip(jnp.tril(mask), 0, 1) - jnp.eye(self._num_team_members)
 
-        vacuum_rewards = (
-            jnp.take(self.teammate_rewards, species_token, axis=1)
-            .reshape(-1)
-            .sum(where=species_mask)
-        )
+        mask_sum = mask.sum().clip(min=1)
+        teammate_reward = jnp.where(mask, pairwise_rewards, 0).sum() / mask_sum
 
-        teammate_reward = (
-            forward_teammate_rewards.sum(where=not_unk_mask)
-        ) / not_unk_mask.sum().clip(min=1)
-
-        vacuum_reward = (
-            (unk_mask.sum() / self._num_team_members)
-            * vacuum_rewards
-            / species_mask.sum().clip(min=1)
-        )
-
-        return teammate_reward + vacuum_reward
+        return teammate_reward
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
@@ -242,6 +232,23 @@ class TeamBuilderEnvironment:
             selection_oh, packed_set_token, state.history.packed_set_tokens
         )
 
+        completed_count = (species_tokens != SpeciesEnum.SPECIES_ENUM___UNK).sum()
+        conditional = jnp.take(self.teammate_probs, species_tokens, axis=0)
+        teammate_conditionals = conditional.sum(axis=0) / completed_count.clip(min=1)
+
+        # So it favours teammates more as time goes on
+        alpha = (next_ts / (state.history.species_tokens.shape[0] - 1)).clip(0, 1) ** (
+            1 / 2
+        )
+        target_species_probs = (
+            1 - alpha
+        ) * self.species_probs + alpha * teammate_conditionals
+
+        target_species_probs = jnp.where(species_mask, target_species_probs, 0)
+        target_species_probs = target_species_probs / (
+            target_species_probs.sum() + 1e-8
+        )
+
         return BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=species_mask,
@@ -249,9 +256,10 @@ class TeamBuilderEnvironment:
                 ts=next_ts,
                 # Prevent reward hacking by choosing common species
                 cum_teammate_reward=self._calculate_teammate_rewards(
-                    species_token, state.history.species_tokens, species_mask
+                    state.history.species_tokens
                 ),
                 cum_species_reward=self._calculate_species_rewards(species_tokens),
+                target_species_probs=target_species_probs,
             ),
             history=BuilderHistoryOutput(
                 species_tokens=species_tokens,

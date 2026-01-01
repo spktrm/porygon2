@@ -9,7 +9,8 @@ import { GetRandomAction } from "../server/baselines/random";
 Teams.setGeneratorFactory(TeamGenerators);
 
 async function playerController(player: TrainablePlayerAI) {
-    let historyLength = 0;
+    let historyLength = 0,
+        packedHistoryLength = 0;
     while (true) {
         try {
             const state = await player.receiveEnvironmentState();
@@ -30,6 +31,10 @@ async function playerController(player: TrainablePlayerAI) {
                 historyLength: state.getHistoryLength(),
             });
             historyLength = Math.max(historyLength, state.getHistoryLength());
+            packedHistoryLength = Math.max(
+                packedHistoryLength,
+                state.getHistoryPackedLength(),
+            );
 
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readablePrivateTeam = StateHandler.toReadablePrivate(
@@ -67,7 +72,7 @@ async function playerController(player: TrainablePlayerAI) {
             break;
         }
     }
-    return historyLength;
+    return { historyLength, packedHistoryLength };
 }
 
 async function runBattle() {
@@ -78,16 +83,17 @@ async function runBattle() {
         p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou"),
-        smogonFormat: "gen9randomdoublesbattle",
+        // smogonFormat: "gen9randomdoublesbattle",
+        smogonFormat: "gen9ou",
     };
-    const { p1, p2 } = createBattle(battleOptions, true);
+    const { p1, p2 } = createBattle(battleOptions, false);
     const players = [p1];
     if (!battleOptions.p2Name.startsWith("baseline-")) {
         players.push(p2);
     }
 
     console.log("Starting asynchronous player controllers...");
-    let results: number[] = [];
+    let results: { historyLength: number; packedHistoryLength: number }[] = [];
 
     try {
         // Create a promise for each player's control loop.
@@ -118,10 +124,18 @@ async function runBattle() {
 
 async function main() {
     let historyLength = 0;
+    let packedHistoryLength = 0;
     while (true) {
         const results = await runBattle();
-        historyLength = Math.max(historyLength, ...results);
-        console.log(historyLength);
+        historyLength = Math.max(
+            historyLength,
+            ...results.map((r) => r.historyLength),
+        );
+        packedHistoryLength = Math.max(
+            packedHistoryLength,
+            ...results.map((r) => r.packedHistoryLength),
+        );
+        console.log(historyLength, packedHistoryLength);
     }
 }
 

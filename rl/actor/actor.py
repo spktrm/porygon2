@@ -11,7 +11,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.service_pb2 import Action, ActionEnum
-from rl.environment.utils import clip_history, split_rng
+from rl.environment.utils import clip_history, clip_packed_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
@@ -53,6 +53,7 @@ class Actor:
     def clip_actor_history(self, timestep: PlayerActorInput):
         return PlayerActorInput(
             env=timestep.env,
+            packed_history=clip_packed_history(timestep.packed_history, resolution=128),
             history=clip_history(timestep.history, resolution=128),
         )
 
@@ -97,10 +98,9 @@ class Actor:
                 agent_output=builder_agent_output,
             )
             build_traj.append(builder_transition)
-            builder_actor_input = self._builder_env.step(builder_agent_output)
-            # Swap when we break since we want a continuous trajectory
             if builder_actor_input.env.done.item():
                 break
+            builder_actor_input = self._builder_env.step(builder_agent_output)
 
         if len(build_traj) < builder_unroll_length:
             build_traj += [builder_transition] * (
@@ -155,6 +155,7 @@ class Actor:
             builder_transitions=builder_trajectory,
             builder_history=builder_actor_input.history,
             player_transitions=player_trajectory,
+            player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
         )
 

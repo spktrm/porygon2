@@ -113,6 +113,9 @@ class Agent:
 
         actor_input = PlayerActorInput(
             env=jax.tree.map(lambda t: t[None, ...], actor_input.env),
+            packed_history=jax.tree.map(
+                lambda t: t[:, ...], actor_input.packed_history
+            ),
             history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
         )
 

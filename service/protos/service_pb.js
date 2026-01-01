@@ -1257,7 +1257,8 @@ publicTeam: msg.getPublicTeam_asB64(),
 revealedTeam: msg.getRevealedTeam_asB64(),
 privateTeam: msg.getPrivateTeam_asB64(),
 field: msg.getField_asB64(),
-rqid: jspb.Message.getFieldWithDefault(msg, 14, 0)
+rqid: jspb.Message.getFieldWithDefault(msg, 14, 0),
+historyPackedLength: jspb.Message.getFieldWithDefault(msg, 15, 0)
   };
 
   if (includeInstance) {
@@ -1349,6 +1350,10 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
     case 14:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRqid(value);
+      break;
+    case 15:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setHistoryPackedLength(value);
       break;
     default:
       reader.skipField();
@@ -1474,6 +1479,13 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
   if (f !== 0) {
     writer.writeInt32(
       14,
+      f
+    );
+  }
+  f = message.getHistoryPackedLength();
+  if (f !== 0) {
+    writer.writeInt32(
+      15,
       f
     );
   }
@@ -2017,6 +2029,24 @@ proto.servicev2.EnvironmentState.prototype.getRqid = function() {
  */
 proto.servicev2.EnvironmentState.prototype.setRqid = function(value) {
   return jspb.Message.setProto3IntField(this, 14, value);
+};
+
+
+/**
+ * optional int32 history_packed_length = 15;
+ * @return {number}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryPackedLength = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 15, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.servicev2.EnvironmentState} returns this
+ */
+proto.servicev2.EnvironmentState.prototype.setHistoryPackedLength = function(value) {
+  return jspb.Message.setProto3IntField(this, 15, value);
 };
 
 
