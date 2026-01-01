@@ -14,22 +14,17 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
+from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    HeadlessPolicyQKHead,
     HeadParams,
+    PointerLogits,
     PolicyLogitHead,
-    ValueLogitHead,
     sample_categorical,
 )
 from rl.model.modules import SumEmbeddings
-from rl.model.utils import (
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -41,13 +36,13 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.move_head = HeadlessPolicyQKHead(self.cfg.move_head)
-        self.switch_head = HeadlessPolicyQKHead(self.cfg.switch_head)
+        self.move_head = PointerLogits(**self.cfg.move_head.qk_logits.to_dict())
+        self.switch_head = PointerLogits(**self.cfg.switch_head.qk_logits.to_dict())
         self.wildcard_merge = SumEmbeddings(
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )
         self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
-        self.value_head = ValueLogitHead(self.cfg.value_head)
+        self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
         self,
@@ -77,16 +72,20 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        state_query: jax.Array,
-        contextual_moves: jax.Array,
-        contextual_switches: jax.Array,
+        state_embedding: jax.Array,
+        move_embeddings: jax.Array,
+        switch_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_query, contextual_moves, head_params)
-        switch_logits = self.switch_head(state_query, contextual_switches, head_params)
-        action_logits = jnp.concatenate([move_logits, switch_logits], axis=-1)
+        move_logits = self.move_head(state_embedding[None], move_embeddings)
+        switch_logits = self.switch_head(state_embedding[None], switch_embeddings)
+
+        action_logits = (
+            jnp.concatenate([move_logits, switch_logits], axis=-1).squeeze(0)
+            / head_params.temp
+        )
 
         action_head = self.post_head(
             action_logits,
@@ -97,18 +96,18 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         selected_move_embedding = jnp.take(
-            contextual_moves,
+            move_embeddings,
             action_head.action_index.clip(max=move_logits.shape[-1] - 1),
             axis=0,
         )
-        wildcard_merge = self.wildcard_merge(state_query, selected_move_embedding)
+        wildcard_merge = self.wildcard_merge(state_embedding, selected_move_embedding)
         wildcard_head = self.wildcard_head(
             wildcard_merge,
             actor_output.wildcard_head,
             env_step.wildcard_mask,
             head_params,
         )
-        value_head = self.value_head(state_query)
+        value_head = self.value_head(state_embedding)
 
         return PlayerActorOutput(
             action_head=action_head,
@@ -126,16 +125,16 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_queries, contextual_moves, contextual_switches = self.encoder(
-            actor_input.env, actor_input.history
+        state_embedding, move_embeddings, switch_embeddings = self.encoder(
+            actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            state_queries,
-            contextual_moves,
-            contextual_switches,
+            state_embedding,
+            move_embeddings,
+            switch_embeddings,
             actor_input.env,
             actor_output,
         )
@@ -156,7 +155,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:

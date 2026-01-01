@@ -25,7 +25,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     scale = 1
 
@@ -42,7 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
-    encoder_hidden_size_scale = 1
+    encoder_hidden_size_scale = 2
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
@@ -53,7 +53,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 1
+    decoder_hidden_size_scale = 2
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -88,44 +88,31 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_post_ffw_norm=decoder_use_post_ffw_norm,
     )
 
-    cfg.encoder.timestep_gat = ConfigDict()
-    cfg.encoder.timestep_gat.out_dim = entity_size
-    cfg.encoder.timestep_gat.num_layers = 1
-    cfg.encoder.timestep_gat.num_heads = num_heads
-    cfg.encoder.timestep_gat.max_edges = 4
-
-    cfg.encoder.move_encoder = ConfigDict()
-    set_attributes(cfg.encoder.move_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.move_encoder.need_pos = False
-
-    cfg.encoder.switch_encoder = ConfigDict()
-    set_attributes(cfg.encoder.switch_encoder, **transformer_encoder_kwargs)
-    cfg.encoder.switch_encoder.need_pos = False
-
     cfg.encoder.timestep_encoder = ConfigDict()
     set_attributes(cfg.encoder.timestep_encoder, **transformer_encoder_kwargs)
     cfg.encoder.timestep_encoder.need_pos = True
 
-    cfg.encoder.entity_timestep_transformer = ConfigDict()
-    set_attributes(
-        cfg.encoder.entity_timestep_transformer, **transformer_decoder_kwargs
-    )
-    cfg.encoder.entity_timestep_transformer.num_layers = 4
-    cfg.encoder.entity_timestep_transformer.encoder_need_pos = True
-    cfg.encoder.entity_timestep_transformer.decoder_need_pos = True
+    cfg.encoder.state_perceiver = ConfigDict()
+    set_attributes(cfg.encoder.state_perceiver, **transformer_decoder_kwargs)
+    cfg.encoder.state_perceiver.num_layers = 2
+    cfg.encoder.state_perceiver.encoder_need_pos = True
+    cfg.encoder.state_perceiver.decoder_need_pos = True
+    cfg.encoder.state_perceiver.share_weights = True
 
-    cfg.encoder.action_entity_decoder = ConfigDict()
-    set_attributes(cfg.encoder.action_entity_decoder, **transformer_decoder_kwargs)
-    cfg.encoder.action_entity_decoder.num_layers = 2
-    cfg.encoder.action_entity_decoder.need_pos = False
+    cfg.encoder.state_decoder = ConfigDict()
+    set_attributes(cfg.encoder.state_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.state_decoder.need_pos = False
+
+    cfg.encoder.action_decoder = ConfigDict()
+    set_attributes(cfg.encoder.action_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.action_decoder.need_pos = False
 
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
-    cfg.value_head.category_values = jnp.array([-1, 0, 1])
 
     for head, output_size in [
-        (cfg.value_head, 3),
+        (cfg.value_head, 1),
         (cfg.wildcard_head, NUM_WILDCARD_FEATURES),
     ]:
         head.logits = ConfigDict()
@@ -162,7 +149,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     scale = 1
 
@@ -172,9 +159,9 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 4
+    num_layers = 2
     num_heads = num_heads
-    hidden_size_scale = 1
+    hidden_size_scale = 2
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)
@@ -198,7 +185,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.encoder = ConfigDict()
     set_attributes(cfg.encoder, **transformer_kwargs)
-    cfg.encoder.need_pos = True
+    if generation < 4:
+        cfg.encoder.need_pos = True
 
     for name in ["species_head", "packed_set_head", "value_head"]:
         head_cfg = ConfigDict()
@@ -207,8 +195,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.layer_sizes = 3
-    cfg.value_head.category_values = jnp.array([-1, 0, 1])
+    cfg.value_head.logits.layer_sizes = 1
 
     for head in [
         cfg.species_head,

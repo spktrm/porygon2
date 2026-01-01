@@ -256,6 +256,8 @@ class GenerationEncodings:
                         print(
                             f"Move ID {move_id} not found in df.columns for species ID {species_id}"
                         )
+
+        df.loc["_UNK"] = df.values.any(0).astype(np.float32)
         return df.values
 
 
@@ -326,7 +328,7 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     return net
 
 
-def main(make_graphs: bool = True):
+def main(make_graphs: bool = False):
     with open("data/data/data.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 

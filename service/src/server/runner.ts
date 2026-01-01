@@ -146,6 +146,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
     publicBattle: Battle;
+    sets: PokemonSet[] | undefined;
     eventHandler: EventHandler;
 
     tasks: TaskQueueSystem<StepRequest>;
@@ -178,9 +179,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.userName = userName;
 
-        this.eventHandler = new EventHandler(this);
-        this.privateBattle = new Battle(new Generations(Dex), null, sets);
+        this.privateBattle = new Battle(new Generations(Dex), null);
         this.publicBattle = new Battle(new Generations(Dex), null);
+        this.sets = sets;
+        this.eventHandler = new EventHandler(this);
         this.done = false;
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
@@ -235,6 +237,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const { args, kwArgs } = Protocol.parseBattleLine(line);
         const key = Protocol.key(args);
         if (!key) return;
+
         if (key in this.eventHandler) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (this.eventHandler as any)[key](args, kwArgs);
@@ -523,7 +526,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 }
 
-let totalBattles = 0;
+const MAX_REQUEST_COUNT = 32 * 3;
 
 export function createBattle(
     options: {
@@ -537,7 +540,7 @@ export function createBattle(
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? 120;
+    const maxRequestCount = options.maxRequestCount ?? MAX_REQUEST_COUNT;
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
@@ -562,8 +565,6 @@ export function createBattle(
         name: p2Name,
         team: Teams.pack(p2Sets),
     };
-
-    totalBattles += 1;
 
     const p1 = new TrainablePlayerAI(
         p1spec.name,

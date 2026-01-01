@@ -9,11 +9,7 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 
 import * as path from "path";
 import { TrainablePlayerAI } from "../server/runner";
-import {
-    ActionEnum,
-    Action as ProtoAction,
-    StepRequest,
-} from "../../protos/service_pb";
+import { Action as ProtoAction, StepRequest } from "../../protos/service_pb";
 import { generateTeamFromIndices } from "../server/state";
 
 const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
@@ -80,6 +76,16 @@ function processAssertion(details: { username: string }, assertion: string) {
     }
 
     return assertion;
+}
+
+function sanitizeRoomId(roomId: string): string {
+    // remove last hyphen section if split length >= 4
+    const parts = roomId.split("-");
+    if (parts.length >= 4) {
+        parts.pop();
+        roomId = parts.join("-");
+    }
+    return roomId;
 }
 
 class Connection {
@@ -157,7 +163,7 @@ class Battle {
         this.conn.send(`${this.battleId}|/timer on`);
         // this.ws.send(`${this.battleId}|${welcomeMessage}`);
         const unpackedTeam = team === undefined ? team : Teams.unpack(team);
-        if (unpackedTeam === null) {
+        if (!unpackedTeam) {
             throw new Error("Invalid team provided");
         }
         this.stream = new ClientStream();
@@ -170,10 +176,14 @@ class Battle {
         );
         this.player.choose = (choice: string) => {
             this.conn.send(
-                `${this.battleId}|/choose ${choice}|${this.player.rqid}`,
+                `${this.getBattleId()}|/choose ${choice}|${this.player.rqid}`,
             );
         };
         this.player.start();
+    }
+
+    updateBattleId(roomId: string) {
+        this.battleId = roomId;
     }
 
     public async start(rateLimit: number = 0) {
@@ -220,17 +230,44 @@ interface SearchState {
     games: { [k: string]: string } | null;
 }
 
+class BattleStorage {
+    private battles: { [k: string]: Battle };
+
+    constructor() {
+        this.battles = {};
+    }
+
+    addBattle(roomId: string, battle: Battle) {
+        // remove last hyphen section if split length > 4
+        const battleId = sanitizeRoomId(roomId);
+        this.battles[battleId] = battle;
+    }
+
+    getBattle(roomId: string): Battle | undefined {
+        const battleId = sanitizeRoomId(roomId);
+        const battle = this.battles[battleId];
+        if (battle && battle.getBattleId() !== roomId) {
+            battle.updateBattleId(roomId);
+        }
+        return battle;
+    }
+
+    removeBattle(battleId: string) {
+        delete this.battles[battleId];
+    }
+}
+
 class User {
     private username?: string;
     private searchState?: SearchState;
-    private battles: { [k: string]: Battle };
+    private battles: BattleStorage;
     private teams: string[];
     private searchUpdated: boolean;
     private numBattles: number;
 
     constructor(private readonly connection: Connection) {
         this.searchState = undefined;
-        this.battles = {};
+        this.battles = new BattleStorage();
         this.teams = [];
         this.searchUpdated = false;
         this.numBattles = 0;
@@ -240,15 +277,32 @@ class User {
         return this.username !== undefined;
     }
 
+    createNewBattle(roomId: string) {
+        const team = this.teams.shift();
+        const battle = new Battle(
+            roomId,
+            this.connection,
+            this.username!,
+            team,
+        );
+        this.battles.addBattle(roomId, battle);
+        battle.start().then(() => {
+            battle.leave();
+            if (this.numBattles >= MAX_BATTLES) {
+                console.log("Reached maximum number of battles, logging out.");
+                this.logout().then(() => {
+                    this.connection.close();
+                    process.exit(0);
+                });
+            }
+        });
+    }
+
     async receiveBattleData(roomId: string, data: string): Promise<void> {
-        if (!this.battles[roomId]) {
-            const battle = new Battle(roomId, this.connection, this.username!);
-            this.battles[roomId] = battle;
-            battle.start().then(() => {
-                battle.leave();
-            });
+        if (!this.battles.getBattle(roomId)) {
+            this.createNewBattle(roomId);
         }
-        await this.battles[roomId].receive(data);
+        await this.battles.getBattle(roomId)?.receive(data);
     }
 
     async login(details: LoginDetails): Promise<void> {
@@ -363,31 +417,8 @@ class User {
                 this.searchUpdated = false;
             }
             for (const gameId in games) {
-                if (this.battles[gameId]) continue; // Already in a battle
-                const team = this.teams.shift();
-                if (!team) {
-                    console.error("No team available for battle");
-                    continue;
-                }
-                const battle = new Battle(
-                    gameId,
-                    this.connection,
-                    this.username!,
-                    team,
-                );
-                this.battles[gameId] = battle;
-                battle.start().then(() => {
-                    battle.leave();
-                    if (this.numBattles >= MAX_BATTLES) {
-                        console.log(
-                            "Reached maximum number of battles, logging out.",
-                        );
-                        this.logout().then(() => {
-                            this.connection.close();
-                            process.exit(0);
-                        });
-                    }
-                });
+                if (this.battles.getBattle(gameId)) continue; // Already in a battle
+                this.createNewBattle(gameId);
                 this.numBattles++;
             }
         }

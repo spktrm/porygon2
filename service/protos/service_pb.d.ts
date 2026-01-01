@@ -207,6 +207,9 @@ export class EnvironmentState extends jspb.Message {
   getRqid(): number;
   setRqid(value: number): void;
 
+  getHistoryPackedLength(): number;
+  setHistoryPackedLength(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): EnvironmentState.AsObject;
   static toObject(includeInstance: boolean, msg: EnvironmentState): EnvironmentState.AsObject;
@@ -233,6 +236,7 @@ export namespace EnvironmentState {
     privateTeam: Uint8Array | string,
     field: Uint8Array | string,
     rqid: number,
+    historyPackedLength: number,
   }
 }
 

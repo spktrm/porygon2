@@ -21,19 +21,27 @@ class PlayerEnvOutput(NamedTuple):
     wildcard_mask: ArrayLike = ()
 
 
-class PlayerHistoryOutput(NamedTuple):
+class PlayerPackedHistoryOutput(NamedTuple):
     public: ArrayLike = ()
     revealed: ArrayLike = ()
     edges: ArrayLike = ()
+
+
+class PlayerHistoryOutput(NamedTuple):
     field: ArrayLike = ()
 
 
 class PlayerActorInput(NamedTuple):
     env: PlayerEnvOutput = PlayerEnvOutput()
+    packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
     history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 
-class ValueHeadOutput(NamedTuple):
+class RegressionValueHeadOutput(NamedTuple):
+    logits: ArrayLike = ()
+
+
+class CategoricalValueHeadOutput(NamedTuple):
     logits: ArrayLike = ()
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
@@ -44,10 +52,11 @@ class PolicyHeadOutput(NamedTuple):
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
+    log_policy: ArrayLike = ()
 
 
 class PlayerActorOutput(NamedTuple):
-    value_head: ValueHeadOutput = ValueHeadOutput()
+    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
     action_head: PolicyHeadOutput = PolicyHeadOutput()
     wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
 
@@ -70,6 +79,8 @@ class BuilderEnvOutput(NamedTuple):
     cum_teammate_reward: ArrayLike = ()
     cum_species_reward: ArrayLike = ()
 
+    target_species_probs: ArrayLike = ()
+
 
 class BuilderHistoryOutput(NamedTuple):
     species_tokens: ArrayLike = ()
@@ -82,7 +93,8 @@ class BuilderActorInput(NamedTuple):
 
 
 class BuilderActorOutput(NamedTuple):
-    value_head: ValueHeadOutput = ValueHeadOutput()
+    conditional_entropy_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
+    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
     species_head: PolicyHeadOutput = PolicyHeadOutput()
     packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
 
@@ -101,6 +113,7 @@ class Trajectory(NamedTuple):
     builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
 
     player_transitions: PlayerTransition = PlayerTransition()
+    player_packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
     player_history: PlayerHistoryOutput = PlayerHistoryOutput()
 
 

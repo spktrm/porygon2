@@ -167,6 +167,15 @@ class FieldFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     FIELD_FEATURE__TURN_VALUE: _ClassVar[FieldFeature]
     FIELD_FEATURE__TURN_ORDER_VALUE: _ClassVar[FieldFeature]
     FIELD_FEATURE__TYPE: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX0: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX1: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX2: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX3: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX4: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX5: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX6: _ClassVar[FieldFeature]
+    FIELD_FEATURE__RELEVANT_ENTITY_IDX7: _ClassVar[FieldFeature]
+    FIELD_FEATURE__NUM_RELEVANT: _ClassVar[FieldFeature]
 
 class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -182,6 +191,12 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__MY_HP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__OPP_HP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__NUM_ACTIVE: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE0: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE1: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE2: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE3: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE4: _ClassVar[InfoFeature]
+    INFO_FEATURE__SWITCH_ORDER_VALUE5: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -360,6 +375,15 @@ FIELD_FEATURE__INDEX: FieldFeature
 FIELD_FEATURE__TURN_VALUE: FieldFeature
 FIELD_FEATURE__TURN_ORDER_VALUE: FieldFeature
 FIELD_FEATURE__TYPE: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX0: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX1: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX2: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX3: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX4: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX5: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX6: FieldFeature
+FIELD_FEATURE__RELEVANT_ENTITY_IDX7: FieldFeature
+FIELD_FEATURE__NUM_RELEVANT: FieldFeature
 INFO_FEATURE___UNSPECIFIED: InfoFeature
 INFO_FEATURE__DONE: InfoFeature
 INFO_FEATURE__PLAYER_INDEX: InfoFeature
@@ -372,6 +396,12 @@ INFO_FEATURE__OPP_FAINTED_COUNT: InfoFeature
 INFO_FEATURE__MY_HP_COUNT: InfoFeature
 INFO_FEATURE__OPP_HP_COUNT: InfoFeature
 INFO_FEATURE__NUM_ACTIVE: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE0: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE1: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE2: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE3: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE4: InfoFeature
+INFO_FEATURE__SWITCH_ORDER_VALUE5: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType
