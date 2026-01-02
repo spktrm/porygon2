@@ -760,20 +760,26 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
+    ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
-        0;
-    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
-        0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
+    ] = 0;
+    data[
+        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
+    ] = 0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -1084,14 +1090,17 @@ function getArrayFromPublicPokemon(
 
     const position = candidate.ident.at(2);
     if (position === "a") {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            1;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 1;
     } else if (position === "b") {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            2;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 2;
     } else {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            0;
+        publicData[
+            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ] = 0;
     }
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =

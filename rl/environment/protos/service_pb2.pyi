@@ -7,6 +7,38 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class OutputActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    OUTPUT_ACTION_ENUM___UNSPECIFIED: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MY_TEAM_CLS: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__OPP_TEAM_CLS: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_1: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_2: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_3: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_4: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_1_WILDCARD: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_2_WILDCARD: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_3_WILDCARD: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__MOVE_4_WILDCARD: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_1: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_2: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_3: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_4: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_5: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__SWITCH_6: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_1: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_2: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_3: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_4: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_5: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_6: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_7: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_8: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_9: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_10: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_11: _ClassVar[OutputActionEnum]
+    OUTPUT_ACTION_ENUM__TARGET_12: _ClassVar[OutputActionEnum]
+
 class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_ENUM___UNSPECIFIED: _ClassVar[ActionEnum]
@@ -47,6 +79,35 @@ class WildCardEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WILD_CARD_ENUM__CAN_ZMOVE: _ClassVar[WildCardEnum]
     WILD_CARD_ENUM__CAN_MAX: _ClassVar[WildCardEnum]
     WILD_CARD_ENUM__CAN_TERA: _ClassVar[WildCardEnum]
+OUTPUT_ACTION_ENUM___UNSPECIFIED: OutputActionEnum
+OUTPUT_ACTION_ENUM__MY_TEAM_CLS: OutputActionEnum
+OUTPUT_ACTION_ENUM__OPP_TEAM_CLS: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_1: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_2: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_3: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_4: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_1_WILDCARD: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_2_WILDCARD: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_3_WILDCARD: OutputActionEnum
+OUTPUT_ACTION_ENUM__MOVE_4_WILDCARD: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_1: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_2: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_3: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_4: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_5: OutputActionEnum
+OUTPUT_ACTION_ENUM__SWITCH_6: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_1: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_2: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_3: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_4: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_5: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_6: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_7: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_8: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_9: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_10: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_11: OutputActionEnum
+OUTPUT_ACTION_ENUM__TARGET_12: OutputActionEnum
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__MOVE_1_TARGET_NA: ActionEnum
 ACTION_ENUM__MOVE_1_TARGET_1: ActionEnum
