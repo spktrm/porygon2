@@ -36,8 +36,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
 
-        self.move_head = PointerLogits(**self.cfg.move_head.qk_logits.to_dict())
-        self.switch_head = PointerLogits(**self.cfg.switch_head.qk_logits.to_dict())
+        self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.wildcard_merge = SumEmbeddings(
             output_size=self.cfg.entity_size, dtype=self.cfg.dtype
         )
@@ -73,18 +72,13 @@ class Porygon2PlayerModel(nn.Module):
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
-        move_embeddings: jax.Array,
-        switch_embeddings: jax.Array,
+        action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_embedding[None], move_embeddings)
-        switch_logits = self.switch_head(state_embedding[None], switch_embeddings)
-
         action_logits = (
-            jnp.concatenate([move_logits, switch_logits], axis=-1).squeeze(0)
-            / head_params.temp
+            self.action_head(action_embeddings, action_embeddings) / head_params.temp
         )
 
         action_head = self.post_head(
@@ -96,9 +90,7 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         selected_move_embedding = jnp.take(
-            move_embeddings,
-            action_head.action_index.clip(max=move_logits.shape[-1] - 1),
-            axis=0,
+            action_embeddings, action_head.action_index, axis=0
         )
         wildcard_merge = self.wildcard_merge(state_embedding, selected_move_embedding)
         wildcard_head = self.wildcard_head(
@@ -125,16 +117,15 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, move_embeddings, switch_embeddings = self.encoder(
+        latent_state_embeddings, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            state_embedding,
-            move_embeddings,
-            switch_embeddings,
+            latent_state_embeddings,
+            action_embeddings,
             actor_input.env,
             actor_output,
         )

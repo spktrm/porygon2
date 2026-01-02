@@ -48,10 +48,9 @@ class PolicyQKHead(nn.Module):
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
     ):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(resnet(query_embedding)[None], key_embeddings).squeeze(0)
+        logits = qk_logits(query_embedding[None], key_embeddings).squeeze(0)
         logits = logits * (1 / (head_params.temp + 1e-8))
 
         if valid_mask is None:
@@ -158,10 +157,10 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
+        # resnet = Resnet(**self.cfg.resnet.to_dict())
         logits = MLP(**self.cfg.logits.to_dict())
 
-        x = resnet(x)
+        # x = resnet(x)
         x = logits(x)
 
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

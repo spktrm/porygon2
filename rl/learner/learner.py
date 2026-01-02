@@ -857,11 +857,10 @@ class Learner:
         if frames_passed < self.config.add_player_min_frames:
             return False
 
-        if (
-            len(historical_players) == 0
-            and step_count > self.config.minimum_historical_player_steps
-        ):
-            return True
+        if len(historical_players) == 0:
+            if step_count > self.config.minimum_historical_player_steps:
+                return True
+            return False
 
         win_rates = league.get_winrate((current_main_player, historical_players))
         return (win_rates.min() > 0.7) | (
