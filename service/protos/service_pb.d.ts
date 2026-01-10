@@ -39,11 +39,11 @@ export namespace ClientRequest {
 }
 
 export class Action extends jspb.Message {
-  getAction(): ActionEnumMap[keyof ActionEnumMap];
-  setAction(value: ActionEnumMap[keyof ActionEnumMap]): void;
+  getSrc(): ActionEnumMap[keyof ActionEnumMap];
+  setSrc(value: ActionEnumMap[keyof ActionEnumMap]): void;
 
-  getWildcard(): WildCardEnumMap[keyof WildCardEnumMap];
-  setWildcard(value: WildCardEnumMap[keyof WildCardEnumMap]): void;
+  getTgt(): ActionEnumMap[keyof ActionEnumMap];
+  setTgt(value: ActionEnumMap[keyof ActionEnumMap]): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
@@ -57,8 +57,8 @@ export class Action extends jspb.Message {
 
 export namespace Action {
   export type AsObject = {
-    action: ActionEnumMap[keyof ActionEnumMap],
-    wildcard: WildCardEnumMap[keyof WildCardEnumMap],
+    src: ActionEnumMap[keyof ActionEnumMap],
+    tgt: ActionEnumMap[keyof ActionEnumMap],
   }
 }
 
@@ -66,10 +66,10 @@ export class StepRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  clearActionsList(): void;
-  getActionsList(): Array<Action>;
-  setActionsList(value: Array<Action>): void;
-  addActions(value?: Action, index?: number): Action;
+  hasAction(): boolean;
+  clearAction(): void;
+  getAction(): Action | undefined;
+  setAction(value?: Action): void;
 
   getRqid(): number;
   setRqid(value: number): void;
@@ -90,7 +90,7 @@ export class StepRequest extends jspb.Message {
 export namespace StepRequest {
   export type AsObject = {
     username: string,
-    actionsList: Array<Action.AsObject>,
+    action?: Action.AsObject,
     rqid: number,
     teampreview: boolean,
   }
@@ -150,11 +150,6 @@ export class EnvironmentState extends jspb.Message {
   getActionMask_asU8(): Uint8Array;
   getActionMask_asB64(): string;
   setActionMask(value: Uint8Array | string): void;
-
-  getWildcardMask(): Uint8Array | string;
-  getWildcardMask_asU8(): Uint8Array;
-  getWildcardMask_asB64(): string;
-  setWildcardMask(value: Uint8Array | string): void;
 
   getHistoryEntityPublic(): Uint8Array | string;
   getHistoryEntityPublic_asU8(): Uint8Array;
@@ -224,7 +219,6 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     actionMask: Uint8Array | string,
-    wildcardMask: Uint8Array | string,
     historyEntityPublic: Uint8Array | string,
     historyEntityRevealed: Uint8Array | string,
     historyEntityEdges: Uint8Array | string,
@@ -379,82 +373,39 @@ export namespace WorkerResponse {
   }
 }
 
-export interface OutputActionEnumMap {
-  OUTPUT_ACTION_ENUM___UNSPECIFIED: 0;
-  OUTPUT_ACTION_ENUM__MY_TEAM_CLS: 1;
-  OUTPUT_ACTION_ENUM__OPP_TEAM_CLS: 2;
-  OUTPUT_ACTION_ENUM__MOVE_1: 3;
-  OUTPUT_ACTION_ENUM__MOVE_2: 4;
-  OUTPUT_ACTION_ENUM__MOVE_3: 5;
-  OUTPUT_ACTION_ENUM__MOVE_4: 6;
-  OUTPUT_ACTION_ENUM__MOVE_1_WILDCARD: 7;
-  OUTPUT_ACTION_ENUM__MOVE_2_WILDCARD: 8;
-  OUTPUT_ACTION_ENUM__MOVE_3_WILDCARD: 9;
-  OUTPUT_ACTION_ENUM__MOVE_4_WILDCARD: 10;
-  OUTPUT_ACTION_ENUM__SWITCH_1: 11;
-  OUTPUT_ACTION_ENUM__SWITCH_2: 12;
-  OUTPUT_ACTION_ENUM__SWITCH_3: 13;
-  OUTPUT_ACTION_ENUM__SWITCH_4: 14;
-  OUTPUT_ACTION_ENUM__SWITCH_5: 15;
-  OUTPUT_ACTION_ENUM__SWITCH_6: 16;
-  OUTPUT_ACTION_ENUM__TARGET_1: 17;
-  OUTPUT_ACTION_ENUM__TARGET_2: 18;
-  OUTPUT_ACTION_ENUM__TARGET_3: 19;
-  OUTPUT_ACTION_ENUM__TARGET_4: 20;
-  OUTPUT_ACTION_ENUM__TARGET_5: 21;
-  OUTPUT_ACTION_ENUM__TARGET_6: 22;
-  OUTPUT_ACTION_ENUM__TARGET_7: 23;
-  OUTPUT_ACTION_ENUM__TARGET_8: 24;
-  OUTPUT_ACTION_ENUM__TARGET_9: 25;
-  OUTPUT_ACTION_ENUM__TARGET_10: 26;
-  OUTPUT_ACTION_ENUM__TARGET_11: 27;
-  OUTPUT_ACTION_ENUM__TARGET_12: 28;
-}
-
-export const OutputActionEnum: OutputActionEnumMap;
-
 export interface ActionEnumMap {
   ACTION_ENUM___UNSPECIFIED: 0;
-  ACTION_ENUM__MOVE_1_TARGET_NA: 1;
-  ACTION_ENUM__MOVE_1_TARGET_1: 2;
-  ACTION_ENUM__MOVE_1_TARGET_2: 3;
-  ACTION_ENUM__MOVE_1_TARGET_3: 4;
-  ACTION_ENUM__MOVE_1_TARGET_4: 5;
-  ACTION_ENUM__MOVE_2_TARGET_NA: 6;
-  ACTION_ENUM__MOVE_2_TARGET_1: 7;
-  ACTION_ENUM__MOVE_2_TARGET_2: 8;
-  ACTION_ENUM__MOVE_2_TARGET_3: 9;
-  ACTION_ENUM__MOVE_2_TARGET_4: 10;
-  ACTION_ENUM__MOVE_3_TARGET_NA: 11;
-  ACTION_ENUM__MOVE_3_TARGET_1: 12;
-  ACTION_ENUM__MOVE_3_TARGET_2: 13;
-  ACTION_ENUM__MOVE_3_TARGET_3: 14;
-  ACTION_ENUM__MOVE_3_TARGET_4: 15;
-  ACTION_ENUM__MOVE_4_TARGET_NA: 16;
-  ACTION_ENUM__MOVE_4_TARGET_1: 17;
-  ACTION_ENUM__MOVE_4_TARGET_2: 18;
-  ACTION_ENUM__MOVE_4_TARGET_3: 19;
-  ACTION_ENUM__MOVE_4_TARGET_4: 20;
-  ACTION_ENUM__SWITCH_1: 21;
-  ACTION_ENUM__SWITCH_2: 22;
-  ACTION_ENUM__SWITCH_3: 23;
-  ACTION_ENUM__SWITCH_4: 24;
-  ACTION_ENUM__SWITCH_5: 25;
-  ACTION_ENUM__SWITCH_6: 26;
-  ACTION_ENUM__DEFAULT: 27;
-  ACTION_ENUM__PASS: 28;
+  ACTION_ENUM__DEFAULT: 1;
+  ACTION_ENUM__ALLY_1_MOVE_1: 2;
+  ACTION_ENUM__ALLY_1_MOVE_2: 3;
+  ACTION_ENUM__ALLY_1_MOVE_3: 4;
+  ACTION_ENUM__ALLY_1_MOVE_4: 5;
+  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: 6;
+  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: 7;
+  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: 8;
+  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: 9;
+  ACTION_ENUM__ALLY_2_MOVE_1: 10;
+  ACTION_ENUM__ALLY_2_MOVE_2: 11;
+  ACTION_ENUM__ALLY_2_MOVE_3: 12;
+  ACTION_ENUM__ALLY_2_MOVE_4: 13;
+  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: 14;
+  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: 15;
+  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: 16;
+  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: 17;
+  ACTION_ENUM__RESERVE_1: 18;
+  ACTION_ENUM__RESERVE_2: 19;
+  ACTION_ENUM__RESERVE_3: 20;
+  ACTION_ENUM__RESERVE_4: 21;
+  ACTION_ENUM__RESERVE_5: 22;
+  ACTION_ENUM__RESERVE_6: 23;
+  ACTION_ENUM__ALLY_1: 24;
+  ACTION_ENUM__ALLY_2: 25;
+  ACTION_ENUM__ENEMY_1: 26;
+  ACTION_ENUM__ENEMY_2: 27;
+  ACTION_ENUM__TARGET_AUTO: 28;
+  ACTION_ENUM__ALLY_1_PASS: 29;
+  ACTION_ENUM__ALLY_2_PASS: 30;
 }
 
 export const ActionEnum: ActionEnumMap;
-
-export interface WildCardEnumMap {
-  WILD_CARD_ENUM___UNSPECIFIED: 0;
-  WILD_CARD_ENUM__CAN_NORMAL: 1;
-  WILD_CARD_ENUM__CAN_MEGA: 2;
-  WILD_CARD_ENUM__CAN_ZMOVE: 3;
-  WILD_CARD_ENUM__CAN_MAX: 4;
-  WILD_CARD_ENUM__CAN_TERA: 5;
-}
-
-export const WildCardEnum: WildCardEnumMap;
 

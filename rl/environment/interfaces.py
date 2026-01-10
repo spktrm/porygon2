@@ -18,7 +18,6 @@ class PlayerEnvOutput(NamedTuple):
     private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
-    wildcard_mask: ArrayLike = ()
 
 
 class PlayerPackedHistoryOutput(NamedTuple):
@@ -55,10 +54,14 @@ class PolicyHeadOutput(NamedTuple):
     log_policy: ArrayLike = ()
 
 
+class PlayerPolicyHeadOutput(PolicyHeadOutput):
+    src_index: ArrayLike = ()
+    tgt_index: ArrayLike = ()
+
+
 class PlayerActorOutput(NamedTuple):
     value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
-    action_head: PolicyHeadOutput = PolicyHeadOutput()
-    wildcard_head: PolicyHeadOutput = PolicyHeadOutput()
+    action_head: PlayerPolicyHeadOutput = PlayerPolicyHeadOutput()
 
 
 class PlayerAgentOutput(NamedTuple):

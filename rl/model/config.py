@@ -3,8 +3,6 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import NUM_WILDCARD_FEATURES
-
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
     """
@@ -119,10 +117,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
 
-    for head, output_size in [
-        (cfg.value_head, 1),
-        (cfg.wildcard_head, NUM_WILDCARD_FEATURES),
-    ]:
+    for head, output_size in [(cfg.value_head, 1)]:
         head.logits = ConfigDict()
         head.logits.layer_sizes = output_size
         head.logits.use_layer_norm = False

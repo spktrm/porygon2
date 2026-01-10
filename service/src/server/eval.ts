@@ -9,7 +9,7 @@ export type EvalFuncArgs = {
     player: TrainablePlayerAI;
 };
 
-export type EvalActionFnType = (args: EvalFuncArgs) => Action[];
+export type EvalActionFnType = (args: EvalFuncArgs) => Action;
 
 export const evalActionMapping: EvalActionFnType[] = [
     GetRandomAction, // Random - 0
@@ -18,16 +18,12 @@ export const evalActionMapping: EvalActionFnType[] = [
         if (!request) {
             throw new Error("No request available for default action.");
         }
-        const numActive = player.privateBattle.gameType.includes("doubles")
-            ? 2
-            : 1;
-        const actions: Action[] = [];
-        for (let i = 0; i < numActive; i++) {
-            const action = new Action();
-            action.setAction(ActionEnum.ACTION_ENUM__DEFAULT);
-            actions.push(action);
-        }
-        return actions;
+
+        const action = new Action();
+        action.setSrc(ActionEnum.ACTION_ENUM__DEFAULT);
+        action.setTgt(ActionEnum.ACTION_ENUM__DEFAULT);
+
+        return action;
     }, // Default - 1
     // GetMaxDamageAction,
     // GetHeuristicAction,

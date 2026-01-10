@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
+from rl.actor.actor import ActionEnum
 from rl.environment.data import (
     ACTION_MAX_VALUES,
     ENTITY_EDGE_MAX_VALUES,
@@ -270,6 +271,16 @@ class Encoder(nn.Module):
         # Transformer Decoders
         self.state_embeddings = self.param(
             "state_embeddings",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (2, entity_size),
+        )
+        self.wildcard_embedding = self.param(
+            "wildcard_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (2, 1, entity_size),
+        )
+        self.extra_embeddings = self.param(
+            "extra_embeddings",
             nn.initializers.truncated_normal(stddev=0.02),
             (3, entity_size),
         )
@@ -978,7 +989,7 @@ class Encoder(nn.Module):
 
         return embedding
 
-    def _embed_moves(self, moveset: jax.Array, move_mask: jax.Array) -> jax.Array:
+    def _embed_moves(self, moveset: jax.Array) -> jax.Array:
         return jax.vmap(self._embed_action)(moveset)
 
     def _get_latest_timestep_embeddings(
@@ -1019,8 +1030,23 @@ class Encoder(nn.Module):
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
-        move_mask = jnp.ones_like(env_step.action_mask[:4])
-        move_embeddings = self._embed_moves(env_step.moveset, move_mask)
+        move_mask = jnp.take(
+            env_step.action_mask,
+            np.array(
+                [
+                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_1,
+                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_2,
+                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_3,
+                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_4,
+                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_1,
+                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_2,
+                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_3,
+                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_4,
+                ]
+            ),
+            axis=0,
+        ).any(axis=-1)
+        move_embeddings = jax.vmap(self._embed_moves)(env_step.moveset)
 
         private_mask = jnp.ones_like(switch_embeddings[..., 0], dtype=jnp.bool)
 
@@ -1030,9 +1056,10 @@ class Encoder(nn.Module):
             )
         )
 
+        flat_move_embeddings = move_embeddings.reshape(-1, self.cfg.entity_size)
         input_state_sequence = jnp.concatenate(
             (
-                move_embeddings,
+                flat_move_embeddings,
                 switch_embeddings,
                 entity_embeddings,
                 latest_timestep_embeddings,
@@ -1046,7 +1073,7 @@ class Encoder(nn.Module):
         state_positions = jnp.concatenate(
             (
                 jnp.broadcast_to(current_position, entity_embeddings.shape[:-1]),
-                jnp.broadcast_to(current_position, move_embeddings.shape[:-1]),
+                jnp.broadcast_to(current_position, flat_move_embeddings.shape[:-1]),
                 jnp.broadcast_to(current_position, switch_embeddings.shape[:-1]),
                 latest_timestep_positions,
             )
@@ -1086,12 +1113,17 @@ class Encoder(nn.Module):
         switch_order_values = env_step.info[switch_order_indices]
         switch_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
 
+        move_embeddings = move_embeddings + self.wildcard_embedding
+        move_embeddings = jnp.concatenate((move_embeddings, move_embeddings))
+
         output_state_embeddings = jnp.concatenate(
             [
                 self.state_embeddings,
-                move_embeddings,
+                move_embeddings.reshape(-1, self.cfg.entity_size),
                 switch_embeddings,
-                entity_embeddings,
+                entity_embeddings[:2],
+                entity_embeddings[6:8],
+                self.extra_embeddings,
             ],
             axis=0,
         )
@@ -1101,7 +1133,7 @@ class Encoder(nn.Module):
         output_state_embeddings = self.state_norm_out(output_state_embeddings)
 
         state_embeddings = output_state_embeddings[:1]
-        action_embeddings = output_state_embeddings[1:]
+        action_embeddings = output_state_embeddings
 
         state_embedding = state_embeddings.reshape(-1)
 

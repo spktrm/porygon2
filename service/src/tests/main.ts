@@ -61,9 +61,9 @@ async function playerController(player: TrainablePlayerAI) {
             // A request is pending, so we need to choose an action.
             const stepRequest = new StepRequest();
 
-            const actionList = GetRandomAction({ player });
+            const action = GetRandomAction({ player });
 
-            stepRequest.setActionsList(actionList);
+            stepRequest.setAction(action);
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         } catch (error) {
@@ -75,16 +75,19 @@ async function playerController(player: TrainablePlayerAI) {
     return { historyLength, packedHistoryLength };
 }
 
+const testFormats = ["gen9randomdoublesbattle", "gen9vgc2025regibo3", "gen9ou"];
+
 async function runBattle() {
     console.log("Creating battle...");
 
+    const smogonFormat =
+        testFormats[Math.floor(Math.random() * testFormats.length)];
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou"),
-        // smogonFormat: "gen9randomdoublesbattle",
-        smogonFormat: "gen9ou",
+        smogonFormat,
     };
     const { p1, p2 } = createBattle(battleOptions, false);
     const players = [p1];

@@ -9,87 +9,49 @@ message ClientRequest {
   }
 }
 
-enum OutputActionEnum {
-  OUTPUT_ACTION_ENUM___UNSPECIFIED = 0;
-  OUTPUT_ACTION_ENUM__MY_TEAM_CLS = 1;
-  OUTPUT_ACTION_ENUM__OPP_TEAM_CLS = 2;
-  OUTPUT_ACTION_ENUM__MOVE_1 = 3;
-  OUTPUT_ACTION_ENUM__MOVE_2 = 4;
-  OUTPUT_ACTION_ENUM__MOVE_3 = 5;
-  OUTPUT_ACTION_ENUM__MOVE_4 = 6;
-  OUTPUT_ACTION_ENUM__MOVE_1_WILDCARD = 7;
-  OUTPUT_ACTION_ENUM__MOVE_2_WILDCARD = 8;
-  OUTPUT_ACTION_ENUM__MOVE_3_WILDCARD = 9;
-  OUTPUT_ACTION_ENUM__MOVE_4_WILDCARD = 10;
-  OUTPUT_ACTION_ENUM__SWITCH_1 = 11;
-  OUTPUT_ACTION_ENUM__SWITCH_2 = 12;
-  OUTPUT_ACTION_ENUM__SWITCH_3 = 13;
-  OUTPUT_ACTION_ENUM__SWITCH_4 = 14;
-  OUTPUT_ACTION_ENUM__SWITCH_5 = 15;
-  OUTPUT_ACTION_ENUM__SWITCH_6 = 16;
-  OUTPUT_ACTION_ENUM__TARGET_1 = 17;
-  OUTPUT_ACTION_ENUM__TARGET_2 = 18;
-  OUTPUT_ACTION_ENUM__TARGET_3 = 19;
-  OUTPUT_ACTION_ENUM__TARGET_4 = 20;
-  OUTPUT_ACTION_ENUM__TARGET_5 = 21;
-  OUTPUT_ACTION_ENUM__TARGET_6 = 22;
-  OUTPUT_ACTION_ENUM__TARGET_7 = 23;
-  OUTPUT_ACTION_ENUM__TARGET_8 = 24;
-  OUTPUT_ACTION_ENUM__TARGET_9 = 25;
-  OUTPUT_ACTION_ENUM__TARGET_10 = 26;
-  OUTPUT_ACTION_ENUM__TARGET_11 = 27;
-  OUTPUT_ACTION_ENUM__TARGET_12 = 28;
-}
-
 enum ActionEnum {
   ACTION_ENUM___UNSPECIFIED = 0;
-  ACTION_ENUM__MOVE_1_TARGET_NA = 1;
-  ACTION_ENUM__MOVE_1_TARGET_1 = 2;
-  ACTION_ENUM__MOVE_1_TARGET_2 = 3;
-  ACTION_ENUM__MOVE_1_TARGET_3 = 4;
-  ACTION_ENUM__MOVE_1_TARGET_4 = 5;
-  ACTION_ENUM__MOVE_2_TARGET_NA = 6;
-  ACTION_ENUM__MOVE_2_TARGET_1 = 7;
-  ACTION_ENUM__MOVE_2_TARGET_2 = 8;
-  ACTION_ENUM__MOVE_2_TARGET_3 = 9;
-  ACTION_ENUM__MOVE_2_TARGET_4 = 10;
-  ACTION_ENUM__MOVE_3_TARGET_NA = 11;
-  ACTION_ENUM__MOVE_3_TARGET_1 = 12;
-  ACTION_ENUM__MOVE_3_TARGET_2 = 13;
-  ACTION_ENUM__MOVE_3_TARGET_3 = 14;
-  ACTION_ENUM__MOVE_3_TARGET_4 = 15;
-  ACTION_ENUM__MOVE_4_TARGET_NA = 16;
-  ACTION_ENUM__MOVE_4_TARGET_1 = 17;
-  ACTION_ENUM__MOVE_4_TARGET_2 = 18;
-  ACTION_ENUM__MOVE_4_TARGET_3 = 19;
-  ACTION_ENUM__MOVE_4_TARGET_4 = 20;
-  ACTION_ENUM__SWITCH_1 = 21;
-  ACTION_ENUM__SWITCH_2 = 22;
-  ACTION_ENUM__SWITCH_3 = 23;
-  ACTION_ENUM__SWITCH_4 = 24;
-  ACTION_ENUM__SWITCH_5 = 25;
-  ACTION_ENUM__SWITCH_6 = 26;
-  ACTION_ENUM__DEFAULT = 27;
-  ACTION_ENUM__PASS = 28;
+  ACTION_ENUM__DEFAULT = 1;
+  ACTION_ENUM__ALLY_1_MOVE_1 = 2;
+  ACTION_ENUM__ALLY_1_MOVE_2 = 3;
+  ACTION_ENUM__ALLY_1_MOVE_3 = 4;
+  ACTION_ENUM__ALLY_1_MOVE_4 = 5;
+  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD = 6;
+  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD = 7;
+  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD = 8;
+  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD = 9;
+  ACTION_ENUM__ALLY_2_MOVE_1 = 10;
+  ACTION_ENUM__ALLY_2_MOVE_2 = 11;
+  ACTION_ENUM__ALLY_2_MOVE_3 = 12;
+  ACTION_ENUM__ALLY_2_MOVE_4 = 13;
+  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD = 14;
+  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD = 15;
+  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD = 16;
+  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD = 17;
+  ACTION_ENUM__RESERVE_1 = 18;  
+  ACTION_ENUM__RESERVE_2 = 19;
+  ACTION_ENUM__RESERVE_3 = 20;
+  ACTION_ENUM__RESERVE_4 = 21;
+  ACTION_ENUM__RESERVE_5 = 22;
+  ACTION_ENUM__RESERVE_6 = 23;
+  ACTION_ENUM__ALLY_1 = 24;
+  ACTION_ENUM__ALLY_2 = 25;
+  ACTION_ENUM__ENEMY_1 = 26;
+  ACTION_ENUM__ENEMY_2 = 27;
+  ACTION_ENUM__TARGET_AUTO = 28;
+  ACTION_ENUM__ALLY_1_PASS = 29;
+  ACTION_ENUM__ALLY_2_PASS = 30;
 }
 
-enum WildCardEnum {
-  WILD_CARD_ENUM___UNSPECIFIED = 0; 
-  WILD_CARD_ENUM__CAN_NORMAL = 1; 
-  WILD_CARD_ENUM__CAN_MEGA = 2; 
-  WILD_CARD_ENUM__CAN_ZMOVE = 3; 
-  WILD_CARD_ENUM__CAN_MAX = 4; 
-  WILD_CARD_ENUM__CAN_TERA = 5; 
-}
 
 message Action {
-  ActionEnum action = 1;
-  WildCardEnum wildcard = 2;
+  ActionEnum src = 1;
+  ActionEnum tgt = 2;
 }
 
 message StepRequest {
   string username = 1;
-  repeated Action actions = 2;
+  Action action = 2;
   int32 rqid = 3;
   bool teampreview = 4;
 }
@@ -106,19 +68,18 @@ message ResetRequest {
 message EnvironmentState {
   bytes info = 1;
   bytes action_mask = 2;
-  bytes wildcard_mask = 3;
-  bytes history_entity_public = 4;
-  bytes history_entity_revealed = 5;
-  bytes history_entity_edges = 6;
-  bytes history_field = 7;
-  int32 history_length = 8;
-  bytes moveset = 9;
-  bytes public_team = 10;
-  bytes revealed_team = 11;
-  bytes private_team = 12;
-  bytes field = 13;
-  int32 rqid = 14;
-  int32 history_packed_length = 15;
+  bytes history_entity_public = 3;
+  bytes history_entity_revealed = 4;
+  bytes history_entity_edges = 5;
+  bytes history_field = 6;
+  int32 history_length = 7;
+  bytes moveset = 8;
+  bytes public_team = 9;
+  bytes revealed_team = 10;
+  bytes private_team = 11;
+  bytes field = 12;
+  int32 rqid = 13;
+  int32 history_packed_length = 14;
 }
 
 message EnvironmentTrajectory {

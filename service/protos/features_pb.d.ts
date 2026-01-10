@@ -209,6 +209,7 @@ export interface InfoFeatureMap {
   INFO_FEATURE__SWITCH_ORDER_VALUE3: 15;
   INFO_FEATURE__SWITCH_ORDER_VALUE4: 16;
   INFO_FEATURE__SWITCH_ORDER_VALUE5: 17;
+  INFO_FEATURE__REQUEST_TYPE: 18;
 }
 
 export const InfoFeature: InfoFeatureMap;
@@ -220,6 +221,15 @@ export interface ActionTypeMap {
 }
 
 export const ActionType: ActionTypeMap;
+
+export interface RequestTypeMap {
+  REQUEST_TYPE___UNSPECIFIED: 0;
+  REQUEST_TYPE__MOVE: 1;
+  REQUEST_TYPE__SWITCH: 2;
+  REQUEST_TYPE__TEAM: 3;
+}
+
+export const RequestType: RequestTypeMap;
 
 export interface PackedSetFeatureMap {
   PACKED_SET_FEATURE___UNSPECIFIED: 0;

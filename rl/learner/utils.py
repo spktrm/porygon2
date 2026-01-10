@@ -4,9 +4,9 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from rl.actor.actor import ActionEnum
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.environment.protos.service_pb2 import WildCardEnum
 from rl.learner.config import Porygon2LearnerConfig
 
 
@@ -38,10 +38,11 @@ def collect_batch_telemetry_data(
     action_index = (
         batch.player_transitions.agent_output.actor_output.action_head.action_index
     )
-    wildcard_index = (
-        batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
+    did_move = (
+        (action_index >= ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_1)
+        & (action_index <= ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_4_WILDCARD)
+        & can_move
     )
-    did_move = (action_index < 4) & can_move
     did_switch = (action_index >= 4) & can_switch
     move_ratio = renormalize(did_move, can_act)
     switch_ratio = renormalize(did_switch, can_act)

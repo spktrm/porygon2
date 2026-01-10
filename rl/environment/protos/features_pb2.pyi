@@ -197,12 +197,20 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__SWITCH_ORDER_VALUE3: _ClassVar[InfoFeature]
     INFO_FEATURE__SWITCH_ORDER_VALUE4: _ClassVar[InfoFeature]
     INFO_FEATURE__SWITCH_ORDER_VALUE5: _ClassVar[InfoFeature]
+    INFO_FEATURE__REQUEST_TYPE: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_TYPE___UNSPECIFIED: _ClassVar[ActionType]
     ACTION_TYPE__MOVE: _ClassVar[ActionType]
     ACTION_TYPE__SWITCH: _ClassVar[ActionType]
+
+class RequestType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    REQUEST_TYPE___UNSPECIFIED: _ClassVar[RequestType]
+    REQUEST_TYPE__MOVE: _ClassVar[RequestType]
+    REQUEST_TYPE__SWITCH: _ClassVar[RequestType]
+    REQUEST_TYPE__TEAM: _ClassVar[RequestType]
 
 class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -402,9 +410,14 @@ INFO_FEATURE__SWITCH_ORDER_VALUE2: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE3: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE4: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE5: InfoFeature
+INFO_FEATURE__REQUEST_TYPE: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType
+REQUEST_TYPE___UNSPECIFIED: RequestType
+REQUEST_TYPE__MOVE: RequestType
+REQUEST_TYPE__SWITCH: RequestType
+REQUEST_TYPE__TEAM: RequestType
 PACKED_SET_FEATURE___UNSPECIFIED: PackedSetFeature
 PACKED_SET_FEATURE__SPECIES: PackedSetFeature
 PACKED_SET_FEATURE__ITEM: PackedSetFeature
