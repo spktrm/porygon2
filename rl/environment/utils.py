@@ -4,7 +4,6 @@ import jax
 import numpy as np
 import rlax
 
-from embeddings.packed_set import SpeciesEnum
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
@@ -17,7 +16,6 @@ from rl.environment.data import (
     NUM_HISTORY,
     NUM_MOVE_FEATURES,
     NUM_SPECIES,
-    NUM_WILDCARD_FEATURES,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -31,12 +29,13 @@ from rl.environment.interfaces import (
     PlayerPackedHistoryOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
     EntityRevealedNodeFeature,
     FieldFeature,
     InfoFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentState
+from rl.environment.protos.service_pb2 import EnvironmentState
 
 T = TypeVar("T")
 
@@ -102,34 +101,10 @@ def clip_packed_history(
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 
-def get_action_mask(state: EnvironmentState, num_active: int):
+def get_action_mask(state: EnvironmentState):
     buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
-    mask = np.unpackbits(buffer, axis=-1)
-    return np.take(
-        mask[: num_active * NUM_ACTION_FEATURES].astype(bool),
-        [
-            ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
-            ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
-            ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
-            ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
-            ActionEnum.ACTION_ENUM__SWITCH_1,
-            ActionEnum.ACTION_ENUM__SWITCH_2,
-            ActionEnum.ACTION_ENUM__SWITCH_3,
-            ActionEnum.ACTION_ENUM__SWITCH_4,
-            ActionEnum.ACTION_ENUM__SWITCH_5,
-            ActionEnum.ACTION_ENUM__SWITCH_6,
-        ],
-    ).reshape(10)
-
-
-def get_tera_mask(state: EnvironmentState, num_active: int):
-    buffer = np.frombuffer(state.wildcard_mask, dtype=np.uint8)
-    mask = np.unpackbits(buffer, axis=-1)
-    return (
-        mask[: num_active * NUM_WILDCARD_FEATURES]
-        .astype(bool)
-        .reshape(NUM_WILDCARD_FEATURES)
-    )
+    mask = np.unpackbits(buffer, axis=-1)[: NUM_ACTION_FEATURES**2]
+    return mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
 
 
 def process_state(
@@ -168,7 +143,7 @@ def process_state(
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
-        .reshape(4, NUM_MOVE_FEATURES)
+        .reshape(2, 4, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
     private_team = (
@@ -201,8 +176,6 @@ def process_state(
     # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
     fib_reward = fib_reward_token / MAX_RATIO_TOKEN
 
-    num_active = info[InfoFeature.INFO_FEATURE__NUM_ACTIVE].item()
-
     env_step = PlayerEnvOutput(
         info=info,
         done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
@@ -213,8 +186,7 @@ def process_state(
         revealed_team=revealed_team,
         field=field,
         moveset=moveset,
-        action_mask=get_action_mask(state, num_active),
-        wildcard_mask=get_tera_mask(state, num_active),
+        action_mask=get_action_mask(state),
     )
     packed_history_step = PlayerPackedHistoryOutput(
         public=history_entity_public,
@@ -251,8 +223,11 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
         PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
             value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
-            wildcard_head=PolicyHeadOutput(action_index=env.wildcard_mask.argmax(-1)),
+            action_head=PolicyHeadOutput(
+                action_index=env.action_mask.reshape(
+                    env.action_mask.shape[:-2] + (-1,)
+                ).argmax(-1)
+            ),
         ),
     )
 

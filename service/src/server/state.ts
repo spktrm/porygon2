@@ -31,9 +31,10 @@ import {
     EnumMappings,
     MoveIndex,
     NUM_HISTORY,
+    WILDCARDS,
     jsonDatum,
     lookUpSetsList,
-    numActionMaskFeatures,
+    numActionFeatures,
     numEntityEdgeFeatures,
     numFieldFeatures,
     numInfoFeatures,
@@ -41,7 +42,6 @@ import {
     numPrivateEntityNodeFeatures,
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
-    numWildcardMaskFeatures,
     sets,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
@@ -61,14 +61,10 @@ import {
     InfoFeature,
     MovesetFeature,
     MovesetHasPP,
+    RequestType,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
-import {
-    ActionEnum,
-    ActionEnumMap,
-    EnvironmentState,
-    WildCardEnum,
-} from "../../protos/service_pb";
+import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
@@ -3084,9 +3080,7 @@ class PrivateActionHandler {
     constructor(player: TrainablePlayerAI) {
         this.player = player;
         this.request = player.getRequest();
-
-        // const numActive = (this.request?.active ?? []).length;
-        this.actionBuffer = new Int16Array(1 * 4 * numMoveFeatures);
+        this.actionBuffer = new Int16Array(2 * 4 * numMoveFeatures);
     }
 
     assignActionBuffer(args: { offset: number; index: number; value: number }) {
@@ -3178,7 +3172,7 @@ class PrivateActionHandler {
         let actionOffset = 0;
 
         for (const [activeIndex, activePokemon] of actives.entries()) {
-            let moves = [];
+            const moves = activePokemon?.moves ?? [];
             if (activePokemon !== null) {
                 const { pokemon, index: entityIndex } =
                     this.player.eventHandler.getPokemon(
@@ -3190,7 +3184,6 @@ class PrivateActionHandler {
                         `Pokemon ${switches[activeIndex].ident} not found`,
                     );
                 }
-                moves = activePokemon.moves;
                 for (const action of moves) {
                     this.pushMoveAction(actionOffset, action);
                     this.assignActionBuffer({
@@ -3204,152 +3197,16 @@ class PrivateActionHandler {
             actionOffset += (4 - moves.length) * numMoveFeatures;
         }
 
-        return new Uint8Array(this.actionBuffer.buffer);
-    }
-}
-
-class PublicActionHandler {
-    player: TrainablePlayerAI;
-    actionBuffer: Int16Array;
-
-    constructor(player: TrainablePlayerAI) {
-        this.player = player;
-
-        const request = player.getRequest();
-        const numActive = (request?.active ?? []).length;
-        this.actionBuffer = new Int16Array(
-            (numActive * 4 + 6) * numMoveFeatures,
+        const numPadMoves = Math.floor(
+            (this.actionBuffer.length - actionOffset) / numMoveFeatures,
         );
-    }
-
-    assignActionBuffer(args: { offset: number; index: number; value: number }) {
-        const { offset, index, value } = args;
-        this.actionBuffer[offset + index] = value;
-    }
-
-    pushMoveAction(actionOffset: number, move: Pokemon["moveSlots"][number]) {
-        if ("ppUsed" in move) {
-            const moveData = this.player.eventHandler.getMove(move.id);
-            if (moveData === undefined || moveData.pp === undefined) {
-                throw new Error(`Move ${move.id} not found`);
-            }
-            const maxpp = (8 / 5) * moveData.pp;
-            const pp = maxpp - move.ppUsed;
+        for (let i = 0; i < numPadMoves; i++) {
             this.assignActionBuffer({
                 offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPP.MOVESET_HAS_PP__YES,
+                index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+                value: MovesEnum.MOVES_ENUM___PAD,
             });
-            this.assignActionBuffer({
-                offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__PP,
-                value: pp,
-            });
-            this.assignActionBuffer({
-                offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__MAXPP,
-                value: maxpp,
-            });
-            this.assignActionBuffer({
-                offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__PP_RATIO,
-                value: MAX_RATIO_TOKEN * (pp / maxpp),
-            });
-        } else {
-            this.assignActionBuffer({
-                offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-                value: MovesetHasPP.MOVESET_HAS_PP__NO,
-            });
-        }
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-            value: IndexValueFromEnum(MovesEnum, move.id),
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: ActionType.ACTION_TYPE__MOVE,
-        });
-    }
-
-    pushSwitchAction(actionOffset: number, switchIndex: number) {
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-            value: MovesEnum.MOVES_ENUM___SWITCH_IN,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
-            value: ActionType.ACTION_TYPE__SWITCH,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
-            value: MovesetHasPP.MOVESET_HAS_PP__NO,
-        });
-        this.assignActionBuffer({
-            offset: actionOffset,
-            index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-            value: switchIndex,
-        });
-    }
-
-    build() {
-        const side =
-            this.player.publicBattle.sides[1 - this.player.getPlayerIndex()!];
-        const actives = side.active;
-        const switches = side.team;
-
-        let actionOffset = 0;
-
-        for (const [activeIndex, activePokemon] of actives.entries()) {
-            let moves = [];
-            if (activePokemon !== null) {
-                const { pokemon, index: entityIndex } =
-                    this.player.eventHandler.getPokemon(
-                        switches[activeIndex].ident,
-                        false,
-                    );
-                if (pokemon === null) {
-                    throw new Error(
-                        `Pokemon ${switches[activeIndex].ident} not found`,
-                    );
-                }
-                moves = activePokemon.moveSlots.slice(0, 4);
-                for (const move of moves) {
-                    this.pushMoveAction(actionOffset, move);
-                    this.assignActionBuffer({
-                        offset: actionOffset,
-                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-                        value: entityIndex,
-                    });
-                    actionOffset += numMoveFeatures;
-                }
-                for (let i = 0; i < 4 - moves.length; i++) {
-                    this.pushMoveAction(actionOffset, {
-                        ppUsed: 0,
-                        name: "" as Protocol.MoveName,
-                        id: "" as ID,
-                    });
-                    this.assignActionBuffer({
-                        offset: actionOffset,
-                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
-                        value: entityIndex,
-                    });
-                    actionOffset += numMoveFeatures;
-                }
-                for (const [switchIndex] of switches.entries()) {
-                    this.pushSwitchAction(actionOffset, switchIndex);
-                    actionOffset += numMoveFeatures;
-                }
-                actionOffset += (6 - switches.length) * numMoveFeatures;
-            } else {
-                actionOffset += moves.length * numMoveFeatures;
-                actionOffset += switches.length * numMoveFeatures;
-            }
+            actionOffset += numMoveFeatures;
         }
 
         return new Uint8Array(this.actionBuffer.buffer);
@@ -3410,44 +3267,26 @@ export class StateHandler {
         this.player = player;
     }
 
-    static getActionMask(args: {
-        request?: AnyObject | null;
-        format?: string;
-    }): {
+    getActionMask(args: { request?: AnyObject | null; format?: string }): {
         actionMask: OneDBoolean;
-        wildCardMask: OneDBoolean;
         isStruggling: boolean;
     } {
         const { request, format } = args;
 
-        const numActive = format && format.includes("doubles") ? 2 : 1;
-
+        const arrLength = numActionFeatures ** 2;
         const actionMask = new OneDBoolean(
-            numActive * numActionMaskFeatures,
+            arrLength,
             Uint8Array,
-        );
-        const wildCardMask = new OneDBoolean(
-            numActive * numWildcardMaskFeatures,
-            Uint8Array,
+            numActionFeatures,
         );
         let isStruggling = false;
 
         const setAll = (val: boolean) => {
-            for (let i = 0; i < numActive * numActionMaskFeatures; i++) {
+            for (let i = 0; i < arrLength; i++) {
                 actionMask.set(i, val);
-            }
-            for (let i = 0; i < numActive * numWildcardMaskFeatures; i++) {
-                wildCardMask.set(i, val);
             }
         };
         setAll(false);
-
-        for (let i = 0; i < numActive; i++)
-            wildCardMask.set(
-                i * numWildcardMaskFeatures +
-                    WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL,
-                true,
-            );
 
         if (request === undefined || request === null) {
             setAll(true);
@@ -3459,38 +3298,57 @@ export class StateHandler {
                     .pokemon as Protocol.Request.SideInfo["pokemon"];
 
                 for (const [i, mustSwitch] of request.forceSwitch.entries()) {
+                    if (i != this.player.choices.length) {
+                        continue;
+                    }
+
+                    const rowColValPassValue =
+                        ActionEnum[
+                            `ACTION_ENUM__ALLY_${
+                                i + 1
+                            }_PASS` as keyof typeof ActionEnum
+                        ];
                     if (!mustSwitch) {
-                        actionMask.set(
-                            i * numActionMaskFeatures +
-                                ActionEnum.ACTION_ENUM__PASS,
+                        actionMask.setRowCol(
+                            rowColValPassValue,
+                            rowColValPassValue,
                             true,
                         );
                         continue;
                     }
+
                     const canSwitch = Array.from(pokemon.entries()).filter(
                         ([j, p]) => {
                             return (
                                 p &&
                                 j >= request.forceSwitch.length &&
+                                !this.player.choices.includes(
+                                    `switch ${j + 1}`,
+                                ) &&
                                 !p.condition.endsWith(" fnt") ===
                                     !pokemon[i].reviving
                             );
                         },
                     );
                     if (canSwitch.length === 0) {
-                        actionMask.set(
-                            i * numActionMaskFeatures +
-                                ActionEnum.ACTION_ENUM__PASS,
+                        actionMask.setRowCol(
+                            rowColValPassValue,
+                            rowColValPassValue,
                             true,
                         );
                         continue;
                     }
+
                     for (const [j, _] of canSwitch) {
-                        const switchIndex =
-                            i * numActionMaskFeatures +
-                            ActionEnum.ACTION_ENUM__SWITCH_1 +
-                            j;
-                        actionMask.set(switchIndex, true);
+                        actionMask.setRowCol(
+                            ActionEnum.ACTION_ENUM__ALLY_1 + i,
+                            ActionEnum[
+                                `ACTION_ENUM__RESERVE_${
+                                    j + 1
+                                }` as keyof typeof ActionEnum
+                            ],
+                            true,
+                        );
                     }
                 }
             } else if (request.active) {
@@ -3506,13 +3364,23 @@ export class StateHandler {
                     .pokemon as Protocol.Request.SideInfo["pokemon"];
 
                 for (const [i, active] of request.active.entries()) {
+                    if (i != this.player.choices.length) {
+                        continue;
+                    }
+
+                    const rowColValPassValue =
+                        ActionEnum[
+                            `ACTION_ENUM__ALLY_${
+                                i + 1
+                            }_PASS` as keyof typeof ActionEnum
+                        ];
                     if (
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
                     ) {
-                        actionMask.set(
-                            i * numActionMaskFeatures +
-                                ActionEnum.ACTION_ENUM__PASS,
+                        actionMask.setRowCol(
+                            rowColValPassValue,
+                            rowColValPassValue,
                             true,
                         );
                         continue;
@@ -3548,37 +3416,28 @@ export class StateHandler {
 
                     for (const [j, move] of canMove) {
                         const actionIndices: number[] = [];
-                        if (request.active.length > 1 && "target" in move) {
+                        if (
+                            this.player.privateBattle.gameType === "doubles" &&
+                            "target" in move
+                        ) {
                             switch (move.target) {
                                 case "any":
                                 case "normal":
                                     actionIndices.push(
                                         ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_${
+                                            `ACTION_ENUM__ALLY_${
                                                 2 - i
                                             }` as keyof typeof ActionEnum
                                         ],
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_3` as keyof typeof ActionEnum
-                                        ],
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_4` as keyof typeof ActionEnum
-                                        ],
+                                        ActionEnum.ACTION_ENUM__ENEMY_1,
+                                        ActionEnum.ACTION_ENUM__ENEMY_2,
                                     );
                                     break;
 
                                 case "adjacentAlly":
                                     actionIndices.push(
                                         ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_${
+                                            `ACTION_ENUM__ALLY_${
                                                 2 - i
                                             }` as keyof typeof ActionEnum
                                         ],
@@ -3587,46 +3446,19 @@ export class StateHandler {
 
                                 case "adjacentFoe":
                                     actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_3` as keyof typeof ActionEnum
-                                        ],
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_4` as keyof typeof ActionEnum
-                                        ],
+                                        ActionEnum.ACTION_ENUM__ENEMY_1,
+                                        ActionEnum.ACTION_ENUM__ENEMY_2,
                                     );
                                     break;
 
                                 case "adjacentAllyOrSelf":
                                     actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_${
-                                                i + 1
-                                            }` as keyof typeof ActionEnum
-                                        ],
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_${
-                                                2 - i
-                                            }` as keyof typeof ActionEnum
-                                        ],
+                                        ActionEnum.ACTION_ENUM__ALLY_1,
+                                        ActionEnum.ACTION_ENUM__ALLY_2,
                                     );
                                     break;
+
                                 case "self":
-                                    actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_NA` as keyof typeof ActionEnum
-                                        ],
-                                    );
-                                    break;
                                 case "all":
                                 case "allySide":
                                 case "foeSide":
@@ -3637,104 +3469,126 @@ export class StateHandler {
                                 case "allies":
                                 case "scripted":
                                     actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_NA` as keyof typeof ActionEnum
-                                        ],
+                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
+
                                 default:
                                     actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__MOVE_${
-                                                j + 1
-                                            }_TARGET_NA` as keyof typeof ActionEnum
-                                        ],
+                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
                             }
                         } else {
                             actionIndices.push(
-                                ActionEnum[
-                                    `ACTION_ENUM__MOVE_${
-                                        j + 1
-                                    }_TARGET_NA` as keyof typeof ActionEnum
-                                ],
+                                ActionEnum.ACTION_ENUM__TARGET_AUTO,
                             );
                         }
                         for (const actionIndex of actionIndices) {
                             if (actionIndex === undefined) {
                                 throw new Error(
-                                    `Undefined action index for move ${j} with target ${
+                                    `Undefined action index for move ${
+                                        move.name
+                                    } with target ${
                                         "target" in move ? move.target : "N/A"
                                     }`,
                                 );
                             }
-                            const moveIndex =
-                                i * numActionMaskFeatures + actionIndex;
-                            actionMask.set(moveIndex, true);
+                            const rowIndex =
+                                ActionEnum[
+                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
+                                        j + 1
+                                    }` as keyof typeof ActionEnum
+                                ];
+                            actionMask.setRowCol(rowIndex, actionIndex, true);
+                            const wildCardRowIndex =
+                                ActionEnum[
+                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
+                                        j + 1
+                                    }_WILDCARD` as keyof typeof ActionEnum
+                                ];
+
+                            const wildCardChosenAlready = this.player.choices
+                                .map((x) =>
+                                    WILDCARDS.map((wildcard) =>
+                                        x.endsWith(wildcard),
+                                    ).some((x) => x),
+                                )
+                                .some((x) => x);
+                            const canWildCard =
+                                (!!canMegaEvo ||
+                                    !!canUltraBurst ||
+                                    !!canZMove ||
+                                    !!canTerastallize) &&
+                                !wildCardChosenAlready;
+
+                            actionMask.setRowCol(
+                                wildCardRowIndex,
+                                actionIndex,
+                                canWildCard,
+                            );
                         }
                     }
-
-                    wildCardMask.set(
-                        i * numWildcardMaskFeatures +
-                            WildCardEnum.WILD_CARD_ENUM__CAN_MEGA,
-                        !!canMegaEvo,
-                    );
-                    wildCardMask.set(
-                        i * numWildcardMaskFeatures +
-                            WildCardEnum.WILD_CARD_ENUM__CAN_MAX,
-                        !!canDynamax,
-                    );
-                    wildCardMask.set(
-                        i * numWildcardMaskFeatures +
-                            WildCardEnum.WILD_CARD_ENUM__CAN_TERA,
-                        !!canTerastallize,
-                    );
 
                     const canSwitch = Array.from(pokemon.entries()).filter(
                         ([j, p]) => {
                             return (
-                                p && !p.active && !p.condition.endsWith(" fnt")
+                                p &&
+                                !p.active &&
+                                !this.player.choices.includes(
+                                    `switch ${j + 1}`,
+                                ) &&
+                                !p.condition.endsWith(" fnt")
                             );
                         },
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
+                    const switchFromIndex = ActionEnum.ACTION_ENUM__ALLY_1 + i;
+
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            const switchIndex =
-                                i * numActionMaskFeatures +
-                                ActionEnum.ACTION_ENUM__SWITCH_1 +
-                                j;
-                            actionMask.set(switchIndex, true);
+                            const switchToIndex =
+                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+
+                            actionMask.setRowCol(
+                                switchFromIndex,
+                                switchToIndex,
+                                true,
+                            );
                         }
                     }
                 }
             } else if (request.teamPreview) {
                 const pokemon = request.side.pokemon;
 
-                for (let j = 0; j < 6; j++) {
-                    const currentPokemon = pokemon[j];
-                    if (currentPokemon) {
-                        const switchIndex =
-                            ActionEnum.ACTION_ENUM__SWITCH_1 + j;
-                        actionMask.set(switchIndex, true);
+                for (let i = this.player.choices.length; i < 6; i++) {
+                    for (let j = this.player.choices.length; j < 6; j++) {
+                        const poke_i = pokemon[i];
+                        const poke_j = pokemon[j];
+
+                        if (poke_i && poke_j) {
+                            const switchFromIndex =
+                                ActionEnum.ACTION_ENUM__RESERVE_1 + i;
+                            const switchToIndex =
+                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+
+                            actionMask.setRowCol(
+                                switchFromIndex,
+                                switchToIndex,
+                                true,
+                            );
+                        }
                     }
                 }
             }
         }
-        return { actionMask, wildCardMask, isStruggling };
+
+        return { actionMask, isStruggling };
     }
 
     getMoveset(): Uint8Array {
         const actionHandler = new PrivateActionHandler(this.player);
-        return actionHandler.build();
-    }
-
-    getOppMoveset(): Uint8Array {
-        const actionHandler = new PublicActionHandler(this.player);
         return actionHandler.build();
     }
 
@@ -3754,8 +3608,19 @@ export class StateHandler {
 
         const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
 
+        const scoreOrder = (pokemon: Pokemon) => {
+            let score = 0;
+            if (pokemon.isActive()) {
+                score += 1;
+            }
+            score += pokemon.slot;
+            return score;
+        };
+
         try {
-            for (const member of team) {
+            for (const member of [...team].sort(
+                (a, b) => scoreOrder(b) - scoreOrder(a),
+            )) {
                 const { publicData, revealedData } = getArrayFromPublicPokemon(
                     member,
                     relativeSide,
@@ -3769,17 +3634,17 @@ export class StateHandler {
             const { publicData, revealedData } = relativeSide
                 ? unkPokemon1
                 : unkPokemon0;
-            for (let i = team.length; i < side.totalPokemon; i++) {
+            for (let i = team.length; i < 6; i++) {
                 publicBuffer.set(publicData, publicOffset);
                 revealedBuffer.set(revealedData, revealedOffset);
                 publicOffset += numPublicEntityNodeFeatures;
                 revealedOffset += numRevealedEntityNodeFeatures;
             }
 
-            for (let i = side.totalPokemon; i < 6; i++) {
-                revealedBuffer.set(nullPokemon, revealedOffset);
-                revealedOffset += numRevealedEntityNodeFeatures;
-            }
+            // for (let i = side.totalPokemon; i < 6; i++) {
+            //     revealedBuffer.set(nullPokemon, revealedOffset);
+            //     revealedOffset += numRevealedEntityNodeFeatures;
+            // }
         } catch (error) {
             console.log(error);
             console.log(team);
@@ -3814,9 +3679,23 @@ export class StateHandler {
         if (requestPokemon === undefined) {
             throw new Error("Request pokemon is undefined");
         } else {
-            for (const member of [...requestPokemon].sort((a, b) => {
-                return a.ident.localeCompare(b.ident);
-            })) {
+            let privateOrder;
+
+            if (request.teamPreview) {
+                privateOrder = [...requestPokemon];
+                for (const [toIdx, choice] of this.player.choices.entries()) {
+                    const fromIdx = parseInt(choice.split(" ")[1]) - 1;
+                    [privateOrder[toIdx], privateOrder[fromIdx]] = [
+                        privateOrder[fromIdx],
+                        privateOrder[toIdx],
+                    ];
+                }
+            } else {
+                privateOrder = [...requestPokemon].sort((a, b) => {
+                    return a.ident.localeCompare(b.ident);
+                });
+            }
+            for (const member of privateOrder) {
                 const name = toID(member.speciesForme);
                 const matchedSet = this.player.sets?.find((set) => {
                     const setSpecies = toID(set.species);
@@ -3973,6 +3852,18 @@ export class StateHandler {
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
+
+        if (request.teamPreview) {
+            infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
+                RequestType.REQUEST_TYPE__TEAM;
+        } else if (request.forceSwitch) {
+            infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
+                RequestType.REQUEST_TYPE__SWITCH;
+        } else {
+            infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
+                RequestType.REQUEST_TYPE__MOVE;
+        }
+
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4118,12 +4009,11 @@ export class StateHandler {
         const info = this.getInfo();
         state.setInfo(info);
 
-        const { actionMask, wildCardMask } = StateHandler.getActionMask({
+        const { actionMask } = this.getActionMask({
             request,
             format: this.player.privateBattle.gameType,
         });
         state.setActionMask(actionMask.buffer);
-        state.setWildcardMask(wildCardMask.buffer);
 
         const {
             historyEntityPublic,

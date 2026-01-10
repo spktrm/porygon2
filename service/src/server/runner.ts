@@ -16,13 +16,13 @@ import { EventHandler, RewardTracker, StateHandler } from "./state";
 import { Protocol } from "@pkmn/protocol";
 import {
     Action,
-    ActionEnum,
     EnvironmentState,
+    ActionEnum,
     StepRequest,
-    WildCardEnum,
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
+import { numActionFeatures } from "./data";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -142,6 +142,16 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
+function targetIdxToShowdownFormat(targetIndex: number): string {
+    if (0 <= targetIndex && targetIndex < 2) {
+        return `-` + (targetIndex + 1).toString();
+    } else if (2 <= targetIndex && targetIndex < 4) {
+        return "+" + (targetIndex - 1).toString();
+    } else {
+        return "";
+    }
+}
+
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
@@ -160,6 +170,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     playerIndex: number | undefined;
     requestCount: number;
     rqid: number;
+    choices: string[];
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -184,6 +195,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.sets = sets;
         this.eventHandler = new EventHandler(this);
         this.done = false;
+        this.choices = [];
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
@@ -267,100 +279,67 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
-    choiceFromAction(action: Action, isSingles: boolean = true): string {
-        const actionIndex = action.getAction();
+    choiceFromAction(action: Action): string {
+        const srcIndex = action.getSrc();
+        const tgtIndex = action.getTgt();
+
+        const targetIndex = tgtIndex - ActionEnum.ACTION_ENUM__ALLY_1;
+        const showdownFormat = targetIdxToShowdownFormat(targetIndex);
+
         if (
-            ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA <= actionIndex &&
-            actionIndex <= ActionEnum.ACTION_ENUM__MOVE_4_TARGET_4
+            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
         ) {
-            const moveIndex = Math.floor((actionIndex - 1) / 5);
-            const targetIndex = (actionIndex - 1) % 5;
-            const wildCardIndex = action.getWildcard();
+            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
 
-            let moveCommand = `move ${moveIndex + 1}`;
-            if (targetIndex !== 0 && !isSingles) {
-                const showdownFormat =
-                    targetIndex <= 2 ? -targetIndex : targetIndex - 2;
-                moveCommand += ` ${showdownFormat}`;
-            }
-            if (wildCardIndex !== WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL) {
-                switch (wildCardIndex) {
-                    case WildCardEnum.WILD_CARD_ENUM__CAN_MEGA:
-                        moveCommand += " mega";
-                        break;
-                    case WildCardEnum.WILD_CARD_ENUM__CAN_ZMOVE:
-                        moveCommand += " zmove";
-                        break;
-                    case WildCardEnum.WILD_CARD_ENUM__CAN_MAX:
-                        moveCommand += " dynamax";
-                        break;
-                    case WildCardEnum.WILD_CARD_ENUM__CAN_TERA:
-                        moveCommand += " terastallize";
-                        break;
-                    default:
-                        throw new Error(
-                            `Invalid wildcard index: ${wildCardIndex}`,
-                        );
-                }
-            }
-
-            return moveCommand;
+            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
         } else if (
-            ActionEnum.ACTION_ENUM__SWITCH_1 <= actionIndex &&
-            actionIndex <= ActionEnum.ACTION_ENUM__SWITCH_6
+            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
         ) {
-            const switchIndex = actionIndex - ActionEnum.ACTION_ENUM__SWITCH_1;
+            const moveIndex =
+                srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
+
+            return (
+                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
+                " terastallize"
+            );
+        } else if (
+            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1 <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
+        ) {
+            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
+
+            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
+        } else if (
+            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
+        ) {
+            const moveIndex =
+                srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
+
+            return (
+                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
+                " terastallize"
+            );
+        } else if (
+            ActionEnum.ACTION_ENUM__RESERVE_1 <= tgtIndex &&
+            tgtIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
+        ) {
+            const switchIndex = tgtIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
             return `switch ${switchIndex + 1}`;
-        } else if (actionIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
+        } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
-        } else if (actionIndex === ActionEnum.ACTION_ENUM__PASS) {
+        } else if (
+            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_PASS &&
+                srcIndex === tgtIndex) ||
+            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_PASS &&
+                srcIndex === tgtIndex)
+        ) {
             return "pass";
         } else {
-            throw new Error(`Invalid action index: ${actionIndex}`);
-        }
-    }
-
-    choicesFromActions(
-        actions: Action[],
-        isTeamPreview: boolean = false,
-    ): string {
-        if (isTeamPreview) {
-            const order: number[] = [];
-            for (const action of actions) {
-                const actionIndex = action.getAction();
-                if (
-                    ActionEnum.ACTION_ENUM__SWITCH_1 <= actionIndex &&
-                    actionIndex <= ActionEnum.ACTION_ENUM__SWITCH_6
-                ) {
-                    const switchIndex =
-                        actionIndex - ActionEnum.ACTION_ENUM__SWITCH_1;
-                    order.push(switchIndex + 1);
-                } else if (actionIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
-                    return "default";
-                } else {
-                    throw new Error(
-                        `Invalid team preview action index: ${actionIndex}`,
-                    );
-                }
-            }
-            // Numbers excluding those chosen
-            const rest = [1, 2, 3, 4, 5, 6]
-                .filter((n) => !order.includes(n))
-                .map((n) => n.toString())
-                .join("");
-            return `team ${order.join("")}${rest}`;
-        }
-        const choiceList: string[] = [];
-        const isSingles = !!this.privateBattle.gameType?.includes("singles");
-        if (actions.length === 1 || actions.length === 2) {
-            for (const action of actions) {
-                const choice = this.choiceFromAction(action, isSingles);
-                choiceList.push(choice);
-            }
-            return choiceList.join(",");
-        } else {
             throw new Error(
-                `Expected actions length of 1 or 2, but got ${actions.length}`,
+                `Invalid src index: ${srcIndex} and tgt index: ${tgtIndex}`,
             );
         }
     }
@@ -400,11 +379,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             );
         }
 
-        const actions = stepRequest.getActionsList()!;
-        return this.choicesFromActions(
-            actions,
-            !!this.getRequest()?.teamPreview,
-        );
+        const action = stepRequest.getAction()!;
+        return this.choiceFromAction(action);
     }
 
     private getEvalActorChoice() {
@@ -427,10 +403,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const actions = evalFn({
             player: this,
         });
-        return this.choicesFromActions(
-            actions,
-            !!this.getRequest()?.teamPreview,
-        );
+        return this.choiceFromAction(actions);
     }
 
     async getChoice(): Promise<string> {
@@ -458,9 +431,50 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         if (this.debug) console.log(line);
         if (!line.startsWith("|")) return;
         const [cmd, rest] = splitFirst(line.slice(1), "|");
-        if (cmd === "request") return this.receiveRequest(JSON.parse(rest));
-        if (cmd === "error") return this.receiveError(new Error(rest));
+        if (cmd === "request") {
+            return this.receiveRequest(JSON.parse(rest));
+        }
+        if (cmd === "error") {
+            return this.receiveError(new Error(rest));
+        }
         this.log.push(line);
+    }
+
+    async getChoices() {
+        let choicesNeeded = 1;
+        if (this.privateBattle.gameType === "doubles") {
+            choicesNeeded = 2;
+        } else if (this.privateBattle.gameType === "triples") {
+            choicesNeeded = 3;
+        }
+
+        const request = this.getRequest();
+        choicesNeeded = request.maxChosenTeamSize ?? choicesNeeded;
+
+        while (this.choices.length < choicesNeeded) {
+            const choice = await withTimeoutWarning(
+                () => this.getChoice(),
+                1000,
+                "getChoice",
+            );
+            this.choices.push(choice);
+        }
+
+        const getTeamPreviewChoice = () => {
+            let order = [1, 2, 3, 4, 5, 6];
+            for (const [toIdx, choice] of this.choices.entries()) {
+                const fromIdx = parseInt(choice.split(" ")[1]) - 1;
+                [order[toIdx], order[fromIdx]] = [order[fromIdx], order[toIdx]];
+            }
+            return "team " + order.join("");
+        };
+
+        const choice =
+            request.teamPreview ?? false
+                ? getTeamPreviewChoice()
+                : this.choices.join(",");
+        this.choices = [];
+        return choice;
     }
 
     override async start() {
@@ -491,11 +505,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                     if (cmd === "request" && this.isActionRequired()) {
                         this.rqid = this.getRequest().rqid;
 
-                        const choice = await withTimeoutWarning(
-                            () => this.getChoice(),
-                            1000,
-                            "getChoice",
-                        );
+                        const choice = await this.getChoices();
+
                         choices.push(choice);
 
                         // Process the received action

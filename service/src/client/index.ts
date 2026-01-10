@@ -196,14 +196,14 @@ class Battle {
                 });
                 // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
-                const { action, wildcard } = await response.json();
+                const { src, tgt } = await response.json();
                 const stepRequest = new StepRequest();
 
                 const protoAction = new ProtoAction();
-                protoAction.setAction(action);
-                protoAction.setWildcard(wildcard);
+                protoAction.setSrc(src);
+                protoAction.setTgt(tgt);
 
-                stepRequest.setActionsList([protoAction]);
+                stepRequest.setAction(protoAction);
                 stepRequest.setRqid(state.getRqid());
                 this.player.submitStepRequest(stepRequest);
             } else {

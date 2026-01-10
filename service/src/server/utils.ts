@@ -1,3 +1,5 @@
+import { numActionFeatures } from "./data";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export class TaskQueueSystem<T> {
     private results: Map<number, Promise<T>> = new Map();
@@ -85,6 +87,8 @@ const typedArrayElementSizes: {
 
 export class OneDBoolean<T extends TypedArray = Uint8Array> {
     private readonly length: number;
+    private readonly width: number | undefined;
+    private readonly height: number | undefined;
     private readonly data: T;
     private readonly bitsPerElement: number;
     private readonly mask: number;
@@ -92,8 +96,19 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
     constructor(
         length: number,
         bufferConstructor: new (length: number) => T = Uint8Array as any,
+        width: number | undefined = undefined,
     ) {
         this.length = length;
+        this.width = width;
+        if (width !== undefined) {
+            if (length % width !== 0) {
+                throw new Error(
+                    "Length must be a multiple of width for 2D representation",
+                );
+            }
+            this.height = Math.ceil(length / width);
+        }
+
         const elementSize =
             typedArrayElementSizes[
                 bufferConstructor.name as keyof typeof typedArrayElementSizes
@@ -145,6 +160,16 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         }
     }
 
+    setRowCol(row: number, col: number, value: boolean): void {
+        if (!row || !col) {
+            throw new Error(
+                "row and col must be defined for 2D representation",
+            );
+        }
+        const index = row * this.width! + col;
+        this.set(index, value);
+    }
+
     get buffer(): T {
         return this.data;
     }
@@ -157,7 +182,7 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         return result;
     }
 
-    sum() {
+    sum(axis?: number): number {
         let total = 0;
         for (let i = 0; i < this.length; i++) {
             if (this.get(i)) {
@@ -165,6 +190,10 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
             }
         }
         return total;
+    }
+
+    getLength(): number {
+        return this.length;
     }
 
     split(parts: number): OneDBoolean<T>[] {
@@ -202,6 +231,18 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         }
 
         return result;
+    }
+
+    logIndices(): void {
+        const indices = [];
+        for (let i = 0; i < this.length; i++) {
+            if (this.get(i)) {
+                const rowIndex = Math.floor(i / numActionFeatures);
+                const colIndex = i % numActionFeatures;
+                indices.push([rowIndex, colIndex]);
+            }
+        }
+        console.log("Indices with true values:", indices);
     }
 }
 

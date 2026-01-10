@@ -3,14 +3,17 @@ from pprint import pprint
 
 import cloudpickle as pickle
 import flax.linen as nn
+from grpc import beta
 import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.data import NUM_ACTION_FEATURES
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
+    PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
@@ -23,7 +26,7 @@ from rl.model.heads import (
     PolicyLogitHead,
     sample_categorical,
 )
-from rl.model.modules import SumEmbeddings
+from rl.model.modules import FiLMGenerator, SumEmbeddings
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -37,10 +40,10 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
 
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-        self.wildcard_merge = SumEmbeddings(
-            output_size=self.cfg.entity_size, dtype=self.cfg.dtype
-        )
-        self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
+
+        self.film_generator = FiLMGenerator(self.cfg.entity_size)
+        self.action_head2 = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -65,8 +68,16 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return PolicyHeadOutput(
-            action_index=action_index, log_prob=log_prob, entropy=entropy
+
+        src_index = jnp.floor(action_index / NUM_ACTION_FEATURES)
+        tgt_index = action_index - src_index * NUM_ACTION_FEATURES
+
+        return PlayerPolicyHeadOutput(
+            action_index=action_index,
+            log_prob=log_prob,
+            entropy=entropy,
+            src_index=src_index,
+            tgt_index=tgt_index,
         )
 
     def get_head_outputs(
@@ -77,35 +88,21 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
+
         action_logits = (
             self.action_head(action_embeddings, action_embeddings) / head_params.temp
         )
-
         action_head = self.post_head(
-            action_logits,
-            env_step.action_mask,
+            action_logits.reshape(-1),
+            env_step.action_mask.reshape(-1),
             actor_output.action_head,
             train=self.cfg.train,
             min_p=head_params.min_p,
         )
 
-        selected_move_embedding = jnp.take(
-            action_embeddings, action_head.action_index, axis=0
-        )
-        wildcard_merge = self.wildcard_merge(state_embedding, selected_move_embedding)
-        wildcard_head = self.wildcard_head(
-            wildcard_merge,
-            actor_output.wildcard_head,
-            env_step.wildcard_mask,
-            head_params,
-        )
         value_head = self.value_head(state_embedding)
 
-        return PlayerActorOutput(
-            action_head=action_head,
-            wildcard_head=wildcard_head,
-            value_head=value_head,
-        )
+        return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
     def __call__(
         self,
