@@ -104,6 +104,7 @@ class MovesetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MOVESET_FEATURE__ACTION_TYPE: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__ENTITY_IDX: _ClassVar[MovesetFeature]
     MOVESET_FEATURE__DISABLED: _ClassVar[MovesetFeature]
+    MOVESET_FEATURE__IS_WILDCARD: _ClassVar[MovesetFeature]
 
 class EntityEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -198,6 +199,9 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__SWITCH_ORDER_VALUE4: _ClassVar[InfoFeature]
     INFO_FEATURE__SWITCH_ORDER_VALUE5: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_TYPE: _ClassVar[InfoFeature]
+    INFO_FEATURE__HAS_PREV_ACTION: _ClassVar[InfoFeature]
+    INFO_FEATURE__PREV_ACTION_SRC: _ClassVar[InfoFeature]
+    INFO_FEATURE__PREV_ACTION_TGT: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -326,6 +330,7 @@ MOVESET_FEATURE__HAS_PP: MovesetFeature
 MOVESET_FEATURE__ACTION_TYPE: MovesetFeature
 MOVESET_FEATURE__ENTITY_IDX: MovesetFeature
 MOVESET_FEATURE__DISABLED: MovesetFeature
+MOVESET_FEATURE__IS_WILDCARD: MovesetFeature
 ENTITY_EDGE_FEATURE___UNSPECIFIED: EntityEdgeFeature
 ENTITY_EDGE_FEATURE__MAJOR_ARG: EntityEdgeFeature
 ENTITY_EDGE_FEATURE__MINOR_ARG0: EntityEdgeFeature
@@ -411,6 +416,9 @@ INFO_FEATURE__SWITCH_ORDER_VALUE3: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE4: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE5: InfoFeature
 INFO_FEATURE__REQUEST_TYPE: InfoFeature
+INFO_FEATURE__HAS_PREV_ACTION: InfoFeature
+INFO_FEATURE__PREV_ACTION_SRC: InfoFeature
+INFO_FEATURE__PREV_ACTION_TGT: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType

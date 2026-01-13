@@ -171,6 +171,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     requestCount: number;
     rqid: number;
     choices: string[];
+    actions: Action[];
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -196,6 +197,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.eventHandler = new EventHandler(this);
         this.done = false;
         this.choices = [];
+        this.actions = [];
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
@@ -380,6 +382,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
 
         const action = stepRequest.getAction()!;
+        this.actions.push(action);
+
         return this.choiceFromAction(action);
     }
 
@@ -470,10 +474,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         };
 
         const choice =
-            request.teamPreview ?? false
+            (request.teamPreview ?? false)
                 ? getTeamPreviewChoice()
                 : this.choices.join(",");
+
         this.choices = [];
+        this.actions = [];
+
         return choice;
     }
 

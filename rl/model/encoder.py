@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from rl.actor.actor import ActionEnum
 from rl.environment.data import (
     ACTION_MAX_VALUES,
     ENTITY_EDGE_MAX_VALUES,
@@ -43,6 +42,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
     MovesetFeature,
 )
+from rl.environment.protos.service_pb2 import ActionEnum
 from rl.model.modules import (
     MLP,
     SumEmbeddings,
@@ -51,6 +51,27 @@ from rl.model.modules import (
     create_attention_mask,
     dense_layer,
     one_hot_concat_jax,
+)
+
+MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+    ]
 )
 
 
@@ -216,6 +237,51 @@ class Encoder(nn.Module):
             name="effect_from_source_embedding",
             **embed_kwargs,
         )
+        self.wildcard_embedding = nn.Embed(
+            num_embeddings=2, name="wildcard_embedding", **embed_kwargs
+        )
+
+        # Positional / Modality Embeddings
+        self.move_embedding = self.param(
+            "move_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.private_embedding = self.param(
+            "private_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.public_embedding = self.param(
+            "public_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.prev_action_src_embedding = self.param(
+            "prev_action_src_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.prev_action_tgt_embedding = self.param(
+            "prev_action_tgt_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.timestep_embedding = self.param(
+            "timestep_embedding",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (1, entity_size),
+        )
+        self.switch_positional_embeddings = self.param(
+            "switch_positional_embeddings",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (6, entity_size),
+        )
+        self.timestep_positional_embeddings = self.param(
+            "timestep_positional_embeddings",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (self.cfg.num_history_timesteps, entity_size),
+        )
 
         # Initialize linear layers for encoding various entity features.
         self.species_linear = dense_layer(
@@ -273,11 +339,6 @@ class Encoder(nn.Module):
             "state_embeddings",
             nn.initializers.truncated_normal(stddev=0.02),
             (2, entity_size),
-        )
-        self.wildcard_embedding = self.param(
-            "wildcard_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (2, 1, entity_size),
         )
         self.extra_embeddings = self.param(
             "extra_embeddings",
@@ -983,11 +1044,23 @@ class Encoder(nn.Module):
             ],
             dtype=self.cfg.dtype,
         )
-        embedding = self._embed_move(
-            action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
-        ) + self.action_linear(boolean_code)
+        embedding = (
+            self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID])
+            + self.action_linear(boolean_code)
+            + self.wildcard_embedding(
+                action[MovesetFeature.MOVESET_FEATURE__IS_WILDCARD]
+            )
+        )
 
-        return embedding
+        mask = (
+            action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
+            == MovesEnum.MOVES_ENUM___NULL
+        ) | (
+            action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
+            == MovesEnum.MOVES_ENUM___PAD
+        )
+
+        return embedding, mask
 
     def _embed_moves(self, moveset: jax.Array) -> jax.Array:
         return jax.vmap(self._embed_action)(moveset)
@@ -1030,76 +1103,22 @@ class Encoder(nn.Module):
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
-        move_mask = jnp.take(
-            env_step.action_mask,
-            np.array(
-                [
-                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_1,
-                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_2,
-                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_3,
-                    ActionEnum.ACTION_ENUM__ACTIVE_1_MOVE_4,
-                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_1,
-                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_2,
-                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_3,
-                    ActionEnum.ACTION_ENUM__ACTIVE_2_MOVE_4,
-                ]
-            ),
-            axis=0,
+        move_embeddings, move_mask = self._embed_moves(env_step.moveset)
+        move_mask = move_mask & jnp.take(
+            env_step.action_mask, MOVE_INDICES, axis=0
         ).any(axis=-1)
-        move_embeddings = jax.vmap(self._embed_moves)(env_step.moveset)
 
         private_mask = jnp.ones_like(switch_embeddings[..., 0], dtype=jnp.bool)
 
         latest_timestep_embeddings, latest_timestep_mask, latest_timestep_positions = (
             self._get_latest_timestep_embeddings(
-                timestep_embeddings, timestep_mask, timestep_positions, timestep_arange
+                timestep_embeddings,
+                timestep_mask,
+                timestep_positions,
+                timestep_arange,
+                self.cfg.num_history_timesteps,
             )
         )
-
-        flat_move_embeddings = move_embeddings.reshape(-1, self.cfg.entity_size)
-        input_state_sequence = jnp.concatenate(
-            (
-                flat_move_embeddings,
-                switch_embeddings,
-                entity_embeddings,
-                latest_timestep_embeddings,
-            )
-        )
-        input_state_sequence = self.state_norm_in(input_state_sequence)
-
-        state_mask = jnp.concatenate(
-            (entity_mask, move_mask, private_mask, latest_timestep_mask)
-        )
-        state_positions = jnp.concatenate(
-            (
-                jnp.broadcast_to(current_position, entity_embeddings.shape[:-1]),
-                jnp.broadcast_to(current_position, flat_move_embeddings.shape[:-1]),
-                jnp.broadcast_to(current_position, switch_embeddings.shape[:-1]),
-                latest_timestep_positions,
-            )
-        )
-
-        latent_positions = jnp.broadcast_to(
-            current_position, self.latent_embeddings.shape[:-1]
-        )
-        latent_mask = jnp.ones_like(self.latent_embeddings[..., 0], dtype=jnp.bool)
-
-        latent_state_embeddings = self.latent_embeddings.astype(self.cfg.dtype)
-        for _ in range(self.cfg.num_perceiver_steps):
-            latent_state_embeddings = self.input_decoder(
-                q=latent_state_embeddings,
-                kv=input_state_sequence,
-                attn_mask=create_attention_mask(latent_mask, state_mask),
-                q_positions=latent_positions,
-                kv_positions=state_positions,
-            )
-
-            for _ in range(self.cfg.num_thinking_steps):
-                latent_state_embeddings = self.latent_state_encoder(
-                    qkv=latent_state_embeddings,
-                    attn_mask=create_attention_mask(latent_mask),
-                )
-
         switch_order_indices = np.array(
             [
                 InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
@@ -1113,13 +1132,10 @@ class Encoder(nn.Module):
         switch_order_values = env_step.info[switch_order_indices]
         switch_embeddings = jnp.take(switch_embeddings, switch_order_values, axis=0)
 
-        move_embeddings = move_embeddings + self.wildcard_embedding
-        move_embeddings = jnp.concatenate((move_embeddings, move_embeddings))
-
-        output_state_embeddings = jnp.concatenate(
+        output_state_sequence = jnp.concatenate(
             [
                 self.state_embeddings,
-                move_embeddings.reshape(-1, self.cfg.entity_size),
+                move_embeddings,
                 switch_embeddings,
                 entity_embeddings[:2],
                 entity_embeddings[6:8],
@@ -1127,8 +1143,65 @@ class Encoder(nn.Module):
             ],
             axis=0,
         )
+
+        has_prev_action = env_step.info[
+            InfoFeature.INFO_FEATURE__HAS_PREV_ACTION
+        ].reshape(1, 1)
+        prev_action_src = has_prev_action * jnp.take(
+            output_state_sequence,
+            env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC],
+            axis=0,
+        )
+        prev_action_tgt = has_prev_action * jnp.take(
+            output_state_sequence,
+            env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT],
+            axis=0,
+        )
+
+        input_state_sequence = jnp.concatenate(
+            (
+                move_embeddings + self.move_embedding,
+                switch_embeddings
+                + self.switch_positional_embeddings
+                + self.private_embedding,
+                entity_embeddings + self.public_embedding,
+                prev_action_src + self.prev_action_src_embedding,
+                prev_action_tgt + self.prev_action_tgt_embedding,
+                latest_timestep_embeddings
+                + self.timestep_embedding
+                + self.timestep_positional_embeddings,
+            ),
+            axis=0,
+        )
+        input_state_sequence = self.state_norm_in(input_state_sequence)
+
+        state_mask = jnp.concatenate(
+            (
+                move_mask,
+                private_mask,
+                entity_mask,
+                jnp.ones_like(move_mask[:2], dtype=jnp.bool),
+                latest_timestep_mask,
+            )
+        )
+        latent_mask = jnp.ones_like(self.latent_embeddings[..., 0], dtype=jnp.bool)
+
+        latent_state_embeddings = self.latent_embeddings.astype(self.cfg.dtype)
+        for _ in range(self.cfg.num_perceiver_steps):
+            latent_state_embeddings = self.input_decoder(
+                q=latent_state_embeddings,
+                kv=input_state_sequence,
+                attn_mask=create_attention_mask(latent_mask, state_mask),
+            )
+
+            for _ in range(self.cfg.num_thinking_steps):
+                latent_state_embeddings = self.latent_state_encoder(
+                    qkv=latent_state_embeddings,
+                    attn_mask=create_attention_mask(latent_mask),
+                )
+
         output_state_embeddings = self.output_decoder(
-            output_state_embeddings, latent_state_embeddings
+            output_state_sequence, latent_state_embeddings
         )
         output_state_embeddings = self.state_norm_out(output_state_embeddings)
 

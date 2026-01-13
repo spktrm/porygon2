@@ -1,9 +1,11 @@
-from typing import NamedTuple
+from dataclasses import field
 
+from chex import dataclass
 from jaxtyping import ArrayLike
 
 
-class PlayerEnvOutput(NamedTuple):
+@dataclass
+class PlayerEnvOutput:
     # Standard Info
     info: ArrayLike = ()
     done: ArrayLike = ()
@@ -20,60 +22,75 @@ class PlayerEnvOutput(NamedTuple):
     action_mask: ArrayLike = ()
 
 
-class PlayerPackedHistoryOutput(NamedTuple):
+@dataclass
+class PlayerPackedHistoryOutput:
     public: ArrayLike = ()
     revealed: ArrayLike = ()
     edges: ArrayLike = ()
 
 
-class PlayerHistoryOutput(NamedTuple):
+@dataclass
+class PlayerHistoryOutput:
     field: ArrayLike = ()
 
 
-class PlayerActorInput(NamedTuple):
-    env: PlayerEnvOutput = PlayerEnvOutput()
-    packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
-    history: PlayerHistoryOutput = PlayerHistoryOutput()
+@dataclass
+class PlayerActorInput:
+    env: PlayerEnvOutput = field(default_factory=PlayerEnvOutput)
+    packed_history: PlayerPackedHistoryOutput = field(
+        default_factory=PlayerPackedHistoryOutput
+    )
+    history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
 
-class RegressionValueHeadOutput(NamedTuple):
+@dataclass
+class RegressionValueHeadOutput:
     logits: ArrayLike = ()
 
 
-class CategoricalValueHeadOutput(NamedTuple):
+@dataclass
+class CategoricalValueHeadOutput:
     logits: ArrayLike = ()
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
     expectation: ArrayLike = ()
 
 
-class PolicyHeadOutput(NamedTuple):
+@dataclass
+class PolicyHeadOutput:
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
 
 
+@dataclass
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
 
 
-class PlayerActorOutput(NamedTuple):
-    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
-    action_head: PlayerPolicyHeadOutput = PlayerPolicyHeadOutput()
+@dataclass
+class PlayerActorOutput:
+    value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
 
-class PlayerAgentOutput(NamedTuple):
-    actor_output: PlayerActorOutput = PlayerActorOutput()
+@dataclass
+class PlayerAgentOutput:
+    actor_output: PlayerActorOutput = field(default_factory=PlayerActorOutput)
 
 
-class PlayerTransition(NamedTuple):
-    env_output: PlayerEnvOutput = PlayerEnvOutput()
-    agent_output: PlayerAgentOutput = PlayerAgentOutput()
+@dataclass
+class PlayerTransition:
+    env_output: PlayerEnvOutput = field(default_factory=PlayerEnvOutput)
+    agent_output: PlayerAgentOutput = field(default_factory=PlayerAgentOutput)
 
 
-class BuilderEnvOutput(NamedTuple):
+@dataclass
+class BuilderEnvOutput:
     species_mask: ArrayLike = ()
 
     ts: ArrayLike = ()
@@ -85,41 +102,54 @@ class BuilderEnvOutput(NamedTuple):
     target_species_probs: ArrayLike = ()
 
 
-class BuilderHistoryOutput(NamedTuple):
+@dataclass
+class BuilderHistoryOutput:
     species_tokens: ArrayLike = ()
     packed_set_tokens: ArrayLike = ()
 
 
-class BuilderActorInput(NamedTuple):
-    env: BuilderEnvOutput = BuilderEnvOutput()
-    history: BuilderHistoryOutput = BuilderHistoryOutput()
+@dataclass
+class BuilderActorInput:
+    env: BuilderEnvOutput = field(default_factory=BuilderEnvOutput)
+    history: BuilderHistoryOutput = field(default_factory=BuilderHistoryOutput)
 
 
-class BuilderActorOutput(NamedTuple):
-    conditional_entropy_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
-    value_head: RegressionValueHeadOutput = RegressionValueHeadOutput()
-    species_head: PolicyHeadOutput = PolicyHeadOutput()
-    packed_set_head: PolicyHeadOutput = PolicyHeadOutput()
+@dataclass
+class BuilderActorOutput:
+    conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    species_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    packed_set_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
 
 
-class BuilderAgentOutput(NamedTuple):
-    actor_output: BuilderActorOutput = BuilderActorOutput()
+@dataclass
+class BuilderAgentOutput:
+    actor_output: BuilderActorOutput = field(default_factory=BuilderActorOutput)
 
 
-class BuilderTransition(NamedTuple):
-    env_output: BuilderEnvOutput = BuilderEnvOutput()
-    agent_output: BuilderAgentOutput = BuilderAgentOutput()
+@dataclass
+class BuilderTransition:
+    env_output: BuilderEnvOutput = field(default_factory=BuilderEnvOutput)
+    agent_output: BuilderAgentOutput = field(default_factory=BuilderAgentOutput)
 
 
-class Trajectory(NamedTuple):
-    builder_transitions: BuilderTransition = BuilderTransition()
-    builder_history: BuilderHistoryOutput = BuilderHistoryOutput()
+@dataclass
+class Trajectory:
+    builder_transitions: BuilderTransition = field(default_factory=BuilderTransition)
+    builder_history: BuilderHistoryOutput = field(default_factory=BuilderHistoryOutput)
 
-    player_transitions: PlayerTransition = PlayerTransition()
-    player_packed_history: PlayerPackedHistoryOutput = PlayerPackedHistoryOutput()
-    player_history: PlayerHistoryOutput = PlayerHistoryOutput()
+    player_transitions: PlayerTransition = field(default_factory=PlayerTransition)
+    player_packed_history: PlayerPackedHistoryOutput = field(
+        default_factory=PlayerPackedHistoryOutput
+    )
+    player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
 
-class SamplingConfig(NamedTuple):
+@dataclass
+class SamplingConfig:
     temp: float = 1.0
     min_p: float = 0.0

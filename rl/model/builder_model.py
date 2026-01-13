@@ -89,7 +89,8 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         # layernorms
-        self.encoder_norm_in = MLP(input_activation=False, use_layer_norm=True)
+        self.species_norm = MLP(input_activation=False, use_layer_norm=True)
+        self.packed_set_norm = MLP(input_activation=False, use_layer_norm=True)
         self.encoder_norm_out = MLP(input_activation=False, use_layer_norm=True)
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
 
@@ -254,7 +255,7 @@ class Porygon2BuilderModel(nn.Module):
         else:
             positions = None
 
-        set_embeddings = self.encoder_norm_in(set_embeddings)
+        set_embeddings = self.packed_set_norm(set_embeddings)
         set_embeddings = self.encoder(
             set_embeddings, causal_mask, qkv_positions=positions
         )
@@ -277,7 +278,7 @@ class Porygon2BuilderModel(nn.Module):
         species_gamma, species_beta = self.species_film_generator(
             current_embedding[None]
         )
-        species_keys = species_gamma * species_keys + species_beta
+        species_keys = self.species_norm(species_gamma * species_keys + species_beta)
 
         species_head = self.species_head(
             current_embedding,
@@ -300,7 +301,9 @@ class Porygon2BuilderModel(nn.Module):
             current_embedding[None]
         )
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
-        packed_set_keys = packed_set_keys * packed_set_gamma + packed_set_beta
+        packed_set_keys = self.packed_set_norm(
+            packed_set_keys * packed_set_gamma + packed_set_beta
+        )
         packed_set_head = self.packed_set_head(
             current_embedding,
             packed_set_keys,
