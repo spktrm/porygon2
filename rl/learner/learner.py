@@ -33,17 +33,6 @@ from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
 
-def calculate_player_log_prob(
-    *,
-    action_log_prob: jax.Array,
-    action_index: jax.Array,
-    wildcard_log_prob: jax.Array,
-):
-    is_move = action_index < 4
-
-    return action_log_prob + jnp.where(is_move, wildcard_log_prob, 0.0)
-
-
 def calculate_builder_log_prob(
     *,
     species_log_prob: jax.Array,
@@ -269,24 +258,12 @@ def train_step(
     )
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
-    player_actor_wildcard_head = (
-        player_transitions.agent_output.actor_output.wildcard_head
-    )
 
     player_target_value_head = player_target_pred.value_head
     player_target_action_head = player_target_pred.action_head
-    player_target_wildcard_head = player_target_pred.wildcard_head
 
-    player_actor_log_prob = calculate_player_log_prob(
-        action_log_prob=player_actor_action_head.log_prob,
-        action_index=player_actor_action_head.action_index,
-        wildcard_log_prob=player_actor_wildcard_head.log_prob,
-    )
-    player_target_log_prob = calculate_player_log_prob(
-        action_log_prob=player_target_action_head.log_prob,
-        action_index=player_target_action_head.action_index,
-        wildcard_log_prob=player_target_wildcard_head.log_prob,
-    )
+    player_actor_log_prob = player_actor_action_head.log_prob
+    player_target_log_prob = player_target_action_head.log_prob
 
     builder_actor_conditional_entropy_head = (
         builder_transitions.agent_output.actor_output.conditional_entropy_head
@@ -387,16 +364,11 @@ def train_step(
     builder_norm_advantages = norm_advantages[: builder_valid.shape[0]]
     player_norm_advantages = norm_advantages[builder_valid.shape[0] :]
 
-    wildcard_valid = player_valid & (
-        player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
-    )
+    action_mask_sum = player_transitions.env_output.action_mask.reshape(
+        player_valid.shape + (-1,)
+    ).sum(axis=-1)
 
-    action_mask_sum = player_transitions.env_output.action_mask.sum(axis=-1)
-    move_mask_sum = player_transitions.env_output.action_mask[..., :4].sum(axis=-1)
-    wildcard_mask_sum = player_transitions.env_output.wildcard_mask.sum(axis=-1)
-    player_uniform_prob = 1.0 / (
-        action_mask_sum + move_mask_sum * (wildcard_mask_sum - 1)
-    ).clip(min=1)
+    player_uniform_prob = 1.0 / (action_mask_sum).clip(min=1)
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     entropy_decay = 1 / ((player_state.step_count + 1) ** 0.3)
@@ -414,13 +386,8 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-        learner_wildcard_head = player_pred.wildcard_head
 
-        learner_log_prob = calculate_player_log_prob(
-            action_log_prob=learner_action_head.log_prob,
-            action_index=learner_action_head.action_index,
-            wildcard_log_prob=learner_wildcard_head.log_prob,
-        )
+        learner_log_prob = learner_action_head.log_prob
 
         # Calculate the log ratios.
         learner_uniform_log_ratio = learner_log_prob - player_uniform_log_prob
@@ -450,7 +417,6 @@ def train_step(
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
-        wildcard_head_entropy = average(learner_wildcard_head.entropy, wildcard_valid)
         loss_entropy = backward_kl_loss(
             policy_ratio=learner_uniform_ratio,
             log_policy_ratio=learner_uniform_log_ratio,
@@ -488,7 +454,6 @@ def train_step(
             player_loss_kl=loss_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
-            player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
                 policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo

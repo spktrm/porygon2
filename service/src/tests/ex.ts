@@ -52,10 +52,10 @@ async function runBattle() {
         p2Name: "Bot2",
 
         p1team: getSampleTeam("gen9ou"),
-        p2team: getSampleTeam("gen9ou"),
+        p2team: getSampleTeam("gen9ou", "Zoroark"),
         // smogonFormat: "gen9ou",
-        // smogonFormat: "gen9randomdoublesbattle",
-        smogonFormat: "gen9vgc2025regibo3",
+        smogonFormat: "gen9randomdoublesbattle",
+        // smogonFormat: "gen9vgc2025regibo3",
     });
 
     console.log("Starting asynchronous player controllers...");

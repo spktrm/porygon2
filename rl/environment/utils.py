@@ -143,7 +143,7 @@ def process_state(
 
     moveset = (
         np.frombuffer(state.moveset, dtype=np.int16)
-        .reshape(2, 4, NUM_MOVE_FEATURES)
+        .reshape(16, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
     private_team = (
@@ -153,12 +153,12 @@ def process_state(
     )
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
-        .reshape(12, NUM_ENTITY_REVEALED_FEATURES)
+        .reshape(11 * 2, NUM_ENTITY_REVEALED_FEATURES)
         .astype(np.int32)
     )
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
-        .reshape(12, NUM_ENTITY_PUBLIC_FEATURES)
+        .reshape(11 * 2, NUM_ENTITY_PUBLIC_FEATURES)
         .astype(np.int32)
     )
 

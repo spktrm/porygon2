@@ -232,13 +232,21 @@ const sampleTeams: { [format: string]: string[] } = {
     ],
 };
 
-export function getSampleTeam(format: string): string {
+export function getSampleTeam(format: string, include?: string): string {
     const internalFormat = format
         .replace("_ou_all_formats", "ou")
         .replace("_ou_only_format", "ou");
     const teams = sampleTeams[internalFormat];
     if (!teams || teams.length === 0) {
         throw new Error(`No sample teams found for format: ${format}`);
+    }
+    if (include) {
+        const filteredTeams = teams.filter((team) => team.includes(include));
+        if (filteredTeams.length > 0) {
+            return filteredTeams[
+                Math.floor(Math.random() * filteredTeams.length)
+            ];
+        }
     }
     return teams[Math.floor(Math.random() * teams.length)];
 }
@@ -756,26 +764,20 @@ function getUnkPublicPokemon() {
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK
     ] = 0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED] =
+        0;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HAS_STATUS] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE
-    ] = 0;
-    data[
-        EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE
-    ] = 0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE] =
+        0;
+    data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE] =
+        0;
     data[
         EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE
     ] = 0;
@@ -819,10 +821,12 @@ const unkPokemon0 = getUnkPokemon(0);
 const unkPokemon1 = getUnkPokemon(1);
 
 function getNullPokemon() {
-    const data = getBlankPublicPokemonArr();
-    data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES] =
-        SpeciesEnum.SPECIES_ENUM___NULL;
-    return data;
+    const publicData = getBlankPublicPokemonArr();
+    const revealedData = getUnkRevealedPokemon();
+    revealedData[
+        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+    ] = SpeciesEnum.SPECIES_ENUM___NULL;
+    return { publicData, revealedData };
 }
 
 const nullPokemon = getNullPokemon();
@@ -944,7 +948,7 @@ function getArrayFromPublicPokemon(
         relativeSide === 0 ? getUnkPokemon(0) : getUnkPokemon(1);
 
     if (candidate === null || candidate === undefined) {
-        return { publicData, revealedData: nullPokemon };
+        return { publicData, revealedData: nullPokemon.revealedData };
     }
 
     let pokemon: Pokemon;
@@ -1085,18 +1089,19 @@ function getArrayFromPublicPokemon(
         IndexValueFromEnum(GendernameEnum, pokemon.gender);
 
     const position = candidate.ident.at(2);
-    if (position === "a") {
-        publicData[
-            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-        ] = 1;
-    } else if (position === "b") {
-        publicData[
-            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-        ] = 2;
+    if (candidate.isActive()) {
+        if (position === "a") {
+            publicData[
+                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+            ] = 1;
+        } else if (position === "b") {
+            publicData[
+                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+            ] = 2;
+        }
     } else {
-        publicData[
-            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-        ] = 0;
+        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+            0;
     }
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
@@ -3080,7 +3085,7 @@ class PrivateActionHandler {
     constructor(player: TrainablePlayerAI) {
         this.player = player;
         this.request = player.getRequest();
-        this.actionBuffer = new Int16Array(2 * 4 * numMoveFeatures);
+        this.actionBuffer = new Int16Array(4 * 4 * numMoveFeatures);
     }
 
     assignActionBuffer(args: { offset: number; index: number; value: number }) {
@@ -3098,6 +3103,11 @@ class PrivateActionHandler {
                   id: ID;
                   pp: number;
                   maxpp: number;
+                  target: MoveTarget;
+                  disabled?: boolean;
+              }
+            | {
+                  id: ID;
                   target: MoveTarget;
                   disabled?: boolean;
               },
@@ -3171,8 +3181,20 @@ class PrivateActionHandler {
 
         let actionOffset = 0;
 
+        const addPadRows = (numRows: number) => {
+            for (let i = 0; i < numRows; i++) {
+                this.assignActionBuffer({
+                    offset: actionOffset,
+                    index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+                    value: MovesEnum.MOVES_ENUM___PAD,
+                });
+                actionOffset += numMoveFeatures;
+            }
+        };
+
         for (const [activeIndex, activePokemon] of actives.entries()) {
             const moves = activePokemon?.moves ?? [];
+            const wildcardMoves = activePokemon?.maxMoves ?? moves;
             if (activePokemon !== null) {
                 const { pokemon, index: entityIndex } =
                     this.player.eventHandler.getPokemon(
@@ -3191,22 +3213,28 @@ class PrivateActionHandler {
                         index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
                         value: entityIndex,
                     });
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__IS_WILDCARD,
+                        value: 0,
+                    });
                     actionOffset += numMoveFeatures;
                 }
-            }
-            actionOffset += (4 - moves.length) * numMoveFeatures;
-        }
+                addPadRows(4 - moves.length);
 
-        const numPadMoves = Math.floor(
-            (this.actionBuffer.length - actionOffset) / numMoveFeatures,
-        );
-        for (let i = 0; i < numPadMoves; i++) {
-            this.assignActionBuffer({
-                offset: actionOffset,
-                index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
-                value: MovesEnum.MOVES_ENUM___PAD,
-            });
-            actionOffset += numMoveFeatures;
+                for (const action of wildcardMoves) {
+                    this.pushMoveAction(actionOffset, action);
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__IS_WILDCARD,
+                        value: 1,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+                addPadRows(4 - wildcardMoves.length);
+            } else {
+                addPadRows(8);
+            }
         }
 
         return new Uint8Array(this.actionBuffer.buffer);
@@ -3597,14 +3625,19 @@ export class StateHandler {
         revealedBuffer: Int16Array;
     } {
         const side = this.player.publicBattle.sides[playerIndex];
-        const publicBuffer = new Int16Array(6 * numPublicEntityNodeFeatures);
+        const publicBuffer = new Int16Array(11 * numPublicEntityNodeFeatures);
         const revealedBuffer = new Int16Array(
-            6 * numRevealedEntityNodeFeatures,
+            11 * numRevealedEntityNodeFeatures,
         );
 
         let publicOffset = 0;
         let revealedOffset = 0;
-        let team = side.team.slice(0, 6);
+        const team = side.team;
+        if (team.length > 6) {
+            console.log(
+                `Warning: team length is greater than 6: ${team.length}`,
+            );
+        }
 
         const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
 
@@ -3631,12 +3664,22 @@ export class StateHandler {
                 revealedOffset += numRevealedEntityNodeFeatures;
             }
 
-            const { publicData, revealedData } = relativeSide
-                ? unkPokemon1
-                : unkPokemon0;
+            const { publicData: publicUnkData, revealedData: revealedUnkData } =
+                relativeSide ? unkPokemon1 : unkPokemon0;
             for (let i = team.length; i < 6; i++) {
-                publicBuffer.set(publicData, publicOffset);
-                revealedBuffer.set(revealedData, revealedOffset);
+                publicBuffer.set(publicUnkData, publicOffset);
+                revealedBuffer.set(revealedUnkData, revealedOffset);
+                publicOffset += numPublicEntityNodeFeatures;
+                revealedOffset += numRevealedEntityNodeFeatures;
+            }
+
+            const {
+                publicData: publicNullData,
+                revealedData: revealedNullData,
+            } = nullPokemon;
+            for (let i = Math.max(team.length, 6); i < 11; i++) {
+                publicBuffer.set(publicNullData, publicOffset);
+                revealedBuffer.set(revealedNullData, revealedOffset);
                 publicOffset += numPublicEntityNodeFeatures;
                 revealedOffset += numRevealedEntityNodeFeatures;
             }
@@ -3868,12 +3911,24 @@ export class StateHandler {
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
 
-        if (requestPokemon !== undefined) {
-            for (const [sortedIdx, sortedMember] of [...requestPokemon]
-                .sort((a, b) => {
+        if (requestPokemon) {
+            let privateOrder;
+
+            if (request.teamPreview) {
+                privateOrder = [...requestPokemon];
+                for (const [toIdx, choice] of this.player.choices.entries()) {
+                    const fromIdx = parseInt(choice.split(" ")[1]) - 1;
+                    [privateOrder[toIdx], privateOrder[fromIdx]] = [
+                        privateOrder[fromIdx],
+                        privateOrder[toIdx],
+                    ];
+                }
+            } else {
+                privateOrder = [...requestPokemon].sort((a, b) => {
                     return a.ident.localeCompare(b.ident);
-                })
-                .entries()) {
+                });
+            }
+            for (const [sortedIdx, sortedMember] of privateOrder.entries()) {
                 for (const [
                     unsortedIdx,
                     unsortedMember,
@@ -3888,6 +3943,16 @@ export class StateHandler {
                     }
                 }
             }
+        }
+
+        infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
+        if (!request.teamPreview && this.player.actions.length > 0) {
+            infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 1;
+            const lastAction = this.player.actions.at(-1)!;
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] =
+                lastAction.getSrc();
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] =
+                lastAction.getTgt();
         }
 
         return new Uint8Array(infoBuffer.buffer);

@@ -37,6 +37,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
+    cfg.encoder.num_history_timesteps = 32
     cfg.encoder.num_latent_embeddings = 16
     cfg.encoder.num_perceiver_steps = 2
     cfg.encoder.num_thinking_steps = 4

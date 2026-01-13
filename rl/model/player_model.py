@@ -3,7 +3,6 @@ from pprint import pprint
 
 import cloudpickle as pickle
 import flax.linen as nn
-from grpc import beta
 import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
@@ -20,13 +19,8 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import (
-    HeadParams,
-    PointerLogits,
-    PolicyLogitHead,
-    sample_categorical,
-)
-from rl.model.modules import FiLMGenerator, SumEmbeddings
+from rl.model.heads import HeadParams, PointerLogits, sample_categorical
+from rl.model.modules import FiLMGenerator
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -69,8 +63,12 @@ class Porygon2PlayerModel(nn.Module):
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
 
-        src_index = jnp.floor(action_index / NUM_ACTION_FEATURES)
-        tgt_index = action_index - src_index * NUM_ACTION_FEATURES
+        src_index = (jnp.floor(action_index / NUM_ACTION_FEATURES)).astype(
+            action_index.dtype
+        )
+        tgt_index = (action_index - src_index * NUM_ACTION_FEATURES).astype(
+            action_index.dtype
+        )
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,

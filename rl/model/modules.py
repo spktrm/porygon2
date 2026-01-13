@@ -460,10 +460,6 @@ class MLP(nn.Module):
         return x
 
 
-def ffw_activation(x: jax.Array) -> jax.Array:
-    return nn.relu(x) ** 2
-
-
 class FiLMGenerator(nn.Module):
     features: int
 
@@ -472,7 +468,7 @@ class FiLMGenerator(nn.Module):
         # 1. Project to a hidden representation (optional but recommended)
         # Using the same dimension 'features' is standard.
         x = dense_layer(features=self.features, dtype=x.dtype)(x)
-        x = nn.relu(x)
+        x = activation_fn(x)
 
         # 2. Project to gamma (scale) and beta (shift)
         # We output features * 2 so we can split them later

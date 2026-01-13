@@ -93,7 +93,7 @@ class SinglePlayerSyncEnvironment:
         if self._is_done():
             return self.last_state
         step_message = ClientRequest(
-            step=StepRequest(actions=[action], username=self.username, rqid=self.rqid),
+            step=StepRequest(action=action, username=self.username, rqid=self.rqid),
         )
         self.websocket.send(step_message.SerializeToString())
         return self._recv()

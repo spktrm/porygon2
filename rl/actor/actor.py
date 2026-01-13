@@ -10,7 +10,7 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.service_pb2 import Action, ActionEnum
+from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history, clip_packed_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner

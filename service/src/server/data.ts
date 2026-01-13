@@ -114,11 +114,6 @@ export const NUM_HISTORY = 512;
 
 export const WILDCARDS = ["dynamax", "mega", "zmove", "terastallize", "ultra"];
 
-export const AllValidActions = new OneDBoolean(10, Uint8Array);
-for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
-    AllValidActions.set(actionIndex, true);
-}
-
 // Define the path to the JSON file
 const filePath = "../data/data/data.json";
 
