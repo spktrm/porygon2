@@ -153,12 +153,12 @@ def process_state(
     )
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
-        .reshape(11 * 2, NUM_ENTITY_REVEALED_FEATURES)
+        .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)
         .astype(np.int32)
     )
     public_team = (
         np.frombuffer(state.public_team, dtype=np.int16)
-        .reshape(11 * 2, NUM_ENTITY_PUBLIC_FEATURES)
+        .reshape(6 * 2, NUM_ENTITY_PUBLIC_FEATURES)
         .astype(np.int32)
     )
 

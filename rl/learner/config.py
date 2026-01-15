@@ -42,7 +42,7 @@ GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_actors: int = 8
+    num_actors: int = 16
     num_eval_actors: int = 2
 
     unroll_length: int = 128
