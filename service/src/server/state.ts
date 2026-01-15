@@ -3625,14 +3625,14 @@ export class StateHandler {
         revealedBuffer: Int16Array;
     } {
         const side = this.player.publicBattle.sides[playerIndex];
-        const publicBuffer = new Int16Array(11 * numPublicEntityNodeFeatures);
+        const publicBuffer = new Int16Array(6 * numPublicEntityNodeFeatures);
         const revealedBuffer = new Int16Array(
-            11 * numRevealedEntityNodeFeatures,
+            6 * numRevealedEntityNodeFeatures,
         );
 
         let publicOffset = 0;
         let revealedOffset = 0;
-        const team = side.team;
+        const team = side.team.slice(0, 6);
         if (team.length > 6) {
             console.log(
                 `Warning: team length is greater than 6: ${team.length}`,
@@ -3673,16 +3673,16 @@ export class StateHandler {
                 revealedOffset += numRevealedEntityNodeFeatures;
             }
 
-            const {
-                publicData: publicNullData,
-                revealedData: revealedNullData,
-            } = nullPokemon;
-            for (let i = Math.max(team.length, 6); i < 11; i++) {
-                publicBuffer.set(publicNullData, publicOffset);
-                revealedBuffer.set(revealedNullData, revealedOffset);
-                publicOffset += numPublicEntityNodeFeatures;
-                revealedOffset += numRevealedEntityNodeFeatures;
-            }
+            // const {
+            //     publicData: publicNullData,
+            //     revealedData: revealedNullData,
+            // } = nullPokemon;
+            // for (let i = Math.max(team.length, 6); i < 11; i++) {
+            //     publicBuffer.set(publicNullData, publicOffset);
+            //     revealedBuffer.set(revealedNullData, revealedOffset);
+            //     publicOffset += numPublicEntityNodeFeatures;
+            //     revealedOffset += numRevealedEntityNodeFeatures;
+            // }
 
             // for (let i = side.totalPokemon; i < 6; i++) {
             //     revealedBuffer.set(nullPokemon, revealedOffset);

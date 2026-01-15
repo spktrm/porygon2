@@ -24,7 +24,6 @@ from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
-    BuilderEnvOutput,
     BuilderTransition,
 )
 from rl.environment.protos.enums_pb2 import (
@@ -89,9 +88,10 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         # layernorms
-        self.species_norm = MLP(input_activation=False, use_layer_norm=True)
-        self.packed_set_norm = MLP(input_activation=False, use_layer_norm=True)
-        self.encoder_norm_out = MLP(input_activation=False, use_layer_norm=True)
+        self.species_mlp = MLP()
+        self.packed_set_key_mlp = MLP()
+        self.packed_set_query_mlp = MLP()
+        self.encoder_mlp_out = MLP()
         self.packed_set_merge = SumEmbeddings(entity_size, dtype=dtype)
 
         self.sos_embedding = self.param(
@@ -105,9 +105,8 @@ class Porygon2BuilderModel(nn.Module):
             (1, entity_size),
         )
 
-        self.species_film_generator = FiLMGenerator(entity_size)
-        self.packed_set_film_generator = FiLMGenerator(entity_size)
-
+        self.species_film_query = FiLMGenerator(entity_size)
+        self.packed_set_film_query = FiLMGenerator(entity_size)
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
 
         self.species_head = PolicyQKHead(self.cfg.species_head)
@@ -255,16 +254,16 @@ class Porygon2BuilderModel(nn.Module):
         else:
             positions = None
 
-        set_embeddings = self.packed_set_norm(set_embeddings)
+        set_embeddings = self.packed_set_key_mlp(set_embeddings)
         set_embeddings = self.encoder(
             set_embeddings, causal_mask, qkv_positions=positions
         )
-        return self.encoder_norm_out(set_embeddings)
+        return self.encoder_mlp_out(set_embeddings)
 
     def _forward(
         self,
         current_embedding: jax.Array,
-        actor_env: BuilderEnvOutput,
+        species_mask: jax.Array,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
         head_params: HeadParams,
@@ -275,16 +274,14 @@ class Porygon2BuilderModel(nn.Module):
             current_embedding
         )
 
-        species_gamma, species_beta = self.species_film_generator(
-            current_embedding[None]
-        )
-        species_keys = self.species_norm(species_gamma * species_keys + species_beta)
+        gamma, beta = self.species_film_query(current_embedding)
+        current_embedding = gamma * current_embedding + beta
 
         species_head = self.species_head(
             current_embedding,
             species_keys,
             actor_output.species_head,
-            actor_env.species_mask,
+            species_mask,
             head_params=head_params,
         )
 
@@ -294,18 +291,29 @@ class Porygon2BuilderModel(nn.Module):
             axis=0,
         )
 
+        current_species_embedding = jnp.take(
+            species_keys, species_head.action_index, axis=0
+        )
+        packed_set_query = self.packed_set_query_mlp(
+            current_embedding + current_species_embedding
+        )
+        gamma, beta = self.packed_set_film_query(packed_set_query)
+        packed_set_query = gamma * packed_set_query + beta
+
         packed_sets = SET_TOKENS[self.cfg.generation]["ou_all_formats"][
             species_head.action_index
         ]
-        packed_set_gamma, packed_set_beta = self.packed_set_film_generator(
-            current_embedding[None]
-        )
         packed_set_keys = jax.vmap(self._embed_packed_set)(packed_sets)
-        packed_set_keys = self.packed_set_norm(
-            packed_set_keys * packed_set_gamma + packed_set_beta
+        packed_set_keys = self.packed_set_key_mlp(packed_set_keys)
+
+        mean_mask = packed_set_mask[..., None] + (packed_set_mask.sum() == 0)
+        mean_packed_set_key = jnp.mean(
+            packed_set_keys, where=mean_mask, axis=0, keepdims=True
         )
+        packed_set_keys = packed_set_keys - mean_packed_set_key
+
         packed_set_head = self.packed_set_head(
-            current_embedding,
+            packed_set_query,
             packed_set_keys,
             actor_output.packed_set_head,
             packed_set_mask,
@@ -326,23 +334,19 @@ class Porygon2BuilderModel(nn.Module):
         head_params: HeadParams,
     ) -> BuilderActorOutput:
         species_keys = jax.vmap(self._embed_species)(np.arange(NUM_SPECIES))
-        num_team = actor_input.history.species_tokens.shape[0] + 1
-        mean_mask_shape = (num_team, num_team)
-        mean_masks = jnp.tril(jnp.ones(mean_mask_shape, dtype=jnp.bool))
-        denom = (actor_input.env.ts.reshape(-1) + 1)[..., None]
-        mean_mask = jnp.take(mean_masks, actor_input.env.ts.reshape(-1), axis=0)
+        species_keys = self.species_mlp(species_keys)
 
-        team_embeddings = self._encode_team(
+        hidden_states = self._encode_team(
             actor_input.history.species_tokens, actor_input.history.packed_set_tokens
         )
-        hidden_states = (mean_mask @ team_embeddings) / denom
+        hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
             in_axes=(0, 0, 0, None),
         )(
-            hidden_states,
-            actor_input.env,
+            hidden_state,
+            actor_input.env.species_mask,
             actor_output,
             species_keys,
         )
@@ -354,7 +358,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def main(debug: bool = False, generation: int = 9):
+def main(debug: bool = True, generation: int = 9):
     get_learner_config()
 
     actor_model_config = get_builder_model_config(generation, train=False)
