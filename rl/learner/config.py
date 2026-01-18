@@ -46,7 +46,7 @@ class Porygon2LearnerConfig:
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 512 * 3
+    replay_buffer_capacity: int = 512 * 2
     theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
 
     # Self-play evaluation params
@@ -63,7 +63,7 @@ class Porygon2LearnerConfig:
     target_replay_ratio: float = 4
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-6, weight_decay=1e-2)
+    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-4, weight_decay=1e-2)
     player_learning_rate: float = 5e-5
     builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0

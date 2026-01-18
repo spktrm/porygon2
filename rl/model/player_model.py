@@ -20,7 +20,6 @@ from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams, PointerLogits, sample_categorical
-from rl.model.modules import FiLMGenerator
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -32,12 +31,7 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-
-        self.film_generator = FiLMGenerator(self.cfg.entity_size)
-        self.action_head2 = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
