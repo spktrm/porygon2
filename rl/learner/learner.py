@@ -26,7 +26,7 @@ from rl.learner.config import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League, pfsp
+from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, promote_map
@@ -845,16 +845,16 @@ class Learner:
     def add_new_player(self):
         num_steps = np.array(self.player_state.step_count).item()
 
-        league = self.league
+        # league = self.league
 
-        main_player = league.get_main_player()
+        # main_player = league.get_main_player()
 
-        historical_players = [
-            v
-            for k, v in league.players.items()
-            if k != MAIN_KEY
-            and v.step_count > self.config.minimum_historical_player_steps
-        ]
+        # historical_players = [
+        #     v
+        #     for k, v in league.players.items()
+        #     if k != MAIN_KEY
+        #     and v.step_count > self.config.minimum_historical_player_steps
+        # ]
 
         print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
@@ -867,16 +867,16 @@ class Learner:
             )
         )
 
-        if len(historical_players) > 0:
-            win_rates = league.get_winrate((main_player, historical_players))
-            pick_idx = np.random.choice(
-                len(historical_players), p=pfsp(win_rates, weighting="squared")
-            )
-            new_reset = historical_players[pick_idx]
-            print(
-                f"Resetting main player to historical player @ step {new_reset.step_count}",
-            )
-            self.league.update_main_player(new_reset)
+        # if len(historical_players) > 0:
+        #     win_rates = league.get_winrate((main_player, historical_players))
+        #     pick_idx = np.random.choice(
+        #         len(historical_players), p=pfsp(win_rates, weighting="squared")
+        #     )
+        #     new_reset = historical_players[pick_idx]
+        #     print(
+        #         f"Resetting main player to historical player @ step {new_reset.step_count}",
+        #     )
+        #     self.league.update_main_player(new_reset)
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)

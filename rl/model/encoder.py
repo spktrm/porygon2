@@ -1052,12 +1052,15 @@ class Encoder(nn.Module):
             )
         )
 
-        mask = (
-            action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
-            == MovesEnum.MOVES_ENUM___NULL
-        ) | (
-            action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
-            == MovesEnum.MOVES_ENUM___PAD
+        mask = ~(
+            (
+                action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
+                == MovesEnum.MOVES_ENUM___NULL
+            )
+            | (
+                action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]
+                == MovesEnum.MOVES_ENUM___PAD
+            )
         )
 
         return embedding, mask
