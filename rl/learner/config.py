@@ -21,7 +21,7 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import LATEST_KEY, League
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
@@ -280,14 +280,23 @@ def _init_league(
 ) -> League:
     """Creates a fresh League instance."""
     return League(
-        main_player=ParamsContainer(
-            player_frame_count=np.array(player_state.frame_count).item(),
-            builder_frame_count=np.array(builder_state.frame_count).item(),
-            step_count=MAIN_KEY,
-            player_params=player_state.params,
-            builder_params=builder_state.params,
-        ),
-        players=[],
+        players=[
+            ParamsContainer(
+                player_type=player_type,
+                parent="init",
+                step_count=LATEST_KEY,
+                player_frame_count=np.array(player_state.frame_count).item(),
+                builder_frame_count=np.array(builder_state.frame_count).item(),
+                player_params=player_state.params,
+                builder_params=builder_state.params,
+            )
+            for player_type in [
+                "main_player",
+                "main_exploiter",
+                "league_exploiter",
+                "historical",
+            ]
+        ],
         league_size=learner_config.league_size,
     )
 

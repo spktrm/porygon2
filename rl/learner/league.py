@@ -12,12 +12,12 @@ _psfp_weightings = {
     "linear": lambda x: 1 - x,
     "linear_capped": lambda x: np.minimum(0.5, 1 - x),
     "squared": lambda x: (1 - x) ** 2,
-    "inverse_squared": lambda x: x**2,
 }
 
-PsfpWeighting = Literal[
-    "variance", "linear", "linear_capped", "squared", "inverse_squared"
-]
+PsfpWeighting = Literal["variance", "linear", "linear_capped", "squared"]
+
+
+LATEST_KEY = -1
 
 
 def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndarray:
@@ -29,13 +29,9 @@ def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndar
     return probs / norm
 
 
-MAIN_KEY = -1
-
-
 class League:
     def __init__(
         self,
-        main_player: ParamsContainer,
         players: list[ParamsContainer],
         league_size: int = 16,
         tau: float = 1e-3,
@@ -47,8 +43,8 @@ class League:
         self.decay = tau
         self.lock = threading.Lock()
 
-        self.players = {p.step_count: p for p in players}
-        self.players[MAIN_KEY] = main_player
+        self.players = {p.get_key(): p for p in players}
+
         self.wins = collections.defaultdict(lambda: 0)
         self.draws = collections.defaultdict(lambda: 0)
         self.losses = collections.defaultdict(lambda: 0)
@@ -56,8 +52,8 @@ class League:
 
     def print_players(self):
         print("League initialized with num players: ", len(self.players.keys()))
-        for k, v in self.players.items():
-            print("  Player: ", k, repr(v))
+        for player_key, player in self.players.items():
+            print("  Player: ", player_key, player.get_key())
 
     def serialize(self) -> bytes:
         return pickle.dumps(
@@ -76,9 +72,7 @@ class League:
     def deserialize(cls, data: bytes) -> "League":
         state = pickle.loads(data)
         players: dict[int, ParamsContainer] = state["players"]
-        main_player = players.pop(MAIN_KEY, players)
         league = cls(
-            main_player,
             list(players.values()),
             state["max_players"],
             state["decay"],
@@ -90,10 +84,12 @@ class League:
         league.print_players()
         return league
 
-    def get_latest_player(self) -> ParamsContainer:
+    def get_latest_player(self):
         with self.lock:
-            latest_step = max(self.players.keys())
-            return self.players[latest_step]
+            if not self.players:
+                raise ValueError("No players in the league.")
+            latest_player = max(self.players.values(), key=lambda p: p.step_count)
+            return latest_player
 
     def get_winrate(
         self,
@@ -116,8 +112,8 @@ class League:
         return win_rates
 
     def _win_rate(self, sender: ParamsContainer, receiver: ParamsContainer) -> float:
-        home = sender.step_count
-        away = receiver.step_count
+        home = sender.get_key()
+        away = receiver.get_key()
 
         numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
         denom = self.games[home, away] + 1
@@ -126,22 +122,28 @@ class League:
 
     def add_player(self, player: ParamsContainer):
         # self.remove_weakest_players()
-        self.players[player.step_count] = player
+        self.players[player.get_key()] = player
 
-    def update_player(self, key: int, player: ParamsContainer):
+    def update_player(self, key: str, player: ParamsContainer):
         with self.lock:
             self.players[key] = player
 
-    def update_main_player(self, main_player: ParamsContainer):
-        self.update_player(MAIN_KEY, main_player)
+    def get_player(self, key: str) -> ParamsContainer:
+        with self.lock:
+            player = self.players.get(key)
+            if player is None:
+                raise KeyError(
+                    f"Player with key {key} not found in the {list(self.players.keys())}."
+                )
+            return player
 
     def update_payoff(
         self, sender: ParamsContainer, receiver: ParamsContainer, payoff: float
     ):
         with self.lock:
             # Ignore updates for players that may have been removed
-            home = sender.step_count
-            away = receiver.step_count
+            home = sender.get_key()
+            away = receiver.get_key()
 
             if home not in self.players or away not in self.players:
                 return
@@ -163,13 +165,9 @@ class League:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
 
-    def get_main_player(self) -> ParamsContainer:
-        with self.lock:
-            return self.players[MAIN_KEY]
-
 
 def main():
-    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="inverse_squared"))
+    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="squared"))
 
 
 if __name__ == "__main__":

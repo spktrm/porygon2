@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Callable, NamedTuple, TypeVar, cast
+from typing import Callable, Literal, NamedTuple, TypeVar, cast
 
 import chex
 import jax
 import jax.numpy as jnp
 
+PlayerType = Literal["main_player", "main_exploiter", "league_exploiter", "historical"]
+
 
 class ParamsContainer(NamedTuple):
+    player_type: PlayerType
+    parent: str
+
     step_count: int
 
     player_frame_count: int
@@ -18,13 +23,14 @@ class ParamsContainer(NamedTuple):
     player_params: chex.ArrayTree
     builder_params: chex.ArrayTree
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ParamsContainer):
-            return NotImplemented
-        return self.step_count == other.step_count
+    def __hash__(self) -> int:
+        return hash(repr(self))
+
+    def get_key(self) -> str:
+        return f"{self.player_type}_{self.step_count}"
 
     def __repr__(self) -> str:
-        return f"ParamsContainer(step_count={self.step_count})"
+        return self.get_key()
 
 
 Params = chex.ArrayTree

@@ -34,17 +34,18 @@ def run_training_actor_pair(
 
     while not stop_signal[0]:
         try:
-            player_params = player.pull_main_player()
-            opponent_params, is_trainable = player.get_match()
+            player_params = player.get_current_player()
+            opponent_params, _ = player.get_match()
+            is_trainable = player_params == opponent_params
 
-            player_ckpt = np.array(player_params.step_count).item()
-            opponent_ckpt = np.array(opponent_params.step_count).item()
+            player_key = player_params.get_key()
+            opponent_key = opponent_params.get_key()
 
-            player.set_current_ckpt(player_ckpt)
-            player.set_opponent_ckpt(opponent_ckpt)
+            player.set_current_ckpt(player_key)
+            player.set_opponent_ckpt(opponent_key)
 
-            opponent.set_current_ckpt(opponent_ckpt)
-            opponent.set_opponent_ckpt(player_ckpt)
+            opponent.set_current_ckpt(opponent_key)
+            opponent.set_opponent_ckpt(player_key)
 
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)
@@ -84,7 +85,7 @@ def run_eval_heuristic(
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = actor.pull_main_player()
+                player = actor.get_current_player()
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
