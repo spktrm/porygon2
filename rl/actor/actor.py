@@ -12,7 +12,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history, clip_packed_history, split_rng
-from rl.learner.league import MAIN_KEY, pfsp
+from rl.learner.league import pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
@@ -150,10 +150,10 @@ class Actor:
         self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
-    def set_current_ckpt(self, ckpt: int):
+    def set_current_ckpt(self, ckpt: str):
         self._player_env._set_current_ckpt(ckpt)
 
-    def set_opponent_ckpt(self, ckpt: int):
+    def set_opponent_ckpt(self, ckpt: str):
         self._player_env._set_opponent_ckpt(ckpt)
 
     def reset_ckpts(self):
@@ -177,39 +177,152 @@ class Actor:
             self._learner.enqueue_traj(act_out)
         return act_out
 
-    def pull_main_player(self) -> ParamsContainer:
-        league = self._learner.league
-        return league.get_main_player()
+    def get_current_player(self) -> ParamsContainer:
+        return self._learner.get_current_player()
 
-    def _pfsp_branch(self) -> ParamsContainer | None:
+    def _pfsp_branch(self):
         historical = [
             player
             for player in self._learner.league.players.values()
-            if player.step_count != MAIN_KEY
+            if player.player_type == "historical"
         ]
         if not historical:  # No historical players to play against
             return None
 
-        main_player = self.pull_main_player()
-        win_rates = self._learner.league.get_winrate((main_player, historical))
-        pick_idx = np.random.choice(
+        current_player = self.get_current_player()
+        win_rates = self._learner.league.get_winrate((current_player, historical))
+        pick_idx: int = np.random.choice(
             len(historical), p=pfsp(win_rates, weighting="squared")
         )
-        return historical[pick_idx]
+        return historical[pick_idx], True
 
-    def get_match(self) -> tuple[ParamsContainer, bool]:
+    def _selfplay_branch(self, opponent: ParamsContainer):
+        # Play self-play match
+        current_player = self.get_current_player()
+        if self._learner.league.get_winrate((current_player, opponent)) > 0.3:
+            return opponent, False
+
+        # If opponent is too strong, look for a checkpoint
+        # as curriculum
+        historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "historical" and player.parent == opponent
+        ]
+        win_rates = self._learner.league.get_winrate((current_player, historical))
+        pick_idx: int = np.random.choice(
+            len(historical), p=pfsp(win_rates, weighting="squared")
+        )
+        return historical[pick_idx], True
+
+    def _verification_branch(self, opponent: ParamsContainer):
+        # Check exploitation
+        exploiters = set(
+            [
+                player
+                for player in self._learner.league.players.values()
+                if player.player_type == "main_exploiter"
+            ]
+        )
+        exp_historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "historical" and player.parent in exploiters
+        ]
+        current_player = self.get_current_player()
+        win_rates = self._learner.league.get_winrate((current_player, exp_historical))
+        if len(win_rates) and win_rates.min() < 0.3:
+            pick_idx: int = np.random.choice(
+                len(exp_historical), p=pfsp(win_rates, weighting="squared")
+            )
+            return exp_historical[pick_idx], True
+
+        # Check forgetting
+        historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "historical"
+            and player.parent == opponent.get_key()
+        ]
+        win_rates = self._learner.league.get_winrate((current_player, historical))
+        if len(win_rates) and win_rates.min() < 0.7:
+            pick_idx: int = np.random.choice(
+                len(historical), p=pfsp(win_rates, weighting="squared")
+            )
+            return historical[pick_idx], True
+
+        return None
+
+    def get_match(self):
+        current_player = self.get_current_player()
+        if current_player.player_type == "main_player":
+            return self.get_main_player_match()
+        elif current_player.player_type == "main_exploiter":
+            return self.get_main_exploiter_match()
+        elif current_player.player_type == "league_exploiter":
+            return self.get_league_exploiter_match()
+        else:
+            raise ValueError(f"Unknown player type: {current_player.player_type}")
+
+    def get_main_player_match(self):
         coin_toss = np.random.random()
 
-        # Make sure you can beat the League (PFSP)
-        # We only store trajectories from the the perspective of the main player,
-        # so we need to oversample playing against it such that the proportion of
-        # games played against it is 50%.
-        if coin_toss < 0.5:
-            opponent = self._pfsp_branch()
-            if opponent is not None:  # Found a historical opponent
-                return opponent, False
+        main_agents = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "main_player"
+        ]
+        opponent = main_agents[np.random.choice(len(main_agents))]
 
-        return self.pull_main_player(), True
+        # Make sure you can beat the League
+        if coin_toss < 0.5:
+            result = self._pfsp_branch()
+            if result is None:
+                return opponent, True
+            return result
+
+        # Verify if there are some rare players we omitted
+        if coin_toss < 0.5 + 0.15:
+            request = self._verification_branch(opponent)
+            if request is not None:
+                return request
+
+        return self._selfplay_branch(opponent)
+
+    def get_main_exploiter_match(self):
+        main_agents = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "main_player"
+        ]
+        opponent = main_agents[np.random.choice(len(main_agents))]
+
+        current_player = self.get_current_player()
+
+        if self._learner.league.get_winrate((current_player, opponent)) > 0.1:
+            return opponent, True
+
+        historical = [
+            player
+            for player in self._learner.league.players.values()
+            if player.player_type == "historical"
+            and player.parent == opponent.get_key()
+        ]
+        win_rates = self._learner.league.get_winrate((current_player, historical))
+
+        pick_idx: int = np.random.choice(
+            len(historical), p=pfsp(win_rates, weighting="variance")
+        )
+        return historical[pick_idx], True
+
+    def get_league_exploiter_match(self):
+        historical = [player for player in self._learner.league.players.values()]
+        current_player = self.get_current_player()
+        win_rates = self._learner.league.get_winrate((current_player, historical))
+        pick_idx: int = np.random.choice(
+            len(historical), p=pfsp(win_rates, weighting="linear_capped")
+        )
+        return historical[pick_idx], True
 
     def update_player_league_stats(
         self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory

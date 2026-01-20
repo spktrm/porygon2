@@ -31,7 +31,7 @@ interface WaitingPlayer {
 export class WorkerHandler {
     private port: MessagePort | null | undefined = parentPort;
     private playerMapping = new Map<string, TrainablePlayerAI>();
-    private waitingQueues = new Map<number, WaitingPlayer[]>();
+    private waitingQueues = new Map<string, WaitingPlayer[]>();
 
     constructor(port: MessagePort | null | undefined) {
         this.port = port;
@@ -61,8 +61,8 @@ export class WorkerHandler {
         smogonFormat: string,
         speciesIndices?: number[],
         packedSetIndices?: number[],
-        currentCkpt?: number,
-        opponentCkpt?: number,
+        currentCkpt?: string,
+        opponentCkpt?: string,
     ): Promise<WaitingPlayerResolveArgs> {
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
@@ -252,8 +252,8 @@ export class WorkerHandler {
         smogonFormat: string,
         speciesIndices?: number[],
         packedSetIndices?: number[],
-        currentCkpt?: number,
-        opponentCkpt?: number,
+        currentCkpt?: string,
+        opponentCkpt?: string,
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(

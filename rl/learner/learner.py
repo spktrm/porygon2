@@ -26,7 +26,7 @@ from rl.learner.config import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import LATEST_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, promote_map
@@ -697,6 +697,11 @@ class Learner:
         )
         self.league = league
 
+        all_player_keys = list(league.players)
+        self.current_player_key = (
+            all_player_keys[0] if len(league.players) <= 4 else all_player_keys[-1]
+        )
+
         # progress bars
         self.producer_progress = tqdm(desc="producer", smoothing=0.1)
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
@@ -791,92 +796,156 @@ class Learner:
         usage_logs["species_usage"] = table
         return usage_logs
 
+    def update_current_player(self):
+        current_player = self.get_current_player()
+        new_player = ParamsContainer(
+            player_type=current_player.player_type,
+            parent=current_player.parent,
+            step_count=LATEST_KEY,  # For latest agent
+            player_frame_count=np.array(self.player_state.frame_count).item(),
+            builder_frame_count=np.array(self.builder_state.frame_count).item(),
+            player_params=self.player_state.params,
+            builder_params=self.builder_state.params,
+        )
+        self.league.update_player(self.current_player_key, new_player)
+
+    def get_current_player(self) -> ParamsContainer:
+        league = self.league
+        return league.get_player(self.current_player_key)
+
     def get_league_winrates(self):
         league = self.league
 
-        current_main_player = league.get_main_player()
+        current_player = league.get_player(self.current_player_key)
 
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-        win_rates = league.get_winrate((current_main_player, historical_players))
+        historical_players = [
+            v for k, v in league.players.items() if k != self.current_player_key
+        ]
+        win_rates = league.get_winrate((current_player, historical_players))
         return {
-            f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
+            f"{self.current_player_key}_v_{historical_players[i].get_key()}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
         }
+
+    def ready_to_add_league_exploiter(self):
+        league = self.league
+
+        latest_added_player = league.get_latest_player()
+        current_player = self.get_current_player()
+
+        frames_passed = int(
+            current_player.player_frame_count - latest_added_player.player_frame_count
+        )
+
+        historical_players = [
+            player
+            for player in league.players.values()
+            if player.player_type == "historical"
+        ]
+        win_rates = league.get_winrate((current_player, historical_players))
+        return (win_rates.min() > 0.7) | (
+            frames_passed >= self.config.add_player_max_frames
+        )
+
+    def ready_to_add_main_exploiter(self):
+        league = self.league
+
+        latest_added_player = league.get_latest_player()
+        current_player = self.get_current_player()
+
+        frames_passed = int(
+            current_player.player_frame_count - latest_added_player.player_frame_count
+        )
+
+        historical_players = [
+            player
+            for player in league.players.values()
+            if player.player_type == "main_player"
+        ]
+        win_rates = league.get_winrate((current_player, historical_players))
+        return (win_rates.min() > 0.7) | (
+            frames_passed >= self.config.add_player_max_frames
+        )
+
+    def ready_to_add_main_player(self):
+        league = self.league
+
+        latest_added_player = league.get_latest_player()
+        current_player = self.get_current_player()
+
+        frames_passed = int(
+            current_player.player_frame_count - latest_added_player.player_frame_count
+        )
+
+        historical_players = [
+            player
+            for player in league.players.values()
+            if player.player_type == "historical"
+        ]
+
+        win_rates = league.get_winrate((current_player, historical_players))
+        return (win_rates.min() > 0.7) | (
+            frames_passed >= self.config.add_player_max_frames
+        )
 
     def ready_to_add_player(self):
         league = self.league
 
         latest_added_player = league.get_latest_player()
-        current_main_player = league.get_main_player()
+        current_player = self.get_current_player()
 
-        step_count = int(self.player_state.step_count)
-
-        if latest_added_player == current_main_player:
+        if latest_added_player == current_player:
             latest_frame_count = 0
         else:
             latest_frame_count = latest_added_player.player_frame_count
 
-        frames_passed = int(current_main_player.player_frame_count - latest_frame_count)
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        frames_passed = int(current_player.player_frame_count - latest_frame_count)
 
         if frames_passed < self.config.add_player_min_frames:
             return False
 
-        if len(historical_players) == 0:
-            if step_count > self.config.minimum_historical_player_steps:
-                return True
-            return False
+        if current_player.player_type == "main_player":
+            return self.ready_to_add_main_player()
+        elif current_player.player_type == "main_exploiter":
+            return self.ready_to_add_main_exploiter()
+        elif current_player.player_type == "league_exploiter":
+            return self.ready_to_add_league_exploiter()
+        else:
+            raise ValueError(f"Unknown player type: {current_player.player_type}")
 
-        win_rates = league.get_winrate((current_main_player, historical_players))
-        return (win_rates.min() > 0.7) | (
-            frames_passed >= self.config.add_player_max_frames
-        )
-
-    def update_main_player(self):
-        new_params = ParamsContainer(
-            player_frame_count=np.array(self.player_state.frame_count).item(),
-            builder_frame_count=np.array(self.builder_state.frame_count).item(),
-            step_count=MAIN_KEY,  # For main agent
-            player_params=self.player_state.params,
-            builder_params=self.builder_state.params,
-        )
-        self.league.update_main_player(new_params)
+    def next_player_type(self):
+        current_player = self.get_current_player()
+        if current_player.player_type == "main_player":
+            return "league_exploiter"
+        elif current_player.player_type == "league_exploiter":
+            return "main_exploiter"
+        elif current_player.player_type == "main_exploiter":
+            return "main_player"
+        else:
+            raise ValueError(f"Unknown player type: {current_player.player_type}")
 
     def add_new_player(self):
         num_steps = np.array(self.player_state.step_count).item()
 
-        # league = self.league
+        current_player = self.get_current_player()
 
-        # main_player = league.get_main_player()
-
-        # historical_players = [
-        #     v
-        #     for k, v in league.players.items()
-        #     if k != MAIN_KEY
-        #     and v.step_count > self.config.minimum_historical_player_steps
-        # ]
-
-        print(f"Adding new player to league @ {num_steps}")
-        self.league.add_player(
-            ParamsContainer(
+        for player_type, step_count in [
+            ("historical", num_steps),
+            (self.next_player_type(), LATEST_KEY),
+        ]:
+            new_player = ParamsContainer(
+                player_type=player_type,
+                parent=current_player.get_key(),
+                step_count=step_count,
                 player_frame_count=np.array(self.player_state.frame_count).item(),
                 builder_frame_count=np.array(self.builder_state.frame_count).item(),
-                step_count=num_steps,
                 player_params=self.player_state.params,
                 builder_params=self.builder_state.params,
             )
-        )
+            print(f"Adding new player: {new_player.get_key()} to league")
+            self.league.add_player(new_player)
 
-        # if len(historical_players) > 0:
-        #     win_rates = league.get_winrate((main_player, historical_players))
-        #     pick_idx = np.random.choice(
-        #         len(historical_players), p=pfsp(win_rates, weighting="squared")
-        #     )
-        #     new_reset = historical_players[pick_idx]
-        #     print(
-        #         f"Resetting main player to historical player @ step {new_reset.step_count}",
-        #     )
-        #     self.league.update_main_player(new_reset)
+        self.current_player_key = new_player.get_key()
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
@@ -938,7 +1007,7 @@ class Learner:
 
                 self.wandb_run.log(training_logs)
 
-                self.update_main_player()
+                self.update_current_player()
 
                 if (player_step % self.config.save_interval_steps) == 0:
                     save_train_state(

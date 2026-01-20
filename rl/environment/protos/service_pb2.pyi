@@ -112,9 +112,9 @@ class ResetRequest(_message.Message):
     species_indices: _containers.RepeatedScalarFieldContainer[int]
     packed_set_indices: _containers.RepeatedScalarFieldContainer[int]
     smogon_format: str
-    current_ckpt: int
-    opponent_ckpt: int
-    def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ..., current_ckpt: _Optional[int] = ..., opponent_ckpt: _Optional[int] = ...) -> None: ...
+    current_ckpt: str
+    opponent_ckpt: str
+    def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ..., current_ckpt: _Optional[str] = ..., opponent_ckpt: _Optional[str] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
