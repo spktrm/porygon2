@@ -12,25 +12,27 @@ PlayerType = Literal["main_player", "main_exploiter", "league_exploiter", "histo
 
 
 class ParamsContainer(NamedTuple):
+    # Hashable elements
     player_type: PlayerType
     parent: str
-
     step_count: int
-
     player_frame_count: int
     builder_frame_count: int
 
+    # Non-Hashable elements
     player_params: chex.ArrayTree
     builder_params: chex.ArrayTree
 
     def __hash__(self) -> int:
-        return hash(repr(self))
-
-    def get_key(self) -> str:
-        return f"{self.player_type}_{self.step_count}"
-
-    def __repr__(self) -> str:
-        return self.get_key()
+        return hash(
+            (
+                self.player_type,
+                self.parent,
+                self.step_count,
+                self.player_frame_count,
+                self.builder_frame_count,
+            )
+        )
 
 
 Params = chex.ArrayTree
