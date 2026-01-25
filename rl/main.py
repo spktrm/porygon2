@@ -1,4 +1,8 @@
+import pickle
+
 from dotenv import load_dotenv
+
+from rl.model.utils import ParamsContainer
 
 load_dotenv()
 
@@ -141,6 +145,31 @@ def main():
     gpu_lock = threading.Lock()
 
     learner_manager = LearnerManager(config, wandb_run)
+
+    resume_from_ckpt = True
+    if resume_from_ckpt:
+        with open("ckpts/gen9/ckpt_00400000", "rb") as f:
+            datum = pickle.load(f)
+
+        for learner in learner_manager.learners.values():
+            learner.player_state = learner.player_state.replace(
+                **datum["player_state"],
+            )
+            learner.builder_state = learner.builder_state.replace(
+                **datum["builder_state"],
+            )
+
+        for weight_id in learner.league.weight_store._weights.keys():
+            container = learner.league.weight_store.get(weight_id)
+            learner.league.weight_store._weights[weight_id] = ParamsContainer(
+                player_type=container.player_type,
+                parent=container.player_type,
+                step_count=container.player_type,
+                player_frame_count=container.player_type,
+                builder_frame_count=container.player_type,
+                player_params=datum["player_state"]["params"],
+                builder_params=datum["builder_state"]["params"],
+            )
 
     learning_agent = Agent(
         actor_player_net.apply, actor_build_net.apply, gpu_lock=gpu_lock
