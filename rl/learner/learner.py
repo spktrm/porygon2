@@ -1,6 +1,7 @@
 import functools
 import math
 import os
+import pickle
 import queue
 import threading
 import traceback
@@ -855,7 +856,7 @@ class Learner:
         }
 
     def update_current_player(self):
-        weight_id = self.player.weights.weight_id
+        weight_id = self.player.weight_id
         new_weights = ParamsContainer(
             player_type=self.player.__class__.__name__,
             parent=weight_id,
@@ -1087,6 +1088,7 @@ class LearnerManager:
             player_step = training_logs["training_step"]
             if (player_step - prev_add_player_check) >= 10:
                 should_add_player = learner.player.ready_to_checkpoint()
+                prev_add_player_check = player_step
 
         self.league.add_player(learner.player.checkpoint())
         logger.info(f"Learner {learner.player.player_id} added checkpoint to league.")
@@ -1115,6 +1117,9 @@ def save_train_state_locally(manager: LearnerManager):
 
 
 if __name__ == "__main__":
+    with open("ckpts/gen9/ckpt_00400000", "rb") as f:
+        datum = pickle.load(f)
+
     manager = LearnerManager(config=Porygon2LearnerConfig(), wandb_run=None)
 
     for _ in range(2):

@@ -198,6 +198,10 @@ class GenerationalPlayer(Player):
         super().__init__(payoff, weight_store, id_prefix, parent_player_id)
         self._weight_id = weight_id
 
+    @property
+    def weight_id(self) -> WeightID:
+        return self._weight_id
+
     def get_weights(self):
         return self._weight_store.get(self._weight_id)
 
