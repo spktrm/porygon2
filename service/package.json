@@ -20,10 +20,10 @@
     },
     "dependencies": {
         "@pkmn/client": "^0.7.2",
-        "@pkmn/dex": "^0.9.36",
+        "@pkmn/dex": "^0.10.5",
         "@pkmn/login": "^0.2.0",
-        "@pkmn/randoms": "^0.9.36",
-        "@pkmn/sim": "^0.9.36",
+        "@pkmn/randoms": "^0.10.5",
+        "@pkmn/sim": "^0.10.5",
         "@smogon/calc": "^0.10.0",
         "@types/node": "^20.11.20",
         "@types/pino": "^7.0.4",

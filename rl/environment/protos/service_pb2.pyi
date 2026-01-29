@@ -10,78 +10,67 @@ DESCRIPTOR: _descriptor.FileDescriptor
 class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_ENUM___UNSPECIFIED: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_1_TARGET_NA: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_1_TARGET_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_1_TARGET_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_1_TARGET_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_1_TARGET_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_2_TARGET_NA: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_2_TARGET_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_2_TARGET_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_2_TARGET_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_2_TARGET_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_3_TARGET_NA: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_3_TARGET_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_3_TARGET_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_3_TARGET_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_3_TARGET_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_4_TARGET_NA: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_4_TARGET_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_4_TARGET_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_4_TARGET_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__MOVE_4_TARGET_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_5: _ClassVar[ActionEnum]
-    ACTION_ENUM__SWITCH_6: _ClassVar[ActionEnum]
     ACTION_ENUM__DEFAULT: _ClassVar[ActionEnum]
-    ACTION_ENUM__PASS: _ClassVar[ActionEnum]
-
-class WildCardEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    WILD_CARD_ENUM___UNSPECIFIED: _ClassVar[WildCardEnum]
-    WILD_CARD_ENUM__CAN_NORMAL: _ClassVar[WildCardEnum]
-    WILD_CARD_ENUM__CAN_MEGA: _ClassVar[WildCardEnum]
-    WILD_CARD_ENUM__CAN_ZMOVE: _ClassVar[WildCardEnum]
-    WILD_CARD_ENUM__CAN_MAX: _ClassVar[WildCardEnum]
-    WILD_CARD_ENUM__CAN_TERA: _ClassVar[WildCardEnum]
+    ACTION_ENUM__ALLY_1_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__ENEMY_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__ENEMY_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_AUTO: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
 ACTION_ENUM___UNSPECIFIED: ActionEnum
-ACTION_ENUM__MOVE_1_TARGET_NA: ActionEnum
-ACTION_ENUM__MOVE_1_TARGET_1: ActionEnum
-ACTION_ENUM__MOVE_1_TARGET_2: ActionEnum
-ACTION_ENUM__MOVE_1_TARGET_3: ActionEnum
-ACTION_ENUM__MOVE_1_TARGET_4: ActionEnum
-ACTION_ENUM__MOVE_2_TARGET_NA: ActionEnum
-ACTION_ENUM__MOVE_2_TARGET_1: ActionEnum
-ACTION_ENUM__MOVE_2_TARGET_2: ActionEnum
-ACTION_ENUM__MOVE_2_TARGET_3: ActionEnum
-ACTION_ENUM__MOVE_2_TARGET_4: ActionEnum
-ACTION_ENUM__MOVE_3_TARGET_NA: ActionEnum
-ACTION_ENUM__MOVE_3_TARGET_1: ActionEnum
-ACTION_ENUM__MOVE_3_TARGET_2: ActionEnum
-ACTION_ENUM__MOVE_3_TARGET_3: ActionEnum
-ACTION_ENUM__MOVE_3_TARGET_4: ActionEnum
-ACTION_ENUM__MOVE_4_TARGET_NA: ActionEnum
-ACTION_ENUM__MOVE_4_TARGET_1: ActionEnum
-ACTION_ENUM__MOVE_4_TARGET_2: ActionEnum
-ACTION_ENUM__MOVE_4_TARGET_3: ActionEnum
-ACTION_ENUM__MOVE_4_TARGET_4: ActionEnum
-ACTION_ENUM__SWITCH_1: ActionEnum
-ACTION_ENUM__SWITCH_2: ActionEnum
-ACTION_ENUM__SWITCH_3: ActionEnum
-ACTION_ENUM__SWITCH_4: ActionEnum
-ACTION_ENUM__SWITCH_5: ActionEnum
-ACTION_ENUM__SWITCH_6: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
-ACTION_ENUM__PASS: ActionEnum
-WILD_CARD_ENUM___UNSPECIFIED: WildCardEnum
-WILD_CARD_ENUM__CAN_NORMAL: WildCardEnum
-WILD_CARD_ENUM__CAN_MEGA: WildCardEnum
-WILD_CARD_ENUM__CAN_ZMOVE: WildCardEnum
-WILD_CARD_ENUM__CAN_MAX: WildCardEnum
-WILD_CARD_ENUM__CAN_TERA: WildCardEnum
+ACTION_ENUM__ALLY_1_MOVE_1: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_2: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_3: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_4: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_1: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_2: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_3: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_4: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: ActionEnum
+ACTION_ENUM__RESERVE_1: ActionEnum
+ACTION_ENUM__RESERVE_2: ActionEnum
+ACTION_ENUM__RESERVE_3: ActionEnum
+ACTION_ENUM__RESERVE_4: ActionEnum
+ACTION_ENUM__RESERVE_5: ActionEnum
+ACTION_ENUM__RESERVE_6: ActionEnum
+ACTION_ENUM__ALLY_1: ActionEnum
+ACTION_ENUM__ALLY_2: ActionEnum
+ACTION_ENUM__ENEMY_1: ActionEnum
+ACTION_ENUM__ENEMY_2: ActionEnum
+ACTION_ENUM__TARGET_AUTO: ActionEnum
+ACTION_ENUM__ALLY_1_PASS: ActionEnum
+ACTION_ENUM__ALLY_2_PASS: ActionEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")
@@ -92,24 +81,24 @@ class ClientRequest(_message.Message):
     def __init__(self, step: _Optional[_Union[StepRequest, _Mapping]] = ..., reset: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
 class Action(_message.Message):
-    __slots__ = ("action", "wildcard")
-    ACTION_FIELD_NUMBER: _ClassVar[int]
-    WILDCARD_FIELD_NUMBER: _ClassVar[int]
-    action: ActionEnum
-    wildcard: WildCardEnum
-    def __init__(self, action: _Optional[_Union[ActionEnum, str]] = ..., wildcard: _Optional[_Union[WildCardEnum, str]] = ...) -> None: ...
+    __slots__ = ("src", "tgt")
+    SRC_FIELD_NUMBER: _ClassVar[int]
+    TGT_FIELD_NUMBER: _ClassVar[int]
+    src: ActionEnum
+    tgt: ActionEnum
+    def __init__(self, src: _Optional[_Union[ActionEnum, str]] = ..., tgt: _Optional[_Union[ActionEnum, str]] = ...) -> None: ...
 
 class StepRequest(_message.Message):
-    __slots__ = ("username", "actions", "rqid", "teampreview")
+    __slots__ = ("username", "action", "rqid", "teampreview")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
-    ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    ACTION_FIELD_NUMBER: _ClassVar[int]
     RQID_FIELD_NUMBER: _ClassVar[int]
     TEAMPREVIEW_FIELD_NUMBER: _ClassVar[int]
     username: str
-    actions: _containers.RepeatedCompositeFieldContainer[Action]
+    action: Action
     rqid: int
     teampreview: bool
-    def __init__(self, username: _Optional[str] = ..., actions: _Optional[_Iterable[_Union[Action, _Mapping]]] = ..., rqid: _Optional[int] = ..., teampreview: bool = ...) -> None: ...
+    def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ..., teampreview: bool = ...) -> None: ...
 
 class ResetRequest(_message.Message):
     __slots__ = ("username", "species_indices", "packed_set_indices", "smogon_format", "current_ckpt", "opponent_ckpt")
@@ -128,10 +117,9 @@ class ResetRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., species_indices: _Optional[_Iterable[int]] = ..., packed_set_indices: _Optional[_Iterable[int]] = ..., smogon_format: _Optional[str] = ..., current_ckpt: _Optional[int] = ..., opponent_ckpt: _Optional[int] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
-    __slots__ = ("info", "action_mask", "wildcard_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
+    __slots__ = ("info", "action_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
     INFO_FIELD_NUMBER: _ClassVar[int]
     ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
-    WILDCARD_MASK_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_PUBLIC_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_REVEALED_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_EDGES_FIELD_NUMBER: _ClassVar[int]
@@ -146,7 +134,6 @@ class EnvironmentState(_message.Message):
     HISTORY_PACKED_LENGTH_FIELD_NUMBER: _ClassVar[int]
     info: bytes
     action_mask: bytes
-    wildcard_mask: bytes
     history_entity_public: bytes
     history_entity_revealed: bytes
     history_entity_edges: bytes
@@ -159,7 +146,7 @@ class EnvironmentState(_message.Message):
     field: bytes
     rqid: int
     history_packed_length: int
-    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., wildcard_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
+    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
 
 class EnvironmentTrajectory(_message.Message):
     __slots__ = ("states",)

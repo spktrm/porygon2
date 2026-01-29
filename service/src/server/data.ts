@@ -39,7 +39,7 @@ import {
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
 } from "../../protos/features_pb";
-import { ActionEnum, WildCardEnum } from "../../protos/service_pb";
+import { ActionEnum } from "../../protos/service_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -73,8 +73,7 @@ export const numSideConditions = Object.keys(SideconditionEnum).length;
 export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
 export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
 export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
-export const numActionMaskFeatures = Object.keys(ActionEnum).length;
-export const numWildcardMaskFeatures = Object.keys(WildCardEnum).length;
+export const numActionFeatures = Object.keys(ActionEnum).length;
 
 export const actionIndexMapping = {
     0: "move 1",
@@ -113,10 +112,7 @@ export const numMovesetFeatures = 10 * numMoveFeatures;
 
 export const NUM_HISTORY = 512;
 
-export const AllValidActions = new OneDBoolean(10, Uint8Array);
-for (let actionIndex = 0; actionIndex < 10; actionIndex++) {
-    AllValidActions.set(actionIndex, true);
-}
+export const WILDCARDS = ["dynamax", "mega", "zmove", "terastallize", "ultra"];
 
 // Define the path to the JSON file
 const filePath = "../data/data/data.json";

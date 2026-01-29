@@ -110,6 +110,7 @@ export interface MovesetFeatureMap {
   MOVESET_FEATURE__ACTION_TYPE: 6;
   MOVESET_FEATURE__ENTITY_IDX: 7;
   MOVESET_FEATURE__DISABLED: 8;
+  MOVESET_FEATURE__IS_WILDCARD: 9;
 }
 
 export const MovesetFeature: MovesetFeatureMap;
@@ -209,6 +210,10 @@ export interface InfoFeatureMap {
   INFO_FEATURE__SWITCH_ORDER_VALUE3: 15;
   INFO_FEATURE__SWITCH_ORDER_VALUE4: 16;
   INFO_FEATURE__SWITCH_ORDER_VALUE5: 17;
+  INFO_FEATURE__REQUEST_TYPE: 18;
+  INFO_FEATURE__HAS_PREV_ACTION: 19;
+  INFO_FEATURE__PREV_ACTION_SRC: 20;
+  INFO_FEATURE__PREV_ACTION_TGT: 21;
 }
 
 export const InfoFeature: InfoFeatureMap;
@@ -220,6 +225,15 @@ export interface ActionTypeMap {
 }
 
 export const ActionType: ActionTypeMap;
+
+export interface RequestTypeMap {
+  REQUEST_TYPE___UNSPECIFIED: 0;
+  REQUEST_TYPE__MOVE: 1;
+  REQUEST_TYPE__SWITCH: 2;
+  REQUEST_TYPE__TEAM: 3;
+}
+
+export const RequestType: RequestTypeMap;
 
 export interface PackedSetFeatureMap {
   PACKED_SET_FEATURE___UNSPECIFIED: 0;

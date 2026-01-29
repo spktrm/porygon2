@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Tuple
 
 import flax.linen as nn
 import jax
@@ -7,50 +7,6 @@ import numpy as np
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
-
-
-class GatNet(nn.Module):
-    out_dim: int
-    num_layers: int
-    num_heads: int = 1
-    max_edges: int = 2
-
-    @nn.compact
-    def __call__(self, x: jax.Array, e: jax.Array, valid_mask: jax.Array):
-        """
-        x: (N, D) node embeddings
-        e: (N, D) edge embeddings, fully connected to valid nodes
-        f: (D) global embedding, affects all valid nodes/edges
-        valid_mask: (N,) bool
-        returns: (N, out_dim)
-        """
-
-        valid_idx = jnp.where(valid_mask, size=self.max_edges, fill_value=-1)[0]
-        take_mask = valid_idx != -1  # True only for real indices
-
-        # Safely gather with padding -> zeros (avoids accidental -1 indexing)
-        valid_node = jnp.take(x, valid_idx, axis=0, mode="fill", fill_value=0)
-        valid_edge = jnp.take(e, valid_idx, axis=0, mode="fill", fill_value=0)
-        where_mask = take_mask  # use this everywhere downstream
-
-        messages = GLU()(valid_edge, valid_node)
-
-        output = TransformerDecoder(
-            qk_size=self.out_dim // self.num_heads,
-            v_size=self.out_dim // self.num_heads,
-            model_size=self.out_dim,
-            resblocks_hidden_size=self.out_dim,
-            num_layers=self.num_layers,
-            num_heads=self.num_heads,
-        )(
-            valid_node,
-            messages,
-            create_attention_mask(where_mask, where_mask),
-        )
-
-        safe_idx = valid_idx.clip(min=0)
-        weights = take_mask.astype(output.dtype)[..., None]  # (max_edges, 1)
-        return jnp.zeros_like(x).at[safe_idx].add(output * weights)
 
 
 class RMSNorm(nn.Module):
@@ -75,6 +31,14 @@ class RMSNorm(nn.Module):
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         return (normed_inputs * (1 + scale)).astype(self.dtype)
+
+
+def dense_layer(
+    *args,
+    kernel_init: jax.nn.initializers.Initializer = nn.initializers.truncated_normal(),
+    **kwargs,
+) -> nn.Dense:
+    return nn.Dense(kernel_init=kernel_init, *args, **kwargs)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -180,19 +144,19 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = nn.Dense(
+        query_heads = dense_layer(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = nn.Dense(
+        key_heads = dense_layer(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
-        value_heads = nn.Dense(
+        value_heads = dense_layer(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
@@ -251,7 +215,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(
+        final_projection = dense_layer(
             model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
@@ -455,203 +419,6 @@ class TransformerDecoder(nn.Module):
         return q
 
 
-class Perceiver(nn.Module):
-    qk_size: int
-    v_size: int
-    model_size: int
-    num_layers: int
-    num_heads: int
-    use_bias: bool = True
-    encoder_need_pos: bool = False
-    decoder_need_pos: bool = False
-    qk_layer_norm: bool = False
-    resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = False
-    use_post_ffw_norm: bool = False
-    share_weights: bool = True
-    self_attn_per_cross_attn: int = 4
-
-    def apply_encoder_attn(
-        self, attn_module, qkv, attn_mask, positionwise_mask, qkv_positions
-    ):
-        # (Same as previous implementation)
-        qkv_ln = nn.LayerNorm()(qkv)
-        mha = attn_module(
-            q=qkv_ln,
-            kv=qkv_ln,
-            mask=attn_mask,
-            q_positions=qkv_positions,
-            kv_positions=qkv_positions,
-        )
-        if self.use_post_attn_norm:
-            mha = nn.LayerNorm()(mha)
-        return jnp.where(positionwise_mask, mha, 0)
-
-    def apply_decoder_attn(
-        self, attn_module, q, kv, attn_mask, positionwise_mask, q_pos, kv_pos
-    ):
-        # (Same as previous implementation)
-        q_ln = nn.LayerNorm()(q)
-        kv_ln = nn.LayerNorm()(kv)
-        mha = attn_module(
-            q=q_ln, kv=kv_ln, mask=attn_mask, q_positions=q_pos, kv_positions=kv_pos
-        )
-        if self.use_post_attn_norm:
-            mha = nn.LayerNorm()(mha)
-        return jnp.where(positionwise_mask, mha, 0)
-
-    def apply_ffn_mlp(self, ffn_module, q, positionwise_mask):
-        # (Same as previous implementation)
-        q_ln = nn.LayerNorm()(q)
-        ffn = ffn_module(q_ln)
-        if self.use_post_ffw_norm:
-            ffn = nn.LayerNorm()(ffn)
-        return jnp.where(positionwise_mask, ffn, 0)
-
-    def _make_encoder_attn(self, name: str = None):
-        return MultiHeadAttention(
-            num_heads=self.num_heads,
-            qk_size=self.qk_size,
-            v_size=self.v_size,
-            model_size=self.model_size,
-            qk_layer_norm=self.qk_layer_norm,
-            use_bias=self.use_bias,
-            need_pos=self.encoder_need_pos,
-            name=name,
-        )
-
-    def _make_decoder_attn(self, name: str = None):
-        return MultiHeadAttention(
-            num_heads=self.num_heads,
-            qk_size=self.qk_size,
-            v_size=self.v_size,
-            model_size=self.model_size,
-            use_bias=self.use_bias,
-            qk_layer_norm=self.qk_layer_norm,
-            need_pos=self.decoder_need_pos,
-            name=name,
-        )
-
-    def _make_ffw(self, name: str = None):
-        return FFWMLP(hidden_size=self.resblocks_hidden_size, name=name)
-
-    @nn.compact
-    def __call__(
-        self,
-        q: jax.Array,
-        contexts: Sequence[Tuple[jax.Array, jax.Array, jax.Array]],
-        encoder_attn_mask: jax.Array | None = None,
-        q_positions: jax.Array | None = None,
-    ):
-        # --- Mask Preparation ---
-        if encoder_attn_mask is None:
-            qkv_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-            encoder_attn_mask = create_attention_mask(qkv_mask, qkv_mask)
-
-        positionwise_mask = encoder_attn_mask.any(axis=-1, keepdims=True).squeeze(0)
-
-        if q_positions is None and self.encoder_need_pos:
-            q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
-
-        # --- Gating Parameters ---
-        alpha_xattn = self.param(
-            "alpha_xattn", nn.initializers.ones_init(), (self.num_layers, len(contexts))
-        )
-        alpha_dense = self.param(
-            "alpha_dense", nn.initializers.ones_init(), (self.num_layers, len(contexts))
-        )
-
-        # --- Module Instantiation Logic ---
-        layer_modules = []
-
-        # 1. Prepare Shared Instances (if applicable)
-        if self.share_weights:
-            shared_enc_attn = self._make_encoder_attn(name="shared_enc_attn")
-            shared_enc_ffw = self._make_ffw(name="shared_enc_ffw")
-
-            shared_ctx_attns = [
-                self._make_decoder_attn(name=f"shared_dec_attn_ctx_{i}")
-                for i in range(len(contexts))
-            ]
-            shared_ctx_ffws = [
-                self._make_ffw(name=f"shared_dec_ffw_ctx_{i}")
-                for i in range(len(contexts))
-            ]
-
-        # 2. Build Layer List
-        for i in range(self.num_layers):
-            layer_dict = {}
-
-            # -- Build Encoder Stack (The Ratio Logic) --
-            # We create a list of modules. If shared, we repeat the same instance.
-            # If not shared, we create new unique instances for every step in the ratio.
-            enc_stack = []
-            for k in range(self.self_attn_per_cross_attn):
-                if self.share_weights:
-                    enc_stack.append({"attn": shared_enc_attn, "ffw": shared_enc_ffw})
-                else:
-                    enc_stack.append(
-                        {
-                            "attn": self._make_encoder_attn(
-                                name=f"layer_{i}_step_{k}_enc_attn"
-                            ),
-                            "ffw": self._make_ffw(name=f"layer_{i}_step_{k}_enc_ffw"),
-                        }
-                    )
-            layer_dict["enc_stack"] = enc_stack
-
-            # -- Build Decoder Stack --
-            if self.share_weights:
-                layer_dict["ctx_attns"] = shared_ctx_attns
-                layer_dict["ctx_ffws"] = shared_ctx_ffws
-            else:
-                layer_dict["ctx_attns"] = [
-                    self._make_decoder_attn(name=f"layer_{i}_dec_attn_ctx_{c}")
-                    for c in range(len(contexts))
-                ]
-                layer_dict["ctx_ffws"] = [
-                    self._make_ffw(name=f"layer_{i}_dec_ffw_ctx_{c}")
-                    for c in range(len(contexts))
-                ]
-
-            layer_modules.append(layer_dict)
-
-        for layer_idx, modules in enumerate(layer_modules):
-
-            layer_attn_gates = alpha_xattn[layer_idx].astype(q.dtype)
-            layer_dense_gates = alpha_dense[layer_idx].astype(q.dtype)
-            outs = []
-
-            for ctx_idx, (gate_attn, gate_dense, (kv, mask, kv_pos)) in enumerate(
-                zip(layer_attn_gates, layer_dense_gates, contexts)
-            ):
-
-                dec_attn_mod = modules["ctx_attns"][ctx_idx]
-                dec_ffw_mod = modules["ctx_ffws"][ctx_idx]
-
-                q_c = q + gate_attn * self.apply_decoder_attn(
-                    dec_attn_mod, q, kv, mask, positionwise_mask, q_positions, kv_pos
-                )
-                q_c = q_c + gate_dense * self.apply_ffn_mlp(
-                    dec_ffw_mod, q_c, positionwise_mask
-                )
-                outs.append(q_c)
-
-            q = sum(outs) / len(contexts)
-
-            for enc_block in modules["enc_stack"]:
-                q = q + self.apply_encoder_attn(
-                    enc_block["attn"],
-                    q,
-                    encoder_attn_mask,
-                    positionwise_mask,
-                    q_positions,
-                )
-                q = q + self.apply_ffn_mlp(enc_block["ffw"], q, positionwise_mask)
-
-        return q
-
-
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 
@@ -689,12 +456,8 @@ class MLP(nn.Module):
             if i == len(layer_sizes) - 1:
                 if self.final_kernel_init is not None:
                     dense_kwargs["kernel_init"] = self.final_kernel_init
-            x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
+            x = dense_layer(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
-
-
-def ffw_activation(x: jax.Array) -> jax.Array:
-    return nn.relu(x) ** 2
 
 
 class FiLMGenerator(nn.Module):
@@ -704,12 +467,12 @@ class FiLMGenerator(nn.Module):
     def __call__(self, x: jax.Array) -> Tuple[jax.Array, jax.Array]:
         # 1. Project to a hidden representation (optional but recommended)
         # Using the same dimension 'features' is standard.
-        x = nn.Dense(features=self.features, dtype=x.dtype)(x)
-        x = nn.relu(x)
+        x = dense_layer(features=self.features, dtype=x.dtype)(x)
+        x = activation_fn(x)
 
         # 2. Project to gamma (scale) and beta (shift)
         # We output features * 2 so we can split them later
-        stats = nn.Dense(
+        stats = dense_layer(
             features=self.features * 2,
             dtype=x.dtype,
             # Initialize gamma part to 0 (so gamma+1=1) and beta part to 0
@@ -730,7 +493,7 @@ class FFWMLP(nn.Module):
     hidden_size: int
     output_size: int = None
     use_layer_norm: bool = False
-    activation: callable = ffw_activation
+    activation: callable = activation_fn
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -744,11 +507,11 @@ class FFWMLP(nn.Module):
             jax.Array: Output array.
         """
         inp_size = x.shape[-1]
-        x = nn.Dense(self.hidden_size, dtype=x.dtype)(x)
+        x = dense_layer(self.hidden_size, dtype=x.dtype)(x)
         if self.use_layer_norm:
             x = layer_norm(x)
         x = self.activation(x)
-        x = nn.Dense(self.output_size or inp_size, dtype=x.dtype)(x)
+        x = dense_layer(self.output_size or inp_size, dtype=x.dtype)(x)
         return x
 
 
@@ -766,8 +529,8 @@ class GLU(nn.Module):
         Returns:
             jax.Array: Output array.
         """
-        gate = nn.sigmoid(nn.Dense(gate.shape[-1], dtype=gate.dtype)(gate))
-        value = nn.Dense(gate.shape[-1], dtype=gate.dtype)(value)
+        gate = nn.sigmoid(dense_layer(gate.shape[-1], dtype=gate.dtype)(gate))
+        value = dense_layer(gate.shape[-1], dtype=gate.dtype)(value)
         return value * gate
 
 
@@ -827,7 +590,7 @@ class SumEmbeddings(nn.Module):
             raise ValueError("No embeddings provided")
 
         aggregated = sum(
-            nn.Dense(
+            dense_layer(
                 self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
             )(embedding)
             for embedding in embeddings
@@ -859,7 +622,7 @@ class VectorResblock(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = nn.Dense(output_size, dtype=x.dtype, **dense_kwargs)(x)
+            x = dense_layer(output_size, dtype=x.dtype, **dense_kwargs)(x)
         return x + shortcut
 
 
@@ -876,9 +639,10 @@ class Resnet(nn.Module):
 
 class PointerLogits(nn.Module):
     qk_size: int = None
-    num_heads: int = 2
+    num_heads: int = 1
     use_bias: bool = True
     qk_layer_norm: bool = False
+    inverse_sqrt_normalisation: bool = True
 
     @nn.compact
     def __call__(self, q: jax.Array, k: jax.Array) -> jax.Array:
@@ -887,20 +651,12 @@ class PointerLogits(nn.Module):
 
         qk_size = self.qk_size or k.shape[-1] // self.num_heads
 
-        q = activation_fn(layer_norm(q))
-        k = activation_fn(layer_norm(k))
-
-        query_heads = nn.Dense(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=q.dtype,
-            name="q_proj",
+        query_heads = dense_layer(
+            self.num_heads * qk_size, use_bias=self.use_bias, dtype=q.dtype
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = nn.Dense(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=k.dtype,
-            name="k_proj",
+
+        key_heads = dense_layer(
+            self.num_heads * qk_size, use_bias=self.use_bias, dtype=k.dtype
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 
         if self.qk_layer_norm:
@@ -909,8 +665,14 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits.mean(axis=0)  # mean over heads
-        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+
+        if self.num_heads == 1:
+            attn_logits = attn_logits.squeeze(axis=0)
+        else:
+            attn_logits = attn_logits.mean(axis=0)  # mean over heads
+
+        if self.inverse_sqrt_normalisation:
+            attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
         return attn_logits
 

@@ -10,24 +10,11 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.service_pb2 import Action, ActionEnum
+from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history, clip_packed_history, split_rng
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
-
-ACTION_MAPPING = {
-    0: ActionEnum.ACTION_ENUM__MOVE_1_TARGET_NA,
-    1: ActionEnum.ACTION_ENUM__MOVE_2_TARGET_NA,
-    2: ActionEnum.ACTION_ENUM__MOVE_3_TARGET_NA,
-    3: ActionEnum.ACTION_ENUM__MOVE_4_TARGET_NA,
-    4: ActionEnum.ACTION_ENUM__SWITCH_1,
-    5: ActionEnum.ACTION_ENUM__SWITCH_2,
-    6: ActionEnum.ACTION_ENUM__SWITCH_3,
-    7: ActionEnum.ACTION_ENUM__SWITCH_4,
-    8: ActionEnum.ACTION_ENUM__SWITCH_5,
-    9: ActionEnum.ACTION_ENUM__SWITCH_6,
-}
 
 
 class Actor:
@@ -60,10 +47,8 @@ class Actor:
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(
-            action=ACTION_MAPPING[
-                agent_output.actor_output.action_head.action_index.item()
-            ],
-            wildcard=agent_output.actor_output.wildcard_head.action_index.item(),
+            src=agent_output.actor_output.action_head.src_index.item(),
+            tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
 
     def unroll(
