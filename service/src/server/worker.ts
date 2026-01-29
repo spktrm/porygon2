@@ -31,7 +31,10 @@ interface WaitingPlayer {
 export class WorkerHandler {
     private port: MessagePort | null | undefined = parentPort;
     private playerMapping = new Map<string, TrainablePlayerAI>();
-    private waitingQueues = new Map<number, WaitingPlayer[]>();
+
+    // Changed: We now map a specific GameID to a single Waiting Player.
+    // Logic: First player to arrive sits here. Second player triggers the match.
+    private pendingGames = new Map<string, WaitingPlayer>();
 
     constructor(port: MessagePort | null | undefined) {
         this.port = port;
@@ -58,22 +61,19 @@ export class WorkerHandler {
 
     private async resetPlayerFromTrainingUserName(
         userName: string,
+        gameId: string, // Added gameId param
         smogonFormat: string,
         speciesIndices?: number[],
         packedSetIndices?: number[],
-        currentCkpt?: number,
-        opponentCkpt?: number,
     ): Promise<WaitingPlayerResolveArgs> {
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
         }
-        if (currentCkpt === undefined) {
-            throw new Error(`Invalid training currentCkpt: ${currentCkpt}`);
-        }
-        if (opponentCkpt === undefined) {
-            throw new Error(`Invalid training opponentCkpt: ${opponentCkpt}`);
+
+        if (!gameId) {
+            throw new Error("gameId is required for matchmaking.");
         }
 
         const details: PlayerDetails = {
@@ -83,26 +83,34 @@ export class WorkerHandler {
             packedSetIndices,
         };
 
-        const opponentQueue = this.waitingQueues.get(opponentCkpt);
-        const opponent = opponentQueue?.shift(); // Get the first waiting opponent, if any
+        // Check if someone is already waiting for this Game ID
+        const opponent = this.pendingGames.get(gameId);
 
         if (opponent !== undefined) {
-            // --- CASE 1: Opponent was found ---
-            console.log(
-                `Pairing ${userName}:${currentCkpt} vs ${opponent.playerDetails.userName}:${opponentCkpt}`,
-            );
+            // --- CASE 1: Opponent is already waiting (We are the 2nd player) ---
 
-            // Check for format mismatch (same logic as your original code)
-            if (opponent.playerDetails.smogonFormat !== smogonFormat) {
-                // Note: This is a critical error in matchmaking logic.
-                // You might want to put the opponent back in the queue instead of throwing.
-                // But for this refactor, we will replicate the original's behavior.
+            // Safety check: prevent self-matching if unique usernames are required
+            if (opponent.playerDetails.userName === userName) {
                 throw new Error(
-                    `Mismatched formats: ${opponent.playerDetails.smogonFormat} vs ${smogonFormat}`,
+                    `User ${userName} attempted to match with themselves on gameId ${gameId}`,
                 );
             }
 
-            // 5. Create the battle
+            console.log(
+                `Pairing ${userName} vs ${opponent.playerDetails.userName} (GameID: ${gameId})`,
+            );
+
+            if (opponent.playerDetails.smogonFormat !== smogonFormat) {
+                // If formats mismatch, we cannot start the game.
+                // We remove the waiting player to prevent the queue from being "clogged" by a bad match,
+                // or you could choose to throw and leave them waiting.
+                // Here we throw, but the pending game remains (waiting for a valid match).
+                throw new Error(
+                    `Mismatched formats for GameID ${gameId}: ${opponent.playerDetails.smogonFormat} vs ${smogonFormat}`,
+                );
+            }
+
+            // 1. Create the battle
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
@@ -119,35 +127,36 @@ export class WorkerHandler {
                 smogonFormat,
             });
 
-            // 6. Register players in the map
+            // 2. Register players in the map
             this.playerMapping.set(opponent.playerDetails.userName, player1);
             this.playerMapping.set(userName, player2);
 
-            // 7. "Wake up" the waiting opponent by resolving their promise
+            // 3. Remove the game from pending now that it has started
+            this.pendingGames.delete(gameId);
+
+            // 4. "Wake up" the waiting opponent
             opponent.resolve({
                 player: player1,
                 opponentDetails: details,
             });
 
-            // 8. Return the args for the *current* player
+            // 5. Return the args for the *current* player
             return Promise.resolve({
                 player: player2,
                 opponentDetails: opponent.playerDetails,
             });
         } else {
-            // --- CASE 2: No opponent found, this player must wait ---
-            console.log(`No opponent found for ${userName}. Waiting...`);
+            // --- CASE 2: No one is here yet (We are the 1st player) ---
+            console.log(
+                `Waiting for opponent on GameID ${gameId} (User: ${userName})`,
+            );
 
-            // 5. Add this player to their *own* queue and return a promise
             return new Promise((resolve) => {
-                // Find or create the queue for this player's prefix
-                let myQueue = this.waitingQueues.get(currentCkpt);
-                if (myQueue === undefined) {
-                    myQueue = [];
-                    this.waitingQueues.set(currentCkpt, myQueue);
-                }
-                // Add this player (and their "wake-up" function) to the queue
-                myQueue.push({ playerDetails: details, resolve });
+                // Store this player as the waiting party for this GameID
+                this.pendingGames.set(gameId, {
+                    playerDetails: details,
+                    resolve,
+                });
             });
         }
     }
@@ -249,11 +258,11 @@ export class WorkerHandler {
 
     private resetPlayerFromUserName(
         userName: string,
+        gameId: string, // Added param
         smogonFormat: string,
         speciesIndices?: number[],
         packedSetIndices?: number[],
-        currentCkpt?: number,
-        opponentCkpt?: number,
+        // We no longer need ckpt params for matchmaking logic
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(
@@ -267,11 +276,10 @@ export class WorkerHandler {
         } else {
             return this.resetPlayerFromTrainingUserName(
                 userName,
+                gameId,
                 smogonFormat,
                 speciesIndices,
                 packedSetIndices,
-                currentCkpt,
-                opponentCkpt,
             );
         }
     }
@@ -284,16 +292,14 @@ export class WorkerHandler {
         const speciesIndices = resetRequest.getSpeciesIndicesList();
         const packedSetIndices = resetRequest.getPackedSetIndicesList();
         const smogonFormat = resetRequest.getSmogonFormat();
-        const currentCkpt = resetRequest.getCurrentCkpt();
-        const opponentCkpt = resetRequest.getOpponentCkpt();
+        const gameId = resetRequest.getGameId();
 
         const { player, opponentDetails } = await this.resetPlayerFromUserName(
             userName,
+            gameId,
             smogonFormat,
             speciesIndices,
             packedSetIndices,
-            currentCkpt,
-            opponentCkpt,
         );
         const state = await player.receiveEnvironmentState();
 

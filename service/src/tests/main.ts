@@ -85,7 +85,7 @@ async function runBattle() {
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-eval-heuristic:0`,
-        p1team: getSampleTeam("gen9ou", "Zoroark"),
+        p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou", "Zoroark"),
         smogonFormat,
     };

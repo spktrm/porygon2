@@ -1,11 +1,15 @@
 import functools
 import math
+import os
+import pickle
 import queue
 import threading
 import traceback
 from _thread import LockType
 from contextlib import nullcontext
+from typing import Any, Callable
 
+import cloudpickle
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,11 +28,21 @@ from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
     Porygon2PlayerTrainState,
-    save_train_state,
+    create_train_state,
 )
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import (
+    HistoricalPlayer,
+    League,
+    LeagueExploiter,
+    MainExploiter,
+    MainPlayer,
+    Player,
+)
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
+from rl.model.builder_model import get_builder_model
+from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
+from rl.model.player_model import get_player_model
 from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
@@ -662,15 +676,53 @@ def train_step(
     return player_state, builder_state, training_logs
 
 
+def stack_batch(
+    batch: list[Trajectory],
+    player_transition_resolution: int = 50,
+    player_history_resolution: int = 128,
+):
+    stacked_trajectory: Trajectory = jax.tree.map(
+        lambda *xs: np.stack(xs, axis=1), *batch
+    )
+
+    valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
+    valid_sum = valid.sum(0).max().item()
+
+    num_valid = int(
+        np.ceil(valid_sum / player_transition_resolution) * player_transition_resolution
+    )
+
+    clipped_trajectory = Trajectory(
+        builder_transitions=stacked_trajectory.builder_transitions,
+        builder_history=stacked_trajectory.builder_history,
+        player_transitions=jax.tree.map(
+            lambda x: x[:num_valid], stacked_trajectory.player_transitions
+        ),
+        player_packed_history=clip_packed_history(
+            stacked_trajectory.player_packed_history,
+            resolution=player_history_resolution,
+        ),
+        player_history=clip_history(
+            stacked_trajectory.player_history, resolution=player_history_resolution
+        ),
+    )
+
+    return clipped_trajectory
+
+
+train_step_jit = jax.jit(train_step, static_argnames=["config"])
+
+
 class Learner:
     def __init__(
         self,
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
         config: Porygon2LearnerConfig,
-        wandb_run: wandb.wandb_run.Run,
+        wandb_run: wandb.wandb_run.Run | None,
         league: League,
         gpu_lock: LockType | None = None,
+        log_prefix: str = "",
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -689,18 +741,44 @@ class Learner:
         self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
 
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
-
-        self.wandb_run.log_code("rl/")
-        self.wandb_run.log_code("inference/")
-        self.wandb_run.log_code(
-            "service/src/client/", include_fn=lambda x: x.endswith(".ts")
-        )
         self.league = league
 
         # progress bars
-        self.producer_progress = tqdm(desc="producer", smoothing=0.1)
-        self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
-        self.train_progress = tqdm(desc="batches", smoothing=0.1)
+        self.log_prefix = log_prefix
+        self.producer_progress = tqdm(desc=f"{log_prefix} producer", smoothing=0.1)
+        self.consumer_progress = tqdm(desc=f"{log_prefix} consumer", smoothing=0.1)
+        self.train_progress = tqdm(desc=f"{log_prefix} batches", smoothing=0.1)
+
+        transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        transfer_thread.start()
+
+    def serialize(self) -> dict[str, Any]:
+        return {
+            k: v
+            for k, v in self.__dict__.items()
+            if k in ["player", "player_state", "builder_state", "log_prefix"]
+        }
+
+    @classmethod
+    def deserialize(
+        cls,
+        config: Porygon2LearnerConfig,
+        wandb_run: wandb.wandb_run.Run | None,
+        league: League,
+        gpu_lock: LockType | None,
+        data: dict[str, Any],
+    ):
+        instance = cls(
+            player=data["player"],
+            player_state=data["player_state"],
+            builder_state=data["builder_state"],
+            config=config,
+            wandb_run=wandb_run,
+            league=league,
+            gpu_lock=gpu_lock,
+            log_prefix=data["log_prefix"],
+        )
+        return instance
 
     def enqueue_traj(self, traj: Trajectory):
         # Block if the ratio is too low (we are too far ahead)
@@ -714,41 +792,6 @@ class Learner:
 
         # Notify the controller that we have produced one trajectory
         self.controller.notify_produced(n_trajectories=1)
-
-    def stack_batch(
-        self,
-        batch: list[Trajectory],
-        player_transition_resolution: int = 50,
-        player_history_resolution: int = 128,
-    ):
-        stacked_trajectory: Trajectory = jax.tree.map(
-            lambda *xs: np.stack(xs, axis=1), *batch
-        )
-
-        valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
-        valid_sum = valid.sum(0).max().item()
-
-        num_valid = int(
-            np.ceil(valid_sum / player_transition_resolution)
-            * player_transition_resolution
-        )
-
-        clipped_trajectory = Trajectory(
-            builder_transitions=stacked_trajectory.builder_transitions,
-            builder_history=stacked_trajectory.builder_history,
-            player_transitions=jax.tree.map(
-                lambda x: x[:num_valid], stacked_trajectory.player_transitions
-            ),
-            player_packed_history=clip_packed_history(
-                stacked_trajectory.player_packed_history,
-                resolution=player_history_resolution,
-            ),
-            player_history=clip_history(
-                stacked_trajectory.player_history, resolution=player_history_resolution
-            ),
-        )
-
-        return clipped_trajectory
 
     def host_to_device_worker(self):
         max_burst = 8
@@ -770,7 +813,7 @@ class Learner:
                 batch = self.replay.sample(self.config.batch_size)
                 self.consumer_progress.update(batch_size)
 
-                stacked = self.stack_batch(batch)
+                stacked = stack_batch(batch)
                 self.device_q.put(stacked)
 
                 # Notify the controller that we have consumed a batch
@@ -794,176 +837,105 @@ class Learner:
     def get_league_winrates(self):
         league = self.league
 
-        current_main_player = league.get_main_player()
+        current_player = league.get_player(self.player.player_id)
 
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-        win_rates = league.get_winrate((current_main_player, historical_players))
+        historical_players = league._payoff.get_potential_opponents()
+        win_rates = league._payoff[current_player.player_id, historical_players]
+
         return {
-            f"league_main_v_{historical_players[i].step_count}_winrate": win_rate
+            f"{self.player.player_id}_v_{historical_players[i]}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
         }
 
-    def ready_to_add_player(self):
-        league = self.league
-
-        latest_added_player = league.get_latest_player()
-        current_main_player = league.get_main_player()
-
-        step_count = int(self.player_state.step_count)
-
-        if latest_added_player == current_main_player:
-            latest_frame_count = 0
-        else:
-            latest_frame_count = latest_added_player.player_frame_count
-
-        frames_passed = int(current_main_player.player_frame_count - latest_frame_count)
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
-
-        if frames_passed < self.config.add_player_min_frames:
-            return False
-
-        if len(historical_players) == 0:
-            if step_count > self.config.minimum_historical_player_steps:
-                return True
-            return False
-
-        win_rates = league.get_winrate((current_main_player, historical_players))
-        return (win_rates.min() > 0.7) | (
-            frames_passed >= self.config.add_player_max_frames
-        )
-
-    def update_main_player(self):
-        new_params = ParamsContainer(
-            player_frame_count=np.array(self.player_state.frame_count).item(),
-            builder_frame_count=np.array(self.builder_state.frame_count).item(),
-            step_count=MAIN_KEY,  # For main agent
+    def update_current_player(self):
+        weight_id = self.player.lora_id
+        new_weights = ParamsContainer(
+            player_type=self.player.__class__.__name__,
+            parent=weight_id,
+            step_count=int(self.player_state.step_count),
+            player_frame_count=int(self.player_state.frame_count),
+            builder_frame_count=int(self.builder_state.frame_count),
             player_params=self.player_state.params,
             builder_params=self.builder_state.params,
         )
-        self.league.update_main_player(new_params)
+        self.league.update_weights(weight_id, new_weights)
 
-    def add_new_player(self):
-        num_steps = np.array(self.player_state.step_count).item()
+    def upload_logs(self, logs: dict):
+        if self.wandb_run is not None:
+            respective_logs = {f"{self.log_prefix}_{k}": v for k, v in logs.items()}
+            respective_logs["training_step"] = logs["training_step"]
+            self.wandb_run.log(respective_logs)
 
-        # league = self.league
+    def train_step(self, full_log: bool = False):
+        batch = self.device_q.get()
+        batch: Trajectory = jax.device_put(batch)
 
-        # main_player = league.get_main_player()
+        new_player_state: Porygon2PlayerTrainState
+        new_builder_state: Porygon2BuilderTrainState
+        training_logs: dict
 
-        # historical_players = [
-        #     v
-        #     for k, v in league.players.items()
-        #     if k != MAIN_KEY
-        #     and v.step_count > self.config.minimum_historical_player_steps
-        # ]
-
-        print(f"Adding new player to league @ {num_steps}")
-        self.league.add_player(
-            ParamsContainer(
-                player_frame_count=np.array(self.player_state.frame_count).item(),
-                builder_frame_count=np.array(self.builder_state.frame_count).item(),
-                step_count=num_steps,
-                player_params=self.player_state.params,
-                builder_params=self.builder_state.params,
+        with self.gpu_lock:
+            new_player_state, new_builder_state, training_logs = train_step_jit(
+                self.player_state,
+                self.builder_state,
+                batch,
+                self.config,
             )
-        )
 
-        # if len(historical_players) > 0:
-        #     win_rates = league.get_winrate((main_player, historical_players))
-        #     pick_idx = np.random.choice(
-        #         len(historical_players), p=pfsp(win_rates, weighting="squared")
-        #     )
-        #     new_reset = historical_players[pick_idx]
-        #     print(
-        #         f"Resetting main player to historical player @ step {new_reset.step_count}",
-        #     )
-        #     self.league.update_main_player(new_reset)
+        training_step = training_logs["training_step"]
+        player_step = int(training_step)
+
+        if jnp.isfinite(training_logs["player_loss"]).item():
+            self.player_state = new_player_state
+        else:
+            print("Non-finite loss detected in player @ step", player_step)
+            return
+
+        if jnp.isfinite(training_logs["builder_loss"]).item():
+            self.builder_state = new_builder_state
+        else:
+            print("Non-finite loss detected in builder @ step", player_step)
+            return
+
+        if (player_step % self.config.save_interval_steps or full_log) == 0:
+            usage_logs = self.get_usage_counts(self.replay._species_counts)
+            training_logs.update(jax.device_get(usage_logs))
+
+        if (player_step % self.config.league_winrate_log_steps or full_log) == 0:
+            league_winrates = self.get_league_winrates()
+            training_logs.update(jax.device_get(league_winrates))
+
+        # Update the tqdm progress bars.
+        self.train_progress.update(1)
+        rr = self.controller._get_current_rr()
+        self.train_progress.set_description(f"{self.log_prefix} batches - rr: {rr:.2f}")
+
+        training_logs["replay_ratio"] = rr
+
+        self.upload_logs(training_logs)
+        self.update_current_player()
+
+        return training_logs
 
     def train(self):
-        transfer_thread = threading.Thread(target=self.host_to_device_worker)
-        transfer_thread.start()
+        while not self.done:
+            logs = self.train_step()
+            step = int(logs["training_step"])
 
-        train_step_jit = jax.jit(train_step, static_argnames=["config"])
-        # train_step_jit = train_step
+            if (step % self.config.save_interval_steps) == 0:
+                save_learner_locally(self)
 
-        prev_add_player_check = 0
 
-        for _ in range(self.config.num_steps):
+def save_learner_locally(learner: Learner):
+    step = int(learner.player_state.step_count)
+    save_path = os.path.abspath(
+        f"ckpts/gen{learner.config.generation}/ckpt_{step:08}.pkl"
+    )
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-            try:
-                batch = self.device_q.get()
-                batch: Trajectory = jax.device_put(batch)
+    with open(save_path, "wb") as f:
+        data = learner.serialize()
+        cloudpickle.dump(data, f)
 
-                new_player_state: Porygon2PlayerTrainState
-                new_builder_state: Porygon2BuilderTrainState
-                training_logs: dict
-
-                with self.gpu_lock:
-                    new_player_state, new_builder_state, training_logs = train_step_jit(
-                        self.player_state,
-                        self.builder_state,
-                        batch,
-                        self.config,
-                    )
-
-                training_step = training_logs["training_step"]
-
-                if jnp.isfinite(training_logs["player_loss"]).item():
-                    self.player_state = new_player_state
-                else:
-                    print("Non-finite loss detected in player @ step", training_step)
-                    continue
-
-                if jnp.isfinite(training_logs["builder_loss"]).item():
-                    self.builder_state = new_builder_state
-                else:
-                    print("Non-finite loss detected in builder @ step", training_step)
-                    continue
-
-                player_step = int(training_step)
-
-                if (player_step % self.config.save_interval_steps) == 0:
-                    usage_logs = self.get_usage_counts(self.replay._species_counts)
-                    training_logs.update(jax.device_get(usage_logs))
-
-                if (player_step % self.config.league_winrate_log_steps) == 0:
-                    league_winrates = self.get_league_winrates()
-                    training_logs.update(jax.device_get(league_winrates))
-
-                # Update the tqdm progress bars.
-                self.train_progress.update(1)
-                rr = self.controller._get_current_rr()
-                self.train_progress.set_description(f"batches - rr: {rr:.2f}")
-
-                training_logs["replay_ratio"] = rr
-
-                self.wandb_run.log(training_logs)
-
-                self.update_main_player()
-
-                if (player_step % self.config.save_interval_steps) == 0:
-                    save_train_state(
-                        self.wandb_run,
-                        self.config,
-                        self.player_state,
-                        self.builder_state,
-                        self.league,
-                    )
-
-                should_add_player = False
-                if (player_step - prev_add_player_check) >= 10:
-                    should_add_player = self.ready_to_add_player()
-                    prev_add_player_check = player_step
-
-                if should_add_player:
-                    self.add_new_player()
-                    self.replay.reset_species_counts()
-
-            except Exception as e:
-                logger.error(f"Learner train step failed: {e}")
-                traceback.print_exc()
-
-                raise e
-
-        self.done = True
-        # transfer_thread.join()
-        print("Training Finished.")
+    return save_path
