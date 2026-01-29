@@ -39,11 +39,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import (
-    ActionEnum,
-    EnvironmentTrajectory,
-    WildCardEnum,
-)
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentTrajectory
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -76,7 +72,6 @@ NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
-NUM_WILDCARD_FEATURES = len(WildCardEnum.keys())
 
 NUM_HISTORY = 128 * 3
 
@@ -90,7 +85,7 @@ MAX_BOOST_VALUE = 13
 
 ENTITY_PUBLIC_MAX_VALUES = {
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL: 100,
-    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: 2,
+    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: 3,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE: 2,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO: MAX_RATIO_TOKEN,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER: NUM_GENDERS,

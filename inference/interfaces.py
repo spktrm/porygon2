@@ -9,5 +9,5 @@ class ResetResponse(BaseModel):
 
 class StepResponse(BaseModel):
     v: float
-    action: int
-    wildcard: int
+    src: int
+    tgt: int

@@ -26,22 +26,11 @@ from rl.learner.config import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League, pfsp
+from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
-
-
-def calculate_player_log_prob(
-    *,
-    action_log_prob: jax.Array,
-    action_index: jax.Array,
-    wildcard_log_prob: jax.Array,
-):
-    is_move = action_index < 4
-
-    return action_log_prob + jnp.where(is_move, wildcard_log_prob, 0.0)
 
 
 def calculate_builder_log_prob(
@@ -269,24 +258,12 @@ def train_step(
     )
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
-    player_actor_wildcard_head = (
-        player_transitions.agent_output.actor_output.wildcard_head
-    )
 
     player_target_value_head = player_target_pred.value_head
     player_target_action_head = player_target_pred.action_head
-    player_target_wildcard_head = player_target_pred.wildcard_head
 
-    player_actor_log_prob = calculate_player_log_prob(
-        action_log_prob=player_actor_action_head.log_prob,
-        action_index=player_actor_action_head.action_index,
-        wildcard_log_prob=player_actor_wildcard_head.log_prob,
-    )
-    player_target_log_prob = calculate_player_log_prob(
-        action_log_prob=player_target_action_head.log_prob,
-        action_index=player_target_action_head.action_index,
-        wildcard_log_prob=player_target_wildcard_head.log_prob,
-    )
+    player_actor_log_prob = player_actor_action_head.log_prob
+    player_target_log_prob = player_target_action_head.log_prob
 
     builder_actor_conditional_entropy_head = (
         builder_transitions.agent_output.actor_output.conditional_entropy_head
@@ -387,16 +364,11 @@ def train_step(
     builder_norm_advantages = norm_advantages[: builder_valid.shape[0]]
     player_norm_advantages = norm_advantages[builder_valid.shape[0] :]
 
-    wildcard_valid = player_valid & (
-        player_transitions.env_output.wildcard_mask.sum(axis=-1) > 1
-    )
+    action_mask_sum = player_transitions.env_output.action_mask.reshape(
+        player_valid.shape + (-1,)
+    ).sum(axis=-1)
 
-    action_mask_sum = player_transitions.env_output.action_mask.sum(axis=-1)
-    move_mask_sum = player_transitions.env_output.action_mask[..., :4].sum(axis=-1)
-    wildcard_mask_sum = player_transitions.env_output.wildcard_mask.sum(axis=-1)
-    player_uniform_prob = 1.0 / (
-        action_mask_sum + move_mask_sum * (wildcard_mask_sum - 1)
-    ).clip(min=1)
+    player_uniform_prob = 1.0 / (action_mask_sum).clip(min=1)
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     entropy_decay = 1 / ((player_state.step_count + 1) ** 0.3)
@@ -414,13 +386,8 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-        learner_wildcard_head = player_pred.wildcard_head
 
-        learner_log_prob = calculate_player_log_prob(
-            action_log_prob=learner_action_head.log_prob,
-            action_index=learner_action_head.action_index,
-            wildcard_log_prob=learner_wildcard_head.log_prob,
-        )
+        learner_log_prob = learner_action_head.log_prob
 
         # Calculate the log ratios.
         learner_uniform_log_ratio = learner_log_prob - player_uniform_log_prob
@@ -450,7 +417,6 @@ def train_step(
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
-        wildcard_head_entropy = average(learner_wildcard_head.entropy, wildcard_valid)
         loss_entropy = backward_kl_loss(
             policy_ratio=learner_uniform_ratio,
             log_policy_ratio=learner_uniform_log_ratio,
@@ -488,7 +454,6 @@ def train_step(
             player_loss_kl=loss_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
-            player_wildcard_entropy=wildcard_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
                 policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo
@@ -844,18 +809,24 @@ class Learner:
         latest_added_player = league.get_latest_player()
         current_main_player = league.get_main_player()
 
-        step_count = current_main_player.step_count
-        frames_passed = int(
-            current_main_player.player_frame_count
-            - latest_added_player.player_frame_count
-        )
-        if (
-            frames_passed < self.config.add_player_min_frames
-            or step_count < self.config.minimum_historical_player_steps
-        ):
+        step_count = int(self.player_state.step_count)
+
+        if latest_added_player == current_main_player:
+            latest_frame_count = 0
+        else:
+            latest_frame_count = latest_added_player.player_frame_count
+
+        frames_passed = int(current_main_player.player_frame_count - latest_frame_count)
+        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+
+        if frames_passed < self.config.add_player_min_frames:
             return False
 
-        historical_players = [v for k, v in league.players.items() if k != MAIN_KEY]
+        if len(historical_players) == 0:
+            if step_count > self.config.minimum_historical_player_steps:
+                return True
+            return False
+
         win_rates = league.get_winrate((current_main_player, historical_players))
         return (win_rates.min() > 0.7) | (
             frames_passed >= self.config.add_player_max_frames
@@ -874,21 +845,18 @@ class Learner:
     def add_new_player(self):
         num_steps = np.array(self.player_state.step_count).item()
 
-        league = self.league
+        # league = self.league
 
-        main_player = league.get_main_player()
-        historical_players = [
-            v
-            for k, v in league.players.items()
-            if k != MAIN_KEY
-            and v.step_count > self.config.minimum_historical_player_steps
-        ]
-        win_rates = league.get_winrate((main_player, historical_players))
-        pick_idx = np.random.choice(
-            len(historical_players), p=pfsp(win_rates, weighting="squared")
-        )
-        new_reset = historical_players[pick_idx]
+        # main_player = league.get_main_player()
 
+        # historical_players = [
+        #     v
+        #     for k, v in league.players.items()
+        #     if k != MAIN_KEY
+        #     and v.step_count > self.config.minimum_historical_player_steps
+        # ]
+
+        print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
             ParamsContainer(
                 player_frame_count=np.array(self.player_state.frame_count).item(),
@@ -899,11 +867,16 @@ class Learner:
             )
         )
 
-        print(
-            f"Adding new player to league @ {num_steps}, "
-            + f"resetting main player to historical player @ step {new_reset.step_count}",
-        )
-        self.league.update_main_player(new_reset)
+        # if len(historical_players) > 0:
+        #     win_rates = league.get_winrate((main_player, historical_players))
+        #     pick_idx = np.random.choice(
+        #         len(historical_players), p=pfsp(win_rates, weighting="squared")
+        #     )
+        #     new_reset = historical_players[pick_idx]
+        #     print(
+        #         f"Resetting main player to historical player @ step {new_reset.step_count}",
+        #     )
+        #     self.league.update_main_player(new_reset)
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)

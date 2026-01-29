@@ -18,6 +18,11 @@ class ParamsContainer(NamedTuple):
     player_params: chex.ArrayTree
     builder_params: chex.ArrayTree
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ParamsContainer):
+            return NotImplemented
+        return self.step_count == other.step_count
+
     def __repr__(self) -> str:
         return f"ParamsContainer(step_count={self.step_count})"
 

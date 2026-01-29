@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.environment.protos.service_pb2 import WildCardEnum
+from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
 
 
@@ -31,23 +31,53 @@ def collect_batch_telemetry_data(
         ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
-    can_move = batch.player_transitions.env_output.action_mask[..., :4].any(-1)
-    can_switch = batch.player_transitions.env_output.action_mask[..., 4:].any(-1)
+    can_move = (
+        batch.player_transitions.env_output.action_mask[
+            ...,
+            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+            :,
+        ]
+        .reshape(-1)
+        .any(-1)
+    )
+    can_switch = (
+        batch.player_transitions.env_output.action_mask[
+            ...,
+            ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6,
+        ]
+        .reshape(-1)
+        .any(-1)
+    )
     can_act = can_move & can_switch & player_valid
 
-    action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.action_index
+    src_action_index = (
+        batch.player_transitions.agent_output.actor_output.action_head.src_index
     )
-    wildcard_index = (
-        batch.player_transitions.agent_output.actor_output.wildcard_head.action_index
+    tgt_action_index = (
+        batch.player_transitions.agent_output.actor_output.action_head.tgt_index
     )
-    did_move = (action_index < 4) & can_move
-    did_switch = (action_index >= 4) & can_switch
+    did_move = (
+        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)
+        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+        & can_move
+    )
+    did_wildcard = (
+        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
+        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
+    ) | (
+        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
+        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+    ) & can_move
+    did_switch = (
+        (tgt_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
+        & (tgt_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
+        & can_switch
+    )
     move_ratio = renormalize(did_move, can_act)
     switch_ratio = renormalize(did_switch, can_act)
 
     wildcard_turn = jnp.where(
-        did_move & (wildcard_index != WildCardEnum.WILD_CARD_ENUM__CAN_NORMAL),
+        did_move & did_wildcard,
         jnp.arange(player_valid.shape[0], dtype=jnp.int32)[:, None],
         player_valid.shape[0],
     ).min(axis=0)

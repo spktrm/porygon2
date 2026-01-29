@@ -31,6 +31,7 @@ goog.exportSymbol('proto.InfoFeature', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
 goog.exportSymbol('proto.MovesetHasPP', null, global);
 goog.exportSymbol('proto.PackedSetFeature', null, global);
+goog.exportSymbol('proto.RequestType', null, global);
 /**
  * @enum {number}
  */
@@ -144,7 +145,8 @@ proto.MovesetFeature = {
   MOVESET_FEATURE__HAS_PP: 5,
   MOVESET_FEATURE__ACTION_TYPE: 6,
   MOVESET_FEATURE__ENTITY_IDX: 7,
-  MOVESET_FEATURE__DISABLED: 8
+  MOVESET_FEATURE__DISABLED: 8,
+  MOVESET_FEATURE__IS_WILDCARD: 9
 };
 
 /**
@@ -246,7 +248,11 @@ proto.InfoFeature = {
   INFO_FEATURE__SWITCH_ORDER_VALUE2: 14,
   INFO_FEATURE__SWITCH_ORDER_VALUE3: 15,
   INFO_FEATURE__SWITCH_ORDER_VALUE4: 16,
-  INFO_FEATURE__SWITCH_ORDER_VALUE5: 17
+  INFO_FEATURE__SWITCH_ORDER_VALUE5: 17,
+  INFO_FEATURE__REQUEST_TYPE: 18,
+  INFO_FEATURE__HAS_PREV_ACTION: 19,
+  INFO_FEATURE__PREV_ACTION_SRC: 20,
+  INFO_FEATURE__PREV_ACTION_TGT: 21
 };
 
 /**
@@ -256,6 +262,16 @@ proto.ActionType = {
   ACTION_TYPE___UNSPECIFIED: 0,
   ACTION_TYPE__MOVE: 1,
   ACTION_TYPE__SWITCH: 2
+};
+
+/**
+ * @enum {number}
+ */
+proto.RequestType = {
+  REQUEST_TYPE___UNSPECIFIED: 0,
+  REQUEST_TYPE__MOVE: 1,
+  REQUEST_TYPE__SWITCH: 2,
+  REQUEST_TYPE__TEAM: 3
 };
 
 /**

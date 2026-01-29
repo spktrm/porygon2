@@ -7,23 +7,19 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.data import NUM_ACTION_FEATURES
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
+    PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import (
-    HeadParams,
-    PointerLogits,
-    PolicyLogitHead,
-    sample_categorical,
-)
-from rl.model.modules import SumEmbeddings
+from rl.model.heads import HeadParams, PointerLogits, sample_categorical
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -35,13 +31,7 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-
-        self.move_head = PointerLogits(**self.cfg.move_head.qk_logits.to_dict())
-        self.switch_head = PointerLogits(**self.cfg.switch_head.qk_logits.to_dict())
-        self.wildcard_merge = SumEmbeddings(
-            output_size=self.cfg.entity_size, dtype=self.cfg.dtype
-        )
-        self.wildcard_head = PolicyLogitHead(self.cfg.wildcard_head)
+        self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -66,54 +56,45 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
-        return PolicyHeadOutput(
-            action_index=action_index, log_prob=log_prob, entropy=entropy
+
+        src_index = (jnp.floor(action_index / NUM_ACTION_FEATURES)).astype(
+            action_index.dtype
+        )
+        tgt_index = (action_index - src_index * NUM_ACTION_FEATURES).astype(
+            action_index.dtype
+        )
+
+        return PlayerPolicyHeadOutput(
+            action_index=action_index,
+            log_prob=log_prob,
+            entropy=entropy,
+            src_index=src_index,
+            tgt_index=tgt_index,
         )
 
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
-        move_embeddings: jax.Array,
-        switch_embeddings: jax.Array,
+        action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        move_logits = self.move_head(state_embedding[None], move_embeddings)
-        switch_logits = self.switch_head(state_embedding[None], switch_embeddings)
 
         action_logits = (
-            jnp.concatenate([move_logits, switch_logits], axis=-1).squeeze(0)
-            / head_params.temp
+            self.action_head(action_embeddings, action_embeddings) / head_params.temp
         )
-
         action_head = self.post_head(
-            action_logits,
-            env_step.action_mask,
+            action_logits.reshape(-1),
+            env_step.action_mask.reshape(-1),
             actor_output.action_head,
             train=self.cfg.train,
             min_p=head_params.min_p,
         )
 
-        selected_move_embedding = jnp.take(
-            move_embeddings,
-            action_head.action_index.clip(max=move_logits.shape[-1] - 1),
-            axis=0,
-        )
-        wildcard_merge = self.wildcard_merge(state_embedding, selected_move_embedding)
-        wildcard_head = self.wildcard_head(
-            wildcard_merge,
-            actor_output.wildcard_head,
-            env_step.wildcard_mask,
-            head_params,
-        )
         value_head = self.value_head(state_embedding)
 
-        return PlayerActorOutput(
-            action_head=action_head,
-            wildcard_head=wildcard_head,
-            value_head=value_head,
-        )
+        return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
     def __call__(
         self,
@@ -125,16 +106,15 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, move_embeddings, switch_embeddings = self.encoder(
+        latent_state_embeddings, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            state_embedding,
-            move_embeddings,
-            switch_embeddings,
+            latent_state_embeddings,
+            action_embeddings,
             actor_input.env,
             actor_output,
         )
