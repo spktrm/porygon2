@@ -40,7 +40,7 @@ class Porygon2LearnerConfig:
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 128 * 3
+    replay_buffer_capacity: int = 64
     theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
 
     # League params

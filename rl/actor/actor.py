@@ -12,7 +12,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import clip_history, clip_packed_history, split_rng
-from rl.learner.learner import LearnerManager
+from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 
@@ -24,7 +24,7 @@ class Actor:
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
         unroll_length: int,
-        learner_manager: LearnerManager,
+        learner: Learner,
         rng_seed: int = 42,
     ):
         self._agent = agent
@@ -33,7 +33,7 @@ class Actor:
             generation=env.generation, smogon_format="ou_all_formats"
         )
         self._unroll_length = unroll_length
-        self._learner_manager = learner_manager
+        self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
 
     def clip_actor_history(self, timestep: PlayerActorInput):
@@ -149,14 +149,11 @@ class Actor:
         self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
-    def set_current_ckpt(self, ckpt: str):
-        self._player_env._set_current_ckpt(ckpt)
+    def set_game_id(self, game_id: str):
+        self._player_env._set_game_id(game_id)
 
-    def set_opponent_ckpt(self, ckpt: str):
-        self._player_env._set_opponent_ckpt(ckpt)
-
-    def reset_ckpts(self):
-        self._player_env._reset_ckpts()
+    def reset_game_id(self):
+        self._player_env._reset_game_id()
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
@@ -171,6 +168,6 @@ class Actor:
             builder_params=builder_params,
         )
         if do_push:
-            self._learner_manager.current_learner.enqueue_traj(act_out)
-        self.reset_ckpts()
+            self._learner.enqueue_traj(act_out)
+        self.reset_game_id()
         return act_out
