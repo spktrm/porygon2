@@ -1,3 +1,4 @@
+import functools
 from typing import Optional, Tuple
 
 import flax.linen as nn
@@ -39,6 +40,29 @@ def dense_layer(
     **kwargs,
 ) -> nn.Dense:
     return nn.Dense(kernel_init=kernel_init, *args, **kwargs)
+
+
+def lora_layer(
+    inp: jax.Array,
+    rank: int,
+    lora_id: jax.Array | None = None,
+    num_loras: int = 0,
+):
+    if num_loras == 0 or lora_id is None:
+        return inp
+    lora_a = nn.Embed(
+        num_loras,
+        rank * inp.shape[-1],
+        embedding_init=nn.initializers.he_uniform(),
+        name="lora_a",
+    )(lora_id).reshape(inp.shape[-1], rank)
+    lora_b = nn.Embed(
+        num_loras,
+        rank * inp.shape[-1],
+        embedding_init=nn.initializers.zeros(),
+        name="lora_b",
+    )(lora_id).reshape(rank, inp.shape[-1])
+    return inp + inp @ lora_a @ lora_b
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -127,6 +151,8 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
+    num_loras: int = 0
+    lora_rank: int = 8
 
     @nn.compact
     def __call__(
@@ -134,6 +160,7 @@ class MultiHeadAttention(nn.Module):
         q: jax.Array,
         kv: jax.Array,
         mask: jax.Array,
+        lora_id: jax.Array | None = None,
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
     ) -> jax.Array:
@@ -144,24 +171,41 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = dense_layer(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=self.dtype,
-            name="q_proj",
-        )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = dense_layer(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=self.dtype,
-            name="k_proj",
-        )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
-        value_heads = dense_layer(
-            self.num_heads * v_size,
-            use_bias=self.use_bias,
-            dtype=self.dtype,
-            name="v_proj",
-        )(kv).reshape((*kv_leading_dims, self.num_heads, v_size))
+        query_heads = lora_layer(
+            dense_layer(
+                self.num_heads * qk_size,
+                use_bias=self.use_bias,
+                dtype=self.dtype,
+                name="q_proj",
+            )(q),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
+        ).reshape((*q_leading_dims, self.num_heads, qk_size))
+
+        key_heads = lora_layer(
+            dense_layer(
+                self.num_heads * qk_size,
+                use_bias=self.use_bias,
+                dtype=self.dtype,
+                name="k_proj",
+            )(kv),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
+        ).reshape((*kv_leading_dims, self.num_heads, qk_size))
+
+        value_heads = lora_layer(
+            dense_layer(
+                self.num_heads * v_size,
+                use_bias=self.use_bias,
+                dtype=self.dtype,
+                name="v_proj",
+            )(kv),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
+        ).reshape((*kv_leading_dims, self.num_heads, v_size))
 
         if self.qk_layer_norm:
             query_heads = layer_norm(query_heads)
@@ -215,8 +259,18 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = dense_layer(
-            model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
+        final_projection = lora_layer(
+            dense_layer(
+                model_size,
+                use_bias=self.use_bias,
+                dtype=self.dtype,
+                num_loras=self.num_loras,
+                lora_rank=self.lora_rank,
+                name="out_proj",
+            ),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
         )
         return final_projection(attn)  # [T', D']
 
@@ -258,6 +312,8 @@ class TransformerEncoder(nn.Module):
     resblocks_hidden_size: int | None = None
     use_post_attn_norm: bool = False
     use_post_ffw_norm: bool = False
+    num_loras: int = 256
+    lora_rank: int = 8
 
     def layer(
         self,
@@ -265,6 +321,7 @@ class TransformerEncoder(nn.Module):
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
         qkv_positions: jax.Array | None = None,
+        lora_id: jax.Array | None = None,
     ):
         qkv_ln = layer_norm(qkv)
         mha = MultiHeadAttention(
@@ -276,18 +333,25 @@ class TransformerEncoder(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
+            num_loras=self.num_loras,
+            lora_rank=self.lora_rank,
         )(
             q=qkv_ln,
             kv=qkv_ln,
             mask=attn_mask,
             q_positions=qkv_positions,
             kv_positions=qkv_positions,
+            lora_id=lora_id,
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
         qkv = qkv + mha
         qkv_ln = layer_norm(qkv)
-        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
+        ffn = FFWMLP(
+            self.resblocks_hidden_size,
+            num_loras=self.num_loras,
+            lora_rank=self.lora_rank,
+        )(qkv_ln, lora_id=lora_id)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
         qkv = qkv + ffn
@@ -299,6 +363,7 @@ class TransformerEncoder(nn.Module):
         qkv: jax.Array,
         attn_mask: jax.Array | None = None,
         qkv_positions: jax.Array | None = None,
+        lora_id: jax.Array | None = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -321,7 +386,7 @@ class TransformerEncoder(nn.Module):
             qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
 
         for _ in range(self.num_layers):
-            qkv = self.layer(qkv, attn_mask, positionwise_mask, qkv_positions)
+            qkv = self.layer(qkv, attn_mask, positionwise_mask, qkv_positions, lora_id)
 
         return qkv
 
@@ -340,6 +405,8 @@ class TransformerDecoder(nn.Module):
     resblocks_hidden_size: int | None = None
     use_post_attn_norm: bool = False
     use_post_ffw_norm: bool = False
+    num_loras: int = 256
+    lora_rank: int = 8
 
     def layer(
         self,
@@ -349,6 +416,7 @@ class TransformerDecoder(nn.Module):
         positionwise_mask: jax.Array,
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
+        lora_id: jax.Array | None = None,
     ):
         q_ln = layer_norm(q)
         kv_ln = layer_norm(kv)
@@ -361,10 +429,13 @@ class TransformerDecoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
+            num_loras=self.num_loras,
+            lora_rank=self.lora_rank,
         )(
             q=q_ln,
             kv=kv_ln,
             mask=attn_mask,
+            lora_id=lora_id,
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
@@ -372,7 +443,11 @@ class TransformerDecoder(nn.Module):
             mha = layer_norm(mha)
         q = q + mha
         q_ln = layer_norm(q)
-        ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
+        ffn = FFWMLP(
+            self.resblocks_hidden_size,
+            num_loras=self.num_loras,
+            lora_rank=self.lora_rank,
+        )(q_ln, lora_id=lora_id)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
         q = q + ffn
@@ -386,6 +461,7 @@ class TransformerDecoder(nn.Module):
         attn_mask: jax.Array | None = None,
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
+        lora_id: jax.Array | None = None,
     ) -> jax.Array:
         """
         Apply unit-wise resblocks, and transformer layers, to the units.
@@ -413,7 +489,7 @@ class TransformerDecoder(nn.Module):
 
         for _ in range(self.num_layers):
             q = self.layer(
-                q, kv, attn_mask, positionwise_mask, q_positions, kv_positions
+                q, kv, attn_mask, positionwise_mask, q_positions, kv_positions, lora_id
             )
 
         return q
@@ -494,24 +570,37 @@ class FFWMLP(nn.Module):
     output_size: int = None
     use_layer_norm: bool = False
     activation: callable = activation_fn
+    num_loras: int = 0
+    lora_rank: int = 8
 
     @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, lora_id: jax.Array | None = None) -> jax.Array:
         """
         Apply Feed-Forward Network (FFN) MLP to the inputs.
 
         Args:
             x (jax.Array): Input array.
+            lora_id (jax.Array | None): LoRA identifier.
 
         Returns:
             jax.Array: Output array.
         """
         inp_size = x.shape[-1]
-        x = dense_layer(self.hidden_size, dtype=x.dtype)(x)
+        x = lora_layer(
+            dense_layer(self.hidden_size, dtype=x.dtype),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
+        )(x)
         if self.use_layer_norm:
             x = layer_norm(x)
         x = self.activation(x)
-        x = dense_layer(self.output_size or inp_size, dtype=x.dtype)(x)
+        x = lora_layer(
+            dense_layer(self.output_size or inp_size, dtype=x.dtype),
+            rank=self.lora_rank,
+            lora_id=lora_id,
+            num_loras=self.num_loras,
+        )(x)
         return x
 
 

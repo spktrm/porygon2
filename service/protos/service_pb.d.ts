@@ -113,11 +113,8 @@ export class ResetRequest extends jspb.Message {
   getSmogonFormat(): string;
   setSmogonFormat(value: string): void;
 
-  getCurrentCkpt(): string;
-  setCurrentCkpt(value: string): void;
-
-  getOpponentCkpt(): string;
-  setOpponentCkpt(value: string): void;
+  getGameId(): string;
+  setGameId(value: string): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
@@ -135,8 +132,7 @@ export namespace ResetRequest {
     speciesIndicesList: Array<number>,
     packedSetIndicesList: Array<number>,
     smogonFormat: string,
-    currentCkpt: string,
-    opponentCkpt: string,
+    gameId: string,
   }
 }
 

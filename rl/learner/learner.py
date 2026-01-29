@@ -7,7 +7,7 @@ import threading
 import traceback
 from _thread import LockType
 from contextlib import nullcontext
-from typing import Callable
+from typing import Any, Callable
 
 import cloudpickle
 import jax
@@ -31,13 +31,12 @@ from rl.learner.config import (
     create_train_state,
 )
 from rl.learner.league import (
-    GenerationalPlayer,
+    HistoricalPlayer,
     League,
     LeagueExploiter,
     MainExploiter,
     MainPlayer,
     Player,
-    PlayerID,
 )
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.builder_model import get_builder_model
@@ -717,7 +716,6 @@ train_step_jit = jax.jit(train_step, static_argnames=["config"])
 class Learner:
     def __init__(
         self,
-        player: GenerationalPlayer,
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
         config: Porygon2LearnerConfig,
@@ -726,8 +724,6 @@ class Learner:
         gpu_lock: LockType | None = None,
         log_prefix: str = "",
     ):
-        self.player = player
-
         self.player_state = player_state
         self.builder_state = builder_state
         self.config = config
@@ -756,14 +752,12 @@ class Learner:
         transfer_thread = threading.Thread(target=self.host_to_device_worker)
         transfer_thread.start()
 
-    def serialize(self) -> bytes:
-        return cloudpickle.dumps(
-            {
-                k: v
-                for k, v in self.__dict__.items()
-                if k in ["player", "player_state", "builder_state", "log_prefix"]
-            }
-        )
+    def serialize(self) -> dict[str, Any]:
+        return {
+            k: v
+            for k, v in self.__dict__.items()
+            if k in ["player", "player_state", "builder_state", "log_prefix"]
+        }
 
     @classmethod
     def deserialize(
@@ -772,18 +766,17 @@ class Learner:
         wandb_run: wandb.wandb_run.Run | None,
         league: League,
         gpu_lock: LockType | None,
-        data: bytes,
+        data: dict[str, Any],
     ):
-        obj = cloudpickle.loads(data)
         instance = cls(
-            player=obj["player"],
-            player_state=obj["player_state"],
-            builder_state=obj["builder_state"],
+            player=data["player"],
+            player_state=data["player_state"],
+            builder_state=data["builder_state"],
             config=config,
             wandb_run=wandb_run,
             league=league,
             gpu_lock=gpu_lock,
-            log_prefix=obj["log_prefix"],
+            log_prefix=data["log_prefix"],
         )
         return instance
 
@@ -846,17 +839,16 @@ class Learner:
 
         current_player = league.get_player(self.player.player_id)
 
-        historical_players = league._payoff.get_potential_opponents(
-            "historical", current_player.player_id
-        )
+        historical_players = league._payoff.get_potential_opponents()
         win_rates = league._payoff[current_player.player_id, historical_players]
+
         return {
             f"{self.player.player_id}_v_{historical_players[i]}_winrate": win_rate
             for i, win_rate in enumerate(win_rates)
         }
 
     def update_current_player(self):
-        weight_id = self.player.weight_id
+        weight_id = self.player.lora_id
         new_weights = ParamsContainer(
             player_type=self.player.__class__.__name__,
             parent=weight_id,
@@ -868,7 +860,13 @@ class Learner:
         )
         self.league.update_weights(weight_id, new_weights)
 
-    def train_step(self):
+    def upload_logs(self, logs: dict):
+        if self.wandb_run is not None:
+            respective_logs = {f"{self.log_prefix}_{k}": v for k, v in logs.items()}
+            respective_logs["training_step"] = logs["training_step"]
+            self.wandb_run.log(respective_logs)
+
+    def train_step(self, full_log: bool = False):
         batch = self.device_q.get()
         batch: Trajectory = jax.device_put(batch)
 
@@ -885,26 +883,25 @@ class Learner:
             )
 
         training_step = training_logs["training_step"]
+        player_step = int(training_step)
 
         if jnp.isfinite(training_logs["player_loss"]).item():
             self.player_state = new_player_state
         else:
-            print("Non-finite loss detected in player @ step", training_step)
+            print("Non-finite loss detected in player @ step", player_step)
             return
 
         if jnp.isfinite(training_logs["builder_loss"]).item():
             self.builder_state = new_builder_state
         else:
-            print("Non-finite loss detected in builder @ step", training_step)
+            print("Non-finite loss detected in builder @ step", player_step)
             return
 
-        player_step = int(training_step)
-
-        if (player_step % self.config.save_interval_steps) == 0:
+        if (player_step % self.config.save_interval_steps or full_log) == 0:
             usage_logs = self.get_usage_counts(self.replay._species_counts)
             training_logs.update(jax.device_get(usage_logs))
 
-        if (player_step % self.config.league_winrate_log_steps) == 0:
+        if (player_step % self.config.league_winrate_log_steps or full_log) == 0:
             league_winrates = self.get_league_winrates()
             training_logs.update(jax.device_get(league_winrates))
 
@@ -915,224 +912,30 @@ class Learner:
 
         training_logs["replay_ratio"] = rr
 
-        self.wandb_run.log(training_logs)
-
+        self.upload_logs(training_logs)
         self.update_current_player()
 
         return training_logs
 
-
-class LearnerManager:
-    def __init__(
-        self,
-        config: Porygon2LearnerConfig,
-        wandb_run: wandb.wandb_run.Run,
-        do_initialize: bool = True,
-    ):
-        self.config = config
-        self.wandb_run = wandb_run
-        self.gpu_lock = threading.Lock()
-
-        learner_player_conf = get_player_model_config(config.generation, train=True)
-        learner_build_conf = get_builder_model_config(config.generation, train=True)
-
-        self.player_net = get_player_model(learner_player_conf)
-        self.build_net = get_builder_model(learner_build_conf)
-
-        if do_initialize:
-            self.initialize()
-
-    def initialize(self):
-        self.league = League()
-        self.learners: dict[PlayerID, Learner] = {}
-
-        rng_key_init = 0
-        for num_agents, player_fn, add_checkpoint in [
-            (self.config.main_agents, MainPlayer, True),
-            (self.config.main_exploiters, MainExploiter, False),
-            (self.config.league_exploiters, LeagueExploiter, False),
-        ]:
-            self._init_agents(
-                num_agents=num_agents,
-                player_fn=player_fn,
-                seed_init=rng_key_init,
-                add_checkpoint=add_checkpoint,
-            )
-            rng_key_init += num_agents
-
-        self.current_learner_index = 0
-        self.cycle = 0
-
-    @property
-    def current_learner(self) -> Learner:
-        learner_ids = list(self.learners.keys())
-        current_player_id = learner_ids[self.current_learner_index]
-        return self.learners[current_player_id]
-
-    def serialize(self):
-        data = {
-            k: v
-            for k, v in self.__dict__.items()
-            if k in ["league", "current_learner_index", "cycle"]
-        }
-        learners = {}
-        for player_id, learner in self.learners.items():
-            learners[player_id] = learner.serialize()
-        data["learners"] = learners
-        return cloudpickle.dumps(data)
-
-    @classmethod
-    def deserialize(
-        cls,
-        config: Porygon2LearnerConfig,
-        wandb_run: wandb.wandb_run.Run,
-        serialized: bytes,
-    ):
-        state = cloudpickle.loads(serialized)
-        obj = cls(config, wandb_run, do_initialize=False)
-        obj.league = state["league"]
-        obj.current_learner_index = state["current_learner_index"]
-        obj.cycle = state["cycle"]
-        obj.learners = {}
-        for player_id, learner_data in state["learners"].items():
-            learner = Learner.deserialize(
-                config=config,
-                wandb_run=wandb_run,
-                league=obj.league,
-                gpu_lock=obj.gpu_lock,
-                data=learner_data,
-            )
-            obj.learners[player_id] = learner
-        return obj
-
-    def _init_agents(
-        self,
-        num_agents: int,
-        player_fn: Callable[..., Player],
-        seed_init: int,
-        add_checkpoint: bool = True,
-    ):
-        seed_start = seed_init
-        player_type = player_fn.__name__
-
-        for agent_index in range(num_agents):
-            player_state, builder_state = create_train_state(
-                self.player_net,
-                self.build_net,
-                jax.random.key(seed_start + agent_index),
-                self.config,
-            )
-            container = ParamsContainer(
-                player_type=player_type,
-                parent="initial",
-                step_count=0,
-                player_frame_count=player_state.frame_count,
-                builder_frame_count=builder_state.frame_count,
-                player_params=player_state.params,
-                builder_params=builder_state.params,
-            )
-            weight_id = self.league.weight_store.add(container)
-
-            player = player_fn(weight_id, self.league._payoff, self.league.weight_store)
-
-            self.league.add_player(player)
-            if add_checkpoint:
-                self.league.add_player(player.checkpoint())
-
-            self.learners[player.player_id] = self._init_learner(
-                player,
-                player_state,
-                builder_state,
-                log_prefix=f"{player_type}_{player.player_id}",
-            )
-
-    def _init_learner(
-        self,
-        player: Player,
-        player_state: Porygon2PlayerTrainState,
-        builder_state: Porygon2BuilderTrainState,
-        log_prefix: str,
-    ) -> Learner:
-        logger.info(f"Initializing learner for player {player.player_id}")
-        return Learner(
-            player,
-            player_state=player_state,
-            builder_state=builder_state,
-            config=self.config,
-            wandb_run=self.wandb_run,
-            league=self.league,
-            gpu_lock=self.gpu_lock,
-            log_prefix=log_prefix,
-        )
-
     def train(self):
-        while True:
-            for learner in self.learners.values():
-                self.train_learner(learner)
+        while not self.done:
+            logs = self.train_step()
+            step = int(logs["training_step"])
 
-    def train_learner(self, learner: Learner):
-        should_add_player = False
-        prev_add_player_check = learner.player.get_weights().step_count
-
-        while not should_add_player:
-            try:
-                training_logs = learner.train_step()
-            except Exception as e:
-                logger.error(
-                    f"Learner {learner.player.player_id} train step failed: {e}"
-                )
-                traceback.print_exc()
-
-                raise e
-
-            player_step = training_logs["training_step"]
-            if (player_step - prev_add_player_check) >= 10:
-                should_add_player = learner.player.ready_to_checkpoint()
-                prev_add_player_check = player_step
-
-        self.league.add_player(learner.player.checkpoint())
-        logger.info(f"Learner {learner.player.player_id} added checkpoint to league.")
-
-        self.current_learner_index = (self.current_learner_index + 1) % len(
-            self.learners
-        )
-        self.cycle += 1
-
-        save_train_state_locally(self)
-
-    def get_current_player(self):
-        return self.current_learner.player
+            if (step % self.config.save_interval_steps) == 0:
+                save_learner_locally(self)
 
 
-def save_train_state_locally(manager: LearnerManager):
+def save_learner_locally(learner: Learner):
+    step = int(learner.player_state.step_count)
     save_path = os.path.abspath(
-        f"ckpts/gen{manager.config.generation}/ckpt_{manager.cycle:03}.pkl"
+        f"ckpts/gen{learner.config.generation}/ckpt_{step:08}.pkl"
     )
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    save_obj = manager.serialize()
+
     with open(save_path, "wb") as f:
-        f.write(save_obj)
+        data = learner.serialize()
+        cloudpickle.dump(data, f)
+
     return save_path
-
-
-if __name__ == "__main__":
-    with open("ckpts/gen9/ckpt_00400000", "rb") as f:
-        datum = pickle.load(f)
-
-    manager = LearnerManager(config=Porygon2LearnerConfig(), wandb_run=None)
-
-    for _ in range(2):
-        for learner in manager.learners.values():
-            manager.league.add_player(learner.player.checkpoint())
-
-    for player in manager.league._learning_agents:
-        for _ in range(100):
-            opponent_id = player.get_match()
-
-    obj = manager.serialize()
-    new_manager = LearnerManager.deserialize(
-        config=Porygon2LearnerConfig(), wandb_run=None, serialized=obj
-    )
-
-    print()

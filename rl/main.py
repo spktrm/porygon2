@@ -1,7 +1,10 @@
 import pickle
+import uuid
 
+import cloudpickle
 from dotenv import load_dotenv
 
+from rl.learner.learner import Learner
 from rl.model.utils import ParamsContainer
 
 load_dotenv()
@@ -20,7 +23,6 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import get_learner_config
-from rl.learner.learner import LearnerManager
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
@@ -32,15 +34,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_training_worker(actor1: Actor, actor2: Actor, stop_event: threading.Event):
+def run_training_worker(
+    player_actor: Actor,
+    opponent_actor: Actor,
+    worker_id: str,
+    stop_event: threading.Event,
+):
     """
     Runs a training loop for a pair of actors.
     Uses a private, local ThreadPool to handle the synchronous game execution.
     """
-    worker_id = f"{actor1._player_env.username}"
     logger.info(f"Worker {worker_id} started.")
 
-    league = actor1._learner_manager.league
+    league = player_actor._learner.league
 
     # We create a persistent pool of 2 threads specifically for this game pair.
     # This avoids the overhead of creating/destroying threads every loop.
@@ -49,26 +55,29 @@ def run_training_worker(actor1: Actor, actor2: Actor, stop_event: threading.Even
         while not stop_event.is_set():
             try:
                 # 1. Sync Weights
-                player = actor1._learner_manager.get_current_player()
+                player = player_actor._learner.get_current_player()
                 opponent_id, _ = player.get_match()
+                opponent = league.get_player(opponent_id)
 
                 is_trainable = player.player_id == opponent_id
 
-                actor1.set_current_ckpt(player.player_id)
-                actor1.set_opponent_ckpt(opponent_id)
-                actor2.set_current_ckpt(opponent_id)
-                actor2.set_opponent_ckpt(player.player_id)
+                game_id = str(
+                    uuid.uuid3(
+                        uuid.NAMESPACE_OID, worker_id + player.player_id + opponent_id
+                    )
+                )
+
+                for actor in (player_actor, opponent_actor):
+                    actor.set_game_id(game_id)
 
                 # 2. Run Rollouts Simultaneously
                 # We submit both tasks to the local executor so they run at the exact same time
                 # allowing them to handshake/step-sync within the environment.
                 future_p = game_executor.submit(
-                    actor1.unroll_and_push, player.get_weights()
+                    player_actor.unroll_and_push, player.get_weights()
                 )
-
-                opponent = league.get_player(opponent_id)
                 future_o = game_executor.submit(
-                    actor2.unroll_and_push, opponent.get_weights(), is_trainable
+                    opponent_actor.unroll_and_push, opponent.get_weights(), is_trainable
                 )
 
                 # 3. Wait for both to finish
@@ -77,7 +86,16 @@ def run_training_worker(actor1: Actor, actor2: Actor, stop_event: threading.Even
 
                 # 4. Update Stats
                 if not is_trainable:
-                    player._payoff.update(player.player_id, opponent_id, trajectory)
+                    final_reward = trajectory.player_transitions.env_output.win_reward[
+                        -1
+                    ]
+                    if final_reward == 1:
+                        result = "win"
+                    elif final_reward == -1:
+                        result = "loss"
+                    else:
+                        result = "draw"
+                    player._payoff.update(player.player_id, opponent_id, result)
 
             except Exception as e:
                 logger.exception(f"Error in worker {worker_id}: {e}")
@@ -88,7 +106,7 @@ def run_eval_worker(actor: Actor, stop_event: threading.Event, wandb_run: wandb.
     Runs the evaluation loop. Eval is usually single-player or against a bot,
     so it runs sequentially on this thread.
     """
-    learner_manager = actor._learner_manager
+    learner_manager = actor._learner
     session_id = actor._player_env.username
     last_step = -1
 
@@ -101,9 +119,10 @@ def run_eval_worker(actor: Actor, stop_event: threading.Event, wandb_run: wandb.
             if current_step > last_step:
                 last_step = current_step
 
-                player_params = (
-                    actor._learner_manager.get_current_player().get_weights()
-                )
+                player = actor._learner.get_current_player()
+                player_params = player.get_weights()
+
+                actor._player_env._set_game_id(f"eval-{session_id}-{current_step}")
 
                 # Eval is typically simpler, so we run it directly.
                 # If Eval is also 2-player sync, you would need a ThreadPool here too.
@@ -144,32 +163,7 @@ def main():
 
     gpu_lock = threading.Lock()
 
-    learner_manager = LearnerManager(config, wandb_run)
-
-    resume_from_ckpt = True
-    if resume_from_ckpt:
-        with open("ckpts/gen9/ckpt_00400000", "rb") as f:
-            datum = pickle.load(f)
-
-        for learner in learner_manager.learners.values():
-            learner.player_state = learner.player_state.replace(
-                **datum["player_state"],
-            )
-            learner.builder_state = learner.builder_state.replace(
-                **datum["builder_state"],
-            )
-
-        for weight_id in learner.league.weight_store._weights.keys():
-            container = learner.league.weight_store.get(weight_id)
-            learner.league.weight_store._weights[weight_id] = ParamsContainer(
-                player_type=container.player_type,
-                parent=container.player_type,
-                step_count=container.player_type,
-                player_frame_count=container.player_type,
-                builder_frame_count=container.player_type,
-                player_params=datum["player_state"]["params"],
-                builder_params=datum["builder_state"]["params"],
-            )
+    learner = Learner(config, wandb_run, gpu_lock)
 
     learning_agent = Agent(
         actor_player_net.apply, actor_build_net.apply, gpu_lock=gpu_lock
@@ -195,7 +189,7 @@ def main():
                     f"train:p{pid}g{game_id:02d}", generation=config.generation
                 ),
                 unroll_length=config.unroll_length,
-                learner_manager=learner_manager,
+                learner=learner,
                 rng_seed=len(threads),
             )
             for pid in range(2)
@@ -205,7 +199,7 @@ def main():
         # Inside that thread, it uses a local threadpool to handle the 2-player sync.
         t = threading.Thread(
             target=run_training_worker,
-            args=(*actors, stop_event),
+            args=(*actors, str(uuid.uuid4()), stop_event),
             name=f"Trainer-{game_id}",
         )
         t.start()
@@ -219,7 +213,7 @@ def main():
                 f"eval-heuristic:{eval_id:04d}", generation=config.generation
             ),
             unroll_length=config.unroll_length,
-            learner_manager=learner_manager,
+            learner=learner,
             rng_seed=len(threads),
         )
 
@@ -231,7 +225,7 @@ def main():
         t.start()
         threads.append(t)
 
-    learner_thread = threading.Thread(target=learner_manager.train)
+    learner_thread = threading.Thread(target=learner.train)
     learner_thread.start()
 
     # --- 5. Run & Cleanup ---
