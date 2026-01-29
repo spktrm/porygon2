@@ -150,14 +150,11 @@ class Actor:
         self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
-    def set_current_ckpt(self, ckpt: int):
-        self._player_env._set_current_ckpt(ckpt)
+    def set_game_id(self, game_id: int):
+        self._player_env._set_game_id(game_id)
 
-    def set_opponent_ckpt(self, ckpt: int):
-        self._player_env._set_opponent_ckpt(ckpt)
-
-    def reset_ckpts(self):
-        self._player_env._reset_ckpts()
+    def reset_game_id(self):
+        self._player_env._reset_game_id()
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
@@ -171,7 +168,7 @@ class Actor:
             player_params=player_params,
             builder_params=builder_params,
         )
-        self.reset_ckpts()
+        self.reset_game_id()
 
         if self._player_env.username.startswith("train") and do_push:
             self._learner.enqueue_traj(act_out)
