@@ -689,12 +689,6 @@ class Learner:
         self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
 
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
-
-        self.wandb_run.log_code("rl/")
-        self.wandb_run.log_code("inference/")
-        self.wandb_run.log_code(
-            "service/src/client/", include_fn=lambda x: x.endswith(".ts")
-        )
         self.league = league
 
         # progress bars
@@ -845,17 +839,6 @@ class Learner:
     def add_new_player(self):
         num_steps = np.array(self.player_state.step_count).item()
 
-        # league = self.league
-
-        # main_player = league.get_main_player()
-
-        # historical_players = [
-        #     v
-        #     for k, v in league.players.items()
-        #     if k != MAIN_KEY
-        #     and v.step_count > self.config.minimum_historical_player_steps
-        # ]
-
         print(f"Adding new player to league @ {num_steps}")
         self.league.add_player(
             ParamsContainer(
@@ -866,17 +849,6 @@ class Learner:
                 builder_params=self.builder_state.params,
             )
         )
-
-        # if len(historical_players) > 0:
-        #     win_rates = league.get_winrate((main_player, historical_players))
-        #     pick_idx = np.random.choice(
-        #         len(historical_players), p=pfsp(win_rates, weighting="squared")
-        #     )
-        #     new_reset = historical_players[pick_idx]
-        #     print(
-        #         f"Resetting main player to historical player @ step {new_reset.step_count}",
-        #     )
-        #     self.league.update_main_player(new_reset)
 
     def train(self):
         transfer_thread = threading.Thread(target=self.host_to_device_worker)

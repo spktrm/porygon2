@@ -36,8 +36,7 @@ class SinglePlayerSyncEnvironment:
         self.username = username
         self.rqid = None
         self.last_state = None
-        self.current_ckpt = None
-        self.opponent_ckpt = None
+        self.game_id = None
 
         self.websocket = connect(
             SERVER_URI,
@@ -46,15 +45,11 @@ class SinglePlayerSyncEnvironment:
         self.generation = generation
         self.metgame_token = None
 
-    def _set_current_ckpt(self, ckpt: str):
-        self.current_ckpt = ckpt
+    def _set_game_id(self, game_id: str):
+        self.game_id = game_id
 
-    def _set_opponent_ckpt(self, ckpt: str):
-        self.opponent_ckpt = ckpt
-
-    def _reset_ckpts(self):
-        self.current_ckpt = None
-        self.opponent_ckpt = None
+    def _reset_game_id(self):
+        self.game_id = None
 
     def _recv(self):
         recv_data = self.websocket.recv()
@@ -77,8 +72,7 @@ class SinglePlayerSyncEnvironment:
                 species_indices=species_indices,
                 packed_set_indices=packed_set_indices,
                 smogon_format=f"gen{self.generation}_ou_all_formats",
-                current_ckpt=self.current_ckpt,
-                opponent_ckpt=self.opponent_ckpt,
+                game_id=self.game_id,
             )
         )
         self.websocket.send(reset_message.SerializeToString())
