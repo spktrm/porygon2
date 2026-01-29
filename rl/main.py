@@ -32,6 +32,8 @@ def run_training_actor_pair(
 ):
     """Runs an actor to produce trajectories"""
 
+    worker_id = threading.current_thread().name
+
     while not stop_signal[0]:
         try:
             player_params = player.pull_main_player()
@@ -40,11 +42,9 @@ def run_training_actor_pair(
             player_ckpt = np.array(player_params.step_count).item()
             opponent_ckpt = np.array(opponent_params.step_count).item()
 
-            player.set_current_ckpt(player_ckpt)
-            player.set_opponent_ckpt(opponent_ckpt)
-
-            opponent.set_current_ckpt(opponent_ckpt)
-            opponent.set_opponent_ckpt(player_ckpt)
+            game_id = f"{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
+            for actor in (player, opponent):
+                actor.set_game_id(game_id)
 
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)

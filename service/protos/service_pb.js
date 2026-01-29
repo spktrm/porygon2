@@ -916,8 +916,7 @@ username: jspb.Message.getFieldWithDefault(msg, 1, ""),
 speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
 packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
 smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, ""),
-currentCkpt: jspb.Message.getFieldWithDefault(msg, 5, 0),
-opponentCkpt: jspb.Message.getFieldWithDefault(msg, 6, 0)
+gameId: jspb.Message.getFieldWithDefault(msg, 5, "")
   };
 
   if (includeInstance) {
@@ -975,12 +974,8 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
       msg.setSmogonFormat(value);
       break;
     case 5:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setCurrentCkpt(value);
-      break;
-    case 6:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setOpponentCkpt(value);
+      var value = /** @type {string} */ (reader.readString());
+      msg.setGameId(value);
       break;
     default:
       reader.skipField();
@@ -1039,17 +1034,10 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
-  f = message.getCurrentCkpt();
-  if (f !== 0) {
-    writer.writeInt32(
+  f = message.getGameId();
+  if (f.length > 0) {
+    writer.writeString(
       5,
-      f
-    );
-  }
-  f = message.getOpponentCkpt();
-  if (f !== 0) {
-    writer.writeInt32(
-      6,
       f
     );
   }
@@ -1167,38 +1155,20 @@ proto.servicev2.ResetRequest.prototype.setSmogonFormat = function(value) {
 
 
 /**
- * optional int32 current_ckpt = 5;
- * @return {number}
+ * optional string game_id = 5;
+ * @return {string}
  */
-proto.servicev2.ResetRequest.prototype.getCurrentCkpt = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 5, 0));
+proto.servicev2.ResetRequest.prototype.getGameId = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * @param {number} value
+ * @param {string} value
  * @return {!proto.servicev2.ResetRequest} returns this
  */
-proto.servicev2.ResetRequest.prototype.setCurrentCkpt = function(value) {
-  return jspb.Message.setProto3IntField(this, 5, value);
-};
-
-
-/**
- * optional int32 opponent_ckpt = 6;
- * @return {number}
- */
-proto.servicev2.ResetRequest.prototype.getOpponentCkpt = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 6, 0));
-};
-
-
-/**
- * @param {number} value
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.setOpponentCkpt = function(value) {
-  return jspb.Message.setProto3IntField(this, 6, value);
+proto.servicev2.ResetRequest.prototype.setGameId = function(value) {
+  return jspb.Message.setProto3StringField(this, 5, value);
 };
 
 
