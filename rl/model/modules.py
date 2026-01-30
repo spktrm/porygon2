@@ -35,7 +35,7 @@ class RMSNorm(nn.Module):
 
 def dense_layer(
     *args,
-    kernel_init: jax.nn.initializers.Initializer = nn.initializers.truncated_normal(),
+    kernel_init: jax.nn.initializers.Initializer = nn.initializers.lecun_normal(),
     **kwargs,
 ) -> nn.Dense:
     return nn.Dense(kernel_init=kernel_init, *args, **kwargs)
@@ -127,6 +127,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
+    use_softcap: bool = False
 
     @nn.compact
     def __call__(
@@ -197,7 +198,9 @@ class MultiHeadAttention(nn.Module):
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
-        attn_logits = softcap(attn_logits, max_value=50.0)
+
+        if self.use_softcap:
+            attn_logits = softcap(attn_logits, max_value=50.0)
 
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
         attn_weights = nn.softmax(attn_logits)
@@ -597,7 +600,7 @@ class SumEmbeddings(nn.Module):
         ) + self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
         )
-        return aggregated.astype(self.dtype)
+        return layer_norm(aggregated.astype(self.dtype))
 
 
 class VectorResblock(nn.Module):
