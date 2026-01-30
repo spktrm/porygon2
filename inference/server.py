@@ -15,6 +15,7 @@ from inference.interfaces import ResetResponse, StepResponse
 from inference.model import InferenceModel
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.model.heads import HeadParams
 
 app = FastAPI()
 
@@ -23,8 +24,8 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=secrets.randbits(32),
-    # player_head_params=HeadParams(min_p=0.03, temp=0.5),
-    # builder_head_params=HeadParams(min_p=0.03),
+    player_head_params=HeadParams(min_p=0.03, temp=0.5),
+    builder_head_params=HeadParams(min_p=0.03, temp=0.5),
 )
 
 
