@@ -1218,7 +1218,7 @@ class Encoder(nn.Module):
             output_state_sequence, latent_state_embeddings
         )
 
-        state_embeddings = output_state_embeddings[:1]
+        state_embeddings = output_state_embeddings[:2]
         action_embeddings = output_state_embeddings
 
         state_embedding = state_embeddings.reshape(-1)
