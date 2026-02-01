@@ -129,6 +129,8 @@ class InferenceModel:
         actor_output = agent_output.actor_output
         return StepResponse(
             v=actor_output.value_head.logits.item(),
+            log_prob=actor_output.action_head.log_prob.item(),
+            entropy=actor_output.action_head.entropy.item(),
             src=agent_output.actor_output.action_head.src_index.item(),
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )

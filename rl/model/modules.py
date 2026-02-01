@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional
 
 import flax.linen as nn
 import jax
@@ -127,6 +127,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
+    use_softcap: bool = False
 
     @nn.compact
     def __call__(
@@ -197,7 +198,9 @@ class MultiHeadAttention(nn.Module):
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
-        attn_logits = softcap(attn_logits, max_value=50.0)
+
+        if self.use_softcap:
+            attn_logits = softcap(attn_logits, max_value=50.0)
 
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
         attn_weights = nn.softmax(attn_logits)
@@ -458,33 +461,6 @@ class MLP(nn.Module):
                     dense_kwargs["kernel_init"] = self.final_kernel_init
             x = dense_layer(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
-
-
-class FiLMGenerator(nn.Module):
-    features: int
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> Tuple[jax.Array, jax.Array]:
-        # 1. Project to a hidden representation (optional but recommended)
-        # Using the same dimension 'features' is standard.
-        x = dense_layer(features=self.features, dtype=x.dtype)(x)
-        x = activation_fn(x)
-
-        # 2. Project to gamma (scale) and beta (shift)
-        # We output features * 2 so we can split them later
-        stats = dense_layer(
-            features=self.features * 2,
-            dtype=x.dtype,
-            # Initialize gamma part to 0 (so gamma+1=1) and beta part to 0
-            kernel_init=nn.initializers.zeros,
-            bias_init=nn.initializers.zeros,
-        )(x)
-
-        # 3. Split into gamma and beta
-        gamma, beta = jnp.split(stats, 2, axis=-1)
-
-        # Add 1 to gamma so it starts as identity multiplication
-        return 1.0 + gamma, beta
 
 
 class FFWMLP(nn.Module):
