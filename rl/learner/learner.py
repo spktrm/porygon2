@@ -559,11 +559,11 @@ def train_step(
         )
 
         loss = (
-            # config.builder_policy_loss_coef * loss_pg
-            +config.builder_value_loss_coef * loss_v
-            # + config.builder_kl_loss_coef * loss_kl_rl
+            config.builder_policy_loss_coef * loss_pg
+            + config.builder_value_loss_coef * loss_v
+            + config.builder_kl_loss_coef * loss_kl_rl
             + config.builder_kl_prior_loss_coef * loss_kl_prior
-            # + loss_entropy
+            + loss_entropy
         )
 
         return loss, dict(

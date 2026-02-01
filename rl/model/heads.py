@@ -3,7 +3,6 @@ from typing import NamedTuple
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from flax.core.nn import layer_norm
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
@@ -11,7 +10,14 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.modules import MLP, PointerLogits, Resnet, activation_fn, dense_layer
+from rl.model.modules import (
+    MLP,
+    PointerLogits,
+    Resnet,
+    activation_fn,
+    dense_layer,
+    layer_norm,
+)
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -106,7 +112,6 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        logits = activation_fn(layer_norm(x))
-        logits = dense_layer(**self.cfg.logits.to_dict())
-        x = logits(x)
+        x = activation_fn(layer_norm(x))
+        x = dense_layer(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

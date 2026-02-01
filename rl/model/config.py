@@ -99,7 +99,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.input_decoder.need_pos = False
 
     cfg.encoder.state_encoder = ConfigDict()
-    cfg.encoder.state_encoder.num_layers = 8
+    cfg.encoder.state_encoder.num_layers = 16
     cfg.encoder.state_encoder.need_pos = False
 
     cfg.encoder.output_decoder = ConfigDict()
