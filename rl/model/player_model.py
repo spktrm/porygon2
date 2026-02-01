@@ -20,6 +20,7 @@ from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams, PointerLogits, sample_categorical
+from rl.model.modules import MLP
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -32,6 +33,8 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+
+        self.value_head_mlp = MLP()
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -72,6 +75,10 @@ class Porygon2PlayerModel(nn.Module):
             tgt_index=tgt_index,
         )
 
+    def _forward_value_head(self, x: jax.Array) -> jax.Array:
+        x = self.value_head_mlp(x)
+        return self.value_head(x)
+
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
@@ -92,7 +99,7 @@ class Porygon2PlayerModel(nn.Module):
             min_p=head_params.min_p,
         )
 
-        value_head = self.value_head(state_embedding)
+        value_head = self._forward_value_head(state_embedding)
 
         return PlayerActorOutput(action_head=action_head, value_head=value_head)
 

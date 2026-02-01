@@ -96,7 +96,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.timestep_encoder.need_pos = True
 
     cfg.encoder.input_decoder = ConfigDict()
-    cfg.encoder.input_decoder.need_pos = True
+    cfg.encoder.input_decoder.need_pos = False
 
     cfg.encoder.state_encoder = ConfigDict()
     cfg.encoder.state_encoder.num_layers = 8
@@ -123,18 +123,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     for head, output_size in [(cfg.value_head, 1)]:
         head.logits = ConfigDict()
-        head.logits.layer_sizes = output_size
-        head.logits.use_layer_norm = False
-        head.logits.input_activation = False
+        head.logits.features = output_size
 
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
     cfg.action_head.qk_logits.qk_layer_norm = False
-
-    # for head in [cfg.value_head, cfg.wildcard_head]:
-    #     head.resnet = ConfigDict()
-    #     head.resnet.num_resblocks = 1
 
     for head in [cfg.action_head, cfg.wildcard_head]:
         head.train = train
@@ -155,7 +149,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 3
+    num_layers = 8
     num_heads = num_heads
     hidden_size_scale = 4
     hidden_size = int(hidden_size_scale * entity_size)
@@ -189,9 +183,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.use_layer_norm = False
-    cfg.value_head.logits.input_activation = False
-    cfg.value_head.logits.layer_sizes = 1
+    cfg.value_head.logits.features = 1
 
     for head in [
         cfg.species_head,
