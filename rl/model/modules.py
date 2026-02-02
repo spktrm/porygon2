@@ -33,12 +33,8 @@ class RMSNorm(nn.Module):
         return (normed_inputs * (1 + scale)).astype(self.dtype)
 
 
-def dense_layer(
-    *args,
-    kernel_init: jax.nn.initializers.Initializer = nn.initializers.truncated_normal(),
-    **kwargs,
-) -> nn.Dense:
-    return nn.Dense(kernel_init=kernel_init, *args, **kwargs)
+def dense_layer(*args, **kwargs) -> nn.Dense:
+    return nn.Dense(*args, **kwargs)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:

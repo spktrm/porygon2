@@ -25,9 +25,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     base_size = 96
     num_heads = 4
-    scale = 1
+    width_scale = 1
 
-    entity_size = int(scale * base_size * num_heads)
+    entity_size = int(width_scale * base_size * num_heads)
 
     cfg.generation = generation
     cfg.entity_size = entity_size
@@ -93,17 +93,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     )
 
     cfg.encoder.timestep_encoder = ConfigDict()
-    cfg.encoder.timestep_encoder.need_pos = True
-
     cfg.encoder.input_decoder = ConfigDict()
-    cfg.encoder.input_decoder.need_pos = False
-
     cfg.encoder.state_encoder = ConfigDict()
-    cfg.encoder.state_encoder.num_layers = 16
-    cfg.encoder.state_encoder.need_pos = False
-
     cfg.encoder.output_decoder = ConfigDict()
-    cfg.encoder.output_decoder.need_pos = False
 
     for encoder in [
         cfg.encoder.timestep_encoder,
@@ -116,6 +108,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         cfg.encoder.output_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
+
+    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.input_decoder.need_pos = False
+    cfg.encoder.state_encoder.num_layers = 4
+    cfg.encoder.state_encoder.need_pos = False
+    cfg.encoder.output_decoder.need_pos = False
 
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
@@ -175,6 +173,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.encoder = ConfigDict()
     set_attributes(cfg.encoder, **transformer_kwargs)
+
     if generation < 4:
         cfg.encoder.need_pos = True
 
