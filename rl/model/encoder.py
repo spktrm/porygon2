@@ -345,11 +345,15 @@ class Encoder(nn.Module):
             nn.initializers.truncated_normal(stddev=0.02),
             (self.cfg.num_latent_embeddings, entity_size),
         )
-        self.input_decoder = TransformerDecoder(**self.cfg.input_decoder.to_dict())
+        self.input_decoder = TransformerDecoder(
+            **self.cfg.input_decoder.to_dict(),
+        )
         self.latent_state_encoder = TransformerEncoder(
             **self.cfg.state_encoder.to_dict()
         )
-        self.output_decoder = TransformerDecoder(**self.cfg.output_decoder.to_dict())
+        self.output_decoder = TransformerDecoder(
+            **self.cfg.output_decoder.to_dict(),
+        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(

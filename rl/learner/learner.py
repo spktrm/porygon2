@@ -374,7 +374,8 @@ def train_step(
     player_uniform_prob = 1.0 / (action_mask_sum).clip(min=1)
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
-    entropy_decay = 1 / ((player_state.step_count + 1) ** 0.3)
+    scale = config.batch_size / 1536
+    entropy_decay = 1 / (((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
 

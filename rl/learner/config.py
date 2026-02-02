@@ -95,7 +95,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_kl_prior_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 1.0
+    builder_entropy_loss_coef: float = 0.1
 
     # Smogon Generation
     generation: GenT = 9
