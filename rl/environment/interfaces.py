@@ -115,6 +115,45 @@ class BuilderActorInput:
 
 
 @dataclass
+class BuilderFullEnvOutput:
+    species_mask: ArrayLike = ()
+    item_mask: ArrayLike = ()
+    ability_mask: ArrayLike = ()
+    move_mask: ArrayLike = ()
+    ev_mask: ArrayLike = ()
+    teratype_mask: ArrayLike = ()
+
+    done: ArrayLike = ()
+    ts: ArrayLike = ()
+    validator_reward: ArrayLike = ()
+
+
+@dataclass
+class BuilderFullHistoryOutput:
+    packed_team_member_tokens: ArrayLike = ()
+    order: ArrayLike = ()
+    row: ArrayLike = ()
+    col: ArrayLike = ()
+
+
+@dataclass
+class BuilderFullActorInput:
+    env: BuilderFullEnvOutput = field(default_factory=BuilderFullEnvOutput)
+    history: BuilderFullHistoryOutput = field(default_factory=BuilderFullHistoryOutput)
+
+
+@dataclass
+class BuilderFullActorOutput:
+    conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    token_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+
+
+@dataclass
 class BuilderActorOutput:
     conditional_entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput

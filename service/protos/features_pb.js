@@ -31,6 +31,7 @@ goog.exportSymbol('proto.InfoFeature', null, global);
 goog.exportSymbol('proto.MovesetFeature', null, global);
 goog.exportSymbol('proto.MovesetHasPP', null, global);
 goog.exportSymbol('proto.PackedSetFeature', null, global);
+goog.exportSymbol('proto.PackedTeamMemberFeature', null, global);
 goog.exportSymbol('proto.RequestType', null, global);
 /**
  * @enum {number}
@@ -122,6 +123,27 @@ proto.EntityPrivateNodeFeature = {
   ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: 19,
   ENTITY_PRIVATE_NODE_FEATURE__NATURE: 20,
   ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: 21
+};
+
+/**
+ * @enum {number}
+ */
+proto.PackedTeamMemberFeature = {
+  PACKED_TEAM_MEMBER_FEATURE___UNSPECIFIED: 0,
+  PACKED_TEAM_MEMBER_FEATURE__SPECIES: 1,
+  PACKED_TEAM_MEMBER_FEATURE__ITEM: 2,
+  PACKED_TEAM_MEMBER_FEATURE__ABILITY: 3,
+  PACKED_TEAM_MEMBER_FEATURE__MOVEID0: 4,
+  PACKED_TEAM_MEMBER_FEATURE__MOVEID1: 5,
+  PACKED_TEAM_MEMBER_FEATURE__MOVEID2: 6,
+  PACKED_TEAM_MEMBER_FEATURE__MOVEID3: 7,
+  PACKED_TEAM_MEMBER_FEATURE__EV_HP: 8,
+  PACKED_TEAM_MEMBER_FEATURE__EV_ATK: 9,
+  PACKED_TEAM_MEMBER_FEATURE__EV_DEF: 10,
+  PACKED_TEAM_MEMBER_FEATURE__EV_SPA: 11,
+  PACKED_TEAM_MEMBER_FEATURE__EV_SPD: 12,
+  PACKED_TEAM_MEMBER_FEATURE__EV_SPE: 13,
+  PACKED_TEAM_MEMBER_FEATURE__TERA_TYPE: 14
 };
 
 /**

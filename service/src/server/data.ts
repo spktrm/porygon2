@@ -38,6 +38,8 @@ import {
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
+    PackedSetFeature,
+    PackedTeamMemberFeature,
 } from "../../protos/features_pb";
 import { ActionEnum } from "../../protos/service_pb";
 
@@ -109,6 +111,9 @@ export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
+export const numPackedTeamMemberFeatures = Object.keys(
+    PackedTeamMemberFeature,
+).length;
 
 export const NUM_HISTORY = 512;
 
