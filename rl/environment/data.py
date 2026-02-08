@@ -38,6 +38,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
     MovesetHasPP,
     PackedSetFeature,
+    PackedTeamMemberFeature,
 )
 from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentTrajectory
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
@@ -204,6 +205,7 @@ HUMAN_TEAMMATE_COUNTS = {
 }
 
 NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
+NUM_PACKED_TEAM_MEMBER_FEATURES = len(PackedTeamMemberFeature.keys())
 
 
 ONEHOT_DTYPE = jnp.bfloat16

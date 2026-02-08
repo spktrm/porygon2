@@ -39,6 +39,7 @@ import {
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    numPackedTeamMemberFeatures,
     numPrivateEntityNodeFeatures,
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
@@ -287,49 +288,50 @@ export function generateTeamFromFormat(format: string): string {
     }
 }
 
-export function generateTeamFromIndices(
-    smogonFormat: string,
-    speciesIndices?: number[],
-    packedSetIndices?: number[],
-): string | null {
-    if (
-        speciesIndices !== undefined &&
-        packedSetIndices !== undefined &&
-        !smogonFormat.endsWith("randombattle")
-    ) {
-        const packedSets = [];
-
-        const speciesKeys = Object.values(jsonDatum.species);
-
-        for (const [
-            memberIndex,
-            packedSetIndex,
-        ] of packedSetIndices.entries()) {
-            const species = speciesKeys[speciesIndices[memberIndex]];
-
-            const speciesPackedSets = lookUpSetsList(smogonFormat, species);
-            if (speciesPackedSets.length === 0) {
-                throw new Error(`No sets found for species: ${species}`);
-            }
-
-            const speciesPackedSet = speciesPackedSets[packedSetIndex];
-            if (!speciesPackedSet) {
-                throw new Error(
-                    `No packed set found for species: ${species} @ ${packedSetIndex}`,
-                );
-            }
-
-            packedSets.push(speciesPackedSet);
-        }
-
-        return packedSets.join("]");
-    } else if (smogonFormat.endsWith("randombattle")) {
-        return null;
-    } else {
-        throw new Error(
-            `Invalid format: ${smogonFormat}. Must end with 'randombattle' or provide indices.`,
-        );
+export function randomSampleTeam(format: string): string {
+    const formatSampleTeams = sampleTeams[format];
+    if (!formatSampleTeams || formatSampleTeams.length === 0) {
+        throw new Error(`No sample teams found for format: ${format}`);
     }
+    return formatSampleTeams[
+        Math.floor(Math.random() * formatSampleTeams.length)
+    ];
+}
+
+export function packedSetFromBytes(packedSetBytes: Int32Array): string {
+    const species = "";
+    const nickname = ;
+    const item = "";
+    const ability = "";
+    const moves = "";
+    const nature = "";
+    const evs = "";
+    const gender = "";
+    const ivs = "";
+    const shiny = "";
+    const level = "";
+    const happiness = "";
+    const pokeball = "";
+    const hiddenpowertype = "";
+    const gigantamax = "";
+    const dynamaxlevel = "";
+    const teratype = "";
+    return `${nickname}|${species}|${item}|${ability}|${moves}|${nature}|${evs}|${gender}|${ivs}|${shiny}|${level}|${happiness},${pokeball},${hiddenpowertype},${gigantamax},${dynamaxlevel},${teratype}`;
+}
+
+export function generateTeamFromBytes(
+    packedTeamBytes: Int32Array,
+): string | null {
+    const generatedSets: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+        const packedSetSlice = packedTeamBytes.slice(
+            i * numPackedTeamMemberFeatures,
+            (i + 1) * numPackedTeamMemberFeatures,
+        );
+        const packedSet = packedSetFromBytes(packedSetSlice);
+        generatedSets.push(packedSet);
+    }
+    return generatedSets.join("]");
 }
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
@@ -662,6 +664,19 @@ function SanitizeKey<T extends EnumMappings>(
     // Cache the sanitized key
     sanitizeKeyCache.set(rawKey, sanitizedKey);
     return sanitizedKey;
+}
+
+export function EnumFromIndexValue<T extends EnumMappings>(
+    enumDatum: T,
+    value: T[keyof T],
+): string {
+    for (const key in enumDatum) {
+        if (enumDatum[key] === value) {
+            const sanitizedKey = SanitizeKey(enumDatum, key);
+            return sanitizedKey.toString().split("__")[1];
+        }
+    }
+    throw new Error(`${value} not in mapping`);
 }
 
 export function IndexValueFromEnum<T extends EnumMappings>(
@@ -1633,7 +1648,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,

@@ -58,10 +58,9 @@ message StepRequest {
 
 message ResetRequest {
   string username = 1;
-  repeated int32 species_indices = 2;
-  repeated int32 packed_set_indices = 3;
-  string smogon_format = 4;
-  string game_id = 5;
+  string smogon_format = 2;
+  string game_id = 3;
+  bytes packed_team = 4;
 }
 
 message EnvironmentState {

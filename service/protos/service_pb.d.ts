@@ -100,21 +100,16 @@ export class ResetRequest extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
 
-  clearSpeciesIndicesList(): void;
-  getSpeciesIndicesList(): Array<number>;
-  setSpeciesIndicesList(value: Array<number>): void;
-  addSpeciesIndices(value: number, index?: number): number;
-
-  clearPackedSetIndicesList(): void;
-  getPackedSetIndicesList(): Array<number>;
-  setPackedSetIndicesList(value: Array<number>): void;
-  addPackedSetIndices(value: number, index?: number): number;
-
   getSmogonFormat(): string;
   setSmogonFormat(value: string): void;
 
   getGameId(): string;
   setGameId(value: string): void;
+
+  getPackedTeam(): Uint8Array | string;
+  getPackedTeam_asU8(): Uint8Array;
+  getPackedTeam_asB64(): string;
+  setPackedTeam(value: Uint8Array | string): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
@@ -129,10 +124,9 @@ export class ResetRequest extends jspb.Message {
 export namespace ResetRequest {
   export type AsObject = {
     username: string,
-    speciesIndicesList: Array<number>,
-    packedSetIndicesList: Array<number>,
     smogonFormat: string,
     gameId: string,
+    packedTeam: Uint8Array | string,
   }
 }
 
