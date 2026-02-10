@@ -6,6 +6,7 @@ import numpy as np
 
 from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import Trajectory
+from rl.environment.protos.features_pb2 import PackedSetFeature
 
 
 class ReplayRatioTokenBucket:
@@ -140,7 +141,9 @@ class ReplayBuffer:
         with self._lock:
             self._species_counts = calculate_tracking(
                 self._species_counts,
-                traj.builder_history.species_tokens.reshape(-1),
+                traj.builder_history.packed_team_member_tokens[
+                    ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+                ].reshape(-1),
                 self._tau,
                 NUM_SPECIES,
             )

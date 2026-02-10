@@ -4,7 +4,10 @@ import os
 import numpy as np
 import httpx
 from typing import TypedDict
+
 import numpy.typing as npt
+import pandas as pd
+import json
 
 from rl.environment.data import STOI, toid
 
@@ -109,6 +112,38 @@ def construct_teammates_usage(data: UsageType) -> npt.NDArray[np.float32]:
     return _construct_generic_usage(data, "teammates", "species")
 
 
+def construct_gender_usage(
+    data: UsageType, pokedex_df: pd.DataFrame
+) -> npt.NDArray[np.float32]:
+    gender_col = pokedex_df["gender"]
+
+    gender_col_unique = [v for v in gender_col.unique() if v]
+    gender_col_sorted = sorted(gender_col_unique)
+
+    usage_array = np.zeros(
+        (len(STOI["species"]), len(STOI["gendername"])), dtype=np.float32
+    )
+
+    for _, row in pokedex_df.iterrows():
+        pokemon_id = toid(row.id)
+        if pokemon_id not in STOI["species"]:
+            print(
+                f"Warning: Pokemon ID '{row.id}' not found in STOI['species']. Skipping."
+            )
+            continue
+
+        row_idx = STOI["species"][pokemon_id]
+        if row.gender:
+            usage_array[row_idx, STOI["gendername"][row.gender.lower()]] = 1.0
+
+        for gender_string in ["m", "f"]:
+            usage_array[row_idx, STOI["gendername"][gender_string]] = row[
+                f"genderRatio.{gender_string.upper()}"
+            ]
+
+    return usage_array
+
+
 def construct_nature_usage(data: UsageType) -> npt.NDArray[np.float32]:
     usage_array = np.zeros(
         (len(STOI["species"]), len(STOI["natures"])), dtype=np.float32
@@ -169,6 +204,9 @@ def save_usage_array(
 async def fetch_and_process(
     client: httpx.AsyncClient, generation: int, smogon_format: str
 ):
+    with open(f"data/data/gen{generation}/species.json", "r") as f:
+        pokedex_df = pd.json_normalize(json.load(f))
+
     url = BASE_URL.format(gen=generation, fmt=smogon_format)
 
     # Simple retry logic
@@ -192,6 +230,10 @@ async def fetch_and_process(
                 # usage_array = usage_array + ~(usage_array.any(axis=-1)[..., None])
 
                 save_usage_array(stat, usage_array, generation, smogon_format)
+
+            usage_array = construct_gender_usage(data, pokedex_df)
+            save_usage_array("gender", usage_array, generation, smogon_format)
+
             return  # Success
 
         except (httpx.HTTPStatusError, httpx.RequestError) as e:

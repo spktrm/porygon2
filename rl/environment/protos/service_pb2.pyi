@@ -101,16 +101,16 @@ class StepRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., action: _Optional[_Union[Action, _Mapping]] = ..., rqid: _Optional[int] = ..., teampreview: bool = ...) -> None: ...
 
 class ResetRequest(_message.Message):
-    __slots__ = ("username", "smogon_format", "game_id", "packed_team")
+    __slots__ = ("username", "smogon_format", "game_id", "packed_teams")
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     SMOGON_FORMAT_FIELD_NUMBER: _ClassVar[int]
     GAME_ID_FIELD_NUMBER: _ClassVar[int]
-    PACKED_TEAM_FIELD_NUMBER: _ClassVar[int]
+    PACKED_TEAMS_FIELD_NUMBER: _ClassVar[int]
     username: str
     smogon_format: str
     game_id: str
-    packed_team: bytes
-    def __init__(self, username: _Optional[str] = ..., smogon_format: _Optional[str] = ..., game_id: _Optional[str] = ..., packed_team: _Optional[bytes] = ...) -> None: ...
+    packed_teams: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, username: _Optional[str] = ..., smogon_format: _Optional[str] = ..., game_id: _Optional[str] = ..., packed_teams: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
     __slots__ = ("info", "action_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")

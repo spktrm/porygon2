@@ -87,24 +87,6 @@ class EntityPrivateNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper
     ENTITY_PRIVATE_NODE_FEATURE__NATURE: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityPrivateNodeFeature]
 
-class PackedTeamMemberFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    PACKED_TEAM_MEMBER_FEATURE___UNSPECIFIED: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__SPECIES: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__ITEM: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__ABILITY: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__MOVEID0: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__MOVEID1: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__MOVEID2: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__MOVEID3: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_HP: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_ATK: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_DEF: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_SPA: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_SPD: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__EV_SPE: _ClassVar[PackedTeamMemberFeature]
-    PACKED_TEAM_MEMBER_FEATURE__TERA_TYPE: _ClassVar[PackedTeamMemberFeature]
-
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     MOVESET_HAS_PP___UNSPECIFIED: _ClassVar[MovesetHasPP]
@@ -252,16 +234,8 @@ class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PACKED_SET_FEATURE__SPA_EV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__SPD_EV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__SPE_EV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__HP_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__ATK_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__DEF_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPA_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPD_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPE_IV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__HIDDENPOWERTYPE: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__TERATYPE: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__LEVEL: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__HAPPINESS: _ClassVar[PackedSetFeature]
 ENTITY_PUBLIC_NODE_FEATURE___UNSPECIFIED: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__GENDER: EntityPublicNodeFeature
@@ -336,21 +310,6 @@ ENTITY_PRIVATE_NODE_FEATURE__IV_SPD: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__NATURE: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: EntityPrivateNodeFeature
-PACKED_TEAM_MEMBER_FEATURE___UNSPECIFIED: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__SPECIES: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__ITEM: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__ABILITY: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__MOVEID0: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__MOVEID1: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__MOVEID2: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__MOVEID3: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_HP: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_ATK: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_DEF: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_SPA: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_SPD: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__EV_SPE: PackedTeamMemberFeature
-PACKED_TEAM_MEMBER_FEATURE__TERA_TYPE: PackedTeamMemberFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP
 MOVESET_HAS_PP__NO: MovesetHasPP
@@ -475,13 +434,5 @@ PACKED_SET_FEATURE__DEF_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPA_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPD_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPE_EV: PackedSetFeature
-PACKED_SET_FEATURE__HP_IV: PackedSetFeature
-PACKED_SET_FEATURE__ATK_IV: PackedSetFeature
-PACKED_SET_FEATURE__DEF_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPA_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPD_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPE_IV: PackedSetFeature
 PACKED_SET_FEATURE__HIDDENPOWERTYPE: PackedSetFeature
 PACKED_SET_FEATURE__TERATYPE: PackedSetFeature
-PACKED_SET_FEATURE__LEVEL: PackedSetFeature
-PACKED_SET_FEATURE__HAPPINESS: PackedSetFeature

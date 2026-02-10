@@ -9,16 +9,12 @@ import {
 } from "../../protos/service_pb";
 import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
-import {
-    generateTeamFromBytes,
-    getSampleTeam,
-    randomSampleTeam,
-} from "./state";
+import { generateTeamFromArray, randomSampleTeam } from "./state";
 
 interface PlayerDetails {
     userName: string;
     smogonFormat: string;
-    packedTeamBytes: Int32Array;
+    packedTeam: number[];
 }
 
 interface WaitingPlayerResolveArgs {
@@ -66,7 +62,7 @@ export class WorkerHandler {
         userName: string,
         gameId: string, // Added gameId param
         smogonFormat: string,
-        packedTeamBytes: Int32Array,
+        packedTeam: number[],
     ): Promise<WaitingPlayerResolveArgs> {
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
@@ -81,7 +77,7 @@ export class WorkerHandler {
         const details: PlayerDetails = {
             userName,
             smogonFormat,
-            packedTeamBytes,
+            packedTeam,
         };
 
         // Check if someone is already waiting for this Game ID
@@ -108,10 +104,10 @@ export class WorkerHandler {
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
-                p1team: generateTeamFromBytes(
-                    opponent.playerDetails.packedTeamBytes,
+                p1team: generateTeamFromArray(
+                    opponent.playerDetails.packedTeam,
                 ),
-                p2team: generateTeamFromBytes(packedTeamBytes),
+                p2team: generateTeamFromArray(packedTeam),
                 smogonFormat,
             });
 
@@ -152,9 +148,9 @@ export class WorkerHandler {
     private resetPlayerFromEvalUserName(
         userName: string,
         smogonFormat: string,
-        packedTeamBytes: Int32Array,
+        packedTeam: number[],
     ) {
-        const teamString = generateTeamFromBytes(packedTeamBytes);
+        const teamString = generateTeamFromArray(packedTeam);
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -243,7 +239,7 @@ export class WorkerHandler {
         userName: string,
         gameId: string, // Added param
         smogonFormat: string,
-        packedTeamBytes: Int32Array,
+        packedTeam: number[],
         // We no longer need ckpt params for matchmaking logic
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
@@ -251,7 +247,7 @@ export class WorkerHandler {
                 this.resetPlayerFromEvalUserName(
                     userName,
                     smogonFormat,
-                    packedTeamBytes,
+                    packedTeam,
                 ),
             );
         } else {
@@ -259,7 +255,7 @@ export class WorkerHandler {
                 userName,
                 gameId,
                 smogonFormat,
-                packedTeamBytes,
+                packedTeam,
             );
         }
     }
@@ -271,15 +267,13 @@ export class WorkerHandler {
         const userName = resetRequest.getUsername();
         const smogonFormat = resetRequest.getSmogonFormat();
         const gameId = resetRequest.getGameId();
-        const packedTeamArray = new Int32Array(
-            resetRequest.getPackedTeam_asU8().buffer,
-        );
+        const packedTeam = resetRequest.getPackedTeamsList();
 
         const { player, opponentDetails } = await this.resetPlayerFromUserName(
             userName,
             gameId,
             smogonFormat,
-            packedTeamArray,
+            packedTeam,
         );
         const state = await player.receiveEnvironmentState();
 

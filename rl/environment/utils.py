@@ -7,15 +7,23 @@ import rlax
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
+    NUM_ABILITIES,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
     NUM_ENTITY_PUBLIC_FEATURES,
     NUM_ENTITY_REVEALED_FEATURES,
     NUM_FIELD_FEATURES,
+    NUM_GENDERS,
     NUM_HISTORY,
+    NUM_ITEMS,
     NUM_MOVE_FEATURES,
+    NUM_MOVES,
+    NUM_NATURES,
+    NUM_PACKED_SET_FEATURES,
+    NUM_PACKED_TEAM_MEMBER_FEATURES,
     NUM_SPECIES,
+    NUM_TYPECHART,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -233,23 +241,46 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
-    trajectory_length = 7
-    history_length = 6
+    trajectory_length = 6 * (NUM_PACKED_SET_FEATURES - 1)
+    6 * NUM_PACKED_SET_FEATURES
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
     ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
+
+    packed_team_member_tokens = np.zeros(
+        (6 * NUM_PACKED_TEAM_MEMBER_FEATURES, 1), dtype=np.int32
+    )
+
+    order = np.arange(6 * NUM_PACKED_TEAM_MEMBER_FEATURES, dtype=np.int32)[:, None]
+    np.random.shuffle(order.copy())
+    member_position = order // NUM_PACKED_TEAM_MEMBER_FEATURES
+    member_attribute = order % NUM_PACKED_TEAM_MEMBER_FEATURES
+
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool
                 ),
+                item_mask=np.ones((trajectory_length, 1, NUM_ITEMS), dtype=np.bool),
+                ability_mask=np.ones(
+                    (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
+                ),
+                move_mask=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
+                ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                nature_mask=np.ones((trajectory_length, 1, NUM_NATURES), dtype=np.bool),
+                gender_mask=np.ones((trajectory_length, 1, NUM_GENDERS), dtype=np.bool),
+                teratype_mask=np.ones(
+                    (trajectory_length, 1, NUM_TYPECHART), dtype=np.bool
+                ),
                 ts=ts,
                 done=done,
             ),
             history=BuilderHistoryOutput(
-                species_tokens=np.zeros((history_length, 1), dtype=np.int32),
-                packed_set_tokens=np.zeros((history_length, 1), dtype=np.int32),
+                packed_team_member_tokens=packed_team_member_tokens,
+                order=order,
+                member_position=member_position,
+                member_attribute=member_attribute,
             ),
         ),
         BuilderActorOutput(
@@ -257,7 +288,23 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             species_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
-            packed_set_head=PolicyHeadOutput(
+            item_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            ability_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            move_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            ev_head=PolicyHeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
+            nature_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            gender_head=PolicyHeadOutput(
+                action_index=np.zeros_like(done, dtype=np.int32)
+            ),
+            teratype_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),

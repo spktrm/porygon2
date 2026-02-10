@@ -60,7 +60,7 @@ message ResetRequest {
   string username = 1;
   string smogon_format = 2;
   string game_id = 3;
-  bytes packed_team = 4;
+  repeated int32 packed_teams = 4;
 }
 
 message EnvironmentState {
