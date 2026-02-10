@@ -10,7 +10,7 @@ import { ObjectReadWriteStream } from "@pkmn/streams";
 import * as path from "path";
 import { TrainablePlayerAI } from "../server/runner";
 import { Action as ProtoAction, StepRequest } from "../../protos/service_pb";
-import { generateTeamFromBytes } from "../server/state";
+import { generateTeamFromArray } from "../server/state";
 
 const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
 
@@ -373,11 +373,7 @@ class User {
                     body: JSON.stringify({ format }),
                 });
                 const modelOutput = await response.json();
-                const team = generateTeamFromBytes(
-                    format.replace("ou", "_ou_all_formats"),
-                    modelOutput.species_indices,
-                    modelOutput.packed_set_indices,
-                )!;
+                const team = generateTeamFromArray(modelOutput.packed_team)!;
                 const validator = new TeamValidator(format);
                 const errors = validator.validateTeam(Teams.unpack(team));
                 if (errors === null) {

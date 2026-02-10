@@ -106,10 +106,10 @@ export class ResetRequest extends jspb.Message {
   getGameId(): string;
   setGameId(value: string): void;
 
-  getPackedTeam(): Uint8Array | string;
-  getPackedTeam_asU8(): Uint8Array;
-  getPackedTeam_asB64(): string;
-  setPackedTeam(value: Uint8Array | string): void;
+  clearPackedTeamsList(): void;
+  getPackedTeamsList(): Array<number>;
+  setPackedTeamsList(value: Array<number>): void;
+  addPackedTeams(value: number, index?: number): number;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): ResetRequest.AsObject;
@@ -126,7 +126,7 @@ export namespace ResetRequest {
     username: string,
     smogonFormat: string,
     gameId: string,
-    packedTeam: Uint8Array | string,
+    packedTeamsList: Array<number>,
   }
 }
 

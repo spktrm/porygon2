@@ -92,36 +92,13 @@ class PlayerTransition:
 @dataclass
 class BuilderEnvOutput:
     species_mask: ArrayLike = ()
-
-    ts: ArrayLike = ()
-    done: ArrayLike = ()
-
-    cum_teammate_reward: ArrayLike = ()
-    cum_species_reward: ArrayLike = ()
-
-    target_species_probs: ArrayLike = ()
-
-
-@dataclass
-class BuilderHistoryOutput:
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
-
-
-@dataclass
-class BuilderActorInput:
-    env: BuilderEnvOutput = field(default_factory=BuilderEnvOutput)
-    history: BuilderHistoryOutput = field(default_factory=BuilderHistoryOutput)
-
-
-@dataclass
-class BuilderFullEnvOutput:
-    species_mask: ArrayLike = ()
     item_mask: ArrayLike = ()
     ability_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
     ev_mask: ArrayLike = ()
+    nature_mask: ArrayLike = ()
     teratype_mask: ArrayLike = ()
+    gender_mask: ArrayLike = ()
 
     done: ArrayLike = ()
     ts: ArrayLike = ()
@@ -129,28 +106,17 @@ class BuilderFullEnvOutput:
 
 
 @dataclass
-class BuilderFullHistoryOutput:
+class BuilderHistoryOutput:
     packed_team_member_tokens: ArrayLike = ()
     order: ArrayLike = ()
-    row: ArrayLike = ()
-    col: ArrayLike = ()
+    member_position: ArrayLike = ()
+    member_attribute: ArrayLike = ()
 
 
 @dataclass
-class BuilderFullActorInput:
-    env: BuilderFullEnvOutput = field(default_factory=BuilderFullEnvOutput)
-    history: BuilderFullHistoryOutput = field(default_factory=BuilderFullHistoryOutput)
-
-
-@dataclass
-class BuilderFullActorOutput:
-    conditional_entropy_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
-    value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
-    token_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+class BuilderActorInput:
+    env: BuilderEnvOutput = field(default_factory=BuilderEnvOutput)
+    history: BuilderHistoryOutput = field(default_factory=BuilderHistoryOutput)
 
 
 @dataclass
@@ -162,7 +128,13 @@ class BuilderActorOutput:
         default_factory=RegressionValueHeadOutput
     )
     species_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    packed_set_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    item_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    ability_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    move_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    ev_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    nature_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    gender_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    teratype_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
 
 
 @dataclass

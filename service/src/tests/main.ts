@@ -1,7 +1,12 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature } from "../../protos/features_pb";
 import { StepRequest } from "../../protos/service_pb";
-import { EdgeBuffer, getSampleTeam, StateHandler } from "../server/state";
+import {
+    EdgeBuffer,
+    generateTeamFromArray,
+    getSampleTeam,
+    StateHandler,
+} from "../server/state";
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
@@ -76,6 +81,14 @@ async function playerController(player: TrainablePlayerAI) {
 }
 
 const testFormats = ["gen9randomdoublesbattle", "gen9vgc2025regibo3", "gen9ou"];
+const testPackedTeamArray = [
+    0, 397, 40, 289, 850, 364, 857, 639, 11, 5, 58, 2, 0, 23, 23, 17, 4, 23, 0,
+    132, 141, 118, 103, 825, 58, 725, 17, 4, 12, 63, 3, 0, 3, 11, 13, 20, 0,
+    550, 81, 264, 385, 680, 90, 729, 17, 4, 1, 14, 0, 18, 32, 51, 9, 9, 0, 563,
+    180, 259, 635, 228, 872, 676, 6, 5, 55, 0, 40, 9, 12, 0, 10, 9, 0, 976, 254,
+    286, 850, 531, 935, 685, 14, 4, 22, 36, 1, 42, 13, 8, 8, 7, 0, 584, 373,
+    199, 925, 880, 808, 530, 15, 6, 0, 26, 2, 16, 48, 2, 8, 7,
+];
 
 async function runBattle() {
     console.log("Creating battle...");
@@ -86,7 +99,10 @@ async function runBattle() {
         p1Name: "Bot1",
         p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou", "Zoroark"),
-        p2team: getSampleTeam("gen9ou", "Zoroark"),
+        p2team:
+            Math.random() < 0.5
+                ? generateTeamFromArray(testPackedTeamArray)
+                : getSampleTeam("gen9ou", "Zoroark"),
         smogonFormat,
     };
     const { p1, p2 } = createBattle(battleOptions, false);

@@ -61,7 +61,7 @@ class Actor:
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = split_rng(rng_key, 2)
-        builder_unroll_length = self._builder_env._max_trajectory_length + 1
+        builder_unroll_length = self._builder_env.length + 1
 
         builder_subkeys = split_rng(builder_key, builder_unroll_length)
         player_subkeys = split_rng(player_key, self._unroll_length)
@@ -102,8 +102,7 @@ class Actor:
 
         # Reset the player environment.
         player_actor_input = self._player_env.reset(
-            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
+            builder_actor_input.history.packed_team_member_tokens.reshape(-1).tolist()
         )
 
         # Rollout the player environment.
