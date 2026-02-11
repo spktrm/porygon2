@@ -31,7 +31,7 @@ class Actor:
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(
-            generation=env.generation, smogon_format="ou_all_formats"
+            generation=env.generation, smogon_format="ou"
         )
         self._unroll_length = unroll_length
         self._learner = learner
@@ -61,18 +61,18 @@ class Actor:
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = split_rng(rng_key, 2)
-        builder_unroll_length = self._builder_env.length + 1
+        builder_unroll_length = self._builder_env.length
 
-        builder_subkeys = split_rng(builder_key, builder_unroll_length)
+        builder_subkeys = split_rng(builder_key, builder_unroll_length + 1)
         player_subkeys = split_rng(player_key, self._unroll_length)
 
         build_traj = []
 
         # Reset the builder environment.
-        builder_actor_input = self._builder_env.reset()
+        builder_actor_input = self._builder_env.reset(builder_subkeys[0])
 
         # Rollout the builder environment.
-        for builder_step_index in range(builder_subkeys.shape[0]):
+        for builder_step_index in range(1, builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
                 builder_params,
