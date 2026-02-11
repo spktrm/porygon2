@@ -70,7 +70,7 @@ class SinglePlayerSyncEnvironment:
                 username=self.username,
                 smogon_format=f"gen{self.generation}{self.smogon_format}",
                 game_id=self.game_id,
-                packed_team=packed_team,
+                packed_teams=packed_team,
             )
         )
         self.websocket.send(reset_message.SerializeToString())

@@ -358,7 +358,6 @@ def train_step(
     actor_target_log_ratio = actor_log_prob - target_log_prob
     actor_target_ratio = jnp.exp(actor_target_log_ratio)
     target_actor_ratio = jnp.exp(-actor_target_log_ratio)
-    target_actor_ratio = target_actor_ratio.at[6].set(1.0)  # Hack to continue trace
 
     actor_target_clipped_ratio = jnp.clip(actor_target_ratio, min=0.0, max=2.0)
     builder_actor_target_clipped_ratio = actor_target_clipped_ratio[
@@ -427,7 +426,7 @@ def train_step(
     player_uniform_prob = 1.0 / (action_mask_sum).clip(min=1)
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
-    scale = config.batch_size / 1536
+    scale = 1  # config.batch_size / 1536
     entropy_decay = 1 / (((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
@@ -571,7 +570,7 @@ def train_step(
 
         ratio = builder_actor_target_clipped_ratio * learner_actor_ratio
 
-        normalising_constant = 10.0
+        normalising_constant = 200.0
 
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
