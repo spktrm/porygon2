@@ -16,10 +16,14 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
-from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import HeadParams, PointerLogits, sample_categorical
+from rl.model.heads import (
+    HeadParams,
+    PointerLogits,
+    RegressionValueLogitHead,
+    sample_categorical,
+)
 from rl.model.modules import MLP
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 

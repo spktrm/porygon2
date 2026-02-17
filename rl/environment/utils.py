@@ -1,6 +1,7 @@
 from typing import Sequence, TypeVar
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import rlax
 
@@ -21,7 +22,6 @@ from rl.environment.data import (
     NUM_MOVES,
     NUM_NATURES,
     NUM_PACKED_SET_FEATURES,
-    NUM_PACKED_TEAM_MEMBER_FEATURES,
     NUM_SPECIES,
     NUM_TYPECHART,
 )
@@ -36,6 +36,7 @@ from rl.environment.interfaces import (
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
     PolicyHeadOutput,
+    RegressionValueHeadOutput,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
@@ -240,6 +241,16 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
 
 
+@jax.jit(static_argnames=["r", "N"])
+def generate_order(key, r, N):
+    total_size = r * N
+
+    x = jnp.arange(total_size).reshape(r, N)[..., 1:].reshape(-1)
+    selection_order = jax.random.permutation(key, x)
+
+    return selection_order.reshape(-1)
+
+
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
     trajectory_length = 6 * (NUM_PACKED_SET_FEATURES - 1)
     6 * NUM_PACKED_SET_FEATURES
@@ -248,13 +259,12 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
     ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
 
     packed_team_member_tokens = np.zeros(
-        (6 * NUM_PACKED_TEAM_MEMBER_FEATURES, 1), dtype=np.int32
+        (6 * NUM_PACKED_SET_FEATURES, 1), dtype=np.int32
     )
 
-    order = np.arange(6 * NUM_PACKED_TEAM_MEMBER_FEATURES, dtype=np.int32)[:, None]
-    np.random.shuffle(order.copy())
-    member_position = order // NUM_PACKED_TEAM_MEMBER_FEATURES
-    member_attribute = order % NUM_PACKED_TEAM_MEMBER_FEATURES
+    order = generate_order(jax.random.key(42), 6, NUM_PACKED_SET_FEATURES)[:, None]
+    member_position = order // NUM_PACKED_SET_FEATURES
+    member_attribute = order % NUM_PACKED_SET_FEATURES
 
     return (
         BuilderActorInput(
@@ -274,37 +284,26 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                     (trajectory_length, 1, NUM_TYPECHART), dtype=np.bool
                 ),
                 ts=ts,
+                curr_order=order,
+                curr_attribute=member_attribute,
+                curr_position=member_position,
                 done=done,
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,
                 order=order,
-                member_position=member_position,
                 member_attribute=member_attribute,
+                member_position=member_position,
             ),
         ),
         BuilderActorOutput(
-            value_head=np.zeros_like(done, dtype=np.float32),
-            species_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
+            conditional_entropy_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(done, dtype=np.float32)
             ),
-            item_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
+            value_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(done, dtype=np.float32)
             ),
-            ability_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
-            move_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
-            ev_head=PolicyHeadOutput(action_index=np.zeros_like(done, dtype=np.int32)),
-            nature_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
-            gender_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
-            ),
-            teratype_head=PolicyHeadOutput(
+            action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),

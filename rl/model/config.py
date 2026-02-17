@@ -147,7 +147,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 8
+    num_layers = 4
     num_heads = num_heads
     hidden_size_scale = 4
     hidden_size = int(hidden_size_scale * entity_size)
@@ -177,7 +177,18 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     if generation < 4:
         cfg.encoder.need_pos = True
 
-    for name in ["species_head", "packed_set_head", "value_head"]:
+    for name in [
+        "value_head",
+        "species_head",
+        "item_head",
+        "ability_head",
+        "move_head",
+        "ev_head",
+        "nature_head",
+        "gender_head",
+        "hiddenpower_head",
+        "teratype_head",
+    ]:
         head_cfg = ConfigDict()
         setattr(cfg, name, head_cfg)
 
@@ -186,7 +197,14 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     for head in [
         cfg.species_head,
-        cfg.packed_set_head,
+        cfg.item_head,
+        cfg.ability_head,
+        cfg.move_head,
+        cfg.ev_head,
+        cfg.nature_head,
+        cfg.gender_head,
+        cfg.hiddenpower_head,
+        cfg.teratype_head,
     ]:
         head.qk_logits = ConfigDict()
         # head.qk_logits.qk_layer_norm = True

@@ -204,7 +204,6 @@ HUMAN_TEAMMATE_COUNTS = {
 }
 
 NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
-NUM_PACKED_TEAM_MEMBER_FEATURES = len(PackedSetFeature.keys())
 
 
 ONEHOT_DTYPE = jnp.bfloat16

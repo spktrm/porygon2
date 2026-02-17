@@ -28,7 +28,9 @@ from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
+    BuilderEnvOutput,
     BuilderTransition,
+    PolicyHeadOutput,
 )
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -40,9 +42,20 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import HeadParams, PolicyQKHead, RegressionValueLogitHead
+from rl.model.heads import (
+    HeadParams,
+    PointerLogits,
+    PolicyQKHead,
+    RegressionValueLogitHead,
+    sample_categorical,
+)
 from rl.model.modules import MLP, TransformerEncoder, dense_layer
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import (
+    get_most_recent_file,
+    get_num_params,
+    legal_log_policy,
+    legal_policy,
+)
 
 
 def _encode_one_hot(
@@ -67,7 +80,7 @@ class Porygon2BuilderModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         entity_size = self.cfg.entity_size
-        dtype = self.cfg.dtype
+        self.cfg.dtype
 
         dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
@@ -86,11 +99,6 @@ class Porygon2BuilderModel(nn.Module):
 
         self.sos_embedding = self.param(
             "sos_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
-        )
-        self.unk_embedding = self.param(
-            "unk_embedding",
             nn.initializers.truncated_normal(stddev=0.02),
             (1, entity_size),
         )
@@ -119,11 +127,9 @@ class Porygon2BuilderModel(nn.Module):
             (NUM_TYPECHART, entity_size),
         )
 
-        self.positional_embedding = nn.Embed(
-            num_embeddings=6, features=entity_size, dtype=dtype
-        )
+        self.positional_embedding = nn.Embed(6, entity_size, self.cfg.dtype)
         self.attribute_embedding = nn.Embed(
-            num_embeddings=NUM_PACKED_SET_FEATURES, features=entity_size, dtype=dtype
+            NUM_PACKED_SET_FEATURES, entity_size, self.cfg.dtype
         )
 
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
@@ -135,16 +141,18 @@ class Porygon2BuilderModel(nn.Module):
         self.ev_head_mlp = MLP()
         self.nature_head_mlp = MLP()
         self.gender_head_mlp = MLP()
+        self.hiddenpower_head_mlp = MLP()
         self.teratype_head_mlp = MLP()
 
         self.species_head = PolicyQKHead(self.cfg.species_head)
-        self.item_head = PolicyQKHead(self.cfg.species_head)
-        self.ability_head = PolicyQKHead(self.cfg.species_head)
-        self.move_head = PolicyQKHead(self.cfg.species_head)
-        self.ev_head = PolicyQKHead(self.cfg.species_head)
-        self.nature_head = PolicyQKHead(self.cfg.species_head)
-        self.gender_head = PolicyQKHead(self.cfg.species_head)
-        self.teratype_head = PolicyQKHead(self.cfg.species_head)
+        self.item_head = PolicyQKHead(self.cfg.item_head)
+        self.ability_head = PolicyQKHead(self.cfg.ability_head)
+        self.move_head = PolicyQKHead(self.cfg.move_head)
+        self.ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.nature_head = PolicyQKHead(self.cfg.nature_head)
+        self.gender_head = PolicyQKHead(self.cfg.gender_head)
+        self.hiddenpower_head = PolicyQKHead(self.cfg.hiddenpower_head)
+        self.teratype_head = PolicyQKHead(self.cfg.teratype_head)
 
         self.value_head_mlp = MLP()
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
@@ -235,7 +243,7 @@ class Porygon2BuilderModel(nn.Module):
         position_embedding = self.positional_embedding(position_id)
         attribute_embedding = self.attribute_embedding(attribute_id)
 
-        embeddings = (
+        packed_set_embeddings = (
             position_embedding
             + attribute_embedding
             + (
@@ -248,28 +256,20 @@ class Porygon2BuilderModel(nn.Module):
                 + ev_embeddings
                 + hiddenpower_embeddings
                 + teratype_embedding
-            )
-        )
-        embeddings = jnp.concatenate(
-            (self.sos_embedding.astype(self.cfg.dtype), embeddings), axis=0
+            ).reshape(-1, self.cfg.entity_size)
         )
 
-        causal_mask = jnp.tril(
-            jnp.ones((embeddings.shape[0], embeddings.shape[0]), dtype=jnp.bool)
-        )[None]
-        return self.encoder(embeddings, causal_mask)
+        packed_set_embeddings = jnp.concatenate(
+            (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
+        )
+        seq_len = packed_set_embeddings.shape[0]
+        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
+        return self.encoder(packed_set_embeddings, causal_mask)
 
     def _forward(
         self,
-        current_embedding: jax.Array,
-        species_mask: jax.Array,
-        item_mask: jax.Array,
-        ability_mask: jax.Array,
-        move_mask: jax.Array,
-        ev_mask: jax.Array,
-        nature_mask: jax.Array,
-        teratype_mask: jax.Array,
-        gender_mask: jax.Array,
+        hidden_state: jax.Array,
+        env_step: BuilderEnvOutput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
         ability_keys: jax.Array,
@@ -278,77 +278,134 @@ class Porygon2BuilderModel(nn.Module):
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value_head = self._forward_value_head(current_embedding)
-        conditional_entropy_head = self._forward_conditional_entropy_head(
-            current_embedding
-        )
+        value_head = self._forward_value_head(hidden_state)
+        conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
+
+        hidden_state = hidden_state[None]
 
         species_head = self.species_head(
-            self.species_head_mlp(current_embedding),
+            self.species_head_mlp(hidden_state),
             species_keys,
-            actor_output.species_head,
-            species_mask,
+            actor_output.action_head,
+            env_step.species_mask,
             head_params=head_params,
         )
         item_head = self.item_head(
-            self.item_head_mlp(current_embedding),
+            self.item_head_mlp(hidden_state),
             item_keys,
-            actor_output.item_head,
-            item_mask,
+            actor_output.action_head,
+            env_step.item_mask,
             head_params=head_params,
         )
         ability_head = self.ability_head(
-            self.ability_head_mlp(current_embedding),
+            self.ability_head_mlp(hidden_state),
             ability_keys,
-            actor_output.ability_head,
-            ability_mask,
+            actor_output.action_head,
+            env_step.ability_mask,
             head_params=head_params,
         )
         move_head = self.move_head(
-            self.move_head_mlp(current_embedding),
+            self.move_head_mlp(hidden_state),
             move_keys,
-            actor_output.move_head,
-            move_mask,
+            actor_output.action_head,
+            env_step.move_mask,
             head_params=head_params,
         )
         ev_head = self.ev_head(
-            self.ev_head_mlp(current_embedding),
+            self.ev_head_mlp(hidden_state),
             self.ev_embedding,
-            actor_output.ev_head,
-            ev_mask,
+            actor_output.action_head,
+            env_step.ev_mask,
             head_params=head_params,
         )
         nature_head = self.nature_head(
-            self.nature_head_mlp(current_embedding),
+            self.nature_head_mlp(hidden_state),
             self.nature_embedding,
-            actor_output.nature_head,
-            nature_mask,
+            actor_output.action_head,
+            env_step.nature_mask,
             head_params=head_params,
         )
         gender_head = self.gender_head(
-            self.gender_head_mlp(current_embedding),
+            self.gender_head_mlp(hidden_state),
             self.gender_embedding,
-            actor_output.gender_head,
-            gender_mask,
+            actor_output.action_head,
+            env_step.gender_mask,
             head_params=head_params,
         )
         teratype_head = self.teratype_head(
-            self.teratype_head_mlp(current_embedding),
+            self.teratype_head_mlp(hidden_state),
             self.typechart_embedding,
-            actor_output.teratype_head,
-            teratype_mask,
+            actor_output.action_head,
+            env_step.teratype_mask,
             head_params=head_params,
         )
 
+        action_indices = jnp.concatenate(
+            (
+                species_head.action_index,
+                item_head.action_index,
+                ability_head.action_index,
+                move_head.action_index,
+                ev_head.action_index,
+                nature_head.action_index,
+                gender_head.action_index,
+                teratype_head.action_index,
+            ),
+        )
+        log_probs = jnp.concatenate(
+            (
+                species_head.log_prob,
+                item_head.log_prob,
+                ability_head.log_prob,
+                move_head.log_prob,
+                ev_head.log_prob,
+                nature_head.log_prob,
+                gender_head.log_prob,
+                teratype_head.log_prob,
+            ),
+        )
+        entropies = jnp.concatenate(
+            (
+                species_head.entropy,
+                item_head.entropy,
+                ability_head.entropy,
+                move_head.entropy,
+                ev_head.entropy,
+                nature_head.entropy,
+                gender_head.entropy,
+                teratype_head.entropy,
+            )
+        )
+        mask = jnp.stack(
+            (
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY,
+                (env_step.curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1)
+                & (
+                    env_step.curr_attribute
+                    <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4
+                ),
+                (env_step.curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
+                & (
+                    env_step.curr_attribute
+                    <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+                ),
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__GENDER,
+                env_step.curr_attribute
+                == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE,
+            )
+        )
+
+        action_head = PolicyHeadOutput(
+            action_index=(action_indices @ mask).astype(jnp.int32).reshape(-1),
+            log_prob=(log_probs @ mask).astype(self.cfg.dtype).reshape(-1),
+            entropy=(entropies @ mask).astype(self.cfg.dtype).reshape(-1),
+        )
+
         return BuilderActorOutput(
-            species_head=species_head,
-            item_head=item_head,
-            ability_head=ability_head,
-            move_head=move_head,
-            ev_head=ev_head,
-            nature_head=nature_head,
-            gender_head=gender_head,
-            teratype_head=teratype_head,
+            action_head=action_head,
             value_head=value_head,
             conditional_entropy_head=conditional_entropy_head,
         )
@@ -366,33 +423,25 @@ class Porygon2BuilderModel(nn.Module):
 
         team_tokens = actor_input.history.packed_team_member_tokens
         order = actor_input.history.order
-        member_position = actor_input.history.member_position
-        member_attribute = actor_input.history.member_attribute
 
         hidden_states = self._encode_team(
-            jnp.take(team_tokens, order),
-            member_position,
-            member_attribute,
+            jnp.take(team_tokens, order, axis=0),
+            actor_input.history.member_position,
+            actor_input.history.member_attribute,
             species_keys,
             ability_keys,
             item_keys,
             move_keys,
         )
+
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
-            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None),
+            in_axes=(0, 0, 0, None, None, None, None),
         )(
             hidden_state,
-            actor_input.env.species_mask,
-            actor_input.env.item_mask,
-            actor_input.env.ability_mask,
-            actor_input.env.move_mask,
-            actor_input.env.ev_mask,
-            actor_input.env.nature_mask,
-            actor_input.env.teratype_mask,
-            actor_input.env.gender_mask,
+            actor_input.env,
             actor_output,
             species_keys,
             ability_keys,
@@ -408,6 +457,7 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 
 def print_packed_team_member_tokens(packed_team_member_tokens: jax.Array):
+    reconstructed_sets = []
     for row in packed_team_member_tokens.reshape(-1, NUM_PACKED_SET_FEATURES):
         species = ITOS["species"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES].item(), ""
@@ -449,9 +499,11 @@ def print_packed_team_member_tokens(packed_team_member_tokens: jax.Array):
         )
 
         reconstructed_set = f"|{species}|{item}|{ability}|{",".join(moves)}|{nature}|{",".join(evs)}|{gender}|{ivs}|{shiny}|{level}|{happiness},{pokeball},{hiddenpowertype},{gigantamax},{dynamaxlevel},{teratype}"
-        if "_UNSPECIFIED" in reconstructed_set:
-            print(f"Invalid set with unspecified features: {reconstructed_set}")
+        # if "_UNSPECIFIED" in reconstructed_set:
+        #     print(f"Invalid set with unspecified features: {reconstructed_set}")
+        reconstructed_sets.append(reconstructed_set)
         print(reconstructed_set)
+    return "]".join(reconstructed_sets)
 
 
 def main(debug: bool = False, generation: int = 9):
@@ -467,6 +519,7 @@ def main(debug: bool = False, generation: int = 9):
         jax.tree.map(lambda x: x[:, 0], get_ex_builder_step())
     )
     key = jax.random.key(42)
+    rng_key, key = jax.random.split(key, 2)
 
     latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
@@ -488,6 +541,7 @@ def main(debug: bool = False, generation: int = 9):
 
     builder_env = TeamBuilderEnvironment(generation=generation, smogon_format="ou")
 
+    i = 0
     while True:
 
         rng_key, key = jax.random.split(key, 2)
@@ -515,11 +569,10 @@ def main(debug: bool = False, generation: int = 9):
             with jax.disable_jit(debug):
                 builder_actor_input = builder_env.step(builder_agent_output)
 
-            print(
-                builder_actor_input.history.packed_team_member_tokens.reshape(
-                    -1, NUM_PACKED_SET_FEATURES
-                )
-            )
+            # print_packed_team_member_tokens(
+            #     builder_actor_input.history.packed_team_member_tokens
+            # )
+            # print(i)
 
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
@@ -535,7 +588,8 @@ def main(debug: bool = False, generation: int = 9):
         print_packed_team_member_tokens(
             builder_actor_input.history.packed_team_member_tokens
         )
-        print()
+        print(i)
+        i += 1
 
 
 if __name__ == "__main__":

@@ -77,10 +77,10 @@ class PolicyQKHead(nn.Module):
                 min_p=head_params.min_p,
             )
 
-        log_prob = jnp.take(log_policy, action_index, axis=-1)
+        log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
         return PolicyHeadOutput(
-            action_index=action_index,
-            log_prob=log_prob,
+            action_index=action_index.reshape(entropy.shape),
+            log_prob=log_prob.reshape(entropy.shape),
             entropy=entropy,
             log_policy=log_policy,
         )
