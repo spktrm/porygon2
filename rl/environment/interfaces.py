@@ -96,12 +96,15 @@ class BuilderEnvOutput:
     ability_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
     ev_mask: ArrayLike = ()
-    nature_mask: ArrayLike = ()
     teratype_mask: ArrayLike = ()
+    nature_mask: ArrayLike = ()
     gender_mask: ArrayLike = ()
 
     done: ArrayLike = ()
     ts: ArrayLike = ()
+    curr_order: ArrayLike = ()
+    curr_attribute: ArrayLike = ()
+    curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
 
 
@@ -121,20 +124,13 @@ class BuilderActorInput:
 
 @dataclass
 class BuilderActorOutput:
+    action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
     conditional_entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
     value_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    species_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    item_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    ability_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    move_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    ev_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    nature_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    gender_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    teratype_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
 
 
 @dataclass

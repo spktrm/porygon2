@@ -17,7 +17,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import MAX_RATIO_TOKEN, STOI
+from rl.environment.data import MAX_RATIO_TOKEN, NUM_PACKED_SET_FEATURES, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import InfoFeature, clip_history, clip_packed_history
@@ -35,40 +35,6 @@ from rl.model.utils import Params, ParamsContainer, promote_map
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
-
-
-def calculate_builder_log_prob(
-    *,
-    species_log_prob: jax.Array,
-    item_log_prob: jax.Array,
-    ability_log_prob: jax.Array,
-    move_log_prob: jax.Array,
-    ev_log_prob: jax.Array,
-    nature_log_prob: jax.Array,
-    gender_log_prob: jax.Array,
-    teratype_log_prob: jax.Array,
-    builder_history_attribute: jax.Array,
-):
-    return (
-        species_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES)
-        + item_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
-        + ability_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY)
-        + move_log_prob
-        * (builder_history_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1)
-        * (builder_history_attribute <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4)
-        + ev_log_prob
-        * (builder_history_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
-        * (builder_history_attribute <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
-        + nature_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
-        + gender_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__GENDER)
-        + teratype_log_prob
-        * (builder_history_attribute == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE)
-    )
 
 
 def spo_objective(
@@ -298,51 +264,15 @@ def train_step(
     builder_actor_conditional_entropy_head = (
         builder_transitions.agent_output.actor_output.conditional_entropy_head
     )
-    builder_actor_species_head = (
-        builder_transitions.agent_output.actor_output.species_head
-    )
-    builder_actor_item_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_ability_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_move_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_ev_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_nature_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_gender_head = builder_transitions.agent_output.actor_output.item_head
-    builder_actor_teratype_head = (
-        builder_transitions.agent_output.actor_output.item_head
+    builder_actor_action_head = (
+        builder_transitions.agent_output.actor_output.action_head
     )
 
     builder_target_value_head = builder_target_pred.value_head
-    builder_target_species_head = builder_target_pred.species_head
-    builder_target_item_head = builder_target_pred.item_head
-    builder_target_ability_head = builder_target_pred.item_head
-    builder_target_move_head = builder_target_pred.item_head
-    builder_target_ev_head = builder_target_pred.item_head
-    builder_target_nature_head = builder_target_pred.item_head
-    builder_target_gender_head = builder_target_pred.item_head
-    builder_target_teratype_head = builder_target_pred.item_head
+    builder_target_action_head = builder_target_pred.action_head
 
-    builder_actor_log_prob = calculate_builder_log_prob(
-        species_log_prob=builder_actor_species_head.log_prob,
-        item_log_prob=builder_actor_item_head.log_prob,
-        ability_log_prob=builder_actor_ability_head.log_prob,
-        move_log_prob=builder_actor_move_head.log_prob,
-        ev_log_prob=builder_actor_ev_head.log_prob,
-        nature_log_prob=builder_actor_nature_head.log_prob,
-        gender_log_prob=builder_actor_gender_head.log_prob,
-        teratype_log_prob=builder_actor_teratype_head.log_prob,
-        builder_history_attribute=builder_history.member_attribute,
-    )
-    builder_target_log_prob = calculate_builder_log_prob(
-        species_log_prob=builder_target_species_head.log_prob,
-        item_log_prob=builder_target_item_head.log_prob,
-        ability_log_prob=builder_target_ability_head.log_prob,
-        move_log_prob=builder_target_move_head.log_prob,
-        ev_log_prob=builder_target_ev_head.log_prob,
-        nature_log_prob=builder_target_nature_head.log_prob,
-        gender_log_prob=builder_target_gender_head.log_prob,
-        teratype_log_prob=builder_target_teratype_head.log_prob,
-        builder_history_attribute=builder_history.member_attribute,
-    )
+    builder_actor_log_prob = (builder_actor_action_head.log_prob,)
+    builder_target_log_prob = builder_target_action_head.log_prob
 
     actor_log_prob = jnp.concatenate(
         (builder_actor_log_prob, player_actor_log_prob), axis=0
@@ -540,27 +470,9 @@ def train_step(
 
         conditional_entropy_head = pred.conditional_entropy_head
         value_head = pred.value_head
+        action_head = pred.action_head
 
-        species_head = pred.species_head
-        item_head = pred.item_head
-        ability_head = pred.ability_head
-        move_head = pred.move_head
-        ev_head = pred.ev_head
-        nature_head = pred.nature_head
-        gender_head = pred.gender_head
-        teratype_head = pred.teratype_head
-
-        learner_log_prob = calculate_builder_log_prob(
-            species_log_prob=species_head.log_prob,
-            item_log_prob=item_head.log_prob,
-            ability_log_prob=ability_head.log_prob,
-            move_log_prob=move_head.log_prob,
-            ev_log_prob=ev_head.log_prob,
-            nature_log_prob=nature_head.log_prob,
-            gender_log_prob=gender_head.log_prob,
-            teratype_log_prob=teratype_head.log_prob,
-            builder_history_attribute=builder_history.member_attribute,
-        )
+        learner_log_prob = action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
@@ -592,7 +504,7 @@ def train_step(
             valid=jnp.ones_like(builder_valid),
         )
 
-        species_entropy = average(species_head.entropy, builder_valid)
+        species_entropy = average(action_head.entropy, builder_valid)
 
         # Estimator for entropy
         loss_entropy = mse_value_loss(
