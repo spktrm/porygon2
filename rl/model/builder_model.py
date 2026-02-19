@@ -42,7 +42,12 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import HeadParams, PolicyQKHead, RegressionValueLogitHead
+from rl.model.heads import (
+    CategoricalValueLogitHead,
+    HeadParams,
+    PolicyQKHead,
+    RegressionValueLogitHead,
+)
 from rl.model.modules import MLP, TransformerEncoder, dense_layer
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -144,7 +149,7 @@ class Porygon2BuilderModel(nn.Module):
         self.teratype_head = PolicyQKHead(self.cfg.teratype_head)
 
         self.value_head_mlp = MLP()
-        self.value_head = RegressionValueLogitHead(self.cfg.value_head)
+        self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
         self.conditional_entropy_head_mlp = MLP()
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.value_head)

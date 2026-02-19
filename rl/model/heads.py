@@ -10,14 +10,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.modules import (
-    MLP,
-    PointerLogits,
-    Resnet,
-    activation_fn,
-    dense_layer,
-    layer_norm,
-)
+from rl.model.modules import PointerLogits, activation_fn, dense_layer, layer_norm
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -91,16 +84,15 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        logits = MLP(**self.cfg.logits.to_dict())
-
-        x = resnet(x)
-        x = logits(x)
+        x = activation_fn(layer_norm(x))
+        x = dense_layer(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
-        entropy = -jnp.sum(probs * log_probs, axis=-1)
-        expectation = probs @ self.cfg.category_values
+        entropy = -jnp.sum(probs * log_probs, axis=-1, keepdims=True)
+
+        values = self.cfg.category_values.astype(x.dtype)
+        expectation = (probs @ values).reshape(entropy.shape)
 
         return CategoricalValueHeadOutput(
             logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
