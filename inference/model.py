@@ -66,7 +66,7 @@ class InferenceModel:
 
         print("initializing...")
         self._builder_env = TeamBuilderEnvironment(
-            generation=self._learner_config.generation, smogon_format="ou_all_formats"
+            generation=self._learner_config.generation, smogon_format="ou"
         )
         self.reset()  # warm up the model
 
@@ -90,13 +90,11 @@ class InferenceModel:
 
         rng_key = self.split_rng()
 
-        builder_subkeys = jax.random.split(
-            rng_key, self._builder_env._max_trajectory_length + 1
-        )
+        builder_subkeys = jax.random.split(rng_key, self._builder_env.length)
         build_traj = []
 
-        builder_actor_input = self._builder_env.reset()
-        for builder_step_index in range(builder_subkeys.shape[0]):
+        builder_actor_input = self._builder_env.reset(builder_subkeys[0])
+        for builder_step_index in range(1, builder_subkeys.shape[0] + 2):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
                 self._builder_params,
@@ -112,13 +110,9 @@ class InferenceModel:
             builder_actor_input = self._builder_env.step(builder_agent_output)
 
         # Send set tokens to the player environment.
+        team_tokens = builder_actor_input.history.packed_team_member_tokens
         return ResetResponse(
-            species_indices=builder_actor_input.history.species_tokens.reshape(
-                -1
-            ).tolist(),
-            packed_set_indices=builder_actor_input.history.packed_set_tokens.reshape(
-                -1
-            ).tolist(),
+            packed_team=team_tokens.reshape(-1).tolist(),
             v=builder_agent_output.actor_output.value_head.logits.item(),
         )
 

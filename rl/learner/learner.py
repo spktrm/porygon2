@@ -17,9 +17,8 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import MAX_RATIO_TOKEN, NUM_PACKED_SET_FEATURES, STOI
+from rl.environment.data import MAX_RATIO_TOKEN, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
-from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import InfoFeature, clip_history, clip_packed_history
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
@@ -271,7 +270,7 @@ def train_step(
     builder_target_value_head = builder_target_pred.value_head
     builder_target_action_head = builder_target_pred.action_head
 
-    builder_actor_log_prob = (builder_actor_action_head.log_prob,)
+    builder_actor_log_prob = builder_actor_action_head.log_prob
     builder_target_log_prob = builder_target_action_head.log_prob
 
     actor_log_prob = jnp.concatenate(
@@ -357,7 +356,7 @@ def train_step(
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     scale = 1  # config.batch_size / 1536
-    entropy_decay = 1 / (((player_state.step_count + 1) * scale) ** 0.3)
+    entropy_decay = 1  # / (((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
 
@@ -482,8 +481,6 @@ def train_step(
 
         ratio = builder_actor_target_clipped_ratio * learner_actor_ratio
 
-        normalising_constant = 200.0
-
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
@@ -491,7 +488,7 @@ def train_step(
             + config.builder_entropy_loss_coef
             * entropy_decay
             * (
-                actor_builder_conditional_entropy / normalising_constant
+                actor_builder_conditional_entropy / config.normalising_constant
                 - builder_actor_conditional_entropy_head.logits
             ),
             valid=builder_valid,
@@ -509,7 +506,7 @@ def train_step(
         # Estimator for entropy
         loss_entropy = mse_value_loss(
             pred=conditional_entropy_head.logits,
-            target=actor_builder_conditional_entropy / normalising_constant,
+            target=actor_builder_conditional_entropy / config.normalising_constant,
             valid=builder_valid,
         )
 
@@ -586,6 +583,8 @@ def train_step(
     training_logs.update(
         dict(
             builder_loss=builder_loss_val,
+            builder_inital_entropy=jnp.mean(actor_builder_conditional_entropy[0])
+            * config.normalising_constant,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_is_ratio=average(builder_actor_target_clipped_ratio, builder_valid),

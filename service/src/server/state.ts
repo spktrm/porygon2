@@ -319,11 +319,19 @@ export function packedSetFromArraySlice(packedSetSlice: number[]): string {
     const level = "";
     const happiness = "";
     const pokeball = "";
-    const hiddenpowertype = capitalize(
-        ITOS.typechart[
-            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE]
-        ],
-    );
+
+    const hiddenPowerToken =
+        packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE];
+    const hiddenpowertype =
+        hiddenPowerToken == 0
+            ? ""
+            : capitalize(
+                  ITOS.typechart[
+                      packedSetSlice[
+                          PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+                      ]
+                  ],
+              );
     const gigantamax = "";
     const dynamaxlevel = "";
     const teratype = capitalize(
@@ -1661,7 +1669,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,

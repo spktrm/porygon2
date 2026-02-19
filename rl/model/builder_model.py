@@ -42,20 +42,9 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import (
-    HeadParams,
-    PointerLogits,
-    PolicyQKHead,
-    RegressionValueLogitHead,
-    sample_categorical,
-)
+from rl.model.heads import HeadParams, PolicyQKHead, RegressionValueLogitHead
 from rl.model.modules import MLP, TransformerEncoder, dense_layer
-from rl.model.utils import (
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 def _encode_one_hot(
@@ -225,20 +214,27 @@ class Porygon2BuilderModel(nn.Module):
         )[..., None] * jnp.take(move_keys, token, axis=0, mode="clip")
         nature_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__NATURE
-        )[..., None] * jnp.take(self.nature_embedding, token, axis=0, mode="clip")
+        )[..., None] * jnp.take(
+            self.nature_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
         gender_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__GENDER
-        )[..., None] * jnp.take(self.gender_embedding, token, axis=0, mode="clip")
+        )[..., None] * jnp.take(
+            self.gender_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
         ev_embeddings = (
             (attribute_id >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
             & (attribute_id <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
-        )[..., None] * jnp.take(self.ev_embedding, token, axis=0, mode="clip")
+        )[..., None] * jnp.take(
+            self.ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        typechart_embeddings = self.typechart_embedding.astype(self.cfg.dtype)
         hiddenpower_embeddings = (
             attribute_id >= PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
-        )[..., None] * jnp.take(self.typechart_embedding, token, axis=0, mode="clip")
+        )[..., None] * jnp.take(typechart_embeddings, token, axis=0, mode="clip")
         teratype_embedding = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
-        )[..., None] * jnp.take(self.typechart_embedding, token, axis=0, mode="clip")
+        )[..., None] * jnp.take(typechart_embeddings, token, axis=0, mode="clip")
 
         position_embedding = self.positional_embedding(position_id)
         attribute_embedding = self.attribute_embedding(attribute_id)
@@ -399,9 +395,12 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         action_head = PolicyHeadOutput(
-            action_index=(action_indices @ mask).astype(jnp.int32).reshape(-1),
-            log_prob=(log_probs @ mask).astype(self.cfg.dtype).reshape(-1),
-            entropy=(entropies @ mask).astype(self.cfg.dtype).reshape(-1),
+            action_index=(action_indices @ mask)
+            .astype(jnp.int32)
+            .reshape(-1)
+            .squeeze(),
+            log_prob=(log_probs @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
+            entropy=(entropies @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
         )
 
         return BuilderActorOutput(
@@ -456,9 +455,18 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2BuilderModel(config)
 
 
-def print_packed_team_member_tokens(packed_team_member_tokens: jax.Array):
+def get_packed_team_string(packed_team_member_tokens: jax.Array):
+    # 1. Reshape flat array to (Team_Size, Features)
+    #    We assume NUM_PACKED_SET_FEATURES is available globally or imported
+    reshaped_tokens = packed_team_member_tokens.reshape(-1, NUM_PACKED_SET_FEATURES)
+
     reconstructed_sets = []
-    for row in packed_team_member_tokens.reshape(-1, NUM_PACKED_SET_FEATURES):
+
+    for row in reshaped_tokens:
+        # Check if the species is set (non-zero). If 0, it's an empty/padding slot.
+        # if row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES] == 0:
+        #     continue
+
         species = ITOS["species"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES].item(), ""
         )
@@ -468,45 +476,61 @@ def print_packed_team_member_tokens(packed_team_member_tokens: jax.Array):
         ability = ITOS["abilities"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__ABILITY].item(), ""
         )
+
+        # 2. Fix moves iteration
+        #    Using indices 0 to 3 added to base MOVE1 index
         moves = [
             ITOS["moves"].get(
                 row[PackedSetFeature.PACKED_SET_FEATURE__MOVE1 + i].item(), ""
             )
             for i in range(4)
         ]
+
         nature = ITOS["natures"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__NATURE].item(), ""
         )
+
+        # 3. EVs iteration (Indices 0 to 5 added to base HP_EV)
         evs = [
             str(4 * row[PackedSetFeature.PACKED_SET_FEATURE__HP_EV + i].item())
             for i in range(6)
         ]
+
         gender = ITOS["gendername"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__GENDER].item(), ""
         )
+
+        # Static/Unused fields
         ivs = ""
         shiny = ""
         level = ""
-        happiness = ""
+        happiness = ""  # Default is usually 255
         pokeball = ""
+
         hiddenpowertype = ITOS["typechart"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE].item(), ""
         )
+
         gigantamax = ""
         dynamaxlevel = ""
+
         teratype = ITOS["typechart"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__TERATYPE].item(), ""
         )
 
-        reconstructed_set = f"|{species}|{item}|{ability}|{",".join(moves)}|{nature}|{",".join(evs)}|{gender}|{ivs}|{shiny}|{level}|{happiness},{pokeball},{hiddenpowertype},{gigantamax},{dynamaxlevel},{teratype}"
-        # if "_UNSPECIFIED" in reconstructed_set:
-        #     print(f"Invalid set with unspecified features: {reconstructed_set}")
+        # 4. Safer f-string formatting (using single quotes for joins)
+        reconstructed_set = (
+            f"|{species}|{item}|{ability}|{','.join(moves)}|{nature}|"
+            f"{','.join(evs)}|{gender}|{ivs}|{shiny}|{level}|"
+            f"{happiness},{pokeball},{hiddenpowertype},{gigantamax},{dynamaxlevel},{teratype}"
+        )
+
         reconstructed_sets.append(reconstructed_set)
-        print(reconstructed_set)
+
     return "]".join(reconstructed_sets)
 
 
-def main(debug: bool = False, generation: int = 9):
+def main(generation: int = 9):
     get_learner_config()
 
     actor_model_config = get_builder_model_config(generation, train=False)
@@ -519,7 +543,6 @@ def main(debug: bool = False, generation: int = 9):
         jax.tree.map(lambda x: x[:, 0], get_ex_builder_step())
     )
     key = jax.random.key(42)
-    rng_key, key = jax.random.split(key, 2)
 
     latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
@@ -549,16 +572,14 @@ def main(debug: bool = False, generation: int = 9):
 
         build_traj = []
 
-        with jax.disable_jit(debug):
-            builder_actor_input = builder_env.reset(builder_subkeys[0])
+        builder_actor_input = builder_env.reset(builder_subkeys[0])
 
         for builder_step_index in range(1, builder_subkeys.shape[0] + 2):
-            with jax.disable_jit(debug):
-                builder_agent_output = agent.step_builder(
-                    builder_subkeys[builder_step_index],
-                    builder_params,
-                    builder_actor_input,
-                )
+            builder_agent_output = agent.step_builder(
+                builder_subkeys[builder_step_index],
+                builder_params,
+                builder_actor_input,
+            )
             builder_transition = BuilderTransition(
                 env_output=builder_actor_input.env,
                 agent_output=builder_agent_output,
@@ -566,31 +587,40 @@ def main(debug: bool = False, generation: int = 9):
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            with jax.disable_jit(debug):
-                builder_actor_input = builder_env.step(builder_agent_output)
 
-            # print_packed_team_member_tokens(
-            #     builder_actor_input.history.packed_team_member_tokens
-            # )
+            builder_actor_input = builder_env.step(builder_agent_output)
+
+            # print(get_packed_team_string(team_tokens))
             # print(i)
 
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.array(jnp.stack(xs)), *build_traj
         )
 
+        team_tokens = builder_actor_input.history.packed_team_member_tokens.reshape(
+            -1, NUM_PACKED_SET_FEATURES
+        )
+        print("\n".join(get_packed_team_string(team_tokens).split("]")))
+
         assert np.all(
-            builder_actor_input.history.packed_team_member_tokens[
-                ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
-            ]
+            team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES]
             > SpeciesEnum.SPECIES_ENUM___UNK
         ).item()
 
-        print_packed_team_member_tokens(
-            builder_actor_input.history.packed_team_member_tokens
-        )
-        print(i)
+        assert np.all(
+            team_tokens[
+                ...,
+                PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+                + 1,
+            ].sum(axis=-1)
+            <= 128
+        ).item()
+
+        print(i, len(build_traj))
         i += 1
 
 
 if __name__ == "__main__":
-    main()
+    debug = False
+    with jax.disable_jit(debug):
+        main()
