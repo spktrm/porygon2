@@ -29,20 +29,20 @@ import {
 } from "../../protos/enums_pb";
 import {
     EnumMappings,
+    ITOS,
     MoveIndex,
     NUM_HISTORY,
     WILDCARDS,
     jsonDatum,
-    lookUpSetsList,
     numActionFeatures,
     numEntityEdgeFeatures,
     numFieldFeatures,
     numInfoFeatures,
     numMoveFeatures,
+    numPackedSetFeatures,
     numPrivateEntityNodeFeatures,
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
-    sets,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, BoostID } from "@pkmn/dex-types";
@@ -61,6 +61,7 @@ import {
     InfoFeature,
     MovesetFeature,
     MovesetHasPP,
+    PackedSetFeature,
     RequestType,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
@@ -251,85 +252,107 @@ export function getSampleTeam(format: string, include?: string): string {
     return teams[Math.floor(Math.random() * teams.length)];
 }
 
-export function generateTeamFromFormat(format: string): string {
-    const species2Sets = sets[format];
-    const validator = new TeamValidator(
-        format
-            .replace("_ou_all_formats", "ou")
-            .replace("_ou_only_format", "ou"),
-    );
-
-    while (true) {
-        const packedSets: Set<string> = new Set();
-        const species2Choose = Object.keys(species2Sets).filter(
-            (species) => species2Sets[species].length > 0,
-        );
-
-        while (packedSets.size < 6) {
-            const species =
-                species2Choose[
-                    Math.floor(Math.random() * species2Choose.length)
-                ];
-            species2Choose.splice(species2Choose.indexOf(species), 1);
-            const speciesSets = species2Sets[species];
-            const packedSet =
-                speciesSets[Math.floor(Math.random() * speciesSets.length)];
-
-            packedSets.add(packedSet);
-        }
-
-        const packedTeam = Array.from(packedSets).join("]");
-        const errors = validator.validateTeam(Teams.unpack(packedTeam));
-
-        if (errors === null) {
-            return packedTeam;
-        }
+export function randomSampleTeam(format: string): string {
+    const formatSampleTeams = sampleTeams[format];
+    if (!formatSampleTeams || formatSampleTeams.length === 0) {
+        throw new Error(`No sample teams found for format: ${format}`);
     }
+    return formatSampleTeams[
+        Math.floor(Math.random() * formatSampleTeams.length)
+    ];
 }
 
-export function generateTeamFromIndices(
-    smogonFormat: string,
-    speciesIndices?: number[],
-    packedSetIndices?: number[],
-): string | null {
-    if (
-        speciesIndices !== undefined &&
-        packedSetIndices !== undefined &&
-        !smogonFormat.endsWith("randombattle")
-    ) {
-        const packedSets = [];
-
-        const speciesKeys = Object.values(jsonDatum.species);
-
-        for (const [
-            memberIndex,
-            packedSetIndex,
-        ] of packedSetIndices.entries()) {
-            const species = speciesKeys[speciesIndices[memberIndex]];
-
-            const speciesPackedSets = lookUpSetsList(smogonFormat, species);
-            if (speciesPackedSets.length === 0) {
-                throw new Error(`No sets found for species: ${species}`);
-            }
-
-            const speciesPackedSet = speciesPackedSets[packedSetIndex];
-            if (!speciesPackedSet) {
-                throw new Error(
-                    `No packed set found for species: ${species} @ ${packedSetIndex}`,
-                );
-            }
-
-            packedSets.push(speciesPackedSet);
-        }
-
-        return packedSets.join("]");
-    } else if (smogonFormat.endsWith("randombattle")) {
-        return null;
-    } else {
-        throw new Error(
-            `Invalid format: ${smogonFormat}. Must end with 'randombattle' or provide indices.`,
-        );
+function capitalize(str: string): string {
+    if (str.length === 0) {
+        return str;
     }
+    return str[0].toUpperCase() + str.slice(1);
+}
+
+export function packedSetFromArraySlice(packedSetSlice: number[]): string {
+    const species =
+        ITOS.species[
+            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__SPECIES]
+        ];
+    const nickname = species;
+    const item =
+        ITOS.items[packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__ITEM]];
+    const ability =
+        ITOS.abilities[
+            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__ABILITY]
+        ];
+    const moves = [];
+    for (const moveIndex of [
+        PackedSetFeature.PACKED_SET_FEATURE__MOVE1,
+        PackedSetFeature.PACKED_SET_FEATURE__MOVE2,
+        PackedSetFeature.PACKED_SET_FEATURE__MOVE3,
+        PackedSetFeature.PACKED_SET_FEATURE__MOVE4,
+    ]) {
+        const moveId = packedSetSlice[moveIndex];
+        const moveName =
+            moveId < MovesEnum.MOVES_ENUM__10000000VOLTTHUNDERBOLT
+                ? ""
+                : ITOS.moves[moveId];
+        moves.push(moveName);
+    }
+    const nature =
+        ITOS.natures[
+            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__NATURE]
+        ];
+    const evs = [];
+    for (const evIndex of [
+        PackedSetFeature.PACKED_SET_FEATURE__HP_EV,
+        PackedSetFeature.PACKED_SET_FEATURE__ATK_EV,
+        PackedSetFeature.PACKED_SET_FEATURE__DEF_EV,
+        PackedSetFeature.PACKED_SET_FEATURE__SPA_EV,
+        PackedSetFeature.PACKED_SET_FEATURE__SPD_EV,
+        PackedSetFeature.PACKED_SET_FEATURE__SPE_EV,
+    ]) {
+        evs.push(packedSetSlice[evIndex] * 4);
+    }
+    const gender =
+        ITOS.genders[
+            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__GENDER]
+        ].toUpperCase();
+    const ivs = "";
+    const shiny = "";
+    const level = "";
+    const happiness = "";
+    const pokeball = "";
+
+    const hiddenPowerToken =
+        packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE];
+    const hiddenpowertype =
+        hiddenPowerToken == 0
+            ? ""
+            : capitalize(
+                  ITOS.typechart[
+                      packedSetSlice[
+                          PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+                      ]
+                  ],
+              );
+    const gigantamax = "";
+    const dynamaxlevel = "";
+    const teratype = capitalize(
+        ITOS.typechart[
+            packedSetSlice[PackedSetFeature.PACKED_SET_FEATURE__TERATYPE]
+        ],
+    );
+    return `${nickname}|${species}|${item}|${ability}|${moves.join(",")}|${nature}|${evs.join(",")}|${gender}|${ivs}|${shiny}|${level}|${happiness},${hiddenpowertype},${pokeball},${gigantamax},${dynamaxlevel},${teratype}`;
+}
+
+export function generateTeamFromArray(packedTeam: number[]): string | null {
+    const generatedSets: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+        const packedSetSlice = packedTeam.slice(
+            i * numPackedSetFeatures,
+            (i + 1) * numPackedSetFeatures,
+        );
+        const packedSet = packedSetFromArraySlice(packedSetSlice);
+        generatedSets.push(packedSet);
+    }
+    return generatedSets.join("]");
 }
 
 function int16ArrayToBitIndices(arr: Int16Array): number[] {
@@ -662,6 +685,19 @@ function SanitizeKey<T extends EnumMappings>(
     // Cache the sanitized key
     sanitizeKeyCache.set(rawKey, sanitizedKey);
     return sanitizedKey;
+}
+
+export function EnumFromIndexValue<T extends EnumMappings>(
+    enumDatum: T,
+    value: T[keyof T],
+): string {
+    for (const key in enumDatum) {
+        if (enumDatum[key] === value) {
+            const sanitizedKey = SanitizeKey(enumDatum, key);
+            return sanitizedKey.toString().split("__")[1];
+        }
+    }
+    throw new Error(`${value} not in mapping`);
 }
 
 export function IndexValueFromEnum<T extends EnumMappings>(

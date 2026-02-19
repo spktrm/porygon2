@@ -75,7 +75,7 @@ class Porygon2LearnerConfig:
 
     # Vtrace params
     gamma: float = 1.0
-    lambda_: float = 0.95
+    lambda_: float = 0.85
     clip_rho_threshold: float = 1.0
     clip_pg_rho_threshold: float = 1.0
     clip_ppo: float = 0.3
@@ -94,8 +94,9 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_kl_prior_loss_coef: float = 0.01
-    builder_entropy_loss_coef: float = 1.0
+    builder_kl_prior_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 0.1
+    normalising_constant: int = 200
 
     # Smogon Generation
     generation: GenT = 9

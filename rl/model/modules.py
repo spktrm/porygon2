@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional
 
 import flax.linen as nn
 import jax
@@ -33,12 +33,8 @@ class RMSNorm(nn.Module):
         return (normed_inputs * (1 + scale)).astype(self.dtype)
 
 
-def dense_layer(
-    *args,
-    kernel_init: jax.nn.initializers.Initializer = nn.initializers.lecun_normal(),
-    **kwargs,
-) -> nn.Dense:
-    return nn.Dense(kernel_init=kernel_init, *args, **kwargs)
+def dense_layer(*args, **kwargs) -> nn.Dense:
+    return nn.Dense(*args, **kwargs)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -461,33 +457,6 @@ class MLP(nn.Module):
                     dense_kwargs["kernel_init"] = self.final_kernel_init
             x = dense_layer(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
-
-
-class FiLMGenerator(nn.Module):
-    features: int
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> Tuple[jax.Array, jax.Array]:
-        # 1. Project to a hidden representation (optional but recommended)
-        # Using the same dimension 'features' is standard.
-        x = dense_layer(features=self.features, dtype=x.dtype)(x)
-        x = activation_fn(x)
-
-        # 2. Project to gamma (scale) and beta (shift)
-        # We output features * 2 so we can split them later
-        stats = dense_layer(
-            features=self.features * 2,
-            dtype=x.dtype,
-            # Initialize gamma part to 0 (so gamma+1=1) and beta part to 0
-            kernel_init=nn.initializers.zeros,
-            bias_init=nn.initializers.zeros,
-        )(x)
-
-        # 3. Split into gamma and beta
-        gamma, beta = jnp.split(stats, 2, axis=-1)
-
-        # Add 1 to gamma so it starts as identity multiplication
-        return 1.0 + gamma, beta
 
 
 class FFWMLP(nn.Module):

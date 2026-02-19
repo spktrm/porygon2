@@ -92,20 +92,28 @@ class PlayerTransition:
 @dataclass
 class BuilderEnvOutput:
     species_mask: ArrayLike = ()
+    item_mask: ArrayLike = ()
+    ability_mask: ArrayLike = ()
+    move_mask: ArrayLike = ()
+    ev_mask: ArrayLike = ()
+    teratype_mask: ArrayLike = ()
+    nature_mask: ArrayLike = ()
+    gender_mask: ArrayLike = ()
 
-    ts: ArrayLike = ()
     done: ArrayLike = ()
-
-    cum_teammate_reward: ArrayLike = ()
-    cum_species_reward: ArrayLike = ()
-
-    target_species_probs: ArrayLike = ()
+    ts: ArrayLike = ()
+    curr_order: ArrayLike = ()
+    curr_attribute: ArrayLike = ()
+    curr_position: ArrayLike = ()
+    validator_reward: ArrayLike = ()
 
 
 @dataclass
 class BuilderHistoryOutput:
-    species_tokens: ArrayLike = ()
-    packed_set_tokens: ArrayLike = ()
+    packed_team_member_tokens: ArrayLike = ()
+    order: ArrayLike = ()
+    member_position: ArrayLike = ()
+    member_attribute: ArrayLike = ()
 
 
 @dataclass
@@ -116,14 +124,13 @@ class BuilderActorInput:
 
 @dataclass
 class BuilderActorOutput:
+    action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
     conditional_entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
     value_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    species_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    packed_set_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
 
 
 @dataclass

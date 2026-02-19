@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from rl.model.heads import HeadParams
+
 load_dotenv()
 import secrets
 from typing import Literal

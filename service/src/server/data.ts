@@ -1,6 +1,7 @@
 import * as fs from "fs";
 
 import {
+    AbilitiesEnum,
     AbilitiesEnumMap,
     BattlemajorargsEnum,
     BattlemajorargsEnumMap,
@@ -11,16 +12,21 @@ import {
     ConditionEnumMap,
     EffectEnumMap,
     EffecttypesEnumMap,
+    GendernameEnum,
     GendernameEnumMap,
     ItemeffecttypesEnumMap,
+    ItemsEnum,
     ItemsEnumMap,
     LastitemeffecttypesEnumMap,
+    MovesEnum,
     MovesEnumMap,
+    NaturesEnum,
     NaturesEnumMap,
     PseudoweatherEnum,
     PseudoweatherEnumMap,
     SideconditionEnum,
     SideconditionEnumMap,
+    SpeciesEnum,
     SpeciesEnumMap,
     StatusEnumMap,
     TypechartEnum,
@@ -38,6 +44,7 @@ import {
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
+    PackedSetFeature,
 } from "../../protos/features_pb";
 import { ActionEnum } from "../../protos/service_pb";
 
@@ -62,6 +69,51 @@ export type EnumMappings =
     | EffectEnumMap
     | EffecttypesEnumMap
     | NaturesEnumMap;
+
+export const ITOS = {
+    species: Object.fromEntries(
+        Object.entries(SpeciesEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    items: Object.fromEntries(
+        Object.entries(ItemsEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    abilities: Object.fromEntries(
+        Object.entries(AbilitiesEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    moves: Object.fromEntries(
+        Object.entries(MovesEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    natures: Object.fromEntries(
+        Object.entries(NaturesEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    typechart: Object.fromEntries(
+        Object.entries(TypechartEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+    genders: Object.fromEntries(
+        Object.entries(GendernameEnum).map(([k, v]) => [
+            v,
+            k.split("__")[1].toLowerCase(),
+        ]),
+    ),
+};
 
 export type MoveIndex = 0 | 1 | 2 | 3;
 export type BenchIndex = MoveIndex | 4 | 5;
@@ -109,6 +161,7 @@ export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
+export const numPackedSetFeatures = Object.keys(PackedSetFeature).length;
 
 export const NUM_HISTORY = 512;
 
@@ -144,36 +197,3 @@ function transformJson(
 
 // Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
-
-export const sets: { [k: string]: Record<string, string[]> } = {};
-
-for (const i of [1, 9]) {
-    for (const smogonFormat of ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]) {
-        for (const suffix of ["all_formats", "only_format"] as const) {
-            try {
-                const data = fs.readFileSync(
-                    `../data/data/gen${i}/${smogonFormat}_${suffix}.json`,
-                    "utf-8",
-                );
-                sets[`gen${i}_${smogonFormat}_${suffix}`] = JSON.parse(data);
-            } catch (err) {
-                continue;
-            }
-        }
-    }
-}
-
-export function lookUpSetsList(
-    smogonFormat: string,
-    species: string,
-): string[] {
-    const maybeSets = sets[smogonFormat];
-    if (maybeSets === undefined) {
-        throw new Error(`No sets found for format: ${smogonFormat}`);
-    }
-    const speciesSets = maybeSets[species];
-    if (speciesSets === undefined) {
-        throw new Error(`No sets found for species: ${species}`);
-    }
-    return speciesSets;
-}
