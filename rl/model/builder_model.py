@@ -88,7 +88,7 @@ class Porygon2BuilderModel(nn.Module):
 
         self.sos_embedding = self.param(
             "sos_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
+            nn.initializers.truncated_normal(stddev=1.0),
             (1, entity_size),
         )
 

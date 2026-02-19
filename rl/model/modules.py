@@ -569,7 +569,7 @@ class SumEmbeddings(nn.Module):
         ) + self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
         )
-        return aggregated.astype(self.dtype)
+        return layer_norm(aggregated.astype(self.dtype))
 
 
 class VectorResblock(nn.Module):
