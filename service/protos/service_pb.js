@@ -879,7 +879,7 @@ proto.servicev2.StepRequest.prototype.setTeampreview = function(value) {
  * @private {!Array<number>}
  * @const
  */
-proto.servicev2.ResetRequest.repeatedFields_ = [2,3];
+proto.servicev2.ResetRequest.repeatedFields_ = [4];
 
 
 
@@ -913,10 +913,9 @@ proto.servicev2.ResetRequest.prototype.toObject = function(opt_includeInstance) 
 proto.servicev2.ResetRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
 username: jspb.Message.getFieldWithDefault(msg, 1, ""),
-speciesIndicesList: (f = jspb.Message.getRepeatedField(msg, 2)) == null ? undefined : f,
-packedSetIndicesList: (f = jspb.Message.getRepeatedField(msg, 3)) == null ? undefined : f,
-smogonFormat: jspb.Message.getFieldWithDefault(msg, 4, ""),
-gameId: jspb.Message.getFieldWithDefault(msg, 5, "")
+smogonFormat: jspb.Message.getFieldWithDefault(msg, 2, ""),
+gameId: jspb.Message.getFieldWithDefault(msg, 3, ""),
+packedTeamsList: (f = jspb.Message.getRepeatedField(msg, 4)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -958,24 +957,18 @@ proto.servicev2.ResetRequest.deserializeBinaryFromReader = function(msg, reader)
       msg.setUsername(value);
       break;
     case 2:
-      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
-      for (var i = 0; i < values.length; i++) {
-        msg.addSpeciesIndices(values[i]);
-      }
-      break;
-    case 3:
-      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
-      for (var i = 0; i < values.length; i++) {
-        msg.addPackedSetIndices(values[i]);
-      }
-      break;
-    case 4:
       var value = /** @type {string} */ (reader.readString());
       msg.setSmogonFormat(value);
       break;
-    case 5:
+    case 3:
       var value = /** @type {string} */ (reader.readString());
       msg.setGameId(value);
+      break;
+    case 4:
+      var values = /** @type {!Array<number>} */ (reader.isDelimited() ? reader.readPackedInt32() : [reader.readInt32()]);
+      for (var i = 0; i < values.length; i++) {
+        msg.addPackedTeams(values[i]);
+      }
       break;
     default:
       reader.skipField();
@@ -1013,31 +1006,24 @@ proto.servicev2.ResetRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
-  f = message.getSpeciesIndicesList();
-  if (f.length > 0) {
-    writer.writePackedInt32(
-      2,
-      f
-    );
-  }
-  f = message.getPackedSetIndicesList();
-  if (f.length > 0) {
-    writer.writePackedInt32(
-      3,
-      f
-    );
-  }
   f = message.getSmogonFormat();
   if (f.length > 0) {
     writer.writeString(
-      4,
+      2,
       f
     );
   }
   f = message.getGameId();
   if (f.length > 0) {
     writer.writeString(
-      5,
+      3,
+      f
+    );
+  }
+  f = message.getPackedTeamsList();
+  if (f.length > 0) {
+    writer.writePackedInt32(
+      4,
       f
     );
   }
@@ -1063,85 +1049,11 @@ proto.servicev2.ResetRequest.prototype.setUsername = function(value) {
 
 
 /**
- * repeated int32 species_indices = 2;
- * @return {!Array<number>}
- */
-proto.servicev2.ResetRequest.prototype.getSpeciesIndicesList = function() {
-  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 2));
-};
-
-
-/**
- * @param {!Array<number>} value
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.setSpeciesIndicesList = function(value) {
-  return jspb.Message.setField(this, 2, value || []);
-};
-
-
-/**
- * @param {number} value
- * @param {number=} opt_index
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.addSpeciesIndices = function(value, opt_index) {
-  return jspb.Message.addToRepeatedField(this, 2, value, opt_index);
-};
-
-
-/**
- * Clears the list making it empty but non-null.
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.clearSpeciesIndicesList = function() {
-  return this.setSpeciesIndicesList([]);
-};
-
-
-/**
- * repeated int32 packed_set_indices = 3;
- * @return {!Array<number>}
- */
-proto.servicev2.ResetRequest.prototype.getPackedSetIndicesList = function() {
-  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 3));
-};
-
-
-/**
- * @param {!Array<number>} value
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.setPackedSetIndicesList = function(value) {
-  return jspb.Message.setField(this, 3, value || []);
-};
-
-
-/**
- * @param {number} value
- * @param {number=} opt_index
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.addPackedSetIndices = function(value, opt_index) {
-  return jspb.Message.addToRepeatedField(this, 3, value, opt_index);
-};
-
-
-/**
- * Clears the list making it empty but non-null.
- * @return {!proto.servicev2.ResetRequest} returns this
- */
-proto.servicev2.ResetRequest.prototype.clearPackedSetIndicesList = function() {
-  return this.setPackedSetIndicesList([]);
-};
-
-
-/**
- * optional string smogon_format = 4;
+ * optional string smogon_format = 2;
  * @return {string}
  */
 proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
@@ -1150,16 +1062,16 @@ proto.servicev2.ResetRequest.prototype.getSmogonFormat = function() {
  * @return {!proto.servicev2.ResetRequest} returns this
  */
 proto.servicev2.ResetRequest.prototype.setSmogonFormat = function(value) {
-  return jspb.Message.setProto3StringField(this, 4, value);
+  return jspb.Message.setProto3StringField(this, 2, value);
 };
 
 
 /**
- * optional string game_id = 5;
+ * optional string game_id = 3;
  * @return {string}
  */
 proto.servicev2.ResetRequest.prototype.getGameId = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
 };
 
 
@@ -1168,7 +1080,44 @@ proto.servicev2.ResetRequest.prototype.getGameId = function() {
  * @return {!proto.servicev2.ResetRequest} returns this
  */
 proto.servicev2.ResetRequest.prototype.setGameId = function(value) {
-  return jspb.Message.setProto3StringField(this, 5, value);
+  return jspb.Message.setProto3StringField(this, 3, value);
+};
+
+
+/**
+ * repeated int32 packed_teams = 4;
+ * @return {!Array<number>}
+ */
+proto.servicev2.ResetRequest.prototype.getPackedTeamsList = function() {
+  return /** @type {!Array<number>} */ (jspb.Message.getRepeatedField(this, 4));
+};
+
+
+/**
+ * @param {!Array<number>} value
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.setPackedTeamsList = function(value) {
+  return jspb.Message.setField(this, 4, value || []);
+};
+
+
+/**
+ * @param {number} value
+ * @param {number=} opt_index
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.addPackedTeams = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 4, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.servicev2.ResetRequest} returns this
+ */
+proto.servicev2.ResetRequest.prototype.clearPackedTeamsList = function() {
+  return this.setPackedTeamsList([]);
 };
 
 

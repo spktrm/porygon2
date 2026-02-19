@@ -2,6 +2,7 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
+from rl.environment.data import NUM_PACKED_SET_FEATURES
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderTransition,
@@ -10,10 +11,17 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
+from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import Action
-from rl.environment.utils import clip_history, clip_packed_history, split_rng
+from rl.environment.utils import (
+    NUM_PACKED_SET_FEATURES,
+    clip_history,
+    clip_packed_history,
+    split_rng,
+)
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
+from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 
@@ -31,7 +39,7 @@ class Actor:
         self._agent = agent
         self._player_env = env
         self._builder_env = TeamBuilderEnvironment(
-            generation=env.generation, smogon_format="ou_all_formats"
+            generation=env.generation, smogon_format="ou"
         )
         self._unroll_length = unroll_length
         self._learner = learner
@@ -61,18 +69,18 @@ class Actor:
     ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
         builder_key, player_key = split_rng(rng_key, 2)
-        builder_unroll_length = self._builder_env._max_trajectory_length + 1
+        builder_unroll_length = self._builder_env.length
 
-        builder_subkeys = split_rng(builder_key, builder_unroll_length)
+        builder_subkeys = split_rng(builder_key, builder_unroll_length + 1)
         player_subkeys = split_rng(player_key, self._unroll_length)
 
         build_traj = []
 
         # Reset the builder environment.
-        builder_actor_input = self._builder_env.reset()
+        builder_actor_input = self._builder_env.reset(builder_subkeys[0])
 
         # Rollout the builder environment.
-        for builder_step_index in range(builder_subkeys.shape[0]):
+        for builder_step_index in range(1, builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
                 builder_params,
@@ -101,10 +109,13 @@ class Actor:
         player_traj = []
 
         # Reset the player environment.
-        player_actor_input = self._player_env.reset(
-            builder_actor_input.history.species_tokens.reshape(-1).tolist(),
-            builder_actor_input.history.packed_set_tokens.reshape(-1).tolist(),
-        )
+        team_tokens = builder_actor_input.history.packed_team_member_tokens
+        if np.any(team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0):
+            raise ValueError(
+                get_packed_team_string(team_tokens.reshape(-1, NUM_PACKED_SET_FEATURES))
+            )
+
+        player_actor_input = self._player_env.reset(team_tokens.reshape(-1).tolist())
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):

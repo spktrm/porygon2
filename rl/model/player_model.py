@@ -16,10 +16,15 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
-from rl.model.builder_model import RegressionValueLogitHead
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import HeadParams, PointerLogits, sample_categorical
+from rl.model.heads import (
+    HeadParams,
+    PointerLogits,
+    RegressionValueLogitHead,
+    sample_categorical,
+)
+from rl.model.modules import MLP
 from rl.model.utils import get_num_params, legal_log_policy, legal_policy
 
 
@@ -32,6 +37,8 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+
+        self.value_head_mlp = MLP()
         self.value_head = RegressionValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -72,6 +79,10 @@ class Porygon2PlayerModel(nn.Module):
             tgt_index=tgt_index,
         )
 
+    def _forward_value_head(self, x: jax.Array) -> jax.Array:
+        x = self.value_head_mlp(x)
+        return self.value_head(x)
+
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
@@ -92,7 +103,7 @@ class Porygon2PlayerModel(nn.Module):
             min_p=head_params.min_p,
         )
 
-        value_head = self.value_head(state_embedding)
+        value_head = self._forward_value_head(state_embedding)
 
         return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
@@ -106,14 +117,14 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        latent_state_embeddings, action_embeddings = self.encoder(
+        state_embedding, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            latent_state_embeddings,
+            state_embedding,
             action_embeddings,
             actor_input.env,
             actor_output,

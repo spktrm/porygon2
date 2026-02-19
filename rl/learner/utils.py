@@ -91,12 +91,6 @@ def collect_batch_telemetry_data(
         builder_trajectory_length_mean=builder_lengths.mean(),
         builder_trajectory_length_min=builder_lengths.min(),
         builder_trajectory_length_max=builder_lengths.max(),
-        builder_species_reward_sum=batch.builder_transitions.env_output.cum_species_reward[
-            -1
-        ].mean(),
-        builder_teammate_reward_sum=batch.builder_transitions.env_output.cum_teammate_reward[
-            -1
-        ].mean(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,

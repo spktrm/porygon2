@@ -1,21 +1,29 @@
 from typing import Sequence, TypeVar
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import rlax
 
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
+    NUM_ABILITIES,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
     NUM_ENTITY_PUBLIC_FEATURES,
     NUM_ENTITY_REVEALED_FEATURES,
     NUM_FIELD_FEATURES,
+    NUM_GENDERS,
     NUM_HISTORY,
+    NUM_ITEMS,
     NUM_MOVE_FEATURES,
+    NUM_MOVES,
+    NUM_NATURES,
+    NUM_PACKED_SET_FEATURES,
     NUM_SPECIES,
+    NUM_TYPECHART,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -28,6 +36,7 @@ from rl.environment.interfaces import (
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
     PolicyHeadOutput,
+    RegressionValueHeadOutput,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
@@ -232,32 +241,99 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
 
 
+@jax.jit(static_argnames=["r", "N"])
+def generate_order(key, r, N):
+    """
+    Generates a build order where Species (Index 1) is always selected first
+    for each team member, followed by a random permutation of the remaining attributes.
+
+    Args:
+        key: JAX random key
+        r: Number of team members (rows)
+        N: Number of features per member (NUM_PACKED_SET_FEATURES)
+    """
+    # 1. Define the specific index for Species (Enum Value 1)
+    SPECIES_IDX = 1
+
+    # 2. Identify "Other" attributes to shuffle (Indices 2 to N-1)
+    # We skip 0 (UNSPECIFIED) and 1 (SPECIES)
+    other_indices = jnp.arange(SPECIES_IDX + 1, N)
+
+    # 3. Define a function to generate the order for a single team member
+    def get_member_order(k):
+        # Shuffle only the non-species attributes
+        shuffled_others = jax.random.permutation(k, other_indices)
+        # Prepend Species index to the shuffled others
+        return jnp.concatenate([jnp.array([SPECIES_IDX]), shuffled_others])
+
+    # 4. Generate keys for each team member
+    keys = jax.random.split(key, r)
+
+    # 5. Apply logic to all members (r, N-1)
+    local_orders = jax.vmap(get_member_order)(keys)
+
+    # 6. Add offsets to convert local indices (0..N-1) to global flattened indices
+    # Shape (r, 1) broadcasted to (r, N-1)
+    offsets = (jnp.arange(r) * N)[:, None]
+    global_orders = local_orders + offsets
+
+    # 7. Flatten to match the expected 1D output shape
+    return global_orders.reshape(-1)
+
+
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
-    trajectory_length = 7
-    history_length = 6
+    trajectory_length = 6 * (NUM_PACKED_SET_FEATURES - 1)
+    6 * NUM_PACKED_SET_FEATURES
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
     done[-1] = True
     ts = np.arange(trajectory_length, dtype=np.int32)[:, None]
+
+    packed_team_member_tokens = np.zeros(
+        (6 * NUM_PACKED_SET_FEATURES, 1), dtype=np.int32
+    )
+
+    order = generate_order(jax.random.key(42), 6, NUM_PACKED_SET_FEATURES)[:, None]
+    member_position = order // NUM_PACKED_SET_FEATURES
+    member_attribute = order % NUM_PACKED_SET_FEATURES
+
     return (
         BuilderActorInput(
             env=BuilderEnvOutput(
                 species_mask=np.ones(
                     (trajectory_length, 1, NUM_SPECIES), dtype=np.bool
                 ),
+                item_mask=np.ones((trajectory_length, 1, NUM_ITEMS), dtype=np.bool),
+                ability_mask=np.ones(
+                    (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
+                ),
+                move_mask=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
+                ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                nature_mask=np.ones((trajectory_length, 1, NUM_NATURES), dtype=np.bool),
+                gender_mask=np.ones((trajectory_length, 1, NUM_GENDERS), dtype=np.bool),
+                teratype_mask=np.ones(
+                    (trajectory_length, 1, NUM_TYPECHART), dtype=np.bool
+                ),
                 ts=ts,
+                curr_order=order,
+                curr_attribute=member_attribute,
+                curr_position=member_position,
                 done=done,
             ),
             history=BuilderHistoryOutput(
-                species_tokens=np.zeros((history_length, 1), dtype=np.int32),
-                packed_set_tokens=np.zeros((history_length, 1), dtype=np.int32),
+                packed_team_member_tokens=packed_team_member_tokens,
+                order=order,
+                member_attribute=member_attribute,
+                member_position=member_position,
             ),
         ),
         BuilderActorOutput(
-            value_head=np.zeros_like(done, dtype=np.float32),
-            species_head=PolicyHeadOutput(
-                action_index=np.zeros_like(done, dtype=np.int32)
+            conditional_entropy_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(done, dtype=np.float32)
             ),
-            packed_set_head=PolicyHeadOutput(
+            value_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(done, dtype=np.float32)
+            ),
+            action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
         ),

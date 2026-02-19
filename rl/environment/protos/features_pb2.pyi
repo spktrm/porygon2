@@ -234,16 +234,8 @@ class PackedSetFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PACKED_SET_FEATURE__SPA_EV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__SPD_EV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__SPE_EV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__HP_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__ATK_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__DEF_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPA_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPD_IV: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__SPE_IV: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__HIDDENPOWERTYPE: _ClassVar[PackedSetFeature]
     PACKED_SET_FEATURE__TERATYPE: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__LEVEL: _ClassVar[PackedSetFeature]
-    PACKED_SET_FEATURE__HAPPINESS: _ClassVar[PackedSetFeature]
 ENTITY_PUBLIC_NODE_FEATURE___UNSPECIFIED: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__GENDER: EntityPublicNodeFeature
@@ -442,13 +434,5 @@ PACKED_SET_FEATURE__DEF_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPA_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPD_EV: PackedSetFeature
 PACKED_SET_FEATURE__SPE_EV: PackedSetFeature
-PACKED_SET_FEATURE__HP_IV: PackedSetFeature
-PACKED_SET_FEATURE__ATK_IV: PackedSetFeature
-PACKED_SET_FEATURE__DEF_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPA_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPD_IV: PackedSetFeature
-PACKED_SET_FEATURE__SPE_IV: PackedSetFeature
 PACKED_SET_FEATURE__HIDDENPOWERTYPE: PackedSetFeature
 PACKED_SET_FEATURE__TERATYPE: PackedSetFeature
-PACKED_SET_FEATURE__LEVEL: PackedSetFeature
-PACKED_SET_FEATURE__HAPPINESS: PackedSetFeature

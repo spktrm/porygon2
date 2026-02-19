@@ -1,15 +1,14 @@
 import functools
-import json
 
 import jax
 import jax.numpy as jnp
 from websockets.sync.client import connect
 
 from rl.environment.data import (
-    HUMAN_SPECIES_COUNTS,
-    HUMAN_TEAMMATE_COUNTS,
-    MASKS,
-    SET_MASK,
+    NUM_MOVES,
+    NUM_PACKED_SET_FEATURES,
+    NUM_SPECIES,
+    PackedSetFeature,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -17,7 +16,6 @@ from rl.environment.interfaces import (
     BuilderEnvOutput,
     BuilderHistoryOutput,
 )
-from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.service_pb2 import (
     Action,
     ClientRequest,
@@ -25,13 +23,13 @@ from rl.environment.protos.service_pb2 import (
     StepRequest,
     WorkerResponse,
 )
-from rl.environment.utils import get_ex_builder_step, process_state
+from rl.environment.utils import generate_order, process_state
 
 SERVER_URI = "ws://localhost:8080"
 
 
 class SinglePlayerSyncEnvironment:
-    def __init__(self, username: str, generation: int = 3):
+    def __init__(self, username: str, generation: int = 3, smogon_format: str = "ou"):
 
         self.username = username
         self.rqid = None
@@ -43,6 +41,7 @@ class SinglePlayerSyncEnvironment:
             additional_headers={"username": username},
         )
         self.generation = generation
+        self.smogon_format = smogon_format
         self.metgame_token = None
 
     def _set_game_id(self, game_id: str):
@@ -60,19 +59,14 @@ class SinglePlayerSyncEnvironment:
         self.last_state = process_state(environment_response.state)
         return self.last_state
 
-    def reset(
-        self,
-        species_indices: list[int],
-        packed_set_indices: list[int],
-    ):
+    def reset(self, packed_team: list[int]):
         self.rqid = None
         reset_message = ClientRequest(
             reset=ResetRequest(
                 username=self.username,
-                species_indices=species_indices,
-                packed_set_indices=packed_set_indices,
-                smogon_format=f"gen{self.generation}_ou_all_formats",
+                smogon_format=f"gen{self.generation}{self.smogon_format}",
                 game_id=self.game_id,
+                packed_teams=packed_team,
             )
         )
         self.websocket.send(reset_message.SerializeToString())
@@ -101,162 +95,353 @@ class TeamBuilderEnvironment:
         generation: int,
         smogon_format: str,
         num_team_members: int = 6,
-        max_trajectory_length: int = 6,
-        min_trajectory_length: int = 1,
     ):
-        if num_team_members < 1 or num_team_members > 6:
-            raise ValueError("num_team_members must be between 1 and 6")
-        if max_trajectory_length < min_trajectory_length:
-            raise ValueError(
-                "max_trajectory_length must be greater than or equal to min_trajectory_length"
-            )
-
         self._smogon_format = smogon_format
         self._generation = generation
         self._num_team_members = num_team_members
-        self._max_trajectory_length = max_trajectory_length
-        self._min_trajectory_length = min_trajectory_length
 
-        self.species_probs = jnp.asarray(
-            HUMAN_SPECIES_COUNTS[generation][smogon_format.replace("_all_formats", "")]
+        # Load Masks
+        teammate_mask = jnp.load(
+            f"data/data/gen{generation}/mask/teammates_mask_{smogon_format}.npy"
         )
-        self.teammate_probs = jnp.asarray(
-            HUMAN_TEAMMATE_COUNTS[generation][smogon_format.replace("_all_formats", "")]
+        self.item_masks = jnp.load(
+            f"data/data/gen{generation}/mask/items_mask_{smogon_format}.npy"
+        )
+        self.ability_masks = jnp.load(
+            f"data/data/gen{generation}/mask/abilities_mask_{smogon_format}.npy"
+        )
+        self.move_masks = jnp.load(
+            f"data/data/gen{generation}/mask/moves_mask_{smogon_format}.npy"
+        )
+        self.ev_masks = jnp.load(
+            f"data/data/gen{generation}/mask/ev_mask_{smogon_format}.npy"
+        )
+        self.nature_masks = jnp.load(
+            f"data/data/gen{generation}/mask/nature_mask_{smogon_format}.npy"
+        )
+        self.gender_masks = jnp.load(
+            f"data/data/gen{generation}/mask/gender_mask_{smogon_format}.npy"
+        )
+        self.teratype_masks = jnp.load(
+            f"data/data/gen{generation}/mask/teratypes_mask_{smogon_format}.npy"
         )
 
-        with open(f"data/data/gen{generation}/{smogon_format}.json", "r") as f:
-            packed_sets = json.load(f)
-        self.packed_set_mask = jnp.array(list(len(v) for v in packed_sets.values())) > 0
+        # Initial Masks
+        self.initial_species_mask = teammate_mask.any(axis=-1)
+        self.initial_item_mask = self.item_masks.any(axis=0)
+        self.initial_ability_mask = self.ability_masks.any(axis=0)
+        self.initial_move_mask = self.move_masks.any(axis=0)
+        self.initial_ev_mask = self.ev_masks.any(axis=0).any(axis=0)
+        self.initial_nature_mask = self.nature_masks.any(axis=0)
+        self.initial_gender_mask = self.gender_masks.any(axis=0)
+        self.initial_teratype_mask = self.teratype_masks.any(axis=0)
 
-        self.duplicate_masks = ~MASKS[generation]["duplicate"]
+        self.length = num_team_members * (NUM_PACKED_SET_FEATURES - 1)
 
-        self.start_mask = (
-            SET_MASK[generation][smogon_format].any(axis=-1) & self.packed_set_mask
-        )
-
-        self.ex = get_ex_builder_step()
-
-    def reset(self) -> BuilderActorInput:
-        self.state = self._reset()
+    def reset(self, key: jax.Array) -> BuilderActorInput:
+        self.state = self._reset(key)
         return self.state
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset(self, key: jax.Array) -> BuilderActorInput:
+        order = generate_order(key, self._num_team_members, NUM_PACKED_SET_FEATURES)
+        member_position = order // NUM_PACKED_SET_FEATURES
+        member_attribute = order % NUM_PACKED_SET_FEATURES
+
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=self.initial_species_mask,
+                item_mask=self.initial_item_mask,
+                ability_mask=self.initial_ability_mask,
+                move_mask=self.initial_move_mask,
+                ev_mask=self.initial_ev_mask,
+                teratype_mask=self.initial_teratype_mask,
+                nature_mask=self.initial_nature_mask,
+                gender_mask=self.initial_gender_mask,
+                ts=jnp.array(0, dtype=jnp.int32),
+                curr_order=order[0],
+                curr_attribute=member_attribute[0],
+                curr_position=member_position[0],
+                done=jnp.array(False, dtype=jnp.bool),
+            ),
+            history=BuilderHistoryOutput(
+                packed_team_member_tokens=jnp.zeros(
+                    (self._num_team_members * NUM_PACKED_SET_FEATURES,),
+                    dtype=jnp.int32,
+                ),
+                order=order,
+                member_position=member_position,
+                member_attribute=member_attribute,
+            ),
+        )
 
     def step(self, agent_output: BuilderAgentOutput) -> BuilderActorInput:
         if self.state.env.done.item():
             return self.state
+
         self.state = self._step(
-            species_token=agent_output.actor_output.species_head.action_index,
-            packed_set_token=agent_output.actor_output.packed_set_head.action_index,
+            action_index=agent_output.actor_output.action_head.action_index,
             state=self.state,
         )
         return self.state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self) -> BuilderActorInput:
-        species_mask = self.start_mask
-
-        species_tokens = (
-            jnp.ones((self._num_team_members,), dtype=jnp.int32)
-            * SpeciesEnum.SPECIES_ENUM___UNK
-        )
-        packed_set_tokens = jnp.zeros_like(species_tokens)
-
-        start_target = self.species_probs * species_mask
-        start_target = start_target / (start_target.sum() + 1e-8)
-
-        return BuilderActorInput(
-            env=BuilderEnvOutput(
-                species_mask=species_mask,
-                done=jnp.array(0, dtype=jnp.bool),
-                ts=jnp.array(0, dtype=jnp.int32),
-                cum_teammate_reward=jnp.array(0, dtype=jnp.float32),
-                cum_species_reward=jnp.array(0, dtype=jnp.float32),
-                target_species_probs=start_target,
-            ),
-            history=BuilderHistoryOutput(
-                species_tokens=species_tokens,
-                packed_set_tokens=packed_set_tokens,
-            ),
-        )
-
-    def _calculate_species_rewards(self, species_tokens: jax.Array):
-        return jnp.take(self.species_probs, species_tokens, axis=0).mean(
-            where=species_tokens != SpeciesEnum.SPECIES_ENUM___UNK
-        )
-
-    def _calculate_teammate_rewards(self, team_tokens: jax.Array):
-        pairwise_rewards = jnp.take(
-            jnp.take(self.teammate_probs, team_tokens, axis=0),
-            team_tokens,
-            axis=1,
-        )
-
-        not_unk_mask = team_tokens != SpeciesEnum.SPECIES_ENUM___UNK
-        mask = jnp.outer(not_unk_mask, not_unk_mask)
-        mask = jnp.clip(jnp.tril(mask), 0, 1) - jnp.eye(self._num_team_members)
-
-        mask_sum = mask.sum().clip(min=1)
-        teammate_reward = jnp.where(mask, pairwise_rewards, 0).sum() / mask_sum
-
-        return teammate_reward
-
-    @functools.partial(jax.jit, static_argnums=(0,))
     def _step(
-        self,
-        species_token: jax.Array,
-        packed_set_token: jax.Array,
-        state: BuilderActorInput,
-    ):
+        self, action_index: jax.Array, state: BuilderActorInput
+    ) -> BuilderActorInput:
+
+        # 1. Apply Agent Action
+        state = self._transition(state, action_index)
+
+        # 2. Initialize Autofill Loop Logic
+        #    Check if the state resulting from the agent's action forces a move
+        def _get_initial_autofill():
+            return self._get_autofill_state(state)
+
+        def _skip_initial():
+            return jnp.array(False), jnp.array(0, dtype=jnp.int32)
+
+        is_forced, forced_action = jax.lax.cond(
+            state.env.done, _skip_initial, _get_initial_autofill
+        )
+
+        init_val = (state, is_forced, forced_action)
+
+        def cond_fun(val):
+            state, is_forced, _ = val
+            return is_forced & (~state.env.done)
+
+        def body_fun(val):
+            curr_state, _, action_to_apply = val
+
+            # Transition with forced action
+            next_state = self._transition(curr_state, action_to_apply)
+
+            # Check if *next* state forces another move
+            def _calc_next_autofill():
+                return self._get_autofill_state(next_state)
+
+            def _return_no_op():
+                return jnp.array(False), jnp.array(0, dtype=jnp.int32)
+
+            next_is_forced, next_action = jax.lax.cond(
+                next_state.env.done, _return_no_op, _calc_next_autofill
+            )
+
+            return (next_state, next_is_forced, next_action)
+
+        final_val = jax.lax.while_loop(cond_fun, body_fun, init_val)
+
+        return final_val[0]
+
+    def _transition(
+        self, state: BuilderActorInput, action_index: jax.Array
+    ) -> BuilderActorInput:
         ts = state.env.ts
+        curr_order = state.env.curr_order
+        action_index = action_index.squeeze()
+
+        new_packed_team_member_tokens = state.history.packed_team_member_tokens.at[
+            curr_order
+        ].set(action_index)
+
         next_ts = ts + 1
+        total_steps = state.history.order.shape[0]
+        is_done = next_ts >= total_steps
 
-        traj_over = next_ts >= self._max_trajectory_length
-        done = state.env.done | traj_over
-
-        selection_oh = jax.nn.one_hot(
-            ts, num_classes=self._num_team_members, dtype=jnp.bool_
-        )
-        species_tokens = jnp.where(
-            selection_oh, species_token, state.history.species_tokens
-        )
-        species_mask = (
-            jnp.take(self.duplicate_masks, species_tokens, axis=0).all(axis=0)
-            & self.packed_set_mask
-        )
-        packed_set_tokens = jnp.where(
-            selection_oh, packed_set_token, state.history.packed_set_tokens
-        )
-
-        completed_count = (species_tokens != SpeciesEnum.SPECIES_ENUM___UNK).sum()
-        conditional = jnp.take(self.teammate_probs, species_tokens, axis=0)
-        teammate_conditionals = conditional.sum(axis=0) / completed_count.clip(min=1)
-
-        # So it favours teammates more as time goes on
-        alpha = (next_ts / (state.history.species_tokens.shape[0] - 1)).clip(0, 1) ** (
-            1 / 2
-        )
-        target_species_probs = (
-            1 - alpha
-        ) * self.species_probs + alpha * teammate_conditionals
-
-        target_species_probs = jnp.where(species_mask, target_species_probs, 0)
-        target_species_probs = target_species_probs / (
-            target_species_probs.sum() + 1e-8
-        )
-
-        return BuilderActorInput(
-            env=BuilderEnvOutput(
-                species_mask=species_mask,
-                done=done,
-                ts=next_ts,
-                # Prevent reward hacking by choosing common species
-                cum_teammate_reward=self._calculate_teammate_rewards(
-                    state.history.species_tokens
+        def _done_branch(_):
+            return state.replace(
+                env=state.env.replace(
+                    ts=next_ts,
+                    done=jnp.array(True, dtype=jnp.bool),
                 ),
-                cum_species_reward=self._calculate_species_rewards(species_tokens),
-                target_species_probs=target_species_probs,
-            ),
-            history=BuilderHistoryOutput(
-                species_tokens=species_tokens,
-                packed_set_tokens=packed_set_tokens,
-            ),
-        )
+                history=state.history.replace(
+                    packed_team_member_tokens=new_packed_team_member_tokens
+                ),
+            )
+
+        def _continue_branch(_):
+            next_order = state.history.order[next_ts]
+            next_position = state.history.member_position[next_ts]
+            next_attribute = state.history.member_attribute[next_ts]
+
+            packed_set_tokens = new_packed_team_member_tokens.reshape(
+                -1, NUM_PACKED_SET_FEATURES
+            )
+
+            # --- Member Context Selection ---
+            # [cite_start]Extract all current attributes for the member being edited [cite: 54, 55, 56]
+            current_member_tokens = packed_set_tokens[next_position]
+            m_species = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+            m_item = current_member_tokens[PackedSetFeature.PACKED_SET_FEATURE__ITEM]
+            m_ability = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__ABILITY
+            ]
+            m_moves = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__MOVE1 : PackedSetFeature.PACKED_SET_FEATURE__MOVE4
+                + 1
+            ]
+            m_evs = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+                + 1
+            ]
+            m_nature = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__NATURE
+            ]
+            m_gender = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__GENDER
+            ]
+            m_tera = current_member_tokens[
+                PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
+            ]
+
+            # --- Proactive Species Pool (Fix 2) ---
+            # [cite_start]A species is valid only if it satisfies EVERY attribute selected so far. [cite: 53]
+            # Attributes set to 0 (Unspecified) are ignored in the constraint.
+            species_pool = (
+                self.initial_species_mask
+                & (self.item_masks[:, m_item] | (m_item == 0))
+                & (self.ability_masks[:, m_ability] | (m_ability == 0))
+                & (self.move_masks[:, m_moves[0]] | (m_moves[0] == 0))
+                & (self.move_masks[:, m_moves[1]] | (m_moves[1] == 0))
+                & (self.move_masks[:, m_moves[2]] | (m_moves[2] == 0))
+                & (self.move_masks[:, m_moves[3]] | (m_moves[3] == 0))
+                & (self.nature_masks[:, m_nature] | (m_nature == 0))
+                & (self.gender_masks[:, m_gender] | (m_gender == 0))
+                & (self.teratype_masks[:, m_tera] | (m_tera == 0))
+            )
+
+            # Prevent picking duplicate species across the team (Species Clause)
+            # Find all species currently on the team excluding the current slot
+            other_species = packed_set_tokens[
+                :, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+            other_species_mask = jax.nn.one_hot(
+                other_species, NUM_SPECIES, dtype=jnp.bool_
+            ).any(axis=0)
+            other_species_mask = other_species_mask.at[m_species].set(
+                False
+            )  # Don't mask yourself
+
+            species_pool = species_pool & ~other_species_mask
+
+            # Finalize species mask for this step
+            next_species_mask = jnp.where(
+                (m_species == 0)[None],
+                species_pool,
+                jax.nn.one_hot(m_species, NUM_SPECIES, dtype=jnp.bool_),
+            )
+
+            # --- Derived Attribute Masks ---
+            next_item_mask = next_species_mask @ self.item_masks
+            next_ability_mask = next_species_mask @ self.ability_masks
+            next_teratype_mask = next_species_mask @ self.teratype_masks
+            next_nature_mask = next_species_mask @ self.nature_masks
+            next_gender_mask = next_species_mask @ self.gender_masks
+
+            # Vectorized Move Exclusion (Prevents selecting the same move twice)
+            already_selected_moves_mask = jax.nn.one_hot(
+                m_moves, NUM_MOVES, dtype=jnp.bool_
+            ).any(axis=0)
+            next_move_mask = (
+                next_species_mask @ self.move_masks
+            ) & ~already_selected_moves_mask
+
+            # --- Accurate EV Budget Logic (512 Total / 252 Stat) ---
+            ev_col = (next_attribute - PackedSetFeature.PACKED_SET_FEATURE__HP_EV).clip(
+                0, 5
+            )
+            is_ev_attr = (
+                next_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV
+            ) & (next_attribute <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
+
+            # 2. Budget Calculation
+            current_slot_val = m_evs[ev_col]
+            evs_sum_others = m_evs.sum() - current_slot_val
+
+            # Max total tokens = 127 (510 EVs / 4 = 127.5 -> 127 integer tokens)
+            evs_remaining_total = 127 - evs_sum_others
+
+            # 3. Mask Generation
+            valid_evs_flat = next_species_mask @ self.ev_masks.reshape(
+                self.ev_masks.shape[0], -1
+            )
+            species_allowed_evs = valid_evs_flat.reshape(6, 64)[ev_col]
+
+            # Max single stat tokens = 63 (252 EVs / 4 = 63)
+            # Upper bound is min(63, Remaining Total Budget)
+            stat_upper_bound = jnp.minimum(63, evs_remaining_total)
+            budget_mask = jnp.arange(64) <= stat_upper_bound
+
+            final_ev_mask = jnp.where(
+                is_ev_attr, species_allowed_evs & budget_mask, self.initial_ev_mask
+            )
+            final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
+
+            return state.replace(
+                env=state.env.replace(
+                    species_mask=next_species_mask,
+                    item_mask=next_item_mask,
+                    ability_mask=next_ability_mask,
+                    move_mask=next_move_mask,
+                    ev_mask=final_ev_mask,
+                    teratype_mask=next_teratype_mask,
+                    nature_mask=next_nature_mask,
+                    gender_mask=next_gender_mask,
+                    ts=next_ts,
+                    curr_order=next_order,
+                    curr_attribute=next_attribute,
+                    curr_position=next_position,
+                    done=jnp.array(False, dtype=jnp.bool),
+                ),
+                history=state.history.replace(
+                    packed_team_member_tokens=new_packed_team_member_tokens,
+                ),
+            )
+
+        return jax.lax.cond(is_done, _done_branch, _continue_branch, operand=None)
+
+    def _get_autofill_state(
+        self, state: BuilderActorInput
+    ) -> tuple[jax.Array, jax.Array]:
+        env = state.env
+        curr = env.curr_attribute
+
+        def check_mask(mask):
+            return (jnp.sum(mask) == 1), jnp.argmax(mask).astype(jnp.int32)
+
+        # Helper for ignored attributes: Always return (False, 0) so the agent (or 0) takes over
+        def ignore_attribute():
+            return jnp.array(False, dtype=jnp.bool), jnp.array(0, dtype=jnp.int32)
+
+        branches = [
+            lambda: check_mask(env.species_mask),  # 0
+            lambda: check_mask(env.item_mask),  # 1
+            lambda: check_mask(env.ability_mask),  # 2
+            lambda: check_mask(env.move_mask),  # 3
+            lambda: check_mask(env.nature_mask),  # 4
+            lambda: check_mask(env.gender_mask),  # 5
+            lambda: check_mask(env.ev_mask),  # 6
+            lambda: check_mask(env.teratype_mask),  # 7
+            ignore_attribute,  # 8: Fallback/Ignored
+        ]
+
+        predicates = [
+            curr == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__ITEM,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__ABILITY,
+            (curr >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1)
+            & (curr <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4),
+            curr == PackedSetFeature.PACKED_SET_FEATURE__NATURE,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__GENDER,
+            (curr >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
+            & (curr <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV),
+            curr == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE,
+        ]
+
+        # If no predicate matches, use index 8 (ignore_attribute)
+        branch_idx = jnp.select(predicates, jnp.arange(8), default=8)
+
+        return jax.lax.switch(branch_idx, branches)

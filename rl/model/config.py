@@ -25,9 +25,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     base_size = 96
     num_heads = 4
-    scale = 1
+    width_scale = 1
 
-    entity_size = int(scale * base_size * num_heads)
+    entity_size = int(width_scale * base_size * num_heads)
 
     cfg.generation = generation
     cfg.entity_size = entity_size
@@ -93,17 +93,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     )
 
     cfg.encoder.timestep_encoder = ConfigDict()
-    cfg.encoder.timestep_encoder.need_pos = True
-
     cfg.encoder.input_decoder = ConfigDict()
-    cfg.encoder.input_decoder.need_pos = True
-
     cfg.encoder.state_encoder = ConfigDict()
-    cfg.encoder.state_encoder.num_layers = 8
-    cfg.encoder.state_encoder.need_pos = False
-
     cfg.encoder.output_decoder = ConfigDict()
-    cfg.encoder.output_decoder.need_pos = False
 
     for encoder in [
         cfg.encoder.timestep_encoder,
@@ -117,24 +109,24 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
+    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.input_decoder.need_pos = False
+    cfg.encoder.state_encoder.num_layers = 4
+    cfg.encoder.state_encoder.need_pos = False
+    cfg.encoder.output_decoder.need_pos = False
+
     # Policy Head Configuration
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
 
     for head, output_size in [(cfg.value_head, 1)]:
         head.logits = ConfigDict()
-        head.logits.layer_sizes = output_size
-        head.logits.use_layer_norm = False
-        head.logits.input_activation = False
+        head.logits.features = output_size
 
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
     cfg.action_head.qk_logits.qk_layer_norm = False
-
-    # for head in [cfg.value_head, cfg.wildcard_head]:
-    #     head.resnet = ConfigDict()
-    #     head.resnet.num_resblocks = 1
 
     for head in [cfg.action_head, cfg.wildcard_head]:
         head.train = train
@@ -155,7 +147,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
 
-    num_layers = 3
+    num_layers = 4
     num_heads = num_heads
     hidden_size_scale = 4
     hidden_size = int(hidden_size_scale * entity_size)
@@ -181,21 +173,38 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.encoder = ConfigDict()
     set_attributes(cfg.encoder, **transformer_kwargs)
+
     if generation < 4:
         cfg.encoder.need_pos = True
 
-    for name in ["species_head", "packed_set_head", "value_head"]:
+    for name in [
+        "value_head",
+        "species_head",
+        "item_head",
+        "ability_head",
+        "move_head",
+        "ev_head",
+        "nature_head",
+        "gender_head",
+        "hiddenpower_head",
+        "teratype_head",
+    ]:
         head_cfg = ConfigDict()
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.use_layer_norm = False
-    cfg.value_head.logits.input_activation = False
-    cfg.value_head.logits.layer_sizes = 1
+    cfg.value_head.logits.features = 1
 
     for head in [
         cfg.species_head,
-        cfg.packed_set_head,
+        cfg.item_head,
+        cfg.ability_head,
+        cfg.move_head,
+        cfg.ev_head,
+        cfg.nature_head,
+        cfg.gender_head,
+        cfg.hiddenpower_head,
+        cfg.teratype_head,
     ]:
         head.qk_logits = ConfigDict()
         # head.qk_logits.qk_layer_norm = True
