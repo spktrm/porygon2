@@ -243,12 +243,42 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
 
 @jax.jit(static_argnames=["r", "N"])
 def generate_order(key, r, N):
-    total_size = r * N
+    """
+    Generates a build order where Species (Index 1) is always selected first
+    for each team member, followed by a random permutation of the remaining attributes.
 
-    x = jnp.arange(total_size).reshape(r, N)[..., 1:].reshape(-1)
-    selection_order = jax.random.permutation(key, x)
+    Args:
+        key: JAX random key
+        r: Number of team members (rows)
+        N: Number of features per member (NUM_PACKED_SET_FEATURES)
+    """
+    # 1. Define the specific index for Species (Enum Value 1)
+    SPECIES_IDX = 1
 
-    return selection_order.reshape(-1)
+    # 2. Identify "Other" attributes to shuffle (Indices 2 to N-1)
+    # We skip 0 (UNSPECIFIED) and 1 (SPECIES)
+    other_indices = jnp.arange(SPECIES_IDX + 1, N)
+
+    # 3. Define a function to generate the order for a single team member
+    def get_member_order(k):
+        # Shuffle only the non-species attributes
+        shuffled_others = jax.random.permutation(k, other_indices)
+        # Prepend Species index to the shuffled others
+        return jnp.concatenate([jnp.array([SPECIES_IDX]), shuffled_others])
+
+    # 4. Generate keys for each team member
+    keys = jax.random.split(key, r)
+
+    # 5. Apply logic to all members (r, N-1)
+    local_orders = jax.vmap(get_member_order)(keys)
+
+    # 6. Add offsets to convert local indices (0..N-1) to global flattened indices
+    # Shape (r, 1) broadcasted to (r, N-1)
+    offsets = (jnp.arange(r) * N)[:, None]
+    global_orders = local_orders + offsets
+
+    # 7. Flatten to match the expected 1D output shape
+    return global_orders.reshape(-1)
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:

@@ -2,6 +2,7 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
+from rl.environment.data import NUM_PACKED_SET_FEATURES
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderTransition,
@@ -10,10 +11,17 @@ from rl.environment.interfaces import (
     PlayerTransition,
     Trajectory,
 )
+from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import Action
-from rl.environment.utils import clip_history, clip_packed_history, split_rng
+from rl.environment.utils import (
+    NUM_PACKED_SET_FEATURES,
+    clip_history,
+    clip_packed_history,
+    split_rng,
+)
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
+from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 
@@ -101,9 +109,13 @@ class Actor:
         player_traj = []
 
         # Reset the player environment.
-        player_actor_input = self._player_env.reset(
-            builder_actor_input.history.packed_team_member_tokens.reshape(-1).tolist()
-        )
+        team_tokens = builder_actor_input.history.packed_team_member_tokens
+        if np.any(team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0):
+            raise ValueError(
+                get_packed_team_string(team_tokens.reshape(-1, NUM_PACKED_SET_FEATURES))
+            )
+
+        player_actor_input = self._player_env.reset(team_tokens.reshape(-1).tolist())
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
