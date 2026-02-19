@@ -72,8 +72,8 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 @dataclass
 class PlayerActorOutput:
-    value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
+    value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
@@ -128,8 +128,8 @@ class BuilderActorOutput:
     conditional_entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
+    value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
     )
 
 

@@ -73,17 +73,10 @@ class Porygon2LearnerConfig:
     player_ema_decay: float = 1e-3
     builder_ema_decay: float = 1e-3
 
-    # Vtrace params
-    gamma: float = 1.0
-    lambda_: float = 0.85
-    clip_rho_threshold: float = 1.0
-    clip_pg_rho_threshold: float = 1.0
+    # Advantage estimation params
+    td_lambda: float = 0.85
+    gae_lambda: float = 0.85
     clip_ppo: float = 0.3
-
-    # Shaped Reward params
-    shaped_reward_scale: float = 1.0
-    shaped_reward_fainted_scale: float = 0.1
-    shaped_reward_hp_scale: float = 0.01
 
     # Loss coefficients
     player_value_loss_coef: float = 1.0

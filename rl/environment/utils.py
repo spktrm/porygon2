@@ -3,7 +3,6 @@ from typing import Sequence, TypeVar
 import jax
 import jax.numpy as jnp
 import numpy as np
-import rlax
 
 from rl.environment.data import (
     EX_TRAJECTORY,
@@ -45,6 +44,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.model.heads import CategoricalValueHeadOutput
 
 T = TypeVar("T")
 
@@ -108,6 +108,25 @@ def clip_packed_history(
     )
 
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
+
+
+def segmented_discounted_cumsum(x, discount):
+    """
+    Computes a reverse discounted cumulative sum.
+    y[t] = x[t] + discount[t] * y[t+1]
+    """
+
+    def scan_fn(carry, inputs):
+        x_t, d_t = inputs
+        # The recurrence relation: current_value = x_t + discount * next_value
+        y_t = x_t + d_t * carry
+        return y_t, y_t
+
+    # We scan from right to left (reverse=True)
+    # carry starts at 0.0 because y[last+1] doesn't exist.
+    _, y = jax.lax.scan(scan_fn, jnp.zeros_like(x[0]), (x, discount), reverse=True)
+
+    return y
 
 
 def get_action_mask(state: EnvironmentState):
@@ -179,7 +198,9 @@ def process_state(
 
     win_reward_token = info[InfoFeature.INFO_FEATURE__WIN_REWARD]
     # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
-    win_reward = win_reward_token / MAX_RATIO_TOKEN
+    win_reward = jax.nn.one_hot(
+        (win_reward_token / MAX_RATIO_TOKEN).astype(jnp.int32) + 1, 3
+    )
 
     fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
     # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
@@ -231,7 +252,11 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     return (
         PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
-            value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
+            value_head=CategoricalValueHeadOutput(
+                logits=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
+                log_probs=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
+                expectation=np.zeros((env.done.shape[0], 1), dtype=np.float32),
+            ),
             action_head=PolicyHeadOutput(
                 action_index=env.action_mask.reshape(
                     env.action_mask.shape[:-2] + (-1,)
@@ -330,8 +355,10 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             conditional_entropy_head=RegressionValueHeadOutput(
                 logits=np.zeros_like(done, dtype=np.float32)
             ),
-            value_head=RegressionValueHeadOutput(
-                logits=np.zeros_like(done, dtype=np.float32)
+            value_head=CategoricalValueHeadOutput(
+                logits=np.zeros((done.shape[0], 1, 3), dtype=np.float32),
+                log_probs=np.zeros((done.shape[0], 1, 3), dtype=np.float32),
+                expectation=np.zeros((done.shape[0], 1), dtype=np.float32),
             ),
             action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
@@ -345,26 +372,58 @@ def main():
     ex_player_input, ex_player_output = get_ex_player_step()
     ex_builder_input, ex_builder_output = get_ex_builder_step()
 
-    rewards_tm1 = ex_player_input.env.win_reward.squeeze(-1)
-    valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
-
-    rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
-
-    oracle_value = rewards[::-1].cumsum()[::-1]
-    perturbed_oracle_value = oracle_value + np.random.normal(
-        scale=0.5, size=oracle_value.shape
+    valid = jnp.concatenate(
+        (
+            np.ones_like(ex_builder_input.env.done),
+            np.bitwise_not(ex_player_input.env.done),
+        )
     )
 
-    v_tm1 = valid * perturbed_oracle_value
-    v_t = np.concatenate((v_tm1[1:], v_tm1[-1:]))
-    discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
-        v_t.dtype
+    value_probs = jnp.exp(
+        jnp.concatenate(
+            (
+                ex_builder_output.value_head.log_probs,
+                ex_player_output.value_head.log_probs,
+            ),
+            axis=0,
+        )
+    )
+    value_probs = value_probs / value_probs.sum(axis=-1, keepdims=True)
+    value_expectation = value_probs @ (
+        jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
     )
 
-    vtrace = rlax.vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, valid, lambda_=0.95
+    scalar_reward = jnp.concatenate(
+        (
+            jnp.zeros_like(ex_builder_output.value_head.log_probs),
+            ex_player_input.env.win_reward,
+        )
     )
-    v_tm1 + vtrace.errors
+    rewards = scalar_reward * ~valid[..., None]
+    value_target = (
+        rewards
+        + jnp.concatenate((jnp.zeros_like(value_probs[0:1]), value_probs[1:]))
+        * valid[..., None]
+    )
+    scalar_value_target = scalar_reward @ (
+        jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
+    )
+
+    cat_value_delta = value_target - value_probs
+    scalar_value_delta = value_expectation - scalar_value_target
+
+    td_lambdas = 0.5 * valid.astype(cat_value_delta.dtype)[..., None]
+    gae_lambdas = 0.99 * valid.astype(cat_value_delta.dtype)
+
+    returns = (
+        jax.vmap(segmented_discounted_cumsum, in_axes=(1, 1))(
+            cat_value_delta, td_lambdas
+        )
+        + value_probs
+    )
+    advantages = jax.vmap(segmented_discounted_cumsum, in_axes=(1, 1))(
+        scalar_value_delta, gae_lambdas
+    )
     print()
 
 

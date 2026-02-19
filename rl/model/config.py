@@ -1,6 +1,7 @@
 import pprint
 
 import jax.numpy as jnp
+import numpy as np
 from ml_collections import ConfigDict
 
 
@@ -119,9 +120,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.wildcard_head = ConfigDict()
     cfg.value_head = ConfigDict()
 
-    for head, output_size in [(cfg.value_head, 1)]:
-        head.logits = ConfigDict()
-        head.logits.features = output_size
+    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits.features = 3
+    cfg.value_head.logits.category_values = np.array([-1.0, 0.0, 1.0], dtype=cfg.dtype)
 
     cfg.train = train
     cfg.action_head = ConfigDict()
@@ -193,7 +194,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 1
+    cfg.value_head.logits.features = 3
+    cfg.value_head.logits.category_values = np.array([-1.0, 0.0, 1.0], dtype=cfg.dtype)
 
     for head in [
         cfg.species_head,
