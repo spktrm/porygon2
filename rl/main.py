@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 
 load_dotenv()
+import argparse
 import concurrent.futures
 import json
 import threading
@@ -104,8 +105,9 @@ def run_eval_heuristic(
         time.sleep(5)
 
 
-def main():
+def main(args: argparse.Namespace):
     """Main function to run the RL learner."""
+    debug = args.debug
 
     learner_config = get_learner_config()
     pprint(learner_config)
@@ -178,6 +180,7 @@ def main():
         league=league,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
+        debug=debug,
     )
 
     with concurrent.futures.ThreadPoolExecutor(
@@ -239,4 +242,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run the RL learner.")
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable debug mode", default=False
+    )
+    args = parser.parse_args()
+    main(args)

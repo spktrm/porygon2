@@ -197,15 +197,10 @@ def train_step(
             axis=0,
         )
     )
-    value_expectation = jnp.concatenate(
-        (builder_actor_value_head.expectation, player_actor_value_head.expectation),
-        axis=0,
-    )
-
     cat_reward = jnp.concatenate(
         (
             jnp.zeros_like(builder_actor_value_head.log_probs),
-            player_transitions.env_output.win_reward,
+            player_transitions.env_output.win_reward.astype(value_probs.dtype),
         )
     )
     value_target = (
@@ -213,10 +208,9 @@ def train_step(
         + jnp.concatenate((value_probs[1:], value_probs[-1:])) * valid[..., None]
     )
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=value_probs.dtype)
-    scalar_value_target = cat_reward @ cat_vf_support
 
     cat_value_delta = value_target - value_probs
-    scalar_value_delta = value_expectation - scalar_value_target
+    scalar_value_delta = cat_value_delta @ cat_vf_support
 
     td_lambdas = config.td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
     gae_lambdas = config.gae_lambda * valid.astype(cat_value_delta.dtype)
@@ -240,8 +234,6 @@ def train_step(
 
     scale = 1  # config.batch_size / 1536
     entropy_decay = 1  # / (((player_state.step_count + 1) * scale) ** 0.3)
-
-    cat_values = jnp.array([-1, 0, 1], dtype=player_uniform_log_prob.dtype)
 
     def player_loss_fn(params: Params):
 
@@ -328,7 +320,7 @@ def train_step(
             # Extra stats
             player_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
-                value_target=player_returns @ cat_values,
+                value_target=player_returns @ cat_vf_support,
                 mask=player_valid,
             ),
         )
@@ -377,7 +369,7 @@ def train_step(
             jnp.ones_like(builder_valid),
         )
 
-        species_entropy = average(learner_action_head.entropy, builder_valid)
+        builder_entropy = average(learner_action_head.entropy, builder_valid)
 
         # Estimator for entropy
         loss_entropy = mse_value_loss(
@@ -410,7 +402,7 @@ def train_step(
             builder_loss_kl_rl=loss_kl_rl,
             builder_loss_entropy=loss_entropy,
             # Head entropies
-            builder_species_entropy=species_entropy,
+            builder_entropy=builder_entropy,
             # Ratios
             builder_ratio_clip_fraction=clip_fraction(
                 policy_ratios=ratio, valid=builder_valid, clip_ppo=config.clip_ppo
@@ -421,7 +413,7 @@ def train_step(
             # Extra stats
             builder_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
-                value_target=builder_returns @ cat_values,
+                value_target=builder_returns @ cat_vf_support,
                 mask=builder_valid,
             ),
         )
@@ -450,7 +442,7 @@ def train_step(
         dict(
             builder_loss=builder_loss_val,
             builder_inital_entropy=jnp.mean(actor_builder_conditional_entropy[0])
-            * config.normalising_constant,
+            / config.normalising_constant,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_norm_adv_mean=average(builder_advantages, builder_valid),
@@ -534,6 +526,7 @@ class Learner:
         wandb_run: wandb.wandb_run.Run,
         league: League,
         gpu_lock: LockType | None = None,
+        debug: bool = False,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -562,8 +555,10 @@ class Learner:
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
         # JIT Compile
-        self._train_step_jit = jax.jit(train_step, static_argnames=["config"])
-        # self._train_step_jit = train_step
+        if debug:
+            self._train_step_jit = train_step
+        else:
+            self._train_step_jit = jax.jit(train_step, static_argnames=["config"])
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
