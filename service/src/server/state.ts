@@ -63,6 +63,7 @@ import {
     MovesetHasPP,
     PackedSetFeature,
     RequestType,
+    RewardFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
@@ -3838,7 +3839,7 @@ export class StateHandler {
         if (this.player.done) {
             if (this.player.finishedEarly) {
                 // Incentivize finishing the battle
-                return -MAX_RATIO_TOKEN;
+                return RewardFeature.REWARD_FEATURE__LOSS;
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";
@@ -3846,14 +3847,14 @@ export class StateHandler {
                 const [_, cmd, winner] = line.split("|");
                 if (cmd === "win") {
                     return this.player.userName === winner
-                        ? MAX_RATIO_TOKEN
-                        : -MAX_RATIO_TOKEN;
+                        ? RewardFeature.REWARD_FEATURE__WIN
+                        : RewardFeature.REWARD_FEATURE__LOSS;
                 } else if (cmd === "tie") {
-                    return 0;
+                    return RewardFeature.REWARD_FEATURE__TIE;
                 }
             }
         }
-        return 0;
+        return RewardFeature.REWARD_FEATURE___UNSPECIFIED;
     }
 
     getFibReward() {
@@ -3880,7 +3881,14 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_COUNT] =
             this.player.requestCount;
 
-        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = this.getWinReward();
+        const winReward = this.getWinReward();
+        if (winReward === RewardFeature.REWARD_FEATURE__WIN) {
+            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
+        } else if (winReward === RewardFeature.REWARD_FEATURE__LOSS) {
+            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
+        } else if (winReward === RewardFeature.REWARD_FEATURE__TIE) {
+            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
+        }
         infoBuffer[InfoFeature.INFO_FEATURE__FIB_REWARD] = this.getFibReward();
 
         const getHpRatio = (member: Pokemon) => {

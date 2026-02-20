@@ -110,23 +110,21 @@ def clip_packed_history(
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 
-def segmented_discounted_cumsum(x, discount):
+def jax_segmented_cumsum(x: jnp.ndarray, discount: jnp.ndarray) -> jnp.ndarray:
     """
-    Computes a reverse discounted cumulative sum.
-    y[t] = x[t] + discount[t] * y[t+1]
+    Parallel implementation of your @torch.jit.script loop.
+    Replaces O(T) sequential loop with O(log T) associative scan.
     """
 
-    def scan_fn(carry, inputs):
-        x_t, d_t = inputs
-        # The recurrence relation: current_value = x_t + discount * next_value
-        y_t = x_t + d_t * carry
-        return y_t, y_t
+    def binary_op(right, left):
+        # The scan operator for: y[t] = x[t] + discount[t] * y[t+1]
+        val_l, disc_l = left
+        val_r, disc_r = right
+        return val_l + disc_l * val_r, disc_l * disc_r
 
-    # We scan from right to left (reverse=True)
-    # carry starts at 0.0 because y[last+1] doesn't exist.
-    _, y = jax.lax.scan(scan_fn, jnp.zeros_like(x[0]), (x, discount), reverse=True)
-
-    return y
+    # Flip to treat the 'future' as the prefix for the scan
+    vals, _ = jax.lax.associative_scan(binary_op, (x[::-1], discount[::-1]))
+    return vals[::-1]
 
 
 def get_action_mask(state: EnvironmentState):
@@ -196,10 +194,15 @@ def process_state(
         .astype(np.int32)
     )
 
-    win_reward_token = info[InfoFeature.INFO_FEATURE__WIN_REWARD]
-    # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
-    win_reward = jax.nn.one_hot(
-        (win_reward_token / MAX_RATIO_TOKEN).astype(jnp.int32) + 1, 3
+    is_done = info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_)
+
+    # Rewards are stored as int16 in the info array, so we need to convert them back to float32
+    win_reward = np.array(
+        [
+            info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
+            info[InfoFeature.INFO_FEATURE__TIE_REWARD],
+            info[InfoFeature.INFO_FEATURE__WIN_REWARD],
+        ]
     )
 
     fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
@@ -208,7 +211,7 @@ def process_state(
 
     env_step = PlayerEnvOutput(
         info=info,
-        done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
+        done=is_done,
         win_reward=win_reward.astype(np.float32),
         fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
@@ -393,38 +396,34 @@ def main():
         jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
     )
 
-    scalar_reward = jnp.concatenate(
+    cat_reward = jnp.concatenate(
         (
             jnp.zeros_like(ex_builder_output.value_head.log_probs),
             ex_player_input.env.win_reward,
         )
     )
-    rewards = scalar_reward * ~valid[..., None]
     value_target = (
-        rewards
-        + jnp.concatenate((jnp.zeros_like(value_probs[0:1]), value_probs[1:]))
+        cat_reward
+        + jnp.concatenate((value_probs[1:], jnp.zeros_like(value_probs[0:1])))
         * valid[..., None]
     )
-    scalar_value_target = scalar_reward @ (
+    scalar_value_target = cat_reward @ (
         jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
     )
 
     cat_value_delta = value_target - value_probs
     scalar_value_delta = value_expectation - scalar_value_target
 
-    td_lambdas = 0.5 * valid.astype(cat_value_delta.dtype)[..., None]
-    gae_lambdas = 0.99 * valid.astype(cat_value_delta.dtype)
+    td_lambda = 0.8
+    gae_lambda = 0.5
 
-    returns = (
-        jax.vmap(segmented_discounted_cumsum, in_axes=(1, 1))(
-            cat_value_delta, td_lambdas
-        )
-        + value_probs
-    )
-    advantages = jax.vmap(segmented_discounted_cumsum, in_axes=(1, 1))(
-        scalar_value_delta, gae_lambdas
-    )
-    print()
+    td_lambdas = td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
+    gae_lambdas = gae_lambda * valid.astype(cat_value_delta.dtype)
+
+    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
+    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
+    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
+    print(returns, advantages)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 import logging
-import math
 import queue
 import threading
 import traceback
@@ -15,13 +14,9 @@ from loguru import logger
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import STOI
+from rl.environment.data import CAT_VF_SUPPORT, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
-from rl.environment.utils import (
-    clip_history,
-    clip_packed_history,
-    segmented_discounted_cumsum,
-)
+from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
 from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -150,18 +145,6 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
-def clip_log_ratio(log_ratio: jax.Array, eps: float = 0.2):
-    return jnp.clip(log_ratio, a_min=math.log1p(-eps), a_max=math.log1p(eps))
-
-
-def shift_left_with_zeros(tensor: jax.Array):
-    return jnp.concatenate((tensor[1:], jnp.zeros_like(tensor[-1:])), axis=0)
-
-
-def shift_right_with_zeros(tensor: jax.Array):
-    return jnp.concatenate((jnp.zeros_like(tensor[:1]), tensor[:-1]), axis=0)
-
-
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -203,6 +186,11 @@ def train_step(
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
     valid = jnp.concatenate((jnp.ones_like(builder_valid), player_valid), axis=0)
 
+    actor_builder_entropy = -jnp.where(builder_valid, builder_actor_log_prob, 0)
+    actor_builder_conditional_entropy = jnp.flip(
+        jnp.cumsum(jnp.flip(actor_builder_entropy, axis=0), axis=0), axis=0
+    )
+
     value_probs = jnp.exp(
         jnp.concatenate(
             (builder_actor_value_head.log_probs, player_actor_value_head.log_probs),
@@ -214,19 +202,18 @@ def train_step(
         axis=0,
     )
 
-    actor_builder_entropy = -jnp.where(builder_valid, builder_actor_log_prob, 0)
-    actor_builder_conditional_entropy = jnp.flip(
-        jnp.cumsum(jnp.flip(actor_builder_entropy, axis=0), axis=0), axis=0
-    )
-
-    value_target = jnp.concatenate(
+    cat_reward = jnp.concatenate(
         (
-            jnp.zeros_like(builder_actor_value_head.logits),
+            jnp.zeros_like(builder_actor_value_head.log_probs),
             player_transitions.env_output.win_reward,
-        ),
-        axis=0,
+        )
     )
-    scalar_value_target = value_target.argmax(-1) - 1
+    value_target = (
+        cat_reward
+        + jnp.concatenate((value_probs[1:], value_probs[-1:])) * valid[..., None]
+    )
+    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=value_probs.dtype)
+    scalar_value_target = cat_reward @ cat_vf_support
 
     cat_value_delta = value_target - value_probs
     scalar_value_delta = value_expectation - scalar_value_target
@@ -234,14 +221,15 @@ def train_step(
     td_lambdas = config.td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
     gae_lambdas = config.gae_lambda * valid.astype(cat_value_delta.dtype)
 
-    returns = segmented_discounted_cumsum(cat_value_delta, td_lambdas) + value_probs
-    advantages = segmented_discounted_cumsum(scalar_value_delta, gae_lambdas)
+    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
+    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
+    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
 
-    player_returns = returns[-player_valid.shape[0] :]
-    player_advantages = advantages[-player_valid.shape[0] :]
+    builder_returns = returns[: builder_valid.shape[0]]
+    builder_advantages = advantages[: builder_valid.shape[0]]
 
-    builder_returns = returns[: -player_valid.shape[0]]
-    builder_advantages = advantages[: -player_valid.shape[0]]
+    player_returns = returns[builder_valid.shape[0] :]
+    player_advantages = advantages[builder_valid.shape[0] :]
 
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
@@ -291,7 +279,7 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                pred=learner_value_head.logits,
+                logits=learner_value_head.logits,
                 labels=player_returns,
             ),
             player_valid,
@@ -383,7 +371,7 @@ def train_step(
 
         loss_v = average(
             optax.softmax_cross_entropy(
-                pred=learner_value_head.logits,
+                logits=learner_value_head.logits,
                 labels=builder_returns,
             ),
             jnp.ones_like(builder_valid),
@@ -575,6 +563,7 @@ class Learner:
 
         # JIT Compile
         self._train_step_jit = jax.jit(train_step, static_argnames=["config"])
+        # self._train_step_jit = train_step
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""

@@ -152,7 +152,7 @@ class Porygon2BuilderModel(nn.Module):
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
         self.conditional_entropy_head_mlp = MLP()
-        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.value_head)
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
