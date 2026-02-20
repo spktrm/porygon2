@@ -17,7 +17,7 @@ from rl.actor.actor import Actor
 from rl.actor.agent import Agent
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
-from rl.learner.learner import Learner
+from rl.learner.learner import CAT_VF_SUPPORT, Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
@@ -89,7 +89,10 @@ def run_eval_heuristic(
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
 
-                payoff = eval_trajectory.player_transitions.env_output.win_reward[-1]
+                payoff = (
+                    eval_trajectory.player_transitions.env_output.win_reward[-1]
+                    @ CAT_VF_SUPPORT
+                )
 
                 wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
 
