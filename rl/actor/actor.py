@@ -2,7 +2,7 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
-from rl.environment.data import NUM_PACKED_SET_FEATURES
+from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
 from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
     BuilderTransition,
@@ -223,5 +223,7 @@ class Actor:
         self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory
     ):
         """Update league stats based on trajectory outcome."""
-        payoff = trajectory.player_transitions.env_output.win_reward[-1]
+        payoff = (
+            trajectory.player_transitions.env_output.win_reward[-1] @ CAT_VF_SUPPORT
+        )
         self._learner.league.update_payoff(sender, receiver, payoff)

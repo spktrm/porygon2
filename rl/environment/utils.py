@@ -270,44 +270,40 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
 
 
-@jax.jit(static_argnames=["r", "N"])
 def generate_order(key, r, N):
     """
-    Generates a build order where Species (Index 1) is always selected first
-    for each team member, followed by a random permutation of the remaining attributes.
-
-    Args:
-        key: JAX random key
-        r: Number of team members (rows)
-        N: Number of features per member (NUM_PACKED_SET_FEATURES)
+    Generates a globally shuffled build order, but strictly enforces
+    that Species_i is selected before OtherAttributes_i for every row.
     """
-    # 1. Define the specific index for Species (Enum Value 1)
     SPECIES_IDX = 1
+    key_noise, key_species = jax.random.split(key)
 
-    # 2. Identify "Other" attributes to shuffle (Indices 2 to N-1)
-    # We skip 0 (UNSPECIFIED) and 1 (SPECIES)
-    other_indices = jnp.arange(SPECIES_IDX + 1, N)
-
-    # 3. Define a function to generate the order for a single team member
-    def get_member_order(k):
-        # Shuffle only the non-species attributes
-        shuffled_others = jax.random.permutation(k, other_indices)
-        # Prepend Species index to the shuffled others
-        return jnp.concatenate([jnp.array([SPECIES_IDX]), shuffled_others])
-
-    # 4. Generate keys for each team member
-    keys = jax.random.split(key, r)
-
-    # 5. Apply logic to all members (r, N-1)
-    local_orders = jax.vmap(get_member_order)(keys)
-
-    # 6. Add offsets to convert local indices (0..N-1) to global flattened indices
-    # Shape (r, 1) broadcasted to (r, N-1)
+    # 1. Generate global offsets and local indices
     offsets = (jnp.arange(r) * N)[:, None]
-    global_orders = local_orders + offsets
+    species_global = offsets + SPECIES_IDX
 
-    # 7. Flatten to match the expected 1D output shape
-    return global_orders.reshape(-1)
+    other_local = jnp.arange(SPECIES_IDX + 1, N)
+    other_global = offsets + other_local
+
+    # 2. Assign random "scores" to all other attributes to determine their sort order
+    other_scores = jax.random.uniform(key_noise, shape=(r, N - 2))
+
+    # 3. Find the lowest score in each row, and force the Species score to be even lower
+    min_other_scores = jnp.min(other_scores, axis=1, keepdims=True)
+
+    # Subtracting a random uniform ensures the species score is strictly less than min_other
+    species_scores = (
+        min_other_scores - jax.random.uniform(key_species, shape=(r, 1)) - 0.1
+    )
+
+    # 4. Combine and flatten the global indices and their corresponding scores
+    valid_indices = jnp.concatenate([species_global, other_global], axis=1).reshape(-1)
+    valid_scores = jnp.concatenate([species_scores, other_scores], axis=1).reshape(-1)
+
+    # 5. Sort the global indices by their scores
+    sorted_positions = jnp.argsort(valid_scores)
+
+    return valid_indices[sorted_positions]
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
