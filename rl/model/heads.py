@@ -89,10 +89,10 @@ class CategoricalValueLogitHead(nn.Module):
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
-        entropy = -jnp.sum(probs * log_probs, axis=-1, keepdims=True)
+        entropy = -jnp.sum(probs * log_probs, axis=-1)
 
         values = self.cfg.category_values.astype(x.dtype)
-        expectation = (probs @ values).reshape(entropy.shape)
+        expectation = probs @ values
 
         return CategoricalValueHeadOutput(
             logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation

@@ -74,8 +74,8 @@ class Porygon2LearnerConfig:
     builder_ema_decay: float = 1e-3
 
     # Advantage estimation params
-    td_lambda: float = 0.85
-    gae_lambda: float = 0.85
+    td_lambda: float = 0.8
+    gae_lambda: float = 0.5
     clip_ppo: float = 0.3
 
     # Loss coefficients
