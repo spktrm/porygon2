@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
+    CAT_VF_SUPPORT,
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ABILITIES,
@@ -392,9 +393,6 @@ def main():
         )
     )
     value_probs = value_probs / value_probs.sum(axis=-1, keepdims=True)
-    value_expectation = value_probs @ (
-        jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
-    )
 
     cat_reward = jnp.concatenate(
         (
@@ -407,12 +405,9 @@ def main():
         + jnp.concatenate((value_probs[1:], jnp.zeros_like(value_probs[0:1])))
         * valid[..., None]
     )
-    scalar_value_target = cat_reward @ (
-        jnp.arange(value_probs.shape[-1], dtype=jnp.float32) - 1
-    )
 
     cat_value_delta = value_target - value_probs
-    scalar_value_delta = value_expectation - scalar_value_target
+    scalar_value_delta = cat_value_delta @ CAT_VF_SUPPORT
 
     td_lambda = 0.8
     gae_lambda = 0.5

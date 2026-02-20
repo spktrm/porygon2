@@ -3885,9 +3885,9 @@ export class StateHandler {
         if (winReward === RewardFeature.REWARD_FEATURE__WIN) {
             infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
         } else if (winReward === RewardFeature.REWARD_FEATURE__LOSS) {
-            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
+            infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] = 1;
         } else if (winReward === RewardFeature.REWARD_FEATURE__TIE) {
-            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
+            infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] = 1;
         }
         infoBuffer[InfoFeature.INFO_FEATURE__FIB_REWARD] = this.getFibReward();
 
