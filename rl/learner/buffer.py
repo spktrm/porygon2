@@ -44,7 +44,7 @@ class BuilderTrajectoryStore:
 
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
-        return len(self._trajectories) > 0 and np.any(self._reuses < self._max_reuses)
+        return np.any((self._reuses < self._max_reuses) & self._valid)
 
     def ready_to_add(self) -> bool:
         """Returns True if there is capacity to add a new trajectory."""
