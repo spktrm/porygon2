@@ -270,40 +270,34 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
 
 
-def generate_order(key, r, N):
-    """
-    Generates a globally shuffled build order, but strictly enforces
-    that Species_i is selected before OtherAttributes_i for every row.
-    """
-    SPECIES_IDX = 1
-    key_noise, key_species = jax.random.split(key)
+def generate_order(key: jax.Array, r: int, N: int):
+    total_size = r * N
+    selection_order = jax.random.permutation(key, jnp.arange(total_size))
 
-    # 1. Generate global offsets and local indices
-    offsets = (jnp.arange(r) * N)[:, None]
-    species_global = offsets + SPECIES_IDX
+    # 1. Entry point is now i % N == 1
+    entry_priorities = selection_order.reshape(r, N)[:, 1]
+    block_gate_priority = jnp.repeat(entry_priorities, N)
 
-    other_local = jnp.arange(SPECIES_IDX + 1, N)
-    other_global = offsets + other_local
+    # 2. Effective priority
+    effective_priority = jnp.maximum(selection_order, block_gate_priority)
 
-    # 2. Assign random "scores" to all other attributes to determine their sort order
-    other_scores = jax.random.uniform(key_noise, shape=(r, N - 2))
+    # 3. Get the full sorted order
+    sorted_indices = jnp.argsort(effective_priority)
 
-    # 3. Find the lowest score in each row, and force the Species score to be even lower
-    min_other_scores = jnp.min(other_scores, axis=1, keepdims=True)
+    # 4. FIXED: Instead of boolean masking, we use a static filter
+    # We find which positions in the 'sorted_indices' do NOT contain an i % N == 0
+    # But wait—it's easier to just calculate the valid indices first!
 
-    # Subtracting a random uniform ensures the species score is strictly less than min_other
-    species_scores = (
-        min_other_scores - jax.random.uniform(key_species, shape=(r, 1)) - 0.1
-    )
+    # Alternative JIT-safe approach:
+    # Use jnp.where with a fixed-size size argument or simple slicing if possible.
+    # Since we must return r * (N-1), we use jnp.take with static indices.
 
-    # 4. Combine and flatten the global indices and their corresponding scores
-    valid_indices = jnp.concatenate([species_global, other_global], axis=1).reshape(-1)
-    valid_scores = jnp.concatenate([species_scores, other_scores], axis=1).reshape(-1)
+    is_valid = (sorted_indices % N) != 0
+    # Sort the boolean mask to push all 'True' values to the front
+    # and then slice the first r*(N-1) elements.
+    valid_positions = jnp.argsort(~is_valid)
 
-    # 5. Sort the global indices by their scores
-    sorted_positions = jnp.argsort(valid_scores)
-
-    return valid_indices[sorted_positions]
+    return sorted_indices[valid_positions[: r * (N - 1)]]
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
@@ -343,6 +337,8 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 curr_attribute=member_attribute,
                 curr_position=member_position,
                 done=done,
+                species_reward=np.zeros_like(done, dtype=np.float32),
+                ev_reward=np.zeros_like(done, dtype=np.float32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,

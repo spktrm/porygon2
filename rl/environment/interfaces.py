@@ -102,6 +102,8 @@ class BuilderEnvOutput:
 
     done: ArrayLike = ()
     ts: ArrayLike = ()
+    ev_reward: ArrayLike = ()
+    species_reward: ArrayLike = ()
     curr_order: ArrayLike = ()
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()

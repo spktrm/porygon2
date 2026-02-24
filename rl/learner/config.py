@@ -37,16 +37,18 @@ class AdamWConfig:
 
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
+SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
 
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_actors: int = 16
+    num_player_actors: int = 8
+    num_builder_actors: int = 4
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 512 * 2
+    replay_buffer_capacity: int = 1024 * 6
     theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
 
     # Self-play evaluation params
@@ -59,11 +61,11 @@ class Porygon2LearnerConfig:
     league_size: int = 16
 
     # Batch iteration params
-    batch_size: int = 4
-    target_replay_ratio: float = 4
+    batch_size: int = 2
+    target_replay_ratio: float = 1
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-4, weight_decay=1e-2)
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 5e-5
     builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
@@ -89,10 +91,11 @@ class Porygon2LearnerConfig:
     builder_kl_loss_coef: float = 0.1
     builder_kl_prior_loss_coef: float = 0.1
     builder_entropy_loss_coef: float = 0.1
-    normalising_constant: int = 200
+    normalising_constant: int = 20
 
     # Smogon Generation
     generation: GenT = 9
+    smogon_format: SmogonFormatT = "ou"
 
 
 def get_learner_config():

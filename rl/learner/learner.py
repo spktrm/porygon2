@@ -10,14 +10,13 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb.wandb_run
-from loguru import logger
 from tqdm import tqdm
 
 import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
-from rl.learner.buffer import DirectRatioLimiter, ReplayBuffer
+from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, ReplayBuffer
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -229,11 +228,11 @@ def train_step(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
 
-    player_uniform_prob = 1.0 / (action_mask_sum).clip(min=1)
+    player_uniform_prob = 1.0 / action_mask_sum.clip(min=1)
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     scale = 1  # config.batch_size / 1536
-    entropy_decay = 1  # / (((player_state.step_count + 1) * scale) ** 0.3)
+    entropy_decay = 1 / (((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
 
@@ -284,12 +283,12 @@ def train_step(
             valid=player_valid,
         )
 
-        learner_actor_approx_kl = forward_kl_loss(
+        loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
             valid=player_valid,
         )
-        loss_kl = backward_kl_loss(
+        loss_backward_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
             valid=player_valid,
@@ -298,7 +297,7 @@ def train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
-            + config.player_kl_loss_coef * loss_kl
+            + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * entropy_decay * loss_entropy
         )
 
@@ -307,7 +306,7 @@ def train_step(
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
-            player_loss_kl=loss_kl,
+            player_loss_kl=loss_backward_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -316,7 +315,7 @@ def train_step(
             ),
             player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
             # Approx KL values
-            player_learner_actor_approx_kl=learner_actor_approx_kl,
+            player_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
@@ -378,12 +377,12 @@ def train_step(
             valid=builder_valid,
         )
 
-        learner_actor_approx_kl = forward_kl_loss(
+        loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
             valid=builder_valid,
         )
-        loss_kl_rl = backward_kl_loss(
+        loss_backward_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
             valid=builder_valid,
@@ -392,14 +391,14 @@ def train_step(
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
-            + config.builder_kl_loss_coef * loss_kl_rl
+            + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
         )
 
         return loss, dict(
             builder_loss_pg=loss_pg,
             builder_loss_v=loss_v,
-            builder_loss_kl_rl=loss_kl_rl,
+            builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
             # Head entropies
             builder_entropy=builder_entropy,
@@ -409,7 +408,7 @@ def train_step(
             ),
             builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
             # Approx KL values
-            builder_learner_actor_approx_kl=learner_actor_approx_kl,
+            builder_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
             builder_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
@@ -516,7 +515,6 @@ def _stack_and_pad_batch(
     )
 
 
-# --- Main Class ---
 class Learner:
     def __init__(
         self,
@@ -536,6 +534,7 @@ class Learner:
         self.gpu_lock = gpu_lock or nullcontext()
 
         self.done = False
+        self.team_store = BuilderTrajectoryStore()
         self.replay = ReplayBuffer(self.config.replay_buffer_capacity)
 
         # Rate Limiting

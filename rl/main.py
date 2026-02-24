@@ -4,18 +4,18 @@ load_dotenv()
 import argparse
 import concurrent.futures
 import json
+import logging
 import threading
 import time
-import traceback
-from pprint import pprint
 
 import jax
 import numpy as np
 import wandb.wandb_run
 
 import wandb
-from rl.actor.actor import Actor
 from rl.actor.agent import Agent
+from rl.actor.builder_actor import BuilderActor
+from rl.actor.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import CAT_VF_SUPPORT, Learner
@@ -24,10 +24,12 @@ from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 
+logger = logging.getLogger(__name__)
+
 
 def run_training_actor_pair(
-    player: Actor,
-    opponent: Actor,
+    player: PlayerActor,
+    opponent: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
 ):
@@ -62,12 +64,12 @@ def run_training_actor_pair(
                     player_params, opponent_params, trajectory
                 )
         except Exception as e:
-            traceback.print_exc()
+            logger.error(f"Error in {worker_id}: {e}", exc_info=True)
             raise e
 
 
 def run_eval_heuristic(
-    actor: Actor,
+    actor: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
     wandb_run: wandb.wandb_run.Run,
@@ -77,7 +79,7 @@ def run_eval_heuristic(
 
     step_count = np.array(learner.player_state.step_count).item()
 
-    session_id = actor._player_env.username
+    session_id = actor._env.username
 
     while not stop_signal[0]:
         try:
@@ -98,19 +100,32 @@ def run_eval_heuristic(
                 wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
 
         except Exception:
-            traceback.print_exc()
+            logger.error("Error running eval heuristic", exc_info=True)
             # Dont let bad evaluation crash the whole training loop
             continue
 
         time.sleep(5)
 
 
+def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
+    while not stop_signal[0]:
+        try:
+            param_container = actor.pull_main_player()
+            new_key = actor.split_rng()
+            actor.unroll(new_key, param_container.builder_params)
+        except Exception as e:
+            logger.error("Error running builder actor", exc_info=True)
+            raise e
+
+
 def main(args: argparse.Namespace):
     """Main function to run the RL learner."""
     debug = args.debug
 
+    salt = int(time.time())
+
     learner_config = get_learner_config()
-    pprint(learner_config)
+    logger.info(f"Learner Config: {learner_config}")
 
     learner_player_model_config = get_player_model_config(
         learner_config.generation, train=True
@@ -154,10 +169,12 @@ def main(args: argparse.Namespace):
         builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
+    logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state, mode="checkpoint"
     )
 
+    logger.info("Initializing WandB...")
     wandb_run = wandb.init(
         project="pokemon-rl",
         config={
@@ -172,6 +189,7 @@ def main(args: argparse.Namespace):
             ),
         },
     )
+    logger.info(f"WandB serialized run: {wandb_run.name}")
 
     learner = Learner(
         player_state=player_state,
@@ -184,12 +202,34 @@ def main(args: argparse.Namespace):
     )
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(learner_config.num_actors // 2 + learner_config.num_eval_actors)
+        max_workers=(
+            learner_config.num_player_actors // 2 + learner_config.num_eval_actors
+        )
     ) as executor:
+        logger.info(
+            f"Initializing {learner_config.num_builder_actors} builder actors..."
+        )
+        for builder_id in range(learner_config.num_builder_actors):
+            actor = BuilderActor(
+                agent=learning_agent,
+                learner=learner,
+                rng_seed=len(actor_threads) + salt,
+            )
+            args = (actor, stop_signal)
+            actor_threads.append(
+                threading.Thread(
+                    target=run_builder_actor,
+                    args=args,
+                    name=f"BuilderActor-{builder_id}",
+                )
+            )
 
-        for game_id in range(learner_config.num_actors // 2):
+        logger.info(
+            f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
+        )
+        for game_id in range(learner_config.num_player_actors // 2):
             actors = [
-                Actor(
+                PlayerActor(
                     agent=learning_agent,
                     env=SinglePlayerSyncEnvironment(
                         f"train:p{player_id}g{game_id:02d}",
@@ -197,7 +237,7 @@ def main(args: argparse.Namespace):
                     ),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
-                    rng_seed=len(actor_threads),
+                    rng_seed=len(actor_threads) + salt,
                 )
                 for player_id in range(2)
             ]
@@ -210,8 +250,11 @@ def main(args: argparse.Namespace):
                 )
             )
 
+        logger.info(
+            f"Initializing {learner_config.num_eval_actors} evaluation actors..."
+        )
         for eval_id in range(learner_config.num_eval_actors):
-            actor = Actor(
+            actor = PlayerActor(
                 agent=eval_agent,
                 env=SinglePlayerSyncEnvironment(
                     f"eval-heuristic:{eval_id:04d}",
@@ -219,7 +262,7 @@ def main(args: argparse.Namespace):
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
-                rng_seed=len(actor_threads),
+                rng_seed=len(actor_threads) + salt,
             )
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
@@ -238,10 +281,15 @@ def main(args: argparse.Namespace):
         for t in actor_threads:
             t.join()
 
-    print("done")
+    logger.info("Training run complete.")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     parser = argparse.ArgumentParser(description="Run the RL learner.")
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug mode", default=False

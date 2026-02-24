@@ -5,7 +5,6 @@ import numpy as np
 
 from inference.interfaces import ResetResponse, StepResponse
 from rl.actor.agent import Agent
-from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
