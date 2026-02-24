@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 THREADS = 64  # worker threads (adjust as needed)
 TIMEOUT = 15  # HTTP timeout (s)
-START_URLS = ["https://www.smogon.com/forums/forums/adv/"]
+START_URLS = ["https://www.smogon.com/forums/forums/overused.726/"]
 DEFAULT_MAX = 2000  # default “stop after N PokéPastes”
 
 POKEPASTE_RE = re.compile(r"https://pokepast\.es/[0-9a-fA-F]{16}")

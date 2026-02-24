@@ -1033,6 +1033,8 @@ function getArrayFromPublicPokemon(
                 } else {
                     id = id.slice(0, -2) as ID;
                 }
+            } else if (id.startsWith("move: ")) {
+                id = id.slice("move: ".length) as ID;
             }
             const ppUsed = move.ppUsed;
             const maxPP = isTransformed

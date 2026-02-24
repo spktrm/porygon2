@@ -13,8 +13,8 @@ from rl.environment.data import STOI, toid
 
 
 ALL_FORMATS = [
-    # "ubers",
     "ou",
+    # "ubers",
     # "uu",
     # "zu",
     # "pu",
@@ -40,8 +40,8 @@ class FrequencyStats(TypedDict):
 
 
 class PokemonStats(TypedDict):
-    lead: str
-    usage: float
+    lead: FrequencyStats
+    usage: FrequencyStats
     count: int
     weight: float
     viability: tuple[int, int, int, int]
@@ -189,6 +189,23 @@ def construct_ev_usage(data: UsageType) -> npt.NDArray[np.float32]:
     return usage_array
 
 
+def construct_species_usage(data: UsageType) -> npt.NDArray[np.float32]:
+    usage_array = np.zeros((len(STOI["species"]),), dtype=np.float32)
+
+    for pokemon, stats in data["pokemon"].items():
+        pokemon_id = toid(pokemon)
+        if pokemon_id not in STOI["species"]:
+            logger.warning(
+                f"Pokemon '{pokemon}' not found in STOI['species']. Skipping species usage entry."
+            )
+            continue
+
+        row_idx = STOI["species"][pokemon_id]
+        usage_array[row_idx] = stats["usage"]["real"]
+
+    return usage_array
+
+
 def save_usage_array(
     stat: str, usage_array: npt.NDArray[np.float32], generation: int, smogon_format: str
 ):
@@ -217,6 +234,7 @@ async def fetch_and_process(
             data = response.json()
 
             for stat, usage_func in [
+                ("species", construct_species_usage),
                 ("teammates", construct_teammates_usage),
                 ("abilities", construct_ability_usage),
                 ("items", construct_items_usage),
@@ -225,11 +243,16 @@ async def fetch_and_process(
                 ("ev", construct_ev_usage),
                 ("nature", construct_nature_usage),
             ]:
-                usage_array = usage_func(data)
-
-                # usage_array = usage_array + ~(usage_array.any(axis=-1)[..., None])
-
-                save_usage_array(stat, usage_array, generation, smogon_format)
+                try:
+                    usage_array = usage_func(data)
+                    # usage_array = usage_array + ~(usage_array.any(axis=-1)[..., None])
+                except Exception as e:
+                    logger.error(
+                        f"Error processing {stat} for gen{generation}{smogon_format}: {e}"
+                    )
+                    continue
+                else:
+                    save_usage_array(stat, usage_array, generation, smogon_format)
 
             usage_array = construct_gender_usage(data, pokedex_df)
             save_usage_array("gender", usage_array, generation, smogon_format)

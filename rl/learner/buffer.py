@@ -5,8 +5,90 @@ from collections import deque
 import numpy as np
 
 from rl.environment.data import NUM_SPECIES
-from rl.environment.interfaces import Trajectory
+from rl.environment.interfaces import (
+    BuilderHistoryOutput,
+    BuilderTransition,
+    Trajectory,
+)
 from rl.environment.protos.features_pb2 import PackedSetFeature
+
+
+class BuilderTrajectoryStore:
+    """Stores builder trajectories for later use by the learner."""
+
+    def __init__(self, max_size: int = 1000, max_reuses: int = 5):
+        self._trajectories: dict[
+            int, tuple[BuilderTransition, BuilderHistoryOutput]
+        ] = {}
+        self._reuses = np.zeros(max_size, dtype=int)
+        self._valid = np.zeros(max_size, dtype=bool)
+
+        self._max_size = max_size
+        self._max_reuses = max_reuses
+
+        self._add_cv = threading.Condition()
+        self._sample_cv = threading.Condition()
+
+    @classmethod
+    def from_trajectories(
+        cls,
+        trajectories: list[BuilderTransition],
+        max_size: int = 1000,
+        max_reuses: int = 5,
+    ):
+        """Initializes the store with a list of trajectories. Primarily for testing."""
+        store = cls(max_size=max_size, max_reuses=max_reuses)
+        for trajectory in trajectories:
+            store.add_trajectory(trajectory)
+        return store
+
+    def ready_to_sample(self) -> bool:
+        """Returns True if there is at least one trajectory that can be sampled."""
+        return len(self._trajectories) > 0 and np.any(self._reuses < self._max_reuses)
+
+    def ready_to_add(self) -> bool:
+        """Returns True if there is capacity to add a new trajectory."""
+        return len(self._trajectories) < self._max_size or np.any(
+            self._reuses >= self._max_reuses
+        )
+
+    def add_trajectory(
+        self, trajectory: BuilderTransition, history: BuilderHistoryOutput
+    ):
+        """
+        adds a trajectory only if there is capacity
+        if not capacity, check if any trajectories have been reused more than max_reuses, if so, remove them and add the new trajectory
+        """
+        item_to_store = (trajectory, history)
+
+        if len(self._trajectories) < self._max_size:
+            current_index = len(self._trajectories)
+            self._trajectories[current_index] = item_to_store
+            self._reuses[current_index] = 0
+            self._valid[current_index] = True
+        else:
+            available_indices = np.where(self._reuses >= self._max_reuses)[0]
+            if len(available_indices) == 0:
+                print(
+                    "Trajectory store is full and no trajectories are available for replacement."
+                )
+                return
+            replace_index = np.random.choice(available_indices)
+            self._trajectories[replace_index] = item_to_store
+            self._reuses[replace_index] = 0
+
+    def sample_trajectory(
+        self, increment: bool = True
+    ) -> tuple[BuilderTransition, BuilderHistoryOutput]:
+        """samples a trajectory uniformly from those with less than max_reuses, and increments its reuse count"""
+
+        valid_indices = (self._reuses < self._max_reuses) & self._valid
+        available_indices = np.where(valid_indices)[0]
+
+        sample_index = np.random.choice(available_indices).item()
+        if increment:
+            self._reuses[sample_index] += 1
+        return self._trajectories[sample_index]
 
 
 class ReplayRatioTokenBucket:
