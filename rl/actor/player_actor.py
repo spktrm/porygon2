@@ -67,6 +67,10 @@ class PlayerActor:
                 self._learner.team_store.sample_trajectory()
             )
 
+        add_cond = self._learner.team_store._add_cv
+        with add_cond:
+            add_cond.notify_all()
+
         player_traj = []
 
         # Reset the player environment.
