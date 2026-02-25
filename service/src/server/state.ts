@@ -2840,6 +2840,9 @@ export class EventHandler implements Protocol.Handler {
 
     "|-enditem|"(args: Args["|-enditem|"], kwArgs: KWArgs["|-enditem|"]) {
         const [argName, pokeIdent, itemId] = args;
+        if (!itemId) {
+            return;
+        }
 
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {

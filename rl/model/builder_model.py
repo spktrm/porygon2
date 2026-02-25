@@ -235,7 +235,7 @@ class Porygon2BuilderModel(nn.Module):
         )
         typechart_embeddings = self.typechart_embedding.astype(self.cfg.dtype)
         hiddenpower_embeddings = (
-            attribute_id >= PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
         )[..., None] * jnp.take(typechart_embeddings, token, axis=0, mode="clip")
         teratype_embedding = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
@@ -564,7 +564,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+        # builder_head_params=HeadParams(temp=0.8, min_p=0.1),
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation, smogon_format="ou")

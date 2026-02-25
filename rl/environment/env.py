@@ -256,7 +256,9 @@ class TeamBuilderEnvironment:
         is_done = next_ts >= total_steps
 
         def _done_branch(_):
-            team_evs = new_packed_team_member_tokens[
+            team_evs = new_packed_team_member_tokens.reshape(
+                -1, NUM_PACKED_SET_FEATURES
+            )[
                 ...,
                 PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
                 + 1,

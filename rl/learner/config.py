@@ -62,7 +62,7 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 2
+    target_replay_ratio: float = 2.0
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
@@ -193,8 +193,8 @@ def create_train_state(
         ),
     )
     if config.gradient_accumulation_steps > 1:
-        player_optimizer = optax.MultiSteps(
-            player_optimizer, config.gradient_accumulation_steps
+        builder_optimizer = optax.MultiSteps(
+            builder_optimizer, config.gradient_accumulation_steps
         )
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
