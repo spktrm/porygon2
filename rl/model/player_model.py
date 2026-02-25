@@ -75,6 +75,7 @@ class Porygon2PlayerModel(nn.Module):
             action_index=action_index,
             log_prob=log_prob,
             entropy=entropy,
+            log_policy=log_policy,
             src_index=src_index,
             tgt_index=tgt_index,
         )

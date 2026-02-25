@@ -35,7 +35,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
-    PolicyHeadOutput,
+    PlayerPolicyHeadOutput,
     RegressionValueHeadOutput,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
@@ -231,8 +231,10 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     return (
         PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
-            value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
-            action_head=PolicyHeadOutput(
+            value_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(env.info[..., 0], dtype=np.float32)
+            ),
+            action_head=PlayerPolicyHeadOutput(
                 action_index=env.action_mask.reshape(
                     env.action_mask.shape[:-2] + (-1,)
                 ).argmax(-1)

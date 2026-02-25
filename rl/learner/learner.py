@@ -207,7 +207,11 @@ def calculate_player_shaped_reward(
     # 2. Calculate Potential for the next_timestep
     phi_tp1 = jnp.concatenate((phi_t[1:], phi_t[-1:]))
 
-    # 3. Return the difference: Current Potential - Previous Potential
+    # 3. Return the PBRS reward F(s_t, s_{t+1}) = γ·φ(s_{t+1}) − φ(s_t),
+    #    shifted right by one step to align with the rewards_tm1 convention
+    #    (where rewards_tm1[t] represents the reward for entering state s_t).
+    #    The shift_right + subsequent shift_left_with_zeros in train_step cancel,
+    #    yielding rewards[t] = win_reward[t+1] + scale * (γ·φ_{t+1} − φ_t). ✓
     return shift_right_with_zeros(config.gamma * phi_tp1 - phi_t)
 
 
