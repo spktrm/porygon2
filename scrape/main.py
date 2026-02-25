@@ -1,13 +1,13 @@
-import asyncio
-import re
-import json
-import sys
-import os
 import argparse
+import asyncio
+import json
+import os
+import re
+import sys
 import time
-from typing import List, Set, Optional, Tuple
-from urllib.parse import urljoin, urlparse
 from collections import deque
+from typing import Optional, Set, Tuple
+from urllib.parse import urljoin
 
 import aiohttp
 from bs4 import BeautifulSoup
