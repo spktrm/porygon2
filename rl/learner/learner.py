@@ -267,13 +267,14 @@ def train_step(
             clip_ppo=config.clip_ppo,
         )
 
-        # Softmax cross-entropy loss for value head
+        # Softmax cross-entropy loss for value head; include terminal states to anchor
+        # value predictions directly to the win/loss reward at episode end.
         loss_v = average(
             optax.softmax_cross_entropy(
                 logits=learner_value_head.logits,
                 labels=player_returns,
             ),
-            player_valid,
+            jnp.ones_like(player_valid),
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)

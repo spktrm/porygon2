@@ -62,7 +62,7 @@ class Porygon2PlayerModel(nn.Module):
                 min_p=min_p,
             )
 
-        log_prob = jnp.take(log_policy, action_index, axis=-1)
+        log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
 
         src_index = (jnp.floor(action_index / NUM_ACTION_FEATURES)).astype(
             action_index.dtype
@@ -93,7 +93,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
 
         action_logits = (
-            self.action_head(action_embeddings, action_embeddings) / head_params.temp
+            self.action_head(action_embeddings, action_embeddings)
+            / (head_params.temp + 1e-8)
         )
         action_head = self.post_head(
             action_logits.reshape(-1),
