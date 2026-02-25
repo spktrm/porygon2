@@ -193,8 +193,8 @@ def create_train_state(
         ),
     )
     if config.gradient_accumulation_steps > 1:
-        player_optimizer = optax.MultiSteps(
-            player_optimizer, config.gradient_accumulation_steps
+        builder_optimizer = optax.MultiSteps(
+            builder_optimizer, config.gradient_accumulation_steps
         )
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(

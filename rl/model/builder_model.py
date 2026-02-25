@@ -235,7 +235,7 @@ class Porygon2BuilderModel(nn.Module):
         )
         typechart_embeddings = self.typechart_embedding.astype(self.cfg.dtype)
         hiddenpower_embeddings = (
-            attribute_id >= PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
         )[..., None] * jnp.take(typechart_embeddings, token, axis=0, mode="clip")
         teratype_embedding = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
