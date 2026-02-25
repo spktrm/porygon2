@@ -164,6 +164,7 @@ class TeamBuilderEnvironment:
                 ts=jnp.array(0, dtype=jnp.int32),
                 ev_reward=jnp.array(0, dtype=jnp.float32),
                 species_reward=jnp.array(0, dtype=jnp.float32),
+                validator_reward=jnp.array(0, dtype=jnp.float32),
                 curr_order=order[0],
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
@@ -268,6 +269,7 @@ class TeamBuilderEnvironment:
                 env=state.env.replace(
                     ts=next_ts,
                     ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
+                    validator_reward=jnp.array(0, dtype=jnp.float32),
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -414,6 +416,7 @@ class TeamBuilderEnvironment:
                         jnp.take(self.species_usage, action_index, axis=0, mode="clip"),
                         jnp.array(0.0, dtype=jnp.float32),
                     ),
+                    validator_reward=jnp.array(0, dtype=jnp.float32),
                     done=jnp.array(False, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -436,6 +439,10 @@ class TeamBuilderEnvironment:
         def ignore_attribute():
             return jnp.array(False, dtype=jnp.bool), jnp.array(0, dtype=jnp.int32)
 
+        # Hidden power type is not used in Gen 9 and has no mask data; always autofill with 0
+        def force_hiddenpower():
+            return jnp.array(True, dtype=jnp.bool), jnp.array(0, dtype=jnp.int32)
+
         branches = [
             lambda: check_mask(env.species_mask),  # 0
             lambda: check_mask(env.item_mask),  # 1
@@ -445,7 +452,8 @@ class TeamBuilderEnvironment:
             lambda: check_mask(env.gender_mask),  # 5
             lambda: check_mask(env.ev_mask),  # 6
             lambda: check_mask(env.teratype_mask),  # 7
-            ignore_attribute,  # 8: Fallback/Ignored
+            force_hiddenpower,  # 8: Always autofill hidden power type with 0
+            ignore_attribute,  # 9: Fallback/Ignored
         ]
 
         predicates = [
@@ -459,9 +467,10 @@ class TeamBuilderEnvironment:
             (curr >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
             & (curr <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV),
             curr == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE,
         ]
 
-        # If no predicate matches, use index 8 (ignore_attribute)
-        branch_idx = jnp.select(predicates, jnp.arange(8), default=8)
+        # If no predicate matches, use index 9 (ignore_attribute)
+        branch_idx = jnp.select(predicates, jnp.arange(len(branches) - 1), default=len(branches) - 1)
 
         return jax.lax.switch(branch_idx, branches)
