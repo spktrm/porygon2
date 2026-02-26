@@ -127,6 +127,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head.logits.features = 3
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
+    cfg.num_skills = 8
+
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
@@ -204,6 +206,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.features = 3
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+
+    cfg.num_skills = 8
 
     for head in [
         cfg.species_head,

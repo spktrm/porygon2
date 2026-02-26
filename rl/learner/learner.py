@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
-import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
@@ -247,6 +247,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
+        learner_discriminator_head = player_pred.discriminator_head
 
         learner_log_prob = learner_action_head.log_prob
 
@@ -259,10 +260,17 @@ def train_step(
 
         ratio = learner_actor_ratio
 
+        # DIAYN: intrinsic reward = log q(z|s) per step
+        skill_ids = player_transitions.env_output.skill_id
+        diayn_reward = jnp.take_along_axis(
+            learner_discriminator_head.log_probs, skill_ids[..., None], axis=-1
+        ).squeeze(-1)
+        diayn_advantages = player_advantages + config.diayn_reward_coef * diayn_reward
+
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
-            advantages=player_advantages,
+            advantages=diayn_advantages,
             valid=player_valid,
             clip_ppo=config.clip_ppo,
         )
@@ -294,11 +302,18 @@ def train_step(
             valid=player_valid,
         )
 
+        # DIAYN: discriminator cross-entropy loss (predict skill from state)
+        loss_discriminator = average(
+            -diayn_reward,
+            player_valid,
+        )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * entropy_decay * loss_entropy
+            + config.diayn_discriminator_loss_coef * loss_discriminator
         )
 
         return loss, dict(
@@ -307,6 +322,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_discriminator=loss_discriminator,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -322,6 +338,8 @@ def train_step(
                 value_target=player_returns @ cat_vf_support,
                 mask=player_valid,
             ),
+            # DIAYN stats
+            player_diayn_reward=average(diayn_reward, player_valid),
         )
 
     def builder_loss_fn(params: Params):
@@ -338,6 +356,7 @@ def train_step(
         conditional_entropy_head = pred.conditional_entropy_head
         learner_value_head = pred.value_head
         learner_action_head = pred.action_head
+        learner_discriminator_head = pred.discriminator_head
 
         learner_log_prob = learner_action_head.log_prob
 
@@ -346,10 +365,19 @@ def train_step(
 
         ratio = learner_actor_ratio
 
+        # DIAYN: intrinsic reward = log q(z|s) per step
+        skill_ids = builder_transitions.env_output.skill_id
+        diayn_reward = jnp.take_along_axis(
+            learner_discriminator_head.log_probs, skill_ids[..., None], axis=-1
+        ).squeeze(-1)
+        diayn_builder_advantages = (
+            builder_advantages + config.diayn_reward_coef * diayn_reward
+        )
+
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=ratio,
-            advantages=builder_advantages
+            advantages=diayn_builder_advantages
             + config.builder_entropy_loss_coef
             * entropy_decay
             * (
@@ -388,11 +416,18 @@ def train_step(
             valid=builder_valid,
         )
 
+        # DIAYN: discriminator cross-entropy loss (predict skill from state)
+        loss_discriminator = average(
+            -diayn_reward,
+            builder_valid,
+        )
+
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
+            + config.diayn_discriminator_loss_coef * loss_discriminator
         )
 
         return loss, dict(
@@ -400,6 +435,7 @@ def train_step(
             builder_loss_v=loss_v,
             builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_discriminator=loss_discriminator,
             # Head entropies
             builder_entropy=builder_entropy,
             # Ratios
@@ -415,6 +451,8 @@ def train_step(
                 value_target=builder_returns @ cat_vf_support,
                 mask=builder_valid,
             ),
+            # DIAYN stats
+            builder_diayn_reward=average(diayn_reward, builder_valid),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)

@@ -44,6 +44,7 @@ from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
     CategoricalValueLogitHead,
+    DiscriminatorHead,
     HeadParams,
     PolicyQKHead,
     RegressionValueLogitHead,
@@ -153,6 +154,13 @@ class Porygon2BuilderModel(nn.Module):
 
         self.conditional_entropy_head_mlp = MLP()
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
+
+        # DIAYN components
+        self.skill_embedding = nn.Embed(
+            self.cfg.num_skills, self.cfg.entity_size, self.cfg.dtype
+        )
+        self.discriminator_head_mlp = MLP()
+        self.discriminator_head = DiscriminatorHead(self.cfg.num_skills)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -279,62 +287,72 @@ class Porygon2BuilderModel(nn.Module):
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value_head = self._forward_value_head(hidden_state)
-        conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
+        # DIAYN: condition hidden state on skill embedding
+        skill_embed = self.skill_embedding(env_step.skill_id)
+        conditioned_state = hidden_state + skill_embed.astype(hidden_state.dtype)
 
-        hidden_state = hidden_state[None]
+        value_head = self._forward_value_head(conditioned_state)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            conditioned_state
+        )
+
+        # DIAYN: discriminator predicts skill from raw (unconditioned) state
+        disc_embedding = self.discriminator_head_mlp(hidden_state)
+        discriminator_head = self.discriminator_head(disc_embedding)
+
+        conditioned_state = conditioned_state[None]
 
         species_head = self.species_head(
-            self.species_head_mlp(hidden_state),
+            self.species_head_mlp(conditioned_state),
             species_keys,
             actor_output.action_head,
             env_step.species_mask,
             head_params=head_params,
         )
         item_head = self.item_head(
-            self.item_head_mlp(hidden_state),
+            self.item_head_mlp(conditioned_state),
             item_keys,
             actor_output.action_head,
             env_step.item_mask,
             head_params=head_params,
         )
         ability_head = self.ability_head(
-            self.ability_head_mlp(hidden_state),
+            self.ability_head_mlp(conditioned_state),
             ability_keys,
             actor_output.action_head,
             env_step.ability_mask,
             head_params=head_params,
         )
         move_head = self.move_head(
-            self.move_head_mlp(hidden_state),
+            self.move_head_mlp(conditioned_state),
             move_keys,
             actor_output.action_head,
             env_step.move_mask,
             head_params=head_params,
         )
         ev_head = self.ev_head(
-            self.ev_head_mlp(hidden_state),
+            self.ev_head_mlp(conditioned_state),
             self.ev_embedding,
             actor_output.action_head,
             env_step.ev_mask,
             head_params=head_params,
         )
         nature_head = self.nature_head(
-            self.nature_head_mlp(hidden_state),
+            self.nature_head_mlp(conditioned_state),
             self.nature_embedding,
             actor_output.action_head,
             env_step.nature_mask,
             head_params=head_params,
         )
         gender_head = self.gender_head(
-            self.gender_head_mlp(hidden_state),
+            self.gender_head_mlp(conditioned_state),
             self.gender_embedding,
             actor_output.action_head,
             env_step.gender_mask,
             head_params=head_params,
         )
         teratype_head = self.teratype_head(
-            self.teratype_head_mlp(hidden_state),
+            self.teratype_head_mlp(conditioned_state),
             self.typechart_embedding,
             actor_output.action_head,
             env_step.teratype_mask,
@@ -412,6 +430,7 @@ class Porygon2BuilderModel(nn.Module):
             action_head=action_head,
             value_head=value_head,
             conditional_entropy_head=conditional_entropy_head,
+            discriminator_head=discriminator_head,
         )
 
     def __call__(

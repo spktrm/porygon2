@@ -20,6 +20,7 @@ from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
+    DiscriminatorHead,
     HeadParams,
     PointerLogits,
     sample_categorical,
@@ -40,6 +41,13 @@ class Porygon2PlayerModel(nn.Module):
 
         self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
+
+        # DIAYN components
+        self.skill_embedding = nn.Embed(
+            self.cfg.num_skills, self.cfg.entity_size, self.cfg.dtype
+        )
+        self.discriminator_head_mlp = MLP()
+        self.discriminator_head = DiscriminatorHead(self.cfg.num_skills)
 
     def post_head(
         self,
@@ -91,6 +99,9 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
+        # DIAYN: condition state on skill embedding
+        skill_embed = self.skill_embedding(env_step.skill_id)
+        conditioned_state = state_embedding + skill_embed.astype(state_embedding.dtype)
 
         action_logits = (
             self.action_head(action_embeddings, action_embeddings) / head_params.temp
@@ -103,9 +114,17 @@ class Porygon2PlayerModel(nn.Module):
             min_p=head_params.min_p,
         )
 
-        value_head = self._forward_value_head(state_embedding)
+        value_head = self._forward_value_head(conditioned_state)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        # DIAYN: discriminator predicts skill from raw (unconditioned) state
+        disc_embedding = self.discriminator_head_mlp(state_embedding)
+        discriminator_head = self.discriminator_head(disc_embedding)
+
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            discriminator_head=discriminator_head,
+        )
 
     def __call__(
         self,

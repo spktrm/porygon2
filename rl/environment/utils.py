@@ -221,6 +221,7 @@ def process_state(
         field=field,
         moveset=moveset,
         action_mask=get_action_mask(state),
+        skill_id=np.int32(0),
     )
     packed_history_step = PlayerPackedHistoryOutput(
         public=history_entity_public,
@@ -339,6 +340,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 done=done,
                 species_reward=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
+                skill_id=np.zeros((trajectory_length, 1), dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,

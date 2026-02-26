@@ -21,6 +21,9 @@ class PlayerEnvOutput:
 
     action_mask: ArrayLike = ()
 
+    # DIAYN skill index (sampled once per episode)
+    skill_id: ArrayLike = ()
+
 
 @dataclass
 class PlayerPackedHistoryOutput:
@@ -46,6 +49,12 @@ class PlayerActorInput:
 @dataclass
 class RegressionValueHeadOutput:
     logits: ArrayLike = ()
+
+
+@dataclass
+class DiscriminatorHeadOutput:
+    logits: ArrayLike = ()
+    log_probs: ArrayLike = ()
 
 
 @dataclass
@@ -76,6 +85,9 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    discriminator_head: DiscriminatorHeadOutput = field(
+        default_factory=DiscriminatorHeadOutput
+    )
 
 
 @dataclass
@@ -109,6 +121,9 @@ class BuilderEnvOutput:
     curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
 
+    # DIAYN skill index (sampled once per episode)
+    skill_id: ArrayLike = ()
+
 
 @dataclass
 class BuilderHistoryOutput:
@@ -132,6 +147,9 @@ class BuilderActorOutput:
     )
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
+    )
+    discriminator_head: DiscriminatorHeadOutput = field(
+        default_factory=DiscriminatorHeadOutput
     )
 
 

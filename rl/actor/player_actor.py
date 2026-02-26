@@ -82,6 +82,12 @@ class PlayerActor:
 
         player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
 
+        # Sample a DIAYN skill for this episode
+        skill_id = np.int32(np.random.randint(0, self._learner.config.num_skills))
+        player_actor_input = player_actor_input.replace(
+            env=player_actor_input.env.replace(skill_id=skill_id)
+        )
+
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
@@ -100,6 +106,10 @@ class PlayerActor:
 
             action = self.player_agent_output_to_action(player_agent_output)
             player_actor_input = self._env.step(action)
+            # Preserve skill_id across steps
+            player_actor_input = player_actor_input.replace(
+                env=player_actor_input.env.replace(skill_id=skill_id)
+            )
 
         if len(player_traj) < self._unroll_length:
             player_traj += [player_transition] * (

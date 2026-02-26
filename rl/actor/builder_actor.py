@@ -39,6 +39,12 @@ class BuilderActor:
         # Reset the builder environment.
         builder_actor_input = self._env.reset(builder_subkeys[0])
 
+        # Sample a DIAYN skill for this episode
+        skill_id = np.int32(np.random.randint(0, self._learner.config.num_skills))
+        builder_actor_input = builder_actor_input.replace(
+            env=builder_actor_input.env.replace(skill_id=skill_id)
+        )
+
         # Rollout the builder environment.
         for builder_step_index in range(1, builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
@@ -54,6 +60,10 @@ class BuilderActor:
             if builder_actor_input.env.done.item():
                 break
             builder_actor_input = self._env.step(builder_agent_output)
+            # Preserve skill_id across steps
+            builder_actor_input = builder_actor_input.replace(
+                env=builder_actor_input.env.replace(skill_id=skill_id)
+            )
 
         if len(build_traj) < builder_unroll_length:
             build_traj += [builder_transition] * (

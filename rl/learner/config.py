@@ -94,6 +94,11 @@ class Porygon2LearnerConfig:
     builder_entropy_loss_coef: float = 0.1
     normalising_constant: int = 20
 
+    # DIAYN params
+    num_skills: int = 8
+    diayn_reward_coef: float = 0.1
+    diayn_discriminator_loss_coef: float = 1.0
+
     # Smogon Generation
     generation: GenT = 9
     smogon_format: SmogonFormatT = "ou"

@@ -7,6 +7,7 @@ from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
+    DiscriminatorHeadOutput,
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
@@ -107,3 +108,16 @@ class RegressionValueLogitHead(nn.Module):
         x = activation_fn(layer_norm(x))
         x = dense_layer(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
+
+
+class DiscriminatorHead(nn.Module):
+    """Discriminator head for DIAYN: predicts skill index from state embedding."""
+
+    num_skills: int
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> DiscriminatorHeadOutput:
+        x = activation_fn(layer_norm(x))
+        logits = dense_layer(self.num_skills, dtype=x.dtype)(x)
+        log_probs = nn.log_softmax(logits.astype(jnp.float32))
+        return DiscriminatorHeadOutput(logits=logits, log_probs=log_probs)
