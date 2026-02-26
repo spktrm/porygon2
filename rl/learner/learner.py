@@ -44,6 +44,17 @@ def spo_objective(
     ) / (2 * clip_ppo)
 
 
+def diayn_reward(
+    *,
+    discriminator_log_probs: jax.Array,
+    skill_ids: jax.Array,
+) -> jax.Array:
+    """Compute DIAYN intrinsic reward: log q(z|s) for the true skill z."""
+    return jnp.take_along_axis(
+        discriminator_log_probs, skill_ids[..., None], axis=-1
+    ).squeeze(-1)
+
+
 def ppo_objective(
     *,
     policy_ratios: jax.Array,
@@ -262,10 +273,13 @@ def train_step(
 
         # DIAYN: intrinsic reward = log q(z|s) per step
         skill_ids = player_transitions.env_output.skill_id
-        diayn_reward = jnp.take_along_axis(
-            learner_discriminator_head.log_probs, skill_ids[..., None], axis=-1
-        ).squeeze(-1)
-        diayn_advantages = player_advantages + config.diayn_reward_coef * diayn_reward
+        player_diayn_reward = diayn_reward(
+            discriminator_log_probs=learner_discriminator_head.log_probs,
+            skill_ids=skill_ids,
+        )
+        diayn_advantages = (
+            player_advantages + config.diayn_reward_coef * player_diayn_reward
+        )
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
@@ -304,7 +318,7 @@ def train_step(
 
         # DIAYN: discriminator cross-entropy loss (predict skill from state)
         loss_discriminator = average(
-            -diayn_reward,
+            -player_diayn_reward,
             player_valid,
         )
 
@@ -339,7 +353,7 @@ def train_step(
                 mask=player_valid,
             ),
             # DIAYN stats
-            player_diayn_reward=average(diayn_reward, player_valid),
+            player_diayn_reward=average(player_diayn_reward, player_valid),
         )
 
     def builder_loss_fn(params: Params):
@@ -367,11 +381,12 @@ def train_step(
 
         # DIAYN: intrinsic reward = log q(z|s) per step
         skill_ids = builder_transitions.env_output.skill_id
-        diayn_reward = jnp.take_along_axis(
-            learner_discriminator_head.log_probs, skill_ids[..., None], axis=-1
-        ).squeeze(-1)
+        builder_diayn_reward = diayn_reward(
+            discriminator_log_probs=learner_discriminator_head.log_probs,
+            skill_ids=skill_ids,
+        )
         diayn_builder_advantages = (
-            builder_advantages + config.diayn_reward_coef * diayn_reward
+            builder_advantages + config.diayn_reward_coef * builder_diayn_reward
         )
 
         # Calculate the losses.
@@ -418,7 +433,7 @@ def train_step(
 
         # DIAYN: discriminator cross-entropy loss (predict skill from state)
         loss_discriminator = average(
-            -diayn_reward,
+            -builder_diayn_reward,
             builder_valid,
         )
 
@@ -452,7 +467,7 @@ def train_step(
                 mask=builder_valid,
             ),
             # DIAYN stats
-            builder_diayn_reward=average(diayn_reward, builder_valid),
+            builder_diayn_reward=average(builder_diayn_reward, builder_valid),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
