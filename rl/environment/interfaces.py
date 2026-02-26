@@ -109,6 +109,9 @@ class BuilderEnvOutput:
     curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
 
+    # True for steps that are editing an already-placed token (uses bidirectional attention)
+    is_edit: ArrayLike = ()
+
 
 @dataclass
 class BuilderHistoryOutput:

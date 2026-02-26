@@ -339,6 +339,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 done=done,
                 species_reward=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
+                is_edit=np.zeros_like(done, dtype=np.bool_),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,

@@ -203,6 +203,7 @@ class Porygon2BuilderModel(nn.Module):
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
+        use_bidirectional: bool = False,
     ):
         species_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -264,8 +265,11 @@ class Porygon2BuilderModel(nn.Module):
             (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
         )
         seq_len = packed_set_embeddings.shape[0]
-        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
-        return self.encoder(packed_set_embeddings, causal_mask)
+        if use_bidirectional:
+            attention_mask = jnp.ones((1, seq_len, seq_len), dtype=bool)
+        else:
+            attention_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
+        return self.encoder(packed_set_embeddings, attention_mask)
 
     def _forward(
         self,
@@ -428,17 +432,38 @@ class Porygon2BuilderModel(nn.Module):
         team_tokens = actor_input.history.packed_team_member_tokens
         order = actor_input.history.order
 
-        hidden_states = self._encode_team(
-            jnp.take(team_tokens, order, axis=0),
-            actor_input.history.member_position,
-            actor_input.history.member_attribute,
-            species_keys,
-            ability_keys,
-            item_keys,
-            move_keys,
+        encode_kwargs = dict(
+            position_id=actor_input.history.member_position,
+            attribute_id=actor_input.history.member_attribute,
+            species_keys=species_keys,
+            ability_keys=ability_keys,
+            item_keys=item_keys,
+            move_keys=move_keys,
         )
+        ordered_tokens = jnp.take(team_tokens, order, axis=0)
 
-        hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
+        is_edit = actor_input.env.is_edit
+        has_edit_steps = not isinstance(is_edit, tuple)
+
+        # Always compute causal (autoregressive) hidden states for normal steps.
+        causal_hidden_states = self._encode_team(
+            ordered_tokens, use_bidirectional=False, **encode_kwargs
+        )
+        causal_state = jnp.take(causal_hidden_states, actor_input.env.ts, axis=0)
+
+        if has_edit_steps:
+            # For edit steps, compute bidirectional hidden states so the edited
+            # token can attend to all already-placed tokens in the team.
+            bidir_hidden_states = self._encode_team(
+                ordered_tokens, use_bidirectional=True, **encode_kwargs
+            )
+            bidir_state = jnp.take(bidir_hidden_states, actor_input.env.ts, axis=0)
+            # Select bidirectional state where is_edit=True, causal elsewhere.
+            hidden_state = jnp.where(
+                jnp.asarray(is_edit)[..., None], bidir_state, causal_state
+            )
+        else:
+            hidden_state = causal_state
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),

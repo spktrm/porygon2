@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
-import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
@@ -482,12 +482,48 @@ def train_step(
     return player_state, builder_state, training_logs
 
 
+def _pad_builder_transitions(
+    batch: list[Trajectory],
+) -> list[Trajectory]:
+    """Pad builder transitions to a uniform length within the batch.
+
+    When edit steps are appended to some trajectories their builder transition
+    length may differ from trajectories that needed no edits.  We pad shorter
+    trajectories by repeating their last transition so every trajectory in the
+    batch has the same builder length before stacking.
+    """
+    max_len = max(traj.builder_transitions.env_output.done.shape[0] for traj in batch)
+
+    padded: list[Trajectory] = []
+    for traj in batch:
+        curr_len = traj.builder_transitions.env_output.done.shape[0]
+        n_pad = max_len - curr_len
+        if n_pad == 0:
+            padded.append(traj)
+            continue
+
+        last = jax.tree.map(
+            lambda x: np.repeat(x[-1:], n_pad, axis=0),
+            traj.builder_transitions,
+        )
+        extended = jax.tree.map(
+            lambda a, b: np.concatenate([a, b], axis=0),
+            traj.builder_transitions,
+            last,
+        )
+        padded.append(traj.replace(builder_transitions=extended))
+
+    return padded
+
+
 def _stack_and_pad_batch(
     batch: list[Trajectory],
     player_transition_resolution: int = 50,
     player_history_resolution: int = 128,
 ) -> Trajectory:
     """Stacks a list of trajectories and pads them to a fixed resolution."""
+    batch = _pad_builder_transitions(batch)
+
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )

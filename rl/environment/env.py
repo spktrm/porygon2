@@ -168,6 +168,7 @@ class TeamBuilderEnvironment:
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
                 done=jnp.array(False, dtype=jnp.bool),
+                is_edit=jnp.array(False, dtype=jnp.bool_),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=jnp.zeros(
@@ -415,6 +416,7 @@ class TeamBuilderEnvironment:
                         jnp.array(0.0, dtype=jnp.float32),
                     ),
                     done=jnp.array(False, dtype=jnp.bool),
+                    is_edit=jnp.array(False, dtype=jnp.bool_),
                 ),
                 history=state.history.replace(
                     packed_team_member_tokens=new_packed_team_member_tokens,
