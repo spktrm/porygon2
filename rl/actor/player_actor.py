@@ -2,22 +2,9 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
-from rl.environment.data import (
-    CAT_VF_SUPPORT,
-    NUM_ABILITIES,
-    NUM_GENDERS,
-    NUM_ITEMS,
-    NUM_MOVES,
-    NUM_NATURES,
-    NUM_PACKED_SET_FEATURES,
-    NUM_SPECIES,
-    NUM_TYPECHART,
-)
-from rl.environment.env import SinglePlayerSyncEnvironment
+from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
+from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.environment.interfaces import (
-    BuilderActorInput,
-    BuilderEnvOutput,
-    BuilderHistoryOutput,
     BuilderTransition,
     PlayerActorInput,
     PlayerAgentOutput,
@@ -27,7 +14,6 @@ from rl.environment.interfaces import (
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import (
-    NUM_PACKED_SET_FEATURES,
     clip_history,
     clip_packed_history,
     split_rng,
@@ -44,12 +30,14 @@ class PlayerActor:
         self,
         agent: Agent,
         env: SinglePlayerSyncEnvironment,
+        builder_env: TeamBuilderEnvironment,
         unroll_length: int,
         learner: Learner,
         rng_seed: int = 42,
     ):
         self._agent = agent
         self._env = env
+        self._builder_env = builder_env
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
@@ -67,102 +55,6 @@ class PlayerActor:
             src=agent_output.actor_output.action_head.src_index.item(),
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
-
-    def _run_edit_steps(
-        self,
-        rng_key: jax.Array,
-        builder_params: Params,
-        builder_history: BuilderHistoryOutput,
-    ) -> tuple[list[BuilderTransition], np.ndarray]:
-        """Run builder edit steps for any team members with invalid teratypes.
-
-        Uses bidirectional attention (is_edit=True) so each edited token can
-        attend to the full already-placed team context when selecting a
-        replacement value.
-
-        Returns a list of BuilderTransition items (one per invalid member) and
-        the updated packed_team_member_tokens array.
-        """
-        team_tokens = np.array(builder_history.packed_team_member_tokens)
-        order = np.array(builder_history.order)
-
-        edit_traj: list[BuilderTransition] = []
-        # 6 team members; pre-split rng keys to index by member position.
-        edit_rng_keys = split_rng(rng_key, 6)
-
-        for m in range(6):
-            flat_idx = (
-                m * NUM_PACKED_SET_FEATURES
-                + PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
-            )
-            if team_tokens[flat_idx] != 0:
-                continue  # Teratype already valid; no edit needed.
-
-            # Find where in the builder ordering this token was originally placed.
-            # generate_order always includes every non-UNSPECIFIED slot, so
-            # flat_idx (teratype, index 17 in each member block) must be present.
-            matches = np.where(order == flat_idx)[0]
-            if len(matches) == 0:
-                continue  # Defensive: position not found; skip this member.
-            k = int(matches[0])
-
-            # Build a broad teratype mask: all types are valid except UNSPECIFIED (0).
-            teratype_mask = np.ones(NUM_TYPECHART, dtype=np.bool_)
-            teratype_mask[0] = False
-
-            # Construct the edit step input.  The history carries the full
-            # (possibly partially-invalid) team so the bidirectional encoder can
-            # use all surrounding context when making the edit decision.
-            edit_actor_input = BuilderActorInput(
-                env=BuilderEnvOutput(
-                    species_mask=np.ones(NUM_SPECIES, dtype=np.bool_),
-                    item_mask=np.ones(NUM_ITEMS, dtype=np.bool_),
-                    ability_mask=np.ones(NUM_ABILITIES, dtype=np.bool_),
-                    move_mask=np.ones(NUM_MOVES, dtype=np.bool_),
-                    ev_mask=np.ones(64, dtype=np.bool_),
-                    teratype_mask=teratype_mask,
-                    nature_mask=np.ones(NUM_NATURES, dtype=np.bool_),
-                    gender_mask=np.ones(NUM_GENDERS, dtype=np.bool_),
-                    done=np.array(False, dtype=np.bool_),
-                    ts=np.array(k, dtype=np.int32),
-                    ev_reward=np.array(0.0, dtype=np.float32),
-                    species_reward=np.array(0.0, dtype=np.float32),
-                    curr_order=np.array(flat_idx, dtype=np.int32),
-                    curr_attribute=np.array(
-                        PackedSetFeature.PACKED_SET_FEATURE__TERATYPE,
-                        dtype=np.int32,
-                    ),
-                    curr_position=np.array(m, dtype=np.int32),
-                    is_edit=np.array(True, dtype=np.bool_),
-                ),
-                history=BuilderHistoryOutput(
-                    packed_team_member_tokens=team_tokens,
-                    order=order,
-                    member_position=builder_history.member_position,
-                    member_attribute=builder_history.member_attribute,
-                ),
-            )
-
-            edit_agent_output = self._agent.step_builder(
-                edit_rng_keys[m],
-                builder_params,
-                edit_actor_input,
-            )
-
-            # Apply the selected teratype and continue.
-            new_teratype = int(
-                edit_agent_output.actor_output.action_head.action_index.item()
-            )
-            team_tokens[flat_idx] = new_teratype
-
-            edit_traj.append(
-                BuilderTransition(
-                    env_output=edit_actor_input.env,
-                    agent_output=edit_agent_output,
-                )
-            )
-
-        return edit_traj, team_tokens
 
     def unroll(
         self, rng_key: jax.Array, player_params: Params, builder_params: Params
@@ -182,16 +74,52 @@ class PlayerActor:
 
         player_traj = []
 
-        # Split RNG: one key for edit steps, remaining for player steps.
+        # Split RNG: one key per potential edit step, then remaining for player.
         rng_key, edit_rng = split_rng(rng_key)
         player_subkeys = split_rng(rng_key, self._unroll_length)
 
-        # Run edit steps for any team members with invalid teratypes before
-        # starting the player game.  Edit transitions are appended to the
-        # builder trajectory so the builder model is trained on them too.
-        edit_transitions, team_tokens = self._run_edit_steps(
-            edit_rng, builder_params, builder_history
-        )
+        # --- Edit phase ----------------------------------------------------------
+        # For any team member whose teratype token is 0 (UNSPECIFIED), ask the
+        # builder model to choose a valid teratype using bidirectional attention
+        # (ts >= num_team_members * NUM_PACKED_SET_FEATURES signals edit mode in
+        # the model).  All logic for constructing the edit step – including the
+        # species-conditioned teratype mask and the correct ts offset – lives in
+        # TeamBuilderEnvironment.make_edit_step.
+        team_tokens = np.array(builder_history.packed_team_member_tokens)
+        edit_transitions: list[BuilderTransition] = []
+        edit_rng_keys = split_rng(edit_rng, self._builder_env.num_team_members)
+
+        for m in range(self._builder_env.num_team_members):
+            flat_idx = (
+                m * NUM_PACKED_SET_FEATURES
+                + PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
+            )
+            if team_tokens[flat_idx] != 0:
+                continue  # Teratype already valid; no edit needed.
+
+            # Pass a history that reflects any teratypes already edited in this
+            # loop so subsequent edits see the up-to-date team context.
+            current_history = builder_history.replace(
+                packed_team_member_tokens=team_tokens
+            )
+            edit_input = self._builder_env.make_edit_step(current_history, m)
+
+            edit_agent_output = self._agent.step_builder(
+                edit_rng_keys[m],
+                builder_params,
+                edit_input,
+            )
+
+            new_teratype = int(
+                edit_agent_output.actor_output.action_head.action_index.item()
+            )
+            team_tokens[flat_idx] = new_teratype
+            edit_transitions.append(
+                BuilderTransition(
+                    env_output=edit_input.env,
+                    agent_output=edit_agent_output,
+                )
+            )
 
         if edit_transitions:
             edit_stacked: BuilderTransition = jax.tree.map(
@@ -205,6 +133,7 @@ class PlayerActor:
             builder_history = builder_history.replace(
                 packed_team_member_tokens=team_tokens
             )
+        # -------------------------------------------------------------------------
 
         player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
 

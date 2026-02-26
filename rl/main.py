@@ -16,7 +16,7 @@ import wandb
 from rl.actor.agent import Agent
 from rl.actor.builder_actor import BuilderActor
 from rl.actor.player_actor import PlayerActor
-from rl.environment.env import SinglePlayerSyncEnvironment
+from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
 from rl.learner.config import create_train_state, get_learner_config, load_train_state
 from rl.learner.learner import CAT_VF_SUPPORT, Learner
 from rl.model.builder_model import get_builder_model
@@ -235,6 +235,10 @@ def main(args: argparse.Namespace):
                         f"train:p{player_id}g{game_id:02d}",
                         generation=learner_config.generation,
                     ),
+                    builder_env=TeamBuilderEnvironment(
+                        generation=learner_config.generation,
+                        smogon_format=learner_config.smogon_format,
+                    ),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
                     rng_seed=len(actor_threads) + salt,
@@ -259,6 +263,10 @@ def main(args: argparse.Namespace):
                 env=SinglePlayerSyncEnvironment(
                     f"eval-heuristic:{eval_id:04d}",
                     generation=learner_config.generation,
+                ),
+                builder_env=TeamBuilderEnvironment(
+                    generation=learner_config.generation,
+                    smogon_format=learner_config.smogon_format,
                 ),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,

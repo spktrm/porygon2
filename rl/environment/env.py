@@ -1,4 +1,5 @@
 import functools
+import numpy as np
 
 import jax
 import jax.numpy as jnp
@@ -23,6 +24,7 @@ from rl.environment.protos.service_pb2 import (
     StepRequest,
     WorkerResponse,
 )
+from rl.environment.protos.enums_pb2 import TypechartEnum
 from rl.environment.utils import generate_order, process_state
 
 SERVER_URI = "ws://localhost:8080"
@@ -100,6 +102,10 @@ class TeamBuilderEnvironment:
         self._generation = generation
         self._num_team_members = num_team_members
 
+    @property
+    def num_team_members(self) -> int:
+        return self._num_team_members
+
         # Load Masks
         teammate_mask = jnp.load(
             f"data/data/gen{generation}/mask/teammates_mask_{smogon_format}.npy"
@@ -168,7 +174,6 @@ class TeamBuilderEnvironment:
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
                 done=jnp.array(False, dtype=jnp.bool),
-                is_edit=jnp.array(False, dtype=jnp.bool_),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=jnp.zeros(
@@ -416,7 +421,6 @@ class TeamBuilderEnvironment:
                         jnp.array(0.0, dtype=jnp.float32),
                     ),
                     done=jnp.array(False, dtype=jnp.bool),
-                    is_edit=jnp.array(False, dtype=jnp.bool_),
                 ),
                 history=state.history.replace(
                     packed_team_member_tokens=new_packed_team_member_tokens,
@@ -424,6 +428,71 @@ class TeamBuilderEnvironment:
             )
 
         return jax.lax.cond(is_done, _done_branch, _continue_branch, operand=None)
+
+    def make_edit_step(
+        self,
+        history: BuilderHistoryOutput,
+        member_idx: int,
+    ) -> BuilderActorInput:
+        """Return a BuilderActorInput for editing *member_idx*'s teratype.
+
+        The step uses ``ts = num_team_members * NUM_PACKED_SET_FEATURES + j``
+        where ``j`` is the position of this teratype slot in the original build
+        order.  The model uses ``ts >= num_team_members * NUM_PACKED_SET_FEATURES``
+        to detect edit steps and switch to bidirectional attention.
+        """
+        team_tokens = np.array(history.packed_team_member_tokens)
+        order = np.array(history.order)
+
+        flat_idx = (
+            member_idx * NUM_PACKED_SET_FEATURES
+            + PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
+        )
+
+        # Position of this slot in the original autoregressive build order.
+        j = int(np.argmax(order == flat_idx))
+
+        # Edit ts is offset beyond the full token array so it is always >=
+        # num_team_members * NUM_PACKED_SET_FEATURES.
+        edit_ts = self._num_team_members * NUM_PACKED_SET_FEATURES + j
+
+        # Use the species-specific teratype mask when the species is known.
+        species_idx = int(
+            team_tokens[
+                member_idx * NUM_PACKED_SET_FEATURES
+                + PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+        )
+        if species_idx > 0:
+            teratype_mask = np.array(self.teratype_masks[species_idx])
+        else:
+            teratype_mask = np.array(self.initial_teratype_mask)
+        teratype_mask = teratype_mask.copy()
+        # Disable UNSPECIFIED (0) – a valid edit must choose a real type.
+        teratype_mask[TypechartEnum.TYPECHART_ENUM___UNSPECIFIED] = False
+
+        return BuilderActorInput(
+            env=BuilderEnvOutput(
+                species_mask=self.initial_species_mask,
+                item_mask=self.initial_item_mask,
+                ability_mask=self.initial_ability_mask,
+                move_mask=self.initial_move_mask,
+                ev_mask=self.initial_ev_mask,
+                teratype_mask=teratype_mask,
+                nature_mask=self.initial_nature_mask,
+                gender_mask=self.initial_gender_mask,
+                ts=jnp.array(edit_ts, dtype=jnp.int32),
+                curr_order=jnp.array(flat_idx, dtype=jnp.int32),
+                curr_attribute=jnp.array(
+                    PackedSetFeature.PACKED_SET_FEATURE__TERATYPE, dtype=jnp.int32
+                ),
+                curr_position=jnp.array(member_idx, dtype=jnp.int32),
+                done=jnp.array(False, dtype=jnp.bool_),
+                ev_reward=jnp.array(0.0, dtype=jnp.float32),
+                species_reward=jnp.array(0.0, dtype=jnp.float32),
+            ),
+            history=history,
+        )
 
     def _get_autofill_state(
         self, state: BuilderActorInput

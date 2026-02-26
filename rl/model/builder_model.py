@@ -442,31 +442,41 @@ class Porygon2BuilderModel(nn.Module):
         )
         ordered_tokens = jnp.take(team_tokens, order, axis=0)
 
-        is_edit = actor_input.env.is_edit
-        # is_edit defaults to () (empty tuple) when the field is unset; treat as
-        # array when it is an actual jax/numpy array (or numpy scalar) containing
-        # per-step flags.
-        has_edit_steps = isinstance(is_edit, (jax.Array, np.ndarray, np.generic))
+        # Edit steps are identified by ts >= num_team_members * NUM_PACKED_SET_FEATURES.
+        # This is a pure JAX comparison – fully JIT-compatible, no Python isinstance.
+        _EDIT_TS_OFFSET = 6 * NUM_PACKED_SET_FEATURES
+        ts = actor_input.env.ts
+        is_edit = ts >= _EDIT_TS_OFFSET
 
-        # Always compute causal (autoregressive) hidden states for normal steps.
-        causal_hidden_states = self._encode_team(
+        # Causal (autoregressive) encoding – always required for normal steps.
+        causal_hidden = self._encode_team(
             ordered_tokens, use_bidirectional=False, **encode_kwargs
         )
-        causal_state = jnp.take(causal_hidden_states, actor_input.env.ts, axis=0)
+        seq_len = causal_hidden.shape[0]
 
-        if has_edit_steps:
-            # For edit steps, compute bidirectional hidden states so the edited
-            # token can attend to all already-placed tokens in the team.
-            bidir_hidden_states = self._encode_team(
+        # Bidirectional encoding – only computed when the batch contains edit
+        # steps (ts >= _EDIT_TS_OFFSET).  jax.lax.cond traces both branches but
+        # executes only the selected one at runtime, keeping this JIT-compatible.
+        any_edit = jnp.any(is_edit)
+        bidir_hidden = jax.lax.cond(
+            any_edit,
+            lambda: self._encode_team(
                 ordered_tokens, use_bidirectional=True, **encode_kwargs
-            )
-            bidir_state = jnp.take(bidir_hidden_states, actor_input.env.ts, axis=0)
-            # Select bidirectional state where is_edit=True, causal elsewhere.
-            hidden_state = jnp.where(
-                jnp.asarray(is_edit)[..., None], bidir_state, causal_state
-            )
-        else:
-            hidden_state = causal_state
+            ),
+            lambda: causal_hidden,
+        )
+
+        # Map ts to a valid index into the hidden-state sequence.
+        # Normal steps:  seq_pos = ts  (causal attention up to step ts)
+        # Edit steps:    seq_pos = ts - _EDIT_TS_OFFSET  (original build position)
+        normal_pos = jnp.clip(ts, 0, seq_len - 1)
+        edit_pos = jnp.clip(ts - _EDIT_TS_OFFSET, 0, seq_len - 1)
+
+        causal_state = jnp.take(causal_hidden, normal_pos, axis=0)  # (..., hidden)
+        bidir_state = jnp.take(bidir_hidden, edit_pos, axis=0)  # (..., hidden)
+
+        # Element-wise selection – JIT-compatible via jnp.where.
+        hidden_state = jnp.where(is_edit[..., None], bidir_state, causal_state)
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
