@@ -443,7 +443,10 @@ class Porygon2BuilderModel(nn.Module):
         ordered_tokens = jnp.take(team_tokens, order, axis=0)
 
         is_edit = actor_input.env.is_edit
-        has_edit_steps = not isinstance(is_edit, tuple)
+        # is_edit defaults to () (empty tuple) when the field is unset; treat as
+        # array when it is an actual jax/numpy array (or numpy scalar) containing
+        # per-step flags.
+        has_edit_steps = isinstance(is_edit, (jax.Array, np.ndarray, np.generic))
 
         # Always compute causal (autoregressive) hidden states for normal steps.
         causal_hidden_states = self._encode_team(
