@@ -104,6 +104,9 @@ class TeamBuilderEnvironment:
         teammate_mask = jnp.load(
             f"data/data/gen{generation}/mask/teammates_mask_{smogon_format}.npy"
         )
+        self.species_usage = jnp.load(
+            f"data/data/gen{generation}/usage/species_usage_{smogon_format}.npy"
+        )
         self.item_masks = jnp.load(
             f"data/data/gen{generation}/mask/items_mask_{smogon_format}.npy"
         )
@@ -159,6 +162,8 @@ class TeamBuilderEnvironment:
                 nature_mask=self.initial_nature_mask,
                 gender_mask=self.initial_gender_mask,
                 ts=jnp.array(0, dtype=jnp.int32),
+                ev_reward=jnp.array(0, dtype=jnp.float32),
+                species_reward=jnp.array(0, dtype=jnp.float32),
                 curr_order=order[0],
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
@@ -239,6 +244,7 @@ class TeamBuilderEnvironment:
     ) -> BuilderActorInput:
         ts = state.env.ts
         curr_order = state.env.curr_order
+        curr_attribute = state.env.curr_attribute
         action_index = action_index.squeeze()
 
         new_packed_team_member_tokens = state.history.packed_team_member_tokens.at[
@@ -250,9 +256,18 @@ class TeamBuilderEnvironment:
         is_done = next_ts >= total_steps
 
         def _done_branch(_):
+            team_evs = new_packed_team_member_tokens.reshape(
+                -1, NUM_PACKED_SET_FEATURES
+            )[
+                ...,
+                PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+                + 1,
+            ]
+            ev_fulfillment_per_member = team_evs.sum(axis=-1) / 127.5
             return state.replace(
                 env=state.env.replace(
                     ts=next_ts,
+                    ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -394,6 +409,11 @@ class TeamBuilderEnvironment:
                     curr_order=next_order,
                     curr_attribute=next_attribute,
                     curr_position=next_position,
+                    species_reward=jnp.where(
+                        curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
+                        jnp.take(self.species_usage, action_index, axis=0, mode="clip"),
+                        jnp.array(0.0, dtype=jnp.float32),
+                    ),
                     done=jnp.array(False, dtype=jnp.bool),
                 ),
                 history=state.history.replace(

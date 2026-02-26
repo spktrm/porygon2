@@ -19,9 +19,9 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
+    CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
-    RegressionValueLogitHead,
     sample_categorical,
 )
 from rl.model.modules import MLP
@@ -39,7 +39,7 @@ class Porygon2PlayerModel(nn.Module):
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.value_head_mlp = MLP()
-        self.value_head = RegressionValueLogitHead(self.cfg.value_head)
+        self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
     def post_head(
         self,

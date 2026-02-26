@@ -3,9 +3,9 @@ from typing import Sequence, TypeVar
 import jax
 import jax.numpy as jnp
 import numpy as np
-import rlax
 
 from rl.environment.data import (
+    CAT_VF_SUPPORT,
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ABILITIES,
@@ -45,6 +45,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.model.heads import CategoricalValueHeadOutput
 
 T = TypeVar("T")
 
@@ -108,6 +109,23 @@ def clip_packed_history(
     )
 
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
+
+
+def jax_segmented_cumsum(x: jnp.ndarray, discount: jnp.ndarray) -> jnp.ndarray:
+    """
+    Parallel implementation of your @torch.jit.script loop.
+    Replaces O(T) sequential loop with O(log T) associative scan.
+    """
+
+    def binary_op(right, left):
+        # The scan operator for: y[t] = x[t] + discount[t] * y[t+1]
+        val_l, disc_l = left
+        val_r, disc_r = right
+        return val_l + disc_l * val_r, disc_l * disc_r
+
+    # Flip to treat the 'future' as the prefix for the scan
+    vals, _ = jax.lax.associative_scan(binary_op, (x[::-1], discount[::-1]))
+    return vals[::-1]
 
 
 def get_action_mask(state: EnvironmentState):
@@ -177,9 +195,16 @@ def process_state(
         .astype(np.int32)
     )
 
-    win_reward_token = info[InfoFeature.INFO_FEATURE__WIN_REWARD]
-    # Divide by MAX_RATIO_TOKEN to normalize the win reward to [-1, 1] since we store as int16
-    win_reward = win_reward_token / MAX_RATIO_TOKEN
+    is_done = info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_)
+
+    # Rewards are stored as int16 in the info array, so we need to convert them back to float32
+    win_reward = np.array(
+        [
+            info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
+            info[InfoFeature.INFO_FEATURE__TIE_REWARD],
+            info[InfoFeature.INFO_FEATURE__WIN_REWARD],
+        ]
+    )
 
     fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
     # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
@@ -187,7 +212,7 @@ def process_state(
 
     env_step = PlayerEnvOutput(
         info=info,
-        done=info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_),
+        done=is_done,
         win_reward=win_reward.astype(np.float32),
         fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
@@ -231,7 +256,11 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     return (
         PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
-            value_head=np.zeros_like(env.info[..., 0], dtype=np.float32),
+            value_head=CategoricalValueHeadOutput(
+                logits=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
+                log_probs=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
+                expectation=np.zeros((env.done.shape[0], 1), dtype=np.float32),
+            ),
             action_head=PolicyHeadOutput(
                 action_index=env.action_mask.reshape(
                     env.action_mask.shape[:-2] + (-1,)
@@ -241,44 +270,34 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
 
 
-@jax.jit(static_argnames=["r", "N"])
-def generate_order(key, r, N):
-    """
-    Generates a build order where Species (Index 1) is always selected first
-    for each team member, followed by a random permutation of the remaining attributes.
+def generate_order(key: jax.Array, r: int, N: int):
+    total_size = r * N
+    selection_order = jax.random.permutation(key, jnp.arange(total_size))
 
-    Args:
-        key: JAX random key
-        r: Number of team members (rows)
-        N: Number of features per member (NUM_PACKED_SET_FEATURES)
-    """
-    # 1. Define the specific index for Species (Enum Value 1)
-    SPECIES_IDX = 1
+    # 1. Entry point is now i % N == 1
+    entry_priorities = selection_order.reshape(r, N)[:, 1]
+    block_gate_priority = jnp.repeat(entry_priorities, N)
 
-    # 2. Identify "Other" attributes to shuffle (Indices 2 to N-1)
-    # We skip 0 (UNSPECIFIED) and 1 (SPECIES)
-    other_indices = jnp.arange(SPECIES_IDX + 1, N)
+    # 2. Effective priority
+    effective_priority = jnp.maximum(selection_order, block_gate_priority)
 
-    # 3. Define a function to generate the order for a single team member
-    def get_member_order(k):
-        # Shuffle only the non-species attributes
-        shuffled_others = jax.random.permutation(k, other_indices)
-        # Prepend Species index to the shuffled others
-        return jnp.concatenate([jnp.array([SPECIES_IDX]), shuffled_others])
+    # 3. Get the full sorted order
+    sorted_indices = jnp.argsort(effective_priority)
 
-    # 4. Generate keys for each team member
-    keys = jax.random.split(key, r)
+    # 4. FIXED: Instead of boolean masking, we use a static filter
+    # We find which positions in the 'sorted_indices' do NOT contain an i % N == 0
+    # But wait—it's easier to just calculate the valid indices first!
 
-    # 5. Apply logic to all members (r, N-1)
-    local_orders = jax.vmap(get_member_order)(keys)
+    # Alternative JIT-safe approach:
+    # Use jnp.where with a fixed-size size argument or simple slicing if possible.
+    # Since we must return r * (N-1), we use jnp.take with static indices.
 
-    # 6. Add offsets to convert local indices (0..N-1) to global flattened indices
-    # Shape (r, 1) broadcasted to (r, N-1)
-    offsets = (jnp.arange(r) * N)[:, None]
-    global_orders = local_orders + offsets
+    is_valid = (sorted_indices % N) != 0
+    # Sort the boolean mask to push all 'True' values to the front
+    # and then slice the first r*(N-1) elements.
+    valid_positions = jnp.argsort(~is_valid)
 
-    # 7. Flatten to match the expected 1D output shape
-    return global_orders.reshape(-1)
+    return sorted_indices[valid_positions[: r * (N - 1)]]
 
 
 def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
@@ -318,6 +337,8 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 curr_attribute=member_attribute,
                 curr_position=member_position,
                 done=done,
+                species_reward=np.zeros_like(done, dtype=np.float32),
+                ev_reward=np.zeros_like(done, dtype=np.float32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,
@@ -330,8 +351,10 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             conditional_entropy_head=RegressionValueHeadOutput(
                 logits=np.zeros_like(done, dtype=np.float32)
             ),
-            value_head=RegressionValueHeadOutput(
-                logits=np.zeros_like(done, dtype=np.float32)
+            value_head=CategoricalValueHeadOutput(
+                logits=np.zeros((done.shape[0], 1, 3), dtype=np.float32),
+                log_probs=np.zeros((done.shape[0], 1, 3), dtype=np.float32),
+                expectation=np.zeros((done.shape[0], 1), dtype=np.float32),
             ),
             action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
@@ -345,27 +368,49 @@ def main():
     ex_player_input, ex_player_output = get_ex_player_step()
     ex_builder_input, ex_builder_output = get_ex_builder_step()
 
-    rewards_tm1 = ex_player_input.env.win_reward.squeeze(-1)
-    valid = np.bitwise_not(ex_player_input.env.done).squeeze(-1).astype(np.float32)
-
-    rewards = np.concatenate((rewards_tm1[1:], np.zeros_like(rewards_tm1[-1:])))
-
-    oracle_value = rewards[::-1].cumsum()[::-1]
-    perturbed_oracle_value = oracle_value + np.random.normal(
-        scale=0.5, size=oracle_value.shape
+    valid = jnp.concatenate(
+        (
+            np.ones_like(ex_builder_input.env.done),
+            np.bitwise_not(ex_player_input.env.done),
+        )
     )
 
-    v_tm1 = valid * perturbed_oracle_value
-    v_t = np.concatenate((v_tm1[1:], v_tm1[-1:]))
-    discounts = (np.concatenate((valid[1:], np.zeros_like(valid[-1:])))).astype(
-        v_t.dtype
+    value_probs = jnp.exp(
+        jnp.concatenate(
+            (
+                ex_builder_output.value_head.log_probs,
+                ex_player_output.value_head.log_probs,
+            ),
+            axis=0,
+        )
+    )
+    value_probs = value_probs / value_probs.sum(axis=-1, keepdims=True)
+
+    cat_reward = jnp.concatenate(
+        (
+            jnp.zeros_like(ex_builder_output.value_head.log_probs),
+            ex_player_input.env.win_reward,
+        )
+    )
+    value_target = (
+        cat_reward
+        + jnp.concatenate((value_probs[1:], jnp.zeros_like(value_probs[0:1])))
+        * valid[..., None]
     )
 
-    vtrace = rlax.vtrace_td_error_and_advantage(
-        v_tm1, v_t, rewards, discounts, valid, lambda_=0.95
-    )
-    v_tm1 + vtrace.errors
-    print()
+    cat_value_delta = value_target - value_probs
+    scalar_value_delta = cat_value_delta @ CAT_VF_SUPPORT
+
+    td_lambda = 0.8
+    gae_lambda = 0.5
+
+    td_lambdas = td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
+    gae_lambdas = gae_lambda * valid.astype(cat_value_delta.dtype)
+
+    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
+    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
+    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
+    print(returns, advantages)
 
 
 if __name__ == "__main__":

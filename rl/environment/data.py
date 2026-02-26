@@ -1,11 +1,9 @@
-import functools
 import json
 import os
 import traceback
 
 import jax.numpy as jnp
 import numpy as np
-import requests
 
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
@@ -156,52 +154,8 @@ def toid(string: str) -> str:
     return "".join(c for c in string if c.isalnum() or c == "_").lower()
 
 
-@functools.lru_cache(maxsize=None)
-def do_request(url: str, **kwargs):
-    return requests.get(url, **kwargs).json()
-
-
-def make_species_count(generation: int, smogon_format: str):
-    data = do_request(
-        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
-    )
-    species_count = np.zeros(NUM_SPECIES, dtype=np.float32)
-    for k, v in data["pokemon"].items():
-        species_id = STOI["species"][toid(k)]
-        species_count[species_id] = v["usage"]["raw"]
-    return species_count
-
-
-def make_teammate_count(generation: int, smogon_format: str):
-    data = do_request(
-        f"https://raw.githubusercontent.com/pkmn/smogon/refs/heads/main/data/stats/gen{generation}{smogon_format}.json"
-    )
-    teammate_count = np.zeros((NUM_SPECIES, NUM_SPECIES), dtype=np.float32)
-    for k, v in data["pokemon"].items():
-        species_id = STOI["species"][toid(k)]
-        for teammate, rew in v["teammates"].items():
-            teammate_id = STOI["species"][toid(teammate)]
-            teammate_count[species_id, teammate_id] = rew
-    return teammate_count
-
-
 VALID_GENERATIONS = [1, 9]
 
-HUMAN_SPECIES_COUNTS = {
-    generation: {
-        smogon_format: make_species_count(generation, smogon_format)
-        for smogon_format in ["ou"]
-    }
-    for generation in VALID_GENERATIONS
-}
-
-HUMAN_TEAMMATE_COUNTS = {
-    generation: {
-        smogon_format: make_teammate_count(generation, smogon_format)
-        for smogon_format in ["ou"]
-    }
-    for generation in VALID_GENERATIONS
-}
 
 NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 
@@ -209,68 +163,7 @@ NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 ONEHOT_DTYPE = jnp.bfloat16
 
 
-def load_masks(generation):
-    table = {}
-    table["species"] = jnp.asarray(
-        np.load(
-            f"data/data/gen{generation}/species_mask.npy",
-        )
-    ).astype(ONEHOT_DTYPE)
-    try:
-        table["abilities"] = jnp.asarray(
-            np.load(
-                f"data/data/gen{generation}/ability_mask.npy",
-            )
-        ).astype(ONEHOT_DTYPE)
-    except:
-        pass
-    table["items"] = jnp.asarray(
-        np.load(
-            f"data/data/gen{generation}/item_mask.npy",
-        )
-    ).astype(ONEHOT_DTYPE)
-    table["learnset"] = jnp.asarray(
-        np.load(
-            f"data/data/gen{generation}/learnset_mask.npy",
-        )
-    ).astype(ONEHOT_DTYPE)
-    table["duplicate"] = jnp.asarray(
-        np.load(
-            f"data/data/gen{generation}/duplicate_mask.npy",
-        )
-    )
-    return table
-
-
-try:
-    MASKS = {generation: load_masks(generation) for generation in VALID_GENERATIONS}
-
-    SET_TOKENS = {
-        generation: {
-            f"{smogon_format}_{suffix}": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/{smogon_format}_{suffix}_features.npy",
-                )
-            )
-            for smogon_format in ["ou"]
-            for suffix in ["all_formats", "only_format"]
-        }
-        for generation in VALID_GENERATIONS
-    }
-    SET_MASK = {
-        generation: {
-            f"{smogon_format}_{suffix}": jnp.asarray(
-                np.load(
-                    f"data/data/gen{generation}/{smogon_format}_{suffix}_mask.npy",
-                )
-            )
-            for smogon_format in ["ou"]
-            for suffix in ["all_formats", "only_format"]
-        }
-        for generation in VALID_GENERATIONS
-    }
-except:
-    traceback.print_exc()
+CAT_VF_SUPPORT = np.array([-1, 0, 1], dtype=np.float32)
 
 
 def add_pretrained_embedding(generation):

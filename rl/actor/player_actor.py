@@ -2,10 +2,9 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
-from rl.environment.data import NUM_PACKED_SET_FEATURES
-from rl.environment.env import SinglePlayerSyncEnvironment, TeamBuilderEnvironment
+from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
+from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
-    BuilderTransition,
     PlayerActorInput,
     PlayerAgentOutput,
     PlayerTransition,
@@ -25,7 +24,7 @@ from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer, promote_map
 
 
-class Actor:
+class PlayerActor:
     """Manages the state of a single agent/environment interaction loop."""
 
     def __init__(
@@ -37,10 +36,7 @@ class Actor:
         rng_seed: int = 42,
     ):
         self._agent = agent
-        self._player_env = env
-        self._builder_env = TeamBuilderEnvironment(
-            generation=env.generation, smogon_format="ou"
-        )
+        self._env = env
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
@@ -59,63 +55,32 @@ class Actor:
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
 
-    def unroll(
-        self,
-        rng_key: jax.Array,
-        player_frame_count: int,
-        builder_frame_count: int,
-        player_params: Params,
-        builder_params: Params,
-    ) -> Trajectory:
+    def unroll(self, rng_key: jax.Array, player_params: Params) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
-        builder_key, player_key = split_rng(rng_key, 2)
-        builder_unroll_length = self._builder_env.length
 
-        builder_subkeys = split_rng(builder_key, builder_unroll_length + 1)
-        player_subkeys = split_rng(player_key, self._unroll_length)
+        player_subkeys = split_rng(rng_key, self._unroll_length)
 
-        build_traj = []
-
-        # Reset the builder environment.
-        builder_actor_input = self._builder_env.reset(builder_subkeys[0])
-
-        # Rollout the builder environment.
-        for builder_step_index in range(1, builder_subkeys.shape[0]):
-            builder_agent_output = self._agent.step_builder(
-                builder_subkeys[builder_step_index],
-                builder_params,
-                builder_actor_input,
-            )
-            builder_transition = BuilderTransition(
-                env_output=builder_actor_input.env,
-                agent_output=builder_agent_output,
-            )
-            build_traj.append(builder_transition)
-            if builder_actor_input.env.done.item():
-                break
-            builder_actor_input = self._builder_env.step(builder_agent_output)
-
-        if len(build_traj) < builder_unroll_length:
-            build_traj += [builder_transition] * (
-                builder_unroll_length - len(build_traj)
+        sample_cond = self._learner.team_store._sample_cv
+        with sample_cond:
+            sample_cond.wait_for(self._learner.team_store.ready_to_sample)
+            builder_trajectory, builder_history = (
+                self._learner.team_store.sample_trajectory()
             )
 
-        # Pack the trajectory and reset parent state.
-        builder_trajectory = jax.device_get(build_traj)
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: np.stack(xs), *builder_trajectory
-        )
+        add_cond = self._learner.team_store._add_cv
+        with add_cond:
+            add_cond.notify_all()
 
         player_traj = []
 
         # Reset the player environment.
-        team_tokens = builder_actor_input.history.packed_team_member_tokens
+        team_tokens = builder_history.packed_team_member_tokens
         if np.any(team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0):
             raise ValueError(
                 get_packed_team_string(team_tokens.reshape(-1, NUM_PACKED_SET_FEATURES))
             )
 
-        player_actor_input = self._player_env.reset(team_tokens.reshape(-1).tolist())
+        player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
@@ -134,7 +99,7 @@ class Actor:
                 break
 
             action = self.player_agent_output_to_action(player_agent_output)
-            player_actor_input = self._player_env.step(action)
+            player_actor_input = self._env.step(action)
 
         if len(player_traj) < self._unroll_length:
             player_traj += [player_transition] * (
@@ -149,7 +114,7 @@ class Actor:
 
         trajectory = Trajectory(
             builder_transitions=builder_trajectory,
-            builder_history=builder_actor_input.history,
+            builder_history=builder_history,
             player_transitions=player_trajectory,
             player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
@@ -162,26 +127,20 @@ class Actor:
         return subkey
 
     def set_game_id(self, game_id: int):
-        self._player_env._set_game_id(game_id)
+        self._env._set_game_id(game_id)
 
     def reset_game_id(self):
-        self._player_env._reset_game_id()
+        self._env._reset_game_id()
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
         player_params = jax.device_put(params_container.player_params)
-        builder_params = jax.device_put(params_container.builder_params)
         subkey = self.split_rng()
-        act_out = self.unroll(
-            rng_key=subkey,
-            player_frame_count=params_container.player_frame_count,
-            builder_frame_count=params_container.builder_frame_count,
-            player_params=player_params,
-            builder_params=builder_params,
-        )
+
+        act_out = self.unroll(rng_key=subkey, player_params=player_params)
         self.reset_game_id()
 
-        if self._player_env.username.startswith("train") and do_push:
+        if self._env.username.startswith("train") and do_push:
             self._learner.enqueue_traj(act_out)
         return act_out
 
@@ -223,5 +182,7 @@ class Actor:
         self, sender: ParamsContainer, receiver: ParamsContainer, trajectory: Trajectory
     ):
         """Update league stats based on trajectory outcome."""
-        payoff = trajectory.player_transitions.env_output.win_reward[-1]
+        payoff = (
+            trajectory.player_transitions.env_output.win_reward[-1] @ CAT_VF_SUPPORT
+        )
         self._learner.league.update_payoff(sender, receiver, payoff)

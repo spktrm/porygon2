@@ -113,7 +113,7 @@ class InferenceModel:
         team_tokens = builder_actor_input.history.packed_team_member_tokens
         return ResetResponse(
             packed_team=team_tokens.reshape(-1).tolist(),
-            v=builder_agent_output.actor_output.value_head.logits.item(),
+            v=builder_agent_output.actor_output.value_head.expectation.item(),
         )
 
     def step(self, timestep: PlayerActorInput):
@@ -122,7 +122,7 @@ class InferenceModel:
         agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
         return StepResponse(
-            v=actor_output.value_head.logits.item(),
+            v=actor_output.value_head.expectation.item(),
             log_prob=actor_output.action_head.log_prob.item(),
             entropy=actor_output.action_head.entropy.item(),
             src=agent_output.actor_output.action_head.src_index.item(),

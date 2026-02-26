@@ -10,14 +10,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.modules import (
-    MLP,
-    PointerLogits,
-    Resnet,
-    activation_fn,
-    dense_layer,
-    layer_norm,
-)
+from rl.model.modules import PointerLogits, activation_fn, dense_layer, layer_norm
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -78,10 +71,16 @@ class PolicyQKHead(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
+        valid_sum = valid_mask.sum(axis=-1)
+
+        log_factor = 1 / jnp.log(valid_sum)
+        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
+
         return PolicyHeadOutput(
             action_index=action_index.reshape(entropy.shape),
             log_prob=log_prob.reshape(entropy.shape),
             entropy=entropy,
+            normalized_entropy=entropy * entropy_scale,
             log_policy=log_policy,
         )
 
@@ -91,16 +90,15 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        resnet = Resnet(**self.cfg.resnet.to_dict())
-        logits = MLP(**self.cfg.logits.to_dict())
-
-        x = resnet(x)
-        x = logits(x)
+        x = activation_fn(layer_norm(x))
+        x = dense_layer(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
         entropy = -jnp.sum(probs * log_probs, axis=-1)
-        expectation = probs @ self.cfg.category_values
+
+        values = self.cfg.category_values.astype(x.dtype)
+        expectation = probs @ values
 
         return CategoricalValueHeadOutput(
             logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation

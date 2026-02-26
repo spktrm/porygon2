@@ -61,6 +61,7 @@ class PolicyHeadOutput:
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
+    normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
 
 
@@ -72,8 +73,8 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 @dataclass
 class PlayerActorOutput:
-    value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
+    value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
@@ -102,6 +103,8 @@ class BuilderEnvOutput:
 
     done: ArrayLike = ()
     ts: ArrayLike = ()
+    ev_reward: ArrayLike = ()
+    species_reward: ArrayLike = ()
     curr_order: ArrayLike = ()
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()
@@ -128,8 +131,8 @@ class BuilderActorOutput:
     conditional_entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
+    value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
     )
 
 
