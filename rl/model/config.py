@@ -3,6 +3,8 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.data import CAT_VF_SUPPORT
+
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
     """
@@ -116,19 +118,21 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.output_decoder.need_pos = False
 
     # Policy Head Configuration
-    cfg.wildcard_head = ConfigDict()
-    cfg.value_head = ConfigDict()
+    cfg.entropy_head = ConfigDict()
+    cfg.entropy_head.logits = ConfigDict()
+    cfg.entropy_head.logits.features = 1
 
-    for head, output_size in [(cfg.value_head, 1)]:
-        head.logits = ConfigDict()
-        head.logits.features = output_size
+    cfg.value_head = ConfigDict()
+    cfg.value_head.logits = ConfigDict()
+    cfg.value_head.logits.features = 3
+    cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
     cfg.action_head.qk_logits.qk_layer_norm = False
 
-    for head in [cfg.action_head, cfg.wildcard_head]:
+    for head in [cfg.action_head]:
         head.train = train
 
     return cfg
@@ -179,6 +183,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     for name in [
         "value_head",
+        "entropy_head",
         "species_head",
         "item_head",
         "ability_head",
@@ -192,8 +197,13 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         head_cfg = ConfigDict()
         setattr(cfg, name, head_cfg)
 
+    cfg.entropy_head = ConfigDict()
+    cfg.entropy_head.logits = ConfigDict()
+    cfg.entropy_head.logits.features = 1
+
     cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 1
+    cfg.value_head.logits.features = 3
+    cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     for head in [
         cfg.species_head,

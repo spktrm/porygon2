@@ -71,6 +71,8 @@ async def get_battles_ids(
     page: int = 1,
     rating_threshold: Optional[int] = None,
     limit: int = None,
+    before: Optional[int] = None,
+    after: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Recursively fetch battle IDs for a user/format combination starting from a page,
     filtering by rating_threshold if provided."""
@@ -78,6 +80,8 @@ async def get_battles_ids(
         "user": user,
         "format": format_id,
         "page": page,
+        "before": before,
+        "after": after,
     }
     # Build suffix for query
     suffix_parts = [f"{k}={v}" for k, v in query_params.items() if v is not None]
@@ -97,6 +101,8 @@ async def get_battles_ids(
             page + 1,
             rating_threshold,
             limit=(limit or float("inf")) - len(res),
+            before=before,
+            after=after,
         )
 
     final = res + next_page
@@ -109,12 +115,23 @@ async def get_battles_ids(
 
 
 class Search:
-    def __init__(self, session: ClientSession, format_id: str, limit: int = 10000):
+    def __init__(
+        self,
+        session: ClientSession,
+        format_id: str,
+        limit: int = 10000,
+        before: Optional[int] = None,
+        after: Optional[int] = None,
+        existing_ids: Optional[Set[str]] = None,
+    ):
         self.session = session
         self.format_id = format_id
         self.game_ids: Set[str] = set()
         self.player_ids: Set[str] = set()
         self.limit = limit
+        self.before = before
+        self.after = after
+        self.existing_ids = existing_ids or set()
         self.is_broken = False
 
     async def get_battle_ids(self, player_queue: asyncio.Queue):
@@ -135,10 +152,19 @@ class Search:
                 format_id=self.format_id,
                 rating_threshold=1000,
                 limit=self.limit - len(self.game_ids),
+                before=self.before,
+                after=self.after,
             )
             for battle in battles:
                 if len(self.game_ids) >= self.limit:
                     return
+
+                # new code start
+                # Skip if already exists in existing_ids
+                if battle.get("id") in self.existing_ids:
+                    continue
+                # new code end
+
                 battle_str = json.dumps(battle, sort_keys=True)
                 if battle_str not in self.game_ids:
                     self.game_ids.add(battle_str)
@@ -187,10 +213,35 @@ async def main():
         default=10000,
         help="Maximum number of games to collect (default: 10000)",
     )
+    parser.add_argument(
+        "--before",
+        type=int,
+        default=None,
+        help="Only include games before this timestamp (in milliseconds since epoch)",
+    )
+    parser.add_argument(
+        "--after",
+        type=int,
+        default=None,
+        help="Only include games after this timestamp (in milliseconds since epoch)",
+    )
     args = parser.parse_args()
 
     format_id = args.format_id
     limit = args.limit
+    before = args.before
+    after = args.after
+
+    # Load existing replay IDs
+    existing_ids = set()
+    root_dir = "replays/data/"
+    format_dir = os.path.join(root_dir, format_id)
+    if os.path.exists(format_dir):
+        print(f"Reading existing replays from {format_dir}...")
+        for filename in os.listdir(format_dir):
+            if filename.endswith(".json"):
+                existing_ids.add(filename[:-5])
+        print(f"Found {len(existing_ids)} existing replays.")
 
     async with aiohttp.ClientSession() as session:
         leaderboard = await get_leaderboard(session, format_id)
@@ -206,7 +257,14 @@ async def main():
             await player_queue.put(player)
 
         # Initialize Search with parsed --limit/-l argument from top-level parser
-        search = Search(session, format_id, limit=limit)
+        search = Search(
+            session,
+            format_id,
+            limit=limit,
+            before=before,
+            after=after,
+            existing_ids=existing_ids,
+        )
 
         # Use a moderate number of workers
         workers = 10
@@ -229,8 +287,7 @@ async def main():
         replays = [r for r in chunk_replays if r is not None]
 
         # Save the replays to disk
-        root_dir = "replays/data/"
-        format_dir = os.path.join(root_dir, format_id)
+        # (format_dir is already defined above)
         os.makedirs(format_dir, exist_ok=True)
 
         for replay in replays:

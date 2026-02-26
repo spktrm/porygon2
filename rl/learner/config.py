@@ -37,16 +37,18 @@ class AdamWConfig:
 
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
+SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
 
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_actors: int = 16
+    num_player_actors: int = 8
+    num_builder_actors: int = 4
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 512 * 2
+    replay_buffer_capacity: int = 1024 * 6
     theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
 
     # Self-play evaluation params
@@ -60,30 +62,24 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 4
+    target_replay_ratio: float = 2.0
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0, b2=0.99, eps=1e-4, weight_decay=1e-2)
-    player_learning_rate: float = 5e-5
-    builder_learning_rate: float = 5e-5
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    player_learning_rate: float = 2e-4
+    builder_learning_rate: float = 2e-4
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
+    gradient_accumulation_steps: int = 8
 
     # EMA params
     player_ema_decay: float = 1e-3
     builder_ema_decay: float = 1e-3
 
-    # Vtrace params
-    gamma: float = 1.0
-    lambda_: float = 0.85
-    clip_rho_threshold: float = 1.0
-    clip_pg_rho_threshold: float = 1.0
+    # Advantage estimation params
+    td_lambda: float = 0.9
+    gae_lambda: float = 0.9
     clip_ppo: float = 0.3
-
-    # Shaped Reward params
-    shaped_reward_scale: float = 1.0
-    shaped_reward_fainted_scale: float = 0.1
-    shaped_reward_hp_scale: float = 0.01
 
     # Loss coefficients
     player_value_loss_coef: float = 1.0
@@ -96,10 +92,11 @@ class Porygon2LearnerConfig:
     builder_kl_loss_coef: float = 0.1
     builder_kl_prior_loss_coef: float = 0.1
     builder_entropy_loss_coef: float = 0.1
-    normalising_constant: int = 200
+    normalising_constant: int = 20
 
     # Smogon Generation
     generation: GenT = 9
+    smogon_format: SmogonFormatT = "ou"
 
 
 def get_learner_config():
@@ -153,6 +150,20 @@ def create_train_state(
         actor_input=ex_player_actor_inp,
         actor_output=ex_player_actor_out,
     )
+    player_optimizer = optax.chain(
+        optax.clip_by_global_norm(config.player_clip_gradient),
+        optax.adamw(
+            learning_rate=config.player_learning_rate,
+            b1=config.adam.b1,
+            b2=config.adam.b2,
+            eps=config.adam.eps,
+            weight_decay=config.adam.weight_decay,
+        ),
+    )
+    if config.gradient_accumulation_steps > 1:
+        player_optimizer = optax.MultiSteps(
+            player_optimizer, config.gradient_accumulation_steps
+        )
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(
             player_network.apply,
@@ -162,16 +173,7 @@ def create_train_state(
         init_fn=player_params_init_fn,
         params=player_params_init_fn(rng),
         target_params=player_params_init_fn(rng),
-        tx=optax.chain(
-            optax.clip_by_global_norm(config.player_clip_gradient),
-            optax.adamw(
-                learning_rate=config.player_learning_rate,
-                b1=config.adam.b1,
-                b2=config.adam.b2,
-                eps=config.adam.eps,
-                weight_decay=config.adam.weight_decay,
-            ),
-        ),
+        tx=player_optimizer,
     )
 
     builder_params_init_fn = functools.partial(
@@ -180,6 +182,20 @@ def create_train_state(
         actor_output=ex_builder_actor_out,
         head_params=HeadParams(),
     )
+    builder_optimizer = optax.chain(
+        optax.clip_by_global_norm(config.builder_clip_gradient),
+        optax.adamw(
+            learning_rate=config.builder_learning_rate,
+            b1=config.adam.b1,
+            b2=config.adam.b2,
+            eps=config.adam.eps,
+            weight_decay=config.adam.weight_decay,
+        ),
+    )
+    if config.gradient_accumulation_steps > 1:
+        builder_optimizer = optax.MultiSteps(
+            builder_optimizer, config.gradient_accumulation_steps
+        )
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
             builder_network.apply,
@@ -189,16 +205,7 @@ def create_train_state(
         init_fn=builder_params_init_fn,
         params=builder_params_init_fn(rng),
         target_params=builder_params_init_fn(rng),
-        tx=optax.chain(
-            optax.clip_by_global_norm(config.builder_clip_gradient),
-            optax.adamw(
-                learning_rate=config.builder_learning_rate,
-                b1=config.adam.b1,
-                b2=config.adam.b2,
-                eps=config.adam.eps,
-                weight_decay=config.adam.weight_decay,
-            ),
-        ),
+        tx=builder_optimizer,
     )
 
     return player_train_state, builder_train_state

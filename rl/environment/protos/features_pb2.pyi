@@ -178,6 +178,13 @@ class FieldFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     FIELD_FEATURE__RELEVANT_ENTITY_IDX7: _ClassVar[FieldFeature]
     FIELD_FEATURE__NUM_RELEVANT: _ClassVar[FieldFeature]
 
+class RewardFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    REWARD_FEATURE___UNSPECIFIED: _ClassVar[RewardFeature]
+    REWARD_FEATURE__LOSS: _ClassVar[RewardFeature]
+    REWARD_FEATURE__TIE: _ClassVar[RewardFeature]
+    REWARD_FEATURE__WIN: _ClassVar[RewardFeature]
+
 class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     INFO_FEATURE___UNSPECIFIED: _ClassVar[InfoFeature]
@@ -185,6 +192,8 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__PLAYER_INDEX: _ClassVar[InfoFeature]
     INFO_FEATURE__TURN: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_COUNT: _ClassVar[InfoFeature]
+    INFO_FEATURE__LOSS_REWARD: _ClassVar[InfoFeature]
+    INFO_FEATURE__TIE_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__FIB_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__MY_FAINTED_COUNT: _ClassVar[InfoFeature]
@@ -389,11 +398,17 @@ FIELD_FEATURE__RELEVANT_ENTITY_IDX5: FieldFeature
 FIELD_FEATURE__RELEVANT_ENTITY_IDX6: FieldFeature
 FIELD_FEATURE__RELEVANT_ENTITY_IDX7: FieldFeature
 FIELD_FEATURE__NUM_RELEVANT: FieldFeature
+REWARD_FEATURE___UNSPECIFIED: RewardFeature
+REWARD_FEATURE__LOSS: RewardFeature
+REWARD_FEATURE__TIE: RewardFeature
+REWARD_FEATURE__WIN: RewardFeature
 INFO_FEATURE___UNSPECIFIED: InfoFeature
 INFO_FEATURE__DONE: InfoFeature
 INFO_FEATURE__PLAYER_INDEX: InfoFeature
 INFO_FEATURE__TURN: InfoFeature
 INFO_FEATURE__REQUEST_COUNT: InfoFeature
+INFO_FEATURE__LOSS_REWARD: InfoFeature
+INFO_FEATURE__TIE_REWARD: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__FIB_REWARD: InfoFeature
 INFO_FEATURE__MY_FAINTED_COUNT: InfoFeature

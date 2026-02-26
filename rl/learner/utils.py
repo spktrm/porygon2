@@ -4,6 +4,7 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.environment.protos.service_pb2 import ActionEnum
@@ -95,8 +96,10 @@ def collect_batch_telemetry_data(
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
-        reward_mean=final_reward.mean(),
-        early_finish_rate=(jnp.abs(final_reward) < 1).astype(jnp.float32).mean(),
+        reward_mean=(final_reward @ CAT_VF_SUPPORT).mean(),
+        early_finish_rate=(jnp.abs(final_reward @ CAT_VF_SUPPORT) < 1)
+        .astype(jnp.float32)
+        .mean(),
     )
 
 
