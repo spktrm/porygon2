@@ -243,7 +243,7 @@ def train_step(
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     scale = 1 / config.gradient_accumulation_steps
-    entropy_decay = 1 / (((player_state.step_count + 1) * scale) ** 0.3)
+    entropy_decay = 1 / (jnp.floor((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
 

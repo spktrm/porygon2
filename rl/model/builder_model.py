@@ -394,6 +394,18 @@ class Porygon2BuilderModel(nn.Module):
                 teratype_head.entropy,
             )
         )
+        normalized_entropies = jnp.concatenate(
+            (
+                species_head.normalized_entropy,
+                item_head.normalized_entropy,
+                ability_head.normalized_entropy,
+                move_head.normalized_entropy,
+                ev_head.normalized_entropy,
+                nature_head.normalized_entropy,
+                gender_head.normalized_entropy,
+                teratype_head.normalized_entropy,
+            )
+        )
         mask = jnp.stack(
             (
                 env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
@@ -423,6 +435,10 @@ class Porygon2BuilderModel(nn.Module):
             .squeeze(),
             log_prob=(log_probs @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
             entropy=(entropies @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
+            normalized_entropy=(normalized_entropies @ mask)
+            .astype(self.cfg.dtype)
+            .reshape(-1)
+            .squeeze(),
         )
 
         return BuilderActorOutput(
@@ -586,7 +602,7 @@ def main(generation: int = 9):
 
     agent = Agent(
         builder_apply_fn=actor_network.apply,
-        # builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+        # builder_head_params=HeadParams(temp=0.2),
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation, smogon_format="ou")
@@ -601,7 +617,7 @@ def main(generation: int = 9):
 
         builder_actor_input = builder_env.reset(builder_subkeys[0])
 
-        for builder_step_index in range(1, builder_subkeys.shape[0] + 2):
+        for builder_step_index in range(1, builder_subkeys.shape[0] + 1):
             builder_agent_output = agent.step_builder(
                 builder_subkeys[builder_step_index],
                 builder_params,

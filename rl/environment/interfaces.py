@@ -70,6 +70,7 @@ class PolicyHeadOutput:
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
     entropy: ArrayLike = ()
+    normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
 
 
