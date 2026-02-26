@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
+import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
@@ -277,8 +277,8 @@ def train_step(
             discriminator_log_probs=learner_discriminator_head.log_probs,
             skill_ids=skill_ids,
         )
-        diayn_advantages = (
-            player_advantages + config.diayn_reward_coef * player_diayn_reward
+        diayn_advantages = player_advantages + config.diayn_reward_coef * (
+            player_diayn_reward + np.log(config.num_skills)
         )
 
         # Calculate losses.
@@ -317,10 +317,7 @@ def train_step(
         )
 
         # DIAYN: discriminator cross-entropy loss (predict skill from state)
-        loss_discriminator = average(
-            -player_diayn_reward,
-            player_valid,
-        )
+        loss_discriminator = average(-player_diayn_reward, player_valid)
 
         loss = (
             config.player_policy_loss_coef * loss_pg
@@ -353,7 +350,9 @@ def train_step(
                 mask=player_valid,
             ),
             # DIAYN stats
-            player_diayn_reward=average(player_diayn_reward, player_valid),
+            player_diayn_reward=average(
+                player_diayn_reward - np.log(config.num_skills), player_valid
+            ),
         )
 
     def builder_loss_fn(params: Params):
@@ -385,8 +384,8 @@ def train_step(
             discriminator_log_probs=learner_discriminator_head.log_probs,
             skill_ids=skill_ids,
         )
-        diayn_builder_advantages = (
-            builder_advantages + config.diayn_reward_coef * builder_diayn_reward
+        diayn_builder_advantages = builder_advantages + config.diayn_reward_coef * (
+            builder_diayn_reward + np.log(config.num_skills)
         )
 
         # Calculate the losses.
@@ -467,7 +466,9 @@ def train_step(
                 mask=builder_valid,
             ),
             # DIAYN stats
-            builder_diayn_reward=average(builder_diayn_reward, builder_valid),
+            builder_diayn_reward=average(
+                builder_diayn_reward - np.log(config.num_skills), builder_valid
+            ),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
@@ -588,7 +589,9 @@ class Learner:
 
         self.done = False
         self.team_store = BuilderTrajectoryStore()
-        self.replay = ReplayBuffer(self.config.replay_buffer_capacity)
+        self.replay = ReplayBuffer(
+            self.config.replay_buffer_capacity, self.config.num_skills
+        )
 
         # Rate Limiting
         self.controller = DirectRatioLimiter(
@@ -799,13 +802,18 @@ class Learner:
 
     def _get_usage_counts(self):
         names = list(STOI["species"])
-        counts = self.replay._species_counts
 
-        table = wandb.Table(columns=["species", "usage"])
-        for name, count in zip(names, counts):
-            table.add_data(name, count)
+        usage_stats = {}
+        for skill_id in range(self.config.num_skills):
+            counts = self.replay._species_counts[skill_id]
 
-        return {"species_usage": table}
+            table = wandb.Table(columns=["species", "usage"])
+            for name, count in zip(names, counts):
+                table.add_data(name, count)
+
+            usage_stats[f"skill_{skill_id}_species_usage"] = table
+
+        return usage_stats
 
     def _get_league_winrates(self):
         current = self.league.get_main_player()

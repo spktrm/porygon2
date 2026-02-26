@@ -103,8 +103,13 @@ class Porygon2PlayerModel(nn.Module):
         skill_embed = self.skill_embedding(env_step.skill_id)
         conditioned_state = state_embedding + skill_embed.astype(state_embedding.dtype)
 
+        conditioned_action_embeddings = action_embeddings + skill_embed[None]
         action_logits = (
-            self.action_head(action_embeddings, action_embeddings) / head_params.temp
+            self.action_head(
+                conditioned_action_embeddings,
+                conditioned_action_embeddings,
+            )
+            / head_params.temp
         )
         action_head = self.post_head(
             action_logits.reshape(-1),

@@ -83,7 +83,7 @@ class PlayerActor:
         player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
 
         # Sample a DIAYN skill for this episode
-        skill_id = np.int32(np.random.randint(0, self._learner.config.num_skills))
+        skill_id = builder_trajectory.env_output.skill_id[0]
         player_actor_input = player_actor_input.replace(
             env=player_actor_input.env.replace(skill_id=skill_id)
         )

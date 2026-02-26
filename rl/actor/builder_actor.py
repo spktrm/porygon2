@@ -1,7 +1,7 @@
 import jax
 import numpy as np
 
-from rl.actor.agent import Agent
+from rl.actor.agent import Agent, BuilderActorInput
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
@@ -41,7 +41,7 @@ class BuilderActor:
 
         # Sample a DIAYN skill for this episode
         skill_id = np.int32(np.random.randint(0, self._learner.config.num_skills))
-        builder_actor_input = builder_actor_input.replace(
+        builder_actor_input: BuilderActorInput = builder_actor_input.replace(
             env=builder_actor_input.env.replace(skill_id=skill_id)
         )
 

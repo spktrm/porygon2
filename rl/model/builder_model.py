@@ -211,7 +211,6 @@ class Porygon2BuilderModel(nn.Module):
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
-        skill_id: jax.Array,
     ):
         species_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -269,16 +268,14 @@ class Porygon2BuilderModel(nn.Module):
             ).reshape(-1, self.cfg.entity_size)
         )
 
-        packed_set_embeddings = jnp.concatenate(
+        unconditioned_sequence = jnp.concatenate(
             (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
         )
-        # DIAYN: inject skill embedding into the SOS token so the transformer
-        # conditions its entire representation on the skill
-        skill_embed = self.skill_embedding(skill_id).astype(self.cfg.dtype)
-        packed_set_embeddings = packed_set_embeddings.at[0].add(skill_embed)
+
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
-        return self.encoder(packed_set_embeddings, causal_mask)
+
+        return self.encoder(unconditioned_sequence, causal_mask)
 
     def _forward(
         self,
@@ -292,66 +289,73 @@ class Porygon2BuilderModel(nn.Module):
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value_head = self._forward_value_head(hidden_state)
-        conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
+        skill_id = env_step.skill_id
+        skill_embed = self.skill_embedding(skill_id)
+        conditioned_hidden_state = hidden_state + skill_embed.astype(
+            conditioned_hidden_state.dtype
+        )
 
-        # DIAYN: discriminator predicts skill from the (skill-conditioned) state
+        value_head = self._forward_value_head(conditioned_hidden_state)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            conditioned_hidden_state
+        )
+
         disc_embedding = self.discriminator_head_mlp(hidden_state)
         discriminator_head = self.discriminator_head(disc_embedding)
 
-        hidden_state = hidden_state[None]
+        conditioned_hidden_state = conditioned_hidden_state[None]
 
         species_head = self.species_head(
-            self.species_head_mlp(hidden_state),
+            self.species_head_mlp(conditioned_hidden_state),
             species_keys,
             actor_output.action_head,
             env_step.species_mask,
             head_params=head_params,
         )
         item_head = self.item_head(
-            self.item_head_mlp(hidden_state),
+            self.item_head_mlp(conditioned_hidden_state),
             item_keys,
             actor_output.action_head,
             env_step.item_mask,
             head_params=head_params,
         )
         ability_head = self.ability_head(
-            self.ability_head_mlp(hidden_state),
+            self.ability_head_mlp(conditioned_hidden_state),
             ability_keys,
             actor_output.action_head,
             env_step.ability_mask,
             head_params=head_params,
         )
         move_head = self.move_head(
-            self.move_head_mlp(hidden_state),
+            self.move_head_mlp(conditioned_hidden_state),
             move_keys,
             actor_output.action_head,
             env_step.move_mask,
             head_params=head_params,
         )
         ev_head = self.ev_head(
-            self.ev_head_mlp(hidden_state),
+            self.ev_head_mlp(conditioned_hidden_state),
             self.ev_embedding,
             actor_output.action_head,
             env_step.ev_mask,
             head_params=head_params,
         )
         nature_head = self.nature_head(
-            self.nature_head_mlp(hidden_state),
+            self.nature_head_mlp(conditioned_hidden_state),
             self.nature_embedding,
             actor_output.action_head,
             env_step.nature_mask,
             head_params=head_params,
         )
         gender_head = self.gender_head(
-            self.gender_head_mlp(hidden_state),
+            self.gender_head_mlp(conditioned_hidden_state),
             self.gender_embedding,
             actor_output.action_head,
             env_step.gender_mask,
             head_params=head_params,
         )
         teratype_head = self.teratype_head(
-            self.teratype_head_mlp(hidden_state),
+            self.teratype_head_mlp(conditioned_hidden_state),
             self.typechart_embedding,
             actor_output.action_head,
             env_step.teratype_mask,
@@ -462,9 +466,6 @@ class Porygon2BuilderModel(nn.Module):
         team_tokens = actor_input.history.packed_team_member_tokens
         order = actor_input.history.order
 
-        # skill_id is constant across the episode; take the first timestep's value
-        skill_id = actor_input.env.skill_id[0]
-
         hidden_states = self._encode_team(
             jnp.take(team_tokens, order, axis=0),
             actor_input.history.member_position,
@@ -473,7 +474,6 @@ class Porygon2BuilderModel(nn.Module):
             ability_keys,
             item_keys,
             move_keys,
-            skill_id,
         )
 
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)

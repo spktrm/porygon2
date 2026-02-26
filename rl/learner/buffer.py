@@ -205,24 +205,28 @@ def calculate_tracking(old: np.ndarray, new: np.ndarray, tau: float, minlength: 
 class ReplayBuffer:
     """Thread-safe uniform replay for [T, ...] trajectories."""
 
-    def __init__(self, capacity: int):
+    def __init__(self, capacity: int, num_skills: int):
         self._buf: deque[Trajectory] = deque(maxlen=capacity)
         self._size = 0
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
 
         # Tracking
-        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+        self._num_skills = num_skills
+        self._species_counts = np.zeros((num_skills, NUM_SPECIES), dtype=np.float32)
         self._tau = 1e-3
 
     def reset_species_counts(self):
         with self._lock:
-            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+            self._species_counts = np.zeros(
+                (self._num_skills, NUM_SPECIES), dtype=np.float32
+            )
 
     def add(self, traj: Trajectory):
         with self._lock:
-            self._species_counts = calculate_tracking(
-                self._species_counts,
+            skill_id = traj.builder_transitions.env_output.skill_id[0]
+            self._species_counts[skill_id] = calculate_tracking(
+                self._species_counts[skill_id],
                 traj.builder_history.packed_team_member_tokens[
                     ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
                 ].reshape(-1),
