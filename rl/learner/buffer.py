@@ -135,9 +135,12 @@ class PlayerTrajectoryStore:
             limit = self._max_size
         return len(self._trajectories) >= limit
 
-    def ready_to_sample(self) -> bool:
+    def ready_to_sample(self, n: int = None) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
-        return np.any((self._reuses < self._max_reuses) & self._valid)
+        if n is None:
+            return np.any((self._reuses < self._max_reuses) & self._valid)
+        else:
+            return np.sum((self._reuses < self._max_reuses) & self._valid) >= n
 
     def ready_to_add(self) -> bool:
         """Returns True if there is capacity to add a new trajectory."""
@@ -182,12 +185,12 @@ class PlayerTrajectoryStore:
         valid_indices = (self._reuses < self._max_reuses) & self._valid
         available_indices = np.where(valid_indices)[0]
 
-        replace = len(available_indices) < n
-        sample_indices = np.random.choice(available_indices, size=n, replace=replace)
+        sample_indices = np.random.choice(available_indices, size=n, replace=False)
         if increment:
             unique_indices, counts = np.unique(sample_indices, return_counts=True)
             for idx, count in zip(unique_indices, counts):
                 self._reuses[idx] += count
+
         return [self._trajectories[i] for i in sample_indices]
 
     def __len__(self):
