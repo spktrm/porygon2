@@ -16,7 +16,7 @@ import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
-from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, ReplayBuffer
+from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -564,15 +564,18 @@ class Learner:
 
         self.done = False
         self.team_store = BuilderTrajectoryStore()
-        self.replay = ReplayBuffer(self.config.replay_buffer_capacity)
+        self.replay = PlayerTrajectoryStore(
+            max_size=self.config.replay_buffer_capacity
+        )
 
         # Rate Limiting
         self.controller = DirectRatioLimiter(
             target_rr=self.config.target_replay_ratio,
             batch_size=self.config.batch_size,
-            warmup_trajectories=self.config.batch_size * 16,
         )
-        self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
+        self.controller.set_ready_to_learn_fn(
+            lambda: self.replay.is_full() or self.team_store.is_full()
+        )
 
         # Threading
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
@@ -594,8 +597,16 @@ class Learner:
         if self.done:
             return
 
+        add_cond = self.replay._add_cv
+        with add_cond:
+            add_cond.wait_for(self.replay.ready_to_add)
+            self.replay.add(traj)
+
+        sample_cond = self.replay._sample_cv
+        with sample_cond:
+            sample_cond.notify_all()
+
         self.producer_progress.update(1)
-        self.replay.add(traj)
         self.controller.notify_produced(n_trajectories=1)
 
     def host_to_device_worker(self):
@@ -610,7 +621,15 @@ class Learner:
                 if self.done:
                     break
 
-                batch = self.replay.sample(batch_size)
+                sample_cond = self.replay._sample_cv
+                with sample_cond:
+                    sample_cond.wait_for(self.replay.ready_to_sample)
+                    batch = self.replay.sample(batch_size)
+
+                add_cond = self.replay._add_cv
+                with add_cond:
+                    add_cond.notify_all()
+
                 self.consumer_progress.update(batch_size)
 
                 # Process pure data outside lock
