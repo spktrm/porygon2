@@ -25,7 +25,12 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import MLP
-from rl.model.utils import get_num_params, legal_log_policy, legal_policy
+from rl.model.utils import (
+    get_most_recent_file,
+    get_num_params,
+    legal_log_policy,
+    legal_policy,
+)
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -53,6 +58,11 @@ class Porygon2PlayerModel(nn.Module):
         policy = legal_policy(logits, valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
 
+        valid_sum = valid_mask.sum(axis=-1)
+        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
+        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
+        normalized_entropy = entropy * entropy_scale
+
         if train:
             action_index = head.action_index
         else:
@@ -75,6 +85,7 @@ class Porygon2PlayerModel(nn.Module):
             action_index=action_index,
             log_prob=log_prob,
             entropy=entropy,
+            normalized_entropy=normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
         )
@@ -146,7 +157,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
