@@ -256,10 +256,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-
         learner_log_prob = learner_action_head.log_prob
-        learner_action_head.log_policy
-        learner_action_head.entropy
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)

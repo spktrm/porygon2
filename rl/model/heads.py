@@ -71,9 +71,9 @@ class PolicyQKHead(nn.Module):
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
-        valid_sum = valid_mask.sum(axis=-1)
 
-        log_factor = 1 / jnp.log(valid_sum)
+        valid_sum = valid_mask.sum(axis=-1)
+        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
 
         return PolicyHeadOutput(
