@@ -347,11 +347,9 @@ def train_step(
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        ratio = learner_actor_ratio
-
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
-            policy_ratios=ratio,
+            policy_ratios=learner_actor_ratio,
             advantages=builder_advantages
             + config.builder_entropy_loss_coef
             * (
@@ -429,7 +427,9 @@ def train_step(
             builder_entropy=builder_entropy,
             # Ratios
             builder_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=builder_valid, clip_ppo=config.clip_ppo
+                policy_ratios=learner_actor_ratio,
+                valid=builder_valid,
+                clip_ppo=config.clip_ppo,
             ),
             builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
             # Approx KL values
@@ -597,7 +597,8 @@ class Learner:
     def host_to_device_worker(self):
         """Background thread to batch data and push to GPU queue."""
         max_burst = 8
-        batch_size = self.config.batch_size
+        minibatch_size = self.config.batch_size
+        batch_size = minibatch_size * self.config.gradient_accumulation_steps
 
         while not self.done:
             # Burst processing to minimize lock contention overhead
@@ -608,17 +609,18 @@ class Learner:
                 sample_cond = self.player_replay._sample_cv
                 with sample_cond:
                     sample_cond.wait_for(
-                        lambda: self.done or self.player_replay.ready_to_sample()
+                        lambda: self.done
+                        or self.player_replay.ready_to_sample(batch_size)
                     )
                     if self.done:
                         break
-                    batch = self.player_replay.sample(batch_size)
+                    batch = self.player_replay.sample(minibatch_size)
 
                 add_cond = self.player_replay._add_cv
                 with add_cond:
                     add_cond.notify_all()
 
-                self.consumer_progress.update(batch_size)
+                self.consumer_progress.update(minibatch_size)
 
                 # Process pure data outside lock
                 stacked = _stack_and_pad_batch(batch)
