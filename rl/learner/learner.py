@@ -144,11 +144,8 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
-def power_schedule(
-    coef: float, step: int, decay: float, ceil: float, floor: float
-) -> jax.Array:
-    x = coef / ((jnp.floor(step) + 1) ** decay)
-    return jnp.clip(x, floor, ceil)
+def power_schedule(coef: float, step: int, decay: float) -> jax.Array:
+    return coef / ((jnp.floor(step) + 1) ** decay)
 
 
 def train_step(
@@ -239,8 +236,6 @@ def train_step(
         1,
         player_state.step_count / config.gradient_accumulation_steps,
         config.entropy_temp_decay,
-        config.entropy_temp_ceil,
-        config.entropy_temp_floor,
     )
 
     def player_loss_fn(params: Params):
