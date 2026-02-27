@@ -206,6 +206,17 @@ def construct_species_usage(data: UsageType) -> npt.NDArray[np.float32]:
     return usage_array
 
 
+def postprocess_usage_array(
+    usage_array: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    if usage_array.ndim == 2:
+        num_valid_mask = np.where((usage_array > 0).sum(axis=1))[0]
+        usage_array[num_valid_mask] = usage_array[num_valid_mask] / usage_array[
+            num_valid_mask
+        ].sum(axis=1, keepdims=True)
+    return usage_array
+
+
 def save_usage_array(
     stat: str, usage_array: npt.NDArray[np.float32], generation: int, smogon_format: str
 ):
@@ -244,7 +255,7 @@ async def fetch_and_process(
                 ("nature", construct_nature_usage),
             ]:
                 try:
-                    usage_array = usage_func(data)
+                    usage_array = postprocess_usage_array(usage_func(data))
                     # usage_array = usage_array + ~(usage_array.any(axis=-1)[..., None])
                 except Exception as e:
                     logger.error(
@@ -254,7 +265,9 @@ async def fetch_and_process(
                 else:
                     save_usage_array(stat, usage_array, generation, smogon_format)
 
-            usage_array = construct_gender_usage(data, pokedex_df)
+            usage_array = postprocess_usage_array(
+                construct_gender_usage(data, pokedex_df)
+            )
             save_usage_array("gender", usage_array, generation, smogon_format)
 
             return  # Success
