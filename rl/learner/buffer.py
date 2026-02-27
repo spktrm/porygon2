@@ -1,6 +1,7 @@
 import threading
 
 import numpy as np
+from tqdm import tqdm
 
 from rl.environment.data import NUM_SPECIES
 from rl.environment.interfaces import (
@@ -27,6 +28,8 @@ class BuilderTrajectoryStore:
         self._add_cv = threading.Condition()
         self._sample_cv = threading.Condition()
 
+        self._progress = tqdm(desc="builder_producer", smoothing=0.1)
+
     @classmethod
     def from_trajectories(
         cls,
@@ -40,9 +43,11 @@ class BuilderTrajectoryStore:
             store.add_trajectory(trajectory)
         return store
 
-    def is_full(self) -> bool:
+    def is_full(self, limit: int = None) -> bool:
         """Returns True if the store has reached its maximum capacity."""
-        return len(self._trajectories) >= self._max_size
+        if limit is None:
+            limit = self._max_size
+        return len(self._trajectories) >= limit
 
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
@@ -78,6 +83,8 @@ class BuilderTrajectoryStore:
             replace_index = np.random.choice(available_indices)
             self._trajectories[replace_index] = item_to_store
             self._reuses[replace_index] = 0
+
+        self._progress.update(1)
 
     def sample_trajectory(
         self, increment: bool = True
@@ -116,13 +123,17 @@ class PlayerTrajectoryStore:
         self._add_cv = threading.Condition()
         self._sample_cv = threading.Condition()
 
+        self._progress = tqdm(desc="player_producer", smoothing=0.1)
+
         # Tracking
         self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
         self._tau = 1e-3
 
-    def is_full(self) -> bool:
+    def is_full(self, limit: int = None) -> bool:
         """Returns True if the store has reached its maximum capacity."""
-        return len(self._trajectories) >= self._max_size
+        if limit is None:
+            limit = self._max_size
+        return len(self._trajectories) >= limit
 
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
@@ -163,6 +174,8 @@ class PlayerTrajectoryStore:
             replace_index = np.random.choice(available_indices)
             self._trajectories[replace_index] = traj
             self._reuses[replace_index] = 0
+
+        self._progress.update(1)
 
     def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
         """Samples n trajectories uniformly from those with fewer than max_reuses."""

@@ -66,13 +66,13 @@ class BuilderActor:
             lambda *xs: np.stack(xs), *builder_trajectory
         )
 
-        add_cond = self._learner.team_store._add_cv
+        add_cond = self._learner.builder_replay._add_cv
         with add_cond:
-            add_cond.wait_for(self._learner.team_store.ready_to_add)
-            self._learner.team_store.add_trajectory(
+            add_cond.wait_for(self._learner.builder_replay.ready_to_add)
+            self._learner.builder_replay.add_trajectory(
                 builder_trajectory, builder_actor_input.history
             )
 
-        sample_cond = self._learner.team_store._sample_cv
+        sample_cond = self._learner.builder_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()

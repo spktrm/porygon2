@@ -2436,6 +2436,8 @@ export class EventHandler implements Protocol.Handler {
 
         const { pokemon } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
+            console.warn(`${args} Pokemon ${pokeIdent} not found`);
+            return;
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 

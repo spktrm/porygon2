@@ -144,6 +144,15 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
+def power_schedule(
+    coef: float, step: int, decay: float, ceil: float, floor: float
+) -> float:
+    x = coef / ((jnp.floor(step) + 1) ** decay)
+    x = max(x, floor)
+    x = min(x, ceil)
+    return x
+
+
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -228,12 +237,13 @@ def train_step(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
 
-    player_uniform_prob = 1.0 / action_mask_sum.clip(min=1)
-    player_uniform_log_prob = jnp.log(player_uniform_prob)
-
-    scale = 1 / config.gradient_accumulation_steps
-    step_adj = jnp.floor((player_state.step_count + 1) * scale)
-    entropy_decay = 1 / (jnp.maximum(step_adj, 1) ** 0.3)
+    entropy_temp = power_schedule(
+        1,
+        player_state.step_count / config.gradient_accumulation_steps,
+        config.entropy_temp_decay,
+        config.entropy_temp_ceil,
+        config.entropy_temp_floor,
+    )
 
     def player_loss_fn(params: Params):
 
@@ -250,10 +260,8 @@ def train_step(
         learner_action_head = player_pred.action_head
 
         learner_log_prob = learner_action_head.log_prob
-
-        # Calculate the log ratios.
-        learner_uniform_log_ratio = learner_log_prob - player_uniform_log_prob
-        learner_uniform_ratio = jnp.exp(learner_uniform_log_ratio)
+        learner_action_head.log_policy
+        learner_action_head.entropy
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
@@ -278,11 +286,15 @@ def train_step(
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
-        loss_entropy = backward_kl_loss(
-            policy_ratio=learner_uniform_ratio,
-            log_policy_ratio=learner_uniform_log_ratio,
-            valid=player_valid,
-        )
+
+        # The log of the number of valid actions
+        log_num_valid_actions = jnp.log(action_mask_sum.clip(min=1))
+
+        # magnet_kl = -entropy + xe
+        exact_magnet_kl = log_num_valid_actions - learner_action_head.entropy
+
+        # Average over valid transitions
+        loss_entropy = average(exact_magnet_kl, player_valid)
 
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -299,7 +311,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * entropy_decay * loss_entropy
+            + config.player_entropy_loss_coef * entropy_temp * loss_entropy
         )
 
         return loss, dict(
@@ -352,7 +364,7 @@ def train_step(
             policy_ratios=ratio,
             advantages=builder_advantages
             + config.builder_entropy_loss_coef
-            * entropy_decay
+            * entropy_temp
             * (
                 actor_builder_conditional_entropy / config.normalising_constant
                 - builder_actor_conditional_entropy_head.logits
@@ -389,30 +401,25 @@ def train_step(
             valid=builder_valid,
         )
 
-        # NLL loss: encourage the builder to assign high log-probability to
-        # actions that are frequently chosen by humans (human_prob as weight).
-        # env_output[t].human_prob was computed from the action taken at step t-1,
-        # so we shift it forward by one to align with learner_log_prob[t].
+        # 1. Shift the logic (Your temporal alignment is still correct!)
         human_prob_raw = builder_transitions.env_output.human_prob
         human_prob = jnp.concatenate(
             [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
         )
-        human_log_prob = jnp.log(jnp.where(human_prob > 0, human_prob, 1))
 
-        human_learner_ratio = jnp.exp(human_log_prob - learner_log_prob)
-        human_learner_log_ratio = human_log_prob - learner_log_prob
+        # 2. Mask out non-human choices (Hidden Power, Gender, etc.)
+        human_valid_mask = (
+            builder_transitions.env_output.curr_attribute
+            != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+        ) & (
+            builder_transitions.env_output.curr_attribute
+            != PackedSetFeature.PACKED_SET_FEATURE__GENDER
+        )
 
-        loss_human = forward_kl_loss(
-            policy_ratio=human_learner_ratio,
-            log_policy_ratio=human_learner_log_ratio,
-            valid=(
-                builder_transitions.env_output.curr_attribute
-                != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
-            )
-            & (
-                builder_transitions.env_output.curr_attribute
-                != PackedSetFeature.PACKED_SET_FEATURE__GENDER
-            ),
+        # 3. Probability-Weighted NLL
+        # No jnp.log() needed for the human! We just use the raw probability as a weight.
+        loss_human = -average(
+            human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
         )
 
         loss = (
@@ -420,7 +427,7 @@ def train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
-            + config.builder_human_loss_coef * entropy_decay * loss_human
+            + config.builder_human_loss_coef * entropy_temp * loss_human
         )
 
         return loss, dict(
@@ -504,7 +511,7 @@ def train_step(
             player_frame_count=player_state.frame_count,
             builder_frame_count=builder_state.frame_count,
             training_step=player_state.step_count,
-            entropy_decay_coeff=entropy_decay,
+            entropy_decay_coeff=entropy_temp,
         )
     )
 
@@ -563,16 +570,19 @@ class Learner:
         self.gpu_lock = gpu_lock or nullcontext()
 
         self.done = False
-        self.team_store = BuilderTrajectoryStore()
-        self.replay = PlayerTrajectoryStore(
-            max_size=self.config.replay_buffer_capacity
+        self.builder_replay = BuilderTrajectoryStore(
+            max_size=self.config.builder_replay_buffer_capacity,
+            max_reuses=self.config.builder_replay_ratio,
+        )
+        self.player_replay = PlayerTrajectoryStore(
+            max_size=self.config.player_replay_buffer_capacity,
+            max_reuses=self.config.player_replay_ratio,
         )
 
         # Threading
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
 
         # Progress Bars
-        self.producer_progress = tqdm(desc="producer", smoothing=0.1)
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
@@ -584,18 +594,16 @@ class Learner:
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
-        add_cond = self.replay._add_cv
+        add_cond = self.player_replay._add_cv
         with add_cond:
-            add_cond.wait_for(lambda: self.done or self.replay.ready_to_add())
+            add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
             if self.done:
                 return
-            self.replay.add(traj)
+            self.player_replay.add(traj)
 
-        sample_cond = self.replay._sample_cv
+        sample_cond = self.player_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()
-
-        self.producer_progress.update(1)
 
     def host_to_device_worker(self):
         """Background thread to batch data and push to GPU queue."""
@@ -608,14 +616,16 @@ class Learner:
                 if self.done:
                     break
 
-                sample_cond = self.replay._sample_cv
+                sample_cond = self.player_replay._sample_cv
                 with sample_cond:
-                    sample_cond.wait_for(lambda: self.done or self.replay.ready_to_sample())
+                    sample_cond.wait_for(
+                        lambda: self.done or self.player_replay.ready_to_sample()
+                    )
                     if self.done:
                         break
-                    batch = self.replay.sample(batch_size)
+                    batch = self.player_replay.sample(batch_size)
 
-                add_cond = self.replay._add_cv
+                add_cond = self.player_replay._add_cv
                 with add_cond:
                     add_cond.notify_all()
 
@@ -665,10 +675,10 @@ class Learner:
             raise e
         finally:
             self.done = True
-            with self.replay._add_cv:
-                self.replay._add_cv.notify_all()
-            with self.replay._sample_cv:
-                self.replay._sample_cv.notify_all()
+            with self.player_replay._add_cv:
+                self.player_replay._add_cv.notify_all()
+            with self.player_replay._sample_cv:
+                self.player_replay._sample_cv.notify_all()
             print("Training Finished.")
 
     def _train_step(self, batch: Trajectory) -> dict | None:
@@ -733,7 +743,7 @@ class Learner:
         if self._should_add_new_player():
             print(f"Adding new player to league @ {step}")
             self.league.add_player(self._create_params_container(step))
-            self.replay.reset_species_counts()
+            self.player_replay.reset_species_counts()
 
     def _should_add_new_player(self) -> bool:
         latest = self.league.get_latest_player()
@@ -780,7 +790,7 @@ class Learner:
 
     def _get_usage_counts(self):
         names = list(STOI["species"])
-        counts = self.replay._species_counts
+        counts = self.player_replay._species_counts
 
         table = wandb.Table(columns=["species", "usage"])
         for name, count in zip(names, counts):
