@@ -43,7 +43,7 @@ SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_player_actors: int = 8
+    num_player_actors: int = 12
     num_builder_actors: int = 4
     num_eval_actors: int = 2
 
@@ -82,16 +82,19 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
 
     # Loss coefficients
+    ## Player
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_entropy_loss_coef: float = 0.05
-
+    ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_kl_prior_loss_coef: float = 0.1
     builder_entropy_loss_coef: float = 0.1
+    builder_human_loss_coef: float = 0.5
+    ## Entropy
     normalising_constant: int = 20
 
     # Smogon Generation

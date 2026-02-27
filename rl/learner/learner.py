@@ -13,7 +13,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import CAT_VF_SUPPORT, STOI
+from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
 from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, ReplayBuffer
@@ -232,7 +232,8 @@ def train_step(
     player_uniform_log_prob = jnp.log(player_uniform_prob)
 
     scale = 1 / config.gradient_accumulation_steps
-    entropy_decay = 1 / (jnp.floor((player_state.step_count + 1) * scale) ** 0.3)
+    step_adj = jnp.floor((player_state.step_count + 1) * scale)
+    entropy_decay = 1 / (jnp.maximum(step_adj, 1) ** 0.3)
 
     def player_loss_fn(params: Params):
 
@@ -388,11 +389,38 @@ def train_step(
             valid=builder_valid,
         )
 
+        # NLL loss: encourage the builder to assign high log-probability to
+        # actions that are frequently chosen by humans (human_prob as weight).
+        # env_output[t].human_prob was computed from the action taken at step t-1,
+        # so we shift it forward by one to align with learner_log_prob[t].
+        human_prob_raw = builder_transitions.env_output.human_prob
+        human_prob = jnp.concatenate(
+            [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
+        )
+        human_log_prob = jnp.log(jnp.where(human_prob > 0, human_prob, 1))
+
+        human_learner_ratio = jnp.exp(human_log_prob - learner_log_prob)
+        human_learner_log_ratio = human_log_prob - learner_log_prob
+
+        loss_human = forward_kl_loss(
+            policy_ratio=human_learner_ratio,
+            log_policy_ratio=human_learner_log_ratio,
+            valid=(
+                builder_transitions.env_output.curr_attribute
+                != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+            )
+            & (
+                builder_transitions.env_output.curr_attribute
+                != PackedSetFeature.PACKED_SET_FEATURE__GENDER
+            ),
+        )
+
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
+            + config.builder_human_loss_coef * entropy_decay * loss_human
         )
 
         return loss, dict(
@@ -400,6 +428,7 @@ def train_step(
             builder_loss_v=loss_v,
             builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_human=loss_human,
             # Head entropies
             builder_entropy=builder_entropy,
             # Ratios
