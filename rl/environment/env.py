@@ -167,13 +167,7 @@ class TeamBuilderEnvironment:
                 gender_mask=self.initial_gender_mask,
                 ts=jnp.array(0, dtype=jnp.int32),
                 ev_reward=jnp.array(0, dtype=jnp.float32),
-                species_prob=jnp.array(0, dtype=jnp.float32),
-                teammate_prob=jnp.array(0, dtype=jnp.float32),
-                item_prob=jnp.array(0, dtype=jnp.float32),
-                ability_prob=jnp.array(0, dtype=jnp.float32),
-                move_prob=jnp.array(0, dtype=jnp.float32),
-                teratype_prob=jnp.array(0, dtype=jnp.float32),
-                nature_prob=jnp.array(0, dtype=jnp.float32),
+                human_prob=jnp.array(0, dtype=jnp.float32),
                 curr_order=order[0],
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
@@ -279,13 +273,7 @@ class TeamBuilderEnvironment:
                 env=state.env.replace(
                     ts=next_ts,
                     ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
-                    species_prob=jnp.array(0.0, dtype=jnp.float32),
-                    teammate_prob=jnp.array(0.0, dtype=jnp.float32),
-                    item_prob=jnp.array(0.0, dtype=jnp.float32),
-                    ability_prob=jnp.array(0.0, dtype=jnp.float32),
-                    move_prob=jnp.array(0.0, dtype=jnp.float32),
-                    teratype_prob=jnp.array(0.0, dtype=jnp.float32),
-                    nature_prob=jnp.array(0.0, dtype=jnp.float32),
+                    human_prob=jnp.array(0.0, dtype=jnp.float32),
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -413,14 +401,13 @@ class TeamBuilderEnvironment:
             )
             final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
 
-            # --- Usage-Based Reward Computation ---
-            # Species of the current member (used for attribute-specific rewards)
+            # --- Human usage probability for this timestep ---
+            # Species of the current member (used for attribute-specific probs)
             curr_species_token = packed_set_tokens[
                 curr_position, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
             ]
 
-            # Teammate reward: when assigning species, measure co-occurrence with
-            # already-selected teammates (using state before this action was applied)
+            # Teammate co-occurrence: needed when choosing species
             all_team_species = packed_set_tokens[
                 :, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
             ]
@@ -437,51 +424,42 @@ class TeamBuilderEnvironment:
                 / n_valid_teammates
             )
 
-            teammate_prob = jnp.where(
-                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES)
-                & is_valid_teammate.any(),
-                mean_teammate_cooccurrence,
-                jnp.array(0.0, dtype=jnp.float32),
-            )
-
-            # Attribute rewards indexed by species (only valid when species is known)
             species_is_known = curr_species_token != 0
-
-            item_prob = jnp.where(
-                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
-                & species_is_known,
-                self.item_usage[curr_species_token, action_index],
-                jnp.array(0.0, dtype=jnp.float32),
-            )
-
-            ability_prob = jnp.where(
-                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY)
-                & species_is_known,
-                self.ability_usage[curr_species_token, action_index],
-                jnp.array(0.0, dtype=jnp.float32),
-            )
 
             is_move_attr = (
                 curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1
             ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4)
-            move_prob = jnp.where(
-                is_move_attr & species_is_known,
-                self.move_usage[curr_species_token, action_index],
-                jnp.array(0.0, dtype=jnp.float32),
-            )
 
-            teratype_prob = jnp.where(
-                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE)
-                & species_is_known,
-                self.teratype_usage[curr_species_token, action_index],
-                jnp.array(0.0, dtype=jnp.float32),
-            )
-
-            nature_prob = jnp.where(
-                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
-                & species_is_known,
-                self.nature_usage[curr_species_token, action_index],
-                jnp.array(0.0, dtype=jnp.float32),
+            # Combine all mutually-exclusive per-attribute probabilities into one
+            # scalar using jnp.select (exactly one condition is true per timestep).
+            human_prob = jnp.select(
+                condlist=[
+                    # Species: usage rate * teammate co-occurrence (1.0 when no teammates yet)
+                    curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
+                    & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY)
+                    & species_is_known,
+                    is_move_attr & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE)
+                    & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
+                    & species_is_known,
+                ],
+                choicelist=[
+                    jnp.take(self.species_usage, action_index, axis=0, mode="clip")
+                    * jnp.where(
+                        is_valid_teammate.any(),
+                        mean_teammate_cooccurrence,
+                        jnp.array(1.0, dtype=jnp.float32),
+                    ),
+                    self.item_usage[curr_species_token, action_index],
+                    self.ability_usage[curr_species_token, action_index],
+                    self.move_usage[curr_species_token, action_index],
+                    self.teratype_usage[curr_species_token, action_index],
+                    self.nature_usage[curr_species_token, action_index],
+                ],
+                default=jnp.array(0.0, dtype=jnp.float32),
             )
 
             return state.replace(
@@ -498,17 +476,7 @@ class TeamBuilderEnvironment:
                     curr_order=next_order,
                     curr_attribute=next_attribute,
                     curr_position=next_position,
-                    species_prob=jnp.where(
-                        curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
-                        jnp.take(self.species_usage, action_index, axis=0, mode="clip"),
-                        jnp.array(0.0, dtype=jnp.float32),
-                    ),
-                    teammate_prob=teammate_prob,
-                    item_prob=item_prob,
-                    ability_prob=ability_prob,
-                    move_prob=move_prob,
-                    teratype_prob=teratype_prob,
-                    nature_prob=nature_prob,
+                    human_prob=human_prob,
                     done=jnp.array(False, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
