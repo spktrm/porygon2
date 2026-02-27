@@ -118,6 +118,7 @@ class TeamBuilderEnvironment:
         self.teratype_usage = load_usage("teratypes")
         self.teammate_usage = load_usage("teammates")
 
+        self.formes_mask = load_mask("formes")
         self.item_masks = load_mask("items")
         self.ability_masks = load_mask("abilities")
         self.move_masks = load_mask("moves")
@@ -346,7 +347,10 @@ class TeamBuilderEnvironment:
                 False
             )  # Don't mask yourself
 
-            species_pool = species_pool & ~other_species_mask
+            # Mask duplicate species from formes
+            formes_mask = self.formes_mask[other_species].all(axis=0)
+
+            species_pool = species_pool & ~other_species_mask & formes_mask
 
             # Finalize species mask for this step
             next_species_mask = jnp.where(
