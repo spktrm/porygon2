@@ -16,7 +16,7 @@ import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
-from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, PlayerTrajectoryStore
+from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -568,15 +568,6 @@ class Learner:
             max_size=self.config.replay_buffer_capacity
         )
 
-        # Rate Limiting
-        self.controller = DirectRatioLimiter(
-            target_rr=self.config.target_replay_ratio,
-            batch_size=self.config.batch_size,
-        )
-        self.controller.set_ready_to_learn_fn(
-            lambda: self.replay.is_full() or self.team_store.is_full()
-        )
-
         # Threading
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
 
@@ -593,13 +584,11 @@ class Learner:
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
-        self.controller.wait_for_produce_permission()
-        if self.done:
-            return
-
         add_cond = self.replay._add_cv
         with add_cond:
-            add_cond.wait_for(self.replay.ready_to_add)
+            add_cond.wait_for(lambda: self.done or self.replay.ready_to_add())
+            if self.done:
+                return
             self.replay.add(traj)
 
         sample_cond = self.replay._sample_cv
@@ -607,7 +596,6 @@ class Learner:
             sample_cond.notify_all()
 
         self.producer_progress.update(1)
-        self.controller.notify_produced(n_trajectories=1)
 
     def host_to_device_worker(self):
         """Background thread to batch data and push to GPU queue."""
@@ -617,13 +605,14 @@ class Learner:
         while not self.done:
             # Burst processing to minimize lock contention overhead
             for _ in range(max_burst):
-                self.controller.wait_for_consume_permission()
                 if self.done:
                     break
 
                 sample_cond = self.replay._sample_cv
                 with sample_cond:
-                    sample_cond.wait_for(self.replay.ready_to_sample)
+                    sample_cond.wait_for(lambda: self.done or self.replay.ready_to_sample())
+                    if self.done:
+                        break
                     batch = self.replay.sample(batch_size)
 
                 add_cond = self.replay._add_cv
@@ -635,8 +624,6 @@ class Learner:
                 # Process pure data outside lock
                 stacked = _stack_and_pad_batch(batch)
                 self.device_q.put(stacked)
-
-                self.controller.notify_consumed(n_trajectories=batch_size)
 
         logger.info("host_to_device_worker exiting.")
 
@@ -678,6 +665,10 @@ class Learner:
             raise e
         finally:
             self.done = True
+            with self.replay._add_cv:
+                self.replay._add_cv.notify_all()
+            with self.replay._sample_cv:
+                self.replay._sample_cv.notify_all()
             print("Training Finished.")
 
     def _train_step(self, batch: Trajectory) -> dict | None:
@@ -716,11 +707,6 @@ class Learner:
 
         # Console Progress
         self.train_progress.update(1)
-        rr = self.controller._get_current_rr()
-        self.train_progress.set_description(f"batches - rr: {rr:.2f}")
-
-        # Metrics
-        logs["replay_ratio"] = rr
 
         if step % self.config.save_interval_steps == 0:
             logs.update(self._get_usage_counts())
