@@ -48,8 +48,12 @@ class Porygon2LearnerConfig:
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 1024 * 6
-    theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
+
+    # Replay buffer params
+    player_replay_buffer_capacity: int = 1024 * 6
+    player_replay_ratio: int = 2
+    builder_replay_buffer_capacity: int = 1024
+    builder_replay_ratio: int = 5
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -62,7 +66,6 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 2.0
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
@@ -86,7 +89,7 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 0.05
+    player_entropy_loss_coef: float = 0.1
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -95,7 +98,10 @@ class Porygon2LearnerConfig:
     builder_entropy_loss_coef: float = 0.1
     builder_human_loss_coef: float = 0.5
     ## Entropy
-    normalising_constant: int = 20
+    normalising_constant: int = 100
+    entropy_temp_decay: float = 0.3
+    entropy_temp_ceil: float = 0.1
+    entropy_temp_floor: float = 1e-3
 
     # Smogon Generation
     generation: GenT = 9

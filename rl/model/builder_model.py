@@ -282,8 +282,6 @@ class Porygon2BuilderModel(nn.Module):
         value_head = self._forward_value_head(hidden_state)
         conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
 
-        hidden_state = hidden_state[None]
-
         species_head = self.species_head(
             self.species_head_mlp(hidden_state),
             species_keys,
@@ -341,7 +339,7 @@ class Porygon2BuilderModel(nn.Module):
             head_params=head_params,
         )
 
-        action_indices = jnp.concatenate(
+        action_indices = jnp.stack(
             (
                 species_head.action_index,
                 item_head.action_index,
@@ -353,7 +351,7 @@ class Porygon2BuilderModel(nn.Module):
                 teratype_head.action_index,
             ),
         )
-        log_probs = jnp.concatenate(
+        log_probs = jnp.stack(
             (
                 species_head.log_prob,
                 item_head.log_prob,
@@ -365,7 +363,7 @@ class Porygon2BuilderModel(nn.Module):
                 teratype_head.log_prob,
             ),
         )
-        entropies = jnp.concatenate(
+        entropies = jnp.stack(
             (
                 species_head.entropy,
                 item_head.entropy,
@@ -377,7 +375,7 @@ class Porygon2BuilderModel(nn.Module):
                 teratype_head.entropy,
             )
         )
-        normalized_entropies = jnp.concatenate(
+        normalized_entropies = jnp.stack(
             (
                 species_head.normalized_entropy,
                 item_head.normalized_entropy,

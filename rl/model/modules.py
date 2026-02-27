@@ -611,7 +611,7 @@ class Resnet(nn.Module):
 
 class PointerLogits(nn.Module):
     qk_size: int = None
-    num_heads: int = 1
+    num_heads: int = 4
     use_bias: bool = True
     qk_layer_norm: bool = False
     inverse_sqrt_normalisation: bool = True
@@ -637,11 +637,7 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-
-        if self.num_heads == 1:
-            attn_logits = attn_logits.squeeze(axis=0)
-        else:
-            attn_logits = attn_logits.mean(axis=0)  # mean over heads
+        attn_logits = attn_logits.mean(axis=0)  # Average over heads
 
         if self.inverse_sqrt_normalisation:
             attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
