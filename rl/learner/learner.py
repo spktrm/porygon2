@@ -359,7 +359,6 @@ def train_step(
             policy_ratios=ratio,
             advantages=builder_advantages
             + config.builder_entropy_loss_coef
-            * entropy_temp
             * (
                 actor_builder_conditional_entropy / config.normalising_constant
                 - builder_actor_conditional_entropy_head.logits
@@ -422,7 +421,7 @@ def train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
-            + config.builder_human_loss_coef * entropy_temp * loss_human
+            + config.builder_human_loss_coef * loss_human
         )
 
         return loss, dict(
