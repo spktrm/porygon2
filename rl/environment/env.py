@@ -116,6 +116,7 @@ class TeamBuilderEnvironment:
         self.nature_usage = load_usage("nature")
         self.gender_usage = load_usage("gender")
         self.teratype_usage = load_usage("teratype")
+        self.teammate_usage = load_usage("teammates")
 
         self.item_masks = load_mask("items")
         self.ability_masks = load_mask("abilities")
@@ -167,6 +168,12 @@ class TeamBuilderEnvironment:
                 ts=jnp.array(0, dtype=jnp.int32),
                 ev_reward=jnp.array(0, dtype=jnp.float32),
                 species_reward=jnp.array(0, dtype=jnp.float32),
+                teammate_reward=jnp.array(0, dtype=jnp.float32),
+                item_reward=jnp.array(0, dtype=jnp.float32),
+                ability_reward=jnp.array(0, dtype=jnp.float32),
+                move_reward=jnp.array(0, dtype=jnp.float32),
+                teratype_reward=jnp.array(0, dtype=jnp.float32),
+                nature_reward=jnp.array(0, dtype=jnp.float32),
                 curr_order=order[0],
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
@@ -248,6 +255,7 @@ class TeamBuilderEnvironment:
         ts = state.env.ts
         curr_order = state.env.curr_order
         curr_attribute = state.env.curr_attribute
+        curr_position = state.env.curr_position
         action_index = action_index.squeeze()
 
         new_packed_team_member_tokens = state.history.packed_team_member_tokens.at[
@@ -271,6 +279,13 @@ class TeamBuilderEnvironment:
                 env=state.env.replace(
                     ts=next_ts,
                     ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
+                    species_reward=jnp.array(0.0, dtype=jnp.float32),
+                    teammate_reward=jnp.array(0.0, dtype=jnp.float32),
+                    item_reward=jnp.array(0.0, dtype=jnp.float32),
+                    ability_reward=jnp.array(0.0, dtype=jnp.float32),
+                    move_reward=jnp.array(0.0, dtype=jnp.float32),
+                    teratype_reward=jnp.array(0.0, dtype=jnp.float32),
+                    nature_reward=jnp.array(0.0, dtype=jnp.float32),
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -398,6 +413,77 @@ class TeamBuilderEnvironment:
             )
             final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
 
+            # --- Usage-Based Reward Computation ---
+            # Species of the current member (used for attribute-specific rewards)
+            curr_species_token = packed_set_tokens[
+                curr_position, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+
+            # Teammate reward: when assigning species, measure co-occurrence with
+            # already-selected teammates (using state before this action was applied)
+            all_team_species = packed_set_tokens[
+                :, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+            is_other_member = jnp.arange(self._num_team_members) != curr_position
+            has_species = all_team_species != 0
+            is_valid_teammate = is_other_member & has_species
+            teammate_cooccurrences = self.teammate_usage[action_index, all_team_species]
+            # clip(min=1) prevents NaN from 0/0 in JAX's eager trace; the outer
+            # jnp.where below further guards against using this value when there
+            # are no valid teammates.
+            n_valid_teammates = is_valid_teammate.sum().clip(min=1)
+            mean_teammate_cooccurrence = (
+                jnp.where(is_valid_teammate, teammate_cooccurrences, 0.0).sum()
+                / n_valid_teammates
+            )
+
+            teammate_reward = jnp.where(
+                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES)
+                & is_valid_teammate.any(),
+                mean_teammate_cooccurrence,
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
+            # Attribute rewards indexed by species (only valid when species is known)
+            species_is_known = curr_species_token != 0
+
+            item_reward = jnp.where(
+                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
+                & species_is_known,
+                self.item_usage[curr_species_token, action_index],
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
+            ability_reward = jnp.where(
+                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY)
+                & species_is_known,
+                self.ability_usage[curr_species_token, action_index],
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
+            is_move_attr = (
+                curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1
+            ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4)
+            move_reward = jnp.where(
+                is_move_attr & species_is_known,
+                self.move_usage[curr_species_token, action_index],
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
+            teratype_reward = jnp.where(
+                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE)
+                & species_is_known,
+                self.teratype_usage[curr_species_token, action_index],
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
+            nature_reward = jnp.where(
+                (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
+                & species_is_known,
+                self.nature_usage[curr_species_token, action_index],
+                jnp.array(0.0, dtype=jnp.float32),
+            )
+
             return state.replace(
                 env=state.env.replace(
                     species_mask=next_species_mask,
@@ -417,6 +503,12 @@ class TeamBuilderEnvironment:
                         jnp.take(self.species_usage, action_index, axis=0, mode="clip"),
                         jnp.array(0.0, dtype=jnp.float32),
                     ),
+                    teammate_reward=teammate_reward,
+                    item_reward=item_reward,
+                    ability_reward=ability_reward,
+                    move_reward=move_reward,
+                    teratype_reward=teratype_reward,
+                    nature_reward=nature_reward,
                     done=jnp.array(False, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
