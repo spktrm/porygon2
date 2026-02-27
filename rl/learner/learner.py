@@ -390,7 +390,12 @@ def train_step(
 
         # NLL loss: encourage the builder to assign high log-probability to
         # actions that are frequently chosen by humans (human_prob as weight).
-        human_prob = builder_transitions.env_output.human_prob
+        # env_output[t].human_prob was computed from the action taken at step t-1,
+        # so we shift it forward by one to align with learner_log_prob[t].
+        human_prob_raw = builder_transitions.env_output.human_prob
+        human_prob = jnp.concatenate(
+            [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
+        )
         loss_human = -average(human_prob * learner_log_prob, builder_valid)
 
         loss = (
