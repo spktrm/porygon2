@@ -306,7 +306,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * entropy_temp * loss_entropy
+            + config.player_entropy_loss_coef * loss_entropy
         )
 
         return loss, dict(
