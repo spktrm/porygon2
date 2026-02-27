@@ -401,7 +401,7 @@ class TeamBuilderEnvironment:
             )
             final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
 
-            # --- Human usage probability for this timestep ---
+            # --- Human usage probability for this timestep (mask-normalized) ---
             # Species of the current member (used for attribute-specific probs)
             curr_species_token = packed_set_tokens[
                 curr_position, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -426,15 +426,40 @@ class TeamBuilderEnvironment:
 
             species_is_known = curr_species_token != 0
 
+            curr_is_ev_attr = (
+                curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV
+            ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
+            curr_ev_col = (
+                curr_attribute - PackedSetFeature.PACKED_SET_FEATURE__HP_EV
+            ).clip(0, 5)
+
             is_move_attr = (
                 curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1
             ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4)
+
+            # Normalize a usage vector over the valid action mask to get the
+            # conditional probability of the chosen action.  If no valid action
+            # has non-zero usage the result is 0 (1e-8 floor prevents NaN from 0/0).
+            def _masked_prob(usage_vec, mask):
+                masked = usage_vec * mask.astype(jnp.float32)
+                return masked[action_index] / masked.sum().clip(min=1e-8)
+
+            # Compute mask-normalized probs for each attribute type.
+            # Species is additionally weighted by teammate co-occurrence because
+            # its usage rate alone does not account for synergy with existing members.
+            species_human_prob = _masked_prob(
+                self.species_usage, state.env.species_mask
+            ) * jnp.where(
+                is_valid_teammate.any(),
+                mean_teammate_cooccurrence,
+                jnp.array(1.0, dtype=jnp.float32),
+            )
 
             # Combine all mutually-exclusive per-attribute probabilities into one
             # scalar using jnp.select (exactly one condition is true per timestep).
             human_prob = jnp.select(
                 condlist=[
-                    # Species: usage rate * teammate co-occurrence (1.0 when no teammates yet)
+                    # Species: mask-normalized usage * teammate co-occurrence
                     curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
                     (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
                     & species_is_known,
@@ -445,19 +470,30 @@ class TeamBuilderEnvironment:
                     & species_is_known,
                     (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
                     & species_is_known,
+                    curr_is_ev_attr & species_is_known,
                 ],
                 choicelist=[
-                    jnp.take(self.species_usage, action_index, axis=0, mode="clip")
-                    * jnp.where(
-                        is_valid_teammate.any(),
-                        mean_teammate_cooccurrence,
-                        jnp.array(1.0, dtype=jnp.float32),
+                    species_human_prob,
+                    _masked_prob(
+                        self.item_usage[curr_species_token], state.env.item_mask
                     ),
-                    self.item_usage[curr_species_token, action_index],
-                    self.ability_usage[curr_species_token, action_index],
-                    self.move_usage[curr_species_token, action_index],
-                    self.teratype_usage[curr_species_token, action_index],
-                    self.nature_usage[curr_species_token, action_index],
+                    _masked_prob(
+                        self.ability_usage[curr_species_token], state.env.ability_mask
+                    ),
+                    _masked_prob(
+                        self.move_usage[curr_species_token], state.env.move_mask
+                    ),
+                    _masked_prob(
+                        self.teratype_usage[curr_species_token],
+                        state.env.teratype_mask,
+                    ),
+                    _masked_prob(
+                        self.nature_usage[curr_species_token], state.env.nature_mask
+                    ),
+                    _masked_prob(
+                        self.ev_usage[curr_species_token, curr_ev_col],
+                        state.env.ev_mask,
+                    ),
                 ],
                 default=jnp.array(0.0, dtype=jnp.float32),
             )
