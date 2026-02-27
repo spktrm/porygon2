@@ -642,6 +642,6 @@ def main(generation: int = 9):
 
 
 if __name__ == "__main__":
-    debug = False
+    debug = True
     with jax.disable_jit(debug):
         main()

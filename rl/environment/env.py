@@ -100,34 +100,30 @@ class TeamBuilderEnvironment:
         self._generation = generation
         self._num_team_members = num_team_members
 
-        # Load Masks
-        teammate_mask = jnp.load(
-            f"data/data/gen{generation}/mask/teammates_mask_{smogon_format}.npy"
+        load_arr = functools.partial(
+            self._load_arr, generation=generation, smogon_format=smogon_format
         )
-        self.species_usage = jnp.load(
-            f"data/data/gen{generation}/usage/species_usage_{smogon_format}.npy"
-        )
-        self.item_masks = jnp.load(
-            f"data/data/gen{generation}/mask/items_mask_{smogon_format}.npy"
-        )
-        self.ability_masks = jnp.load(
-            f"data/data/gen{generation}/mask/abilities_mask_{smogon_format}.npy"
-        )
-        self.move_masks = jnp.load(
-            f"data/data/gen{generation}/mask/moves_mask_{smogon_format}.npy"
-        )
-        self.ev_masks = jnp.load(
-            f"data/data/gen{generation}/mask/ev_mask_{smogon_format}.npy"
-        )
-        self.nature_masks = jnp.load(
-            f"data/data/gen{generation}/mask/nature_mask_{smogon_format}.npy"
-        )
-        self.gender_masks = jnp.load(
-            f"data/data/gen{generation}/mask/gender_mask_{smogon_format}.npy"
-        )
-        self.teratype_masks = jnp.load(
-            f"data/data/gen{generation}/mask/teratypes_mask_{smogon_format}.npy"
-        )
+        load_mask = functools.partial(load_arr, data_type="mask")
+        load_usage = functools.partial(load_arr, data_type="usage")
+
+        teammate_mask = load_mask("teammate")
+
+        self.species_usage = load_usage("species")
+        self.item_usage = load_usage("items")
+        self.ability_usage = load_usage("abilities")
+        self.move_usage = load_usage("moves")
+        self.ev_usage = load_usage("ev")
+        self.nature_usage = load_usage("nature")
+        self.gender_usage = load_usage("gender")
+        self.teratype_usage = load_usage("teratype")
+
+        self.item_masks = load_mask("items")
+        self.ability_masks = load_mask("abilities")
+        self.move_masks = load_mask("moves")
+        self.ev_masks = load_mask("ev")
+        self.nature_masks = load_mask("nature")
+        self.gender_masks = load_mask("gender")
+        self.teratype_masks = load_mask("teratype")
 
         # Initial Masks
         self.initial_species_mask = teammate_mask.any(axis=-1)
@@ -140,6 +136,13 @@ class TeamBuilderEnvironment:
         self.initial_teratype_mask = self.teratype_masks.any(axis=0)
 
         self.length = num_team_members * (NUM_PACKED_SET_FEATURES - 1)
+
+    def _load_arr(
+        self, attribute: str, generation: int, smogon_format: str, data_type: str
+    ):
+        return jnp.load(
+            f"data/data/gen{generation}/{data_type}/{attribute}_{data_type}_{smogon_format}.npy"
+        )
 
     def reset(self, key: jax.Array) -> BuilderActorInput:
         self.state = self._reset(key)
