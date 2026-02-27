@@ -388,11 +388,17 @@ def train_step(
             valid=builder_valid,
         )
 
+        # NLL loss: encourage the builder to assign high log-probability to
+        # actions that are frequently chosen by humans (human_prob as weight).
+        human_prob = builder_transitions.env_output.human_prob
+        loss_human = -average(human_prob * learner_log_prob, builder_valid)
+
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + loss_entropy
+            + config.builder_human_loss_coef * loss_human
         )
 
         return loss, dict(
@@ -400,6 +406,7 @@ def train_step(
             builder_loss_v=loss_v,
             builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_human=loss_human,
             # Head entropies
             builder_entropy=builder_entropy,
             # Ratios
