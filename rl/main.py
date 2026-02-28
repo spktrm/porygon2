@@ -1,3 +1,4 @@
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -121,6 +122,8 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
 def main(args: argparse.Namespace):
     """Main function to run the RL learner."""
     debug = args.debug
+    if debug:
+        os.environ["WANDB_MODE"] = "disabled"
 
     salt = int(time.time())
 

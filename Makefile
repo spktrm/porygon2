@@ -14,4 +14,4 @@ clean:
 	find . -type d -name "__pycache__" -print -exec rm -r {} +
 
 kill:
-	tmux kill-server ; killall python ; killall node
+	tmux kill-server || true; killall -9 python || true; killall -9 node || true

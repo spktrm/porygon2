@@ -144,8 +144,11 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
-def power_schedule(coef: float, step: int, decay: float) -> jax.Array:
-    return coef / ((jnp.floor(step) + 1) ** decay)
+def power_schedule(
+    coef: float, step: int, decay: float, floor: float, ceil: float
+) -> jax.Array:
+    x = coef / ((jnp.floor(step) + 1) ** decay)
+    return jnp.clip(x, floor, ceil)
 
 
 def train_step(
@@ -215,12 +218,56 @@ def train_step(
     cat_value_delta = value_target - value_probs
     scalar_value_delta = cat_value_delta @ cat_vf_support
 
-    td_lambdas = config.td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
-    gae_lambdas = config.gae_lambda * valid.astype(cat_value_delta.dtype)
+    builder_td_lambdas = config.builder_td_lambda * jnp.ones_like(
+        builder_valid, dtype=cat_value_delta.dtype
+    )
+    player_td_lambdas = config.player_td_lambda * player_valid.astype(
+        cat_value_delta.dtype
+    )
+    td_lambdas = jnp.concatenate((builder_td_lambdas, player_td_lambdas))
+
+    builder_gae_lambdas = config.builder_gae_lambda * jnp.ones_like(
+        builder_valid, dtype=cat_value_delta.dtype
+    )
+    player_gae_lambdas = config.player_gae_lambda * player_valid.astype(
+        cat_value_delta.dtype
+    )
+    gae_lambdas = jnp.concatenate((builder_gae_lambdas, player_gae_lambdas))
+
+    num_builder = builder_valid.shape[0]
+    builder_scalar_delta = scalar_value_delta[:num_builder]
+    player_scalar_delta = scalar_value_delta[num_builder:]
+
+    builder_nll = -builder_actor_log_prob
+    builder_ent_pred = builder_actor_conditional_entropy_head.logits
+
+    next_builder_ent_pred = jnp.concatenate(
+        [builder_ent_pred[1:], jnp.zeros_like(builder_ent_pred[:1])], axis=0
+    )
+    builder_ent_delta = (
+        (builder_nll / config.normalising_constant)
+        + next_builder_ent_pred
+        - builder_ent_pred
+    )
+    entropy_temp = power_schedule(
+        config.entropy_loss_coef,
+        player_state.step_count / config.gradient_accumulation_steps,
+        config.entropy_temp_decay,
+        config.entropy_temp_floor,
+        config.entropy_temp_ceil,
+    )
+    combined_builder_delta = builder_scalar_delta + entropy_temp * builder_ent_delta
+    combined_scalar_delta = jnp.concatenate(
+        [combined_builder_delta, player_scalar_delta], axis=0
+    )
 
     segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
-    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
-    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
+    # Need to expand td_lambdas to match the shape of cat_value_delta for proper broadcasting
+    returns = segmented_cumsum(cat_value_delta, td_lambdas[..., None]) + value_probs
+    advantages = segmented_cumsum(combined_scalar_delta, gae_lambdas)
+    ent_returns = (
+        segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
+    )
 
     builder_returns = returns[: builder_valid.shape[0]]
     builder_advantages = advantages[: builder_valid.shape[0]]
@@ -231,12 +278,6 @@ def train_step(
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
-
-    entropy_temp = power_schedule(
-        1,
-        player_state.step_count / config.gradient_accumulation_steps,
-        config.entropy_temp_decay,
-    )
 
     def player_loss_fn(params: Params):
 
@@ -301,7 +342,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * loss_entropy
+            + entropy_temp * loss_entropy
         )
 
         return loss, dict(
@@ -350,12 +391,7 @@ def train_step(
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio,
-            advantages=builder_advantages
-            + config.builder_entropy_loss_coef
-            * (
-                actor_builder_conditional_entropy / config.normalising_constant
-                - builder_actor_conditional_entropy_head.logits
-            ),
+            advantages=builder_advantages,
             valid=builder_valid,
             clip_ppo=config.clip_ppo,
         )
@@ -373,7 +409,7 @@ def train_step(
         # Estimator for entropy
         loss_entropy = mse_value_loss(
             pred=conditional_entropy_head.logits,
-            target=actor_builder_conditional_entropy / config.normalising_constant,
+            target=ent_returns,
             valid=builder_valid,
         )
 
@@ -413,7 +449,7 @@ def train_step(
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
-            + loss_entropy
+            + config.builder_entropy_pred_coef * loss_entropy
             + config.builder_human_loss_coef * loss_human
         )
 
