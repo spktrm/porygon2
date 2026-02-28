@@ -147,7 +147,7 @@ def forward_kl_loss(
 def power_schedule(
     coef: float, step: int, decay: float, floor: float, ceil: float
 ) -> jax.Array:
-    x = coef / ((jnp.floor(step) + 1) ** decay)
+    x = coef / ((step + 1) ** decay)
     return jnp.clip(x, floor, ceil)
 
 
@@ -191,11 +191,6 @@ def train_step(
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
     valid = jnp.concatenate((jnp.ones_like(builder_valid), player_valid), axis=0)
-
-    actor_builder_entropy = -jnp.where(builder_valid, builder_actor_log_prob, 0)
-    actor_builder_conditional_entropy = jnp.flip(
-        jnp.cumsum(jnp.flip(actor_builder_entropy, axis=0), axis=0), axis=0
-    )
 
     value_probs = jnp.exp(
         jnp.concatenate(
@@ -251,7 +246,7 @@ def train_step(
     )
     entropy_temp = power_schedule(
         config.entropy_loss_coef,
-        player_state.step_count / config.gradient_accumulation_steps,
+        jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
         config.entropy_temp_decay,
         config.entropy_temp_floor,
         config.entropy_temp_ceil,
@@ -501,8 +496,8 @@ def train_step(
     training_logs.update(
         dict(
             builder_loss=builder_loss_val,
-            builder_inital_entropy=jnp.mean(actor_builder_conditional_entropy[0])
-            / config.normalising_constant,
+            builder_inital_entropy=jnp.mean(ent_returns[0])
+            * config.normalising_constant,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_norm_adv_mean=average(builder_advantages, builder_valid),
