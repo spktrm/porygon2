@@ -68,7 +68,11 @@ class BuilderActor:
 
         add_cond = self._learner.builder_replay._add_cv
         with add_cond:
-            add_cond.wait_for(self._learner.builder_replay.ready_to_add)
+            add_cond.wait_for(
+                lambda: self._learner.done or self._learner.builder_replay.ready_to_add()
+            )
+            if self._learner.done:
+                return
             self._learner.builder_replay.add_trajectory(
                 builder_trajectory, builder_actor_input.history
             )
