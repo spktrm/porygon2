@@ -69,7 +69,8 @@ class BuilderActor:
         add_cond = self._learner.builder_replay._add_cv
         with add_cond:
             add_cond.wait_for(
-                lambda: self._learner.done or self._learner.builder_replay.ready_to_add()
+                lambda: self._learner.done
+                or self._learner.builder_replay.ready_to_add()
             )
             if self._learner.done:
                 return

@@ -33,10 +33,6 @@ class RMSNorm(nn.Module):
         return (normed_inputs * (1 + scale)).astype(self.dtype)
 
 
-def dense_layer(*args, **kwargs) -> nn.Dense:
-    return nn.Dense(*args, **kwargs)
-
-
 def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.
@@ -123,7 +119,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
-    use_softcap: bool = False
+    use_softcap: bool = True
 
     @nn.compact
     def __call__(
@@ -141,19 +137,19 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = dense_layer(
+        query_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = dense_layer(
+        key_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
-        value_heads = dense_layer(
+        value_heads = nn.Dense(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
@@ -214,7 +210,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = dense_layer(
+        final_projection = nn.Dense(
             model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
@@ -455,7 +451,7 @@ class MLP(nn.Module):
             if i == len(layer_sizes) - 1:
                 if self.final_kernel_init is not None:
                     dense_kwargs["kernel_init"] = self.final_kernel_init
-            x = dense_layer(size, dtype=x.dtype, **dense_kwargs)(x)
+            x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
         return x
 
 
@@ -464,7 +460,6 @@ class FFWMLP(nn.Module):
 
     hidden_size: int
     output_size: int = None
-    use_layer_norm: bool = False
     activation: callable = activation_fn
 
     @nn.compact
@@ -479,31 +474,9 @@ class FFWMLP(nn.Module):
             jax.Array: Output array.
         """
         inp_size = x.shape[-1]
-        x = dense_layer(self.hidden_size, dtype=x.dtype)(x)
-        if self.use_layer_norm:
-            x = layer_norm(x)
-        x = self.activation(x)
-        x = dense_layer(self.output_size or inp_size, dtype=x.dtype)(x)
-        return x
-
-
-class GLU(nn.Module):
-
-    @nn.compact
-    def __call__(self, value: jax.Array, gate: jax.Array) -> jax.Array:
-        """
-        Apply Gated Linear Unit (GLU) to the inputs.
-
-        Args:
-            value (jax.Array): Input array.
-            gate (jax.Array): Input array.
-
-        Returns:
-            jax.Array: Output array.
-        """
-        gate = nn.sigmoid(dense_layer(gate.shape[-1], dtype=gate.dtype)(gate))
-        value = dense_layer(gate.shape[-1], dtype=gate.dtype)(value)
-        return value * gate
+        gate = self.activation(nn.Dense(self.hidden_size, dtype=x.dtype)(x))
+        x = gate * nn.Dense(self.hidden_size, dtype=x.dtype)(x)
+        return nn.Dense(self.output_size or inp_size, dtype=x.dtype)(x)
 
 
 class PretrainedEmbedding:
@@ -562,7 +535,7 @@ class SumEmbeddings(nn.Module):
             raise ValueError("No embeddings provided")
 
         aggregated = sum(
-            dense_layer(
+            nn.Dense(
                 self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
             )(embedding)
             for embedding in embeddings
@@ -594,7 +567,7 @@ class VectorResblock(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = dense_layer(output_size, dtype=x.dtype, **dense_kwargs)(x)
+            x = nn.Dense(output_size, dtype=x.dtype, **dense_kwargs)(x)
         return x + shortcut
 
 
@@ -623,11 +596,11 @@ class PointerLogits(nn.Module):
 
         qk_size = self.qk_size or k.shape[-1] // self.num_heads
 
-        query_heads = dense_layer(
+        query_heads = nn.Dense(
             self.num_heads * qk_size, use_bias=self.use_bias, dtype=q.dtype
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
 
-        key_heads = dense_layer(
+        key_heads = nn.Dense(
             self.num_heads * qk_size, use_bias=self.use_bias, dtype=k.dtype
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 

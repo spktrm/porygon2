@@ -290,7 +290,9 @@ def main(args: argparse.Namespace):
             try:
                 wandb_run.finish()
             except Exception:
-                logger.warning("wandb_run.finish() failed during shutdown", exc_info=True)
+                logger.warning(
+                    "wandb_run.finish() failed during shutdown", exc_info=True
+                )
 
     logger.info("Training run complete.")
 

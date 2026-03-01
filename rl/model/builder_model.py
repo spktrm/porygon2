@@ -48,7 +48,7 @@ from rl.model.heads import (
     PolicyQKHead,
     RegressionValueLogitHead,
 )
-from rl.model.modules import MLP, TransformerEncoder, dense_layer
+from rl.model.modules import MLP, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
@@ -78,27 +78,26 @@ class Porygon2BuilderModel(nn.Module):
 
         dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
-        self.species_linear = dense_layer(
+        self.species_linear = nn.Dense(
             name="species_linear", use_bias=False, **dense_kwargs
         )
-        self.items_linear = dense_layer(
+        self.items_linear = nn.Dense(
             name="items_linear", use_bias=False, **dense_kwargs
         )
-        self.abilities_linear = dense_layer(
+        self.abilities_linear = nn.Dense(
             name="abilities_linear", use_bias=False, **dense_kwargs
         )
-        self.moves_linear = dense_layer(
+        self.moves_linear = nn.Dense(
             name="moves_linear", use_bias=False, **dense_kwargs
-        )
-
-        self.sos_embedding = self.param(
-            "sos_embedding",
-            nn.initializers.truncated_normal(stddev=1.0),
-            (1, entity_size),
         )
 
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
+        )
+        self.sos_embedding = self.param(
+            "sos_embedding",
+            embedding_init,
+            (1, entity_size),
         )
         self.nature_embedding = self.param(
             "nature_embedding",
@@ -127,6 +126,7 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
+        self.norm_out = nn.RMSNorm(dtype=self.cfg.dtype)
 
         self.species_head_mlp = MLP()
         self.item_head_mlp = MLP()
@@ -265,7 +265,8 @@ class Porygon2BuilderModel(nn.Module):
         )
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
-        return self.encoder(packed_set_embeddings, causal_mask)
+        packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
+        return self.norm_out(packed_set_embeddings)
 
     def _forward(
         self,
@@ -640,6 +641,6 @@ def main(generation: int = 9):
 
 
 if __name__ == "__main__":
-    debug = False
+    debug = True
     with jax.disable_jit(debug):
         main()
