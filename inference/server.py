@@ -1,7 +1,5 @@
 from dotenv import load_dotenv
 
-from rl.model.heads import HeadParams
-
 load_dotenv()
 import secrets
 from typing import Literal
@@ -17,7 +15,6 @@ from inference.interfaces import ResetResponse, StepResponse
 from inference.model import InferenceModel
 from rl.environment.env import process_state
 from rl.environment.protos.service_pb2 import EnvironmentState
-from rl.model.heads import HeadParams
 
 app = FastAPI()
 
