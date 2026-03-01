@@ -1205,9 +1205,9 @@ class Encoder(nn.Module):
         )
 
         state_embeddings = output_state_embeddings[:2]
-        action_embeddings = output_state_embeddings
-
         state_embedding = state_embeddings.reshape(-1)
+
+        action_embeddings = output_state_embeddings
 
         return state_embedding, action_embeddings
 
