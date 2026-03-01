@@ -661,7 +661,9 @@ class Learner:
         High-level training loop.
         Delegates computation to _execute_model_update and I/O to _handle_periodic_tasks.
         """
-        transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        transfer_thread = threading.Thread(
+            target=self.host_to_device_worker, daemon=True
+        )
         transfer_thread.start()
 
         try:
@@ -688,16 +690,37 @@ class Learner:
                     self._manage_league(step)
                     prev_league_check_step = step
 
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received. Saving checkpoint...")
+            save_train_state(
+                self.wandb_run,
+                self.config,
+                self.player_state,
+                self.builder_state,
+                self.league,
+            )
+            raise
         except Exception as e:
             logger.error(f"Learner training crashed: {e}")
             traceback.print_exc()
             raise e
         finally:
             self.done = True
+            # device_q has maxsize=1; drain the single pending item (if any) to
+            # unblock host_to_device_worker if it is blocked on put().
+            try:
+                self.device_q.get_nowait()
+            except queue.Empty:
+                pass
             with self.player_replay._add_cv:
                 self.player_replay._add_cv.notify_all()
             with self.player_replay._sample_cv:
                 self.player_replay._sample_cv.notify_all()
+            with self.builder_replay._add_cv:
+                self.builder_replay._add_cv.notify_all()
+            with self.builder_replay._sample_cv:
+                self.builder_replay._sample_cv.notify_all()
+            transfer_thread.join(timeout=10)
             print("Training Finished.")
 
     def _train_step(self, batch: Trajectory) -> dict | None:
