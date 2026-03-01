@@ -545,43 +545,6 @@ class SumEmbeddings(nn.Module):
         return layer_norm(aggregated.astype(self.dtype))
 
 
-class VectorResblock(nn.Module):
-    num_layers: int = 2
-    hidden_size: Optional[int] = None
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        shortcut = x
-        input_size = x.shape[-1]
-        for i in range(self.num_layers):
-            if i < self.num_layers - 1:
-                output_size = self.hidden_size or input_size
-                dense_kwargs = dict()
-            else:
-                output_size = input_size
-                dense_kwargs = dict(
-                    kernel_init=nn.initializers.normal(5e-3),
-                    bias_init=nn.initializers.zeros_init(),
-                )
-            if self.use_layer_norm:
-                x = layer_norm(x)
-            x = activation_fn(x)
-            x = nn.Dense(output_size, dtype=x.dtype, **dense_kwargs)(x)
-        return x + shortcut
-
-
-class Resnet(nn.Module):
-    num_resblocks: int
-    use_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
-        for _ in range(self.num_resblocks):
-            x = VectorResblock(use_layer_norm=self.use_layer_norm)(x)
-        return x
-
-
 class PointerLogits(nn.Module):
     qk_size: int = None
     num_heads: int = 4
