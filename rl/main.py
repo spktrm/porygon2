@@ -278,11 +278,18 @@ def main(args: argparse.Namespace):
         for t in actor_threads:
             t.start()
 
-        learner.train()
-
-        stop_signal[0] = True
-        for t in actor_threads:
-            t.join()
+        try:
+            learner.train()
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received. Shutting down gracefully...")
+        finally:
+            stop_signal[0] = True
+            for t in actor_threads:
+                t.join(timeout=30)
+            try:
+                wandb_run.finish()
+            except Exception:
+                logger.warning("wandb_run.finish() failed during shutdown", exc_info=True)
 
     logger.info("Training run complete.")
 
