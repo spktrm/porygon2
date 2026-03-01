@@ -813,17 +813,17 @@ class Learner:
     def _get_usage_counts(self):
         result = {}
 
-        for key, col_name, counts in [
-            ("species", "species", self.player_replay._species_counts),
-            ("items", "item", self.player_replay._item_counts),
-            ("abilities", "ability", self.player_replay._ability_counts),
-            ("moves", "move", self.player_replay._move_counts),
+        for key, counts in [
+            ("species", self.player_replay._species_counts),
+            ("items", self.player_replay._item_counts),
+            ("abilities", self.player_replay._ability_counts),
+            ("moves", self.player_replay._move_counts),
         ]:
             names = list(STOI[key])
-            table = wandb.Table(columns=[col_name, "usage"])
+            table = wandb.Table(columns=[key, "usage"])
             for name, count in zip(names, counts):
                 table.add_data(name, count)
-            result[f"{col_name}_usage"] = table
+            result[f"{key}_usage"] = table
 
         return result
 
