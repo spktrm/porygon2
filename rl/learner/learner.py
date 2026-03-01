@@ -260,6 +260,7 @@ def train_step(
     # Need to expand td_lambdas to match the shape of cat_value_delta for proper broadcasting
     returns = segmented_cumsum(cat_value_delta, td_lambdas[..., None]) + value_probs
     advantages = segmented_cumsum(combined_scalar_delta, gae_lambdas)
+
     ent_returns = (
         segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
     )
@@ -337,7 +338,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + entropy_temp * loss_entropy
+            + entropy_temp * config.player_entropy_pred_coef * loss_entropy
         )
 
         return loss, dict(
@@ -712,14 +713,16 @@ class Learner:
                 self.device_q.get_nowait()
             except queue.Empty:
                 pass
-            with self.player_replay._add_cv:
-                self.player_replay._add_cv.notify_all()
-            with self.player_replay._sample_cv:
-                self.player_replay._sample_cv.notify_all()
-            with self.builder_replay._add_cv:
-                self.builder_replay._add_cv.notify_all()
-            with self.builder_replay._sample_cv:
-                self.builder_replay._sample_cv.notify_all()
+
+            for cond in [
+                self.player_replay._add_cv,
+                self.player_replay._sample_cv,
+                self.builder_replay._add_cv,
+                self.builder_replay._sample_cv,
+            ]:
+                with cond:
+                    cond.notify_all()
+
             transfer_thread.join(timeout=10)
             print("Training Finished.")
 
