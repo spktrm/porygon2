@@ -425,7 +425,6 @@ def train_step(
             [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
         )
 
-        # 2. Mask out non-human choices (Hidden Power, Gender, etc.)
         human_valid_mask = (
             builder_transitions.env_output.curr_attribute
             != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
@@ -434,8 +433,6 @@ def train_step(
             != PackedSetFeature.PACKED_SET_FEATURE__GENDER
         )
 
-        # 3. Probability-Weighted NLL
-        # No jnp.log() needed for the human! We just use the raw probability as a weight.
         loss_human = -average(
             human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
         )
@@ -445,7 +442,7 @@ def train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + config.builder_entropy_pred_coef * loss_entropy
-            + config.builder_human_loss_coef * loss_human
+            + entropy_temp * config.builder_human_loss_coef * loss_human
         )
 
         return loss, dict(
