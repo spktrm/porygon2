@@ -157,9 +157,8 @@ class PlayerTrajectoryStore:
         self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
         self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
 
-    def add(self, traj: Trajectory):
-        """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
-        tokens = traj.builder_history.packed_team_member_tokens
+    def _update_usage_counts(self, tokens: np.ndarray):
+        """Updates EMA usage counts for species, items, abilities, and moves."""
         self._species_counts = calculate_tracking(
             self._species_counts,
             tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES].reshape(-1),
@@ -192,6 +191,10 @@ class PlayerTrajectoryStore:
             self._tau,
             NUM_MOVES,
         )
+
+    def add(self, traj: Trajectory):
+        """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
+        self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)
