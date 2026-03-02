@@ -130,7 +130,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
-    cfg.action_head.qk_logits.qk_layer_norm = False
 
     for head in [cfg.action_head]:
         head.train = train
@@ -217,7 +216,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         cfg.teratype_head,
     ]:
         head.qk_logits = ConfigDict()
-        # head.qk_logits.qk_layer_norm = True
         head.train = train
 
     return cfg

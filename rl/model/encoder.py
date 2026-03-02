@@ -48,7 +48,6 @@ from rl.model.modules import (
     TransformerDecoder,
     TransformerEncoder,
     create_attention_mask,
-    dense_layer,
     one_hot_concat_jax,
 )
 
@@ -241,61 +240,50 @@ class Encoder(nn.Module):
         )
 
         # Positional / Modality Embeddings
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
         self.move_embedding = self.param(
-            "move_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "move_embedding", embedding_init, (1, entity_size)
         )
         self.private_embedding = self.param(
-            "private_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "private_embedding", embedding_init, (1, entity_size)
         )
         self.public_embedding = self.param(
-            "public_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "public_embedding", embedding_init, (1, entity_size)
         )
         self.prev_action_src_embedding = self.param(
-            "prev_action_src_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "prev_action_src_embedding", embedding_init, (1, entity_size)
         )
         self.prev_action_tgt_embedding = self.param(
-            "prev_action_tgt_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "prev_action_tgt_embedding", embedding_init, (1, entity_size)
         )
         self.timestep_embedding = self.param(
-            "timestep_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "timestep_embedding", embedding_init, (1, entity_size)
         )
         self.switch_positional_embeddings = self.param(
-            "switch_positional_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (6, entity_size),
+            "switch_positional_embeddings", embedding_init, (6, entity_size)
         )
         self.timestep_positional_embeddings = self.param(
             "timestep_positional_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
+            embedding_init,
             (self.cfg.num_history_timesteps, entity_size),
         )
 
         # Initialize linear layers for encoding various entity features.
-        self.species_linear = dense_layer(
+        self.species_linear = nn.Dense(
             name="species_linear", use_bias=False, **dense_kwargs
         )
-        self.items_linear = dense_layer(
+        self.items_linear = nn.Dense(
             name="items_linear", use_bias=False, **dense_kwargs
         )
-        self.abilities_linear = dense_layer(
+        self.abilities_linear = nn.Dense(
             name="abilities_linear", use_bias=False, **dense_kwargs
         )
-        self.moves_linear = dense_layer(
+        self.moves_linear = nn.Dense(
             name="moves_linear", use_bias=False, **dense_kwargs
         )
-        self.learnset_linear = dense_layer(
+        self.learnset_linear = nn.Dense(
             name="learnset_linear", use_bias=False, **dense_kwargs
         )
 
@@ -306,24 +294,22 @@ class Encoder(nn.Module):
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
         )
-        self.action_linear = dense_layer(
+        self.action_linear = nn.Dense(
             features=entity_size, dtype=self.cfg.dtype, name="action_linear"
         )
         self.entity_edge_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="entity_edge_sum"
         )
-        self.field_linear = dense_layer(
+        self.field_linear = nn.Dense(
             features=entity_size, dtype=self.cfg.dtype, name="field_linear"
         )
-        self.side_condition_linear = dense_layer(
+        self.side_condition_linear = nn.Dense(
             features=entity_size, dtype=self.cfg.dtype, name="side_condition_linear"
         )
 
         # Timestep wise graph attention layers
         self.local_timestep_cls_embedding = self.param(
-            "local_timestep_cls_embedding",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (1, entity_size),
+            "local_timestep_cls_embedding", embedding_init, (1, entity_size)
         )
         self.local_timestep_encoder = TransformerEncoder(
             **self.cfg.timestep_encoder.to_dict()
@@ -331,18 +317,14 @@ class Encoder(nn.Module):
 
         # Transformer Decoders
         self.state_embeddings = self.param(
-            "state_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (2, entity_size),
+            "state_embeddings", embedding_init, (2, entity_size)
         )
         self.extra_embeddings = self.param(
-            "extra_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (3, entity_size),
+            "extra_embeddings", embedding_init, (3, entity_size)
         )
         self.latent_embeddings = self.param(
             "latent_embeddings",
-            nn.initializers.truncated_normal(stddev=0.02),
+            embedding_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
         self.input_decoder = TransformerDecoder(
@@ -1223,9 +1205,9 @@ class Encoder(nn.Module):
         )
 
         state_embeddings = output_state_embeddings[:2]
-        action_embeddings = output_state_embeddings
-
         state_embedding = state_embeddings.reshape(-1)
+
+        action_embeddings = output_state_embeddings
 
         return state_embedding, action_embeddings
 

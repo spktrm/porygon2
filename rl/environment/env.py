@@ -100,34 +100,32 @@ class TeamBuilderEnvironment:
         self._generation = generation
         self._num_team_members = num_team_members
 
-        # Load Masks
-        teammate_mask = jnp.load(
-            f"data/data/gen{generation}/mask/teammates_mask_{smogon_format}.npy"
+        load_arr = functools.partial(
+            self._load_arr, generation=generation, smogon_format=smogon_format
         )
-        self.species_usage = jnp.load(
-            f"data/data/gen{generation}/usage/species_usage_{smogon_format}.npy"
-        )
-        self.item_masks = jnp.load(
-            f"data/data/gen{generation}/mask/items_mask_{smogon_format}.npy"
-        )
-        self.ability_masks = jnp.load(
-            f"data/data/gen{generation}/mask/abilities_mask_{smogon_format}.npy"
-        )
-        self.move_masks = jnp.load(
-            f"data/data/gen{generation}/mask/moves_mask_{smogon_format}.npy"
-        )
-        self.ev_masks = jnp.load(
-            f"data/data/gen{generation}/mask/ev_mask_{smogon_format}.npy"
-        )
-        self.nature_masks = jnp.load(
-            f"data/data/gen{generation}/mask/nature_mask_{smogon_format}.npy"
-        )
-        self.gender_masks = jnp.load(
-            f"data/data/gen{generation}/mask/gender_mask_{smogon_format}.npy"
-        )
-        self.teratype_masks = jnp.load(
-            f"data/data/gen{generation}/mask/teratypes_mask_{smogon_format}.npy"
-        )
+        load_mask = functools.partial(load_arr, data_type="mask")
+        load_usage = functools.partial(load_arr, data_type="usage")
+
+        teammate_mask = load_mask("teammates")
+
+        self.species_usage = load_usage("species")
+        self.item_usage = load_usage("items")
+        self.ability_usage = load_usage("abilities")
+        self.move_usage = load_usage("moves")
+        self.ev_usage = load_usage("ev")
+        self.nature_usage = load_usage("nature")
+        self.gender_usage = load_usage("gender")
+        self.teratype_usage = load_usage("teratypes")
+        self.teammate_usage = load_usage("teammates")
+
+        self.formes_mask = load_mask("formes")
+        self.item_masks = load_mask("items")
+        self.ability_masks = load_mask("abilities")
+        self.move_masks = load_mask("moves")
+        self.ev_masks = load_mask("ev")
+        self.nature_masks = load_mask("nature")
+        self.gender_masks = load_mask("gender")
+        self.teratype_masks = load_mask("teratypes")
 
         # Initial Masks
         self.initial_species_mask = teammate_mask.any(axis=-1)
@@ -140,6 +138,13 @@ class TeamBuilderEnvironment:
         self.initial_teratype_mask = self.teratype_masks.any(axis=0)
 
         self.length = num_team_members * (NUM_PACKED_SET_FEATURES - 1)
+
+    def _load_arr(
+        self, attribute: str, generation: int, smogon_format: str, data_type: str
+    ):
+        return jnp.load(
+            f"data/data/gen{generation}/{data_type}/{attribute}_{data_type}_{smogon_format}.npy"
+        )
 
     def reset(self, key: jax.Array) -> BuilderActorInput:
         self.state = self._reset(key)
@@ -163,7 +168,7 @@ class TeamBuilderEnvironment:
                 gender_mask=self.initial_gender_mask,
                 ts=jnp.array(0, dtype=jnp.int32),
                 ev_reward=jnp.array(0, dtype=jnp.float32),
-                species_reward=jnp.array(0, dtype=jnp.float32),
+                human_prob=jnp.array(0, dtype=jnp.float32),
                 curr_order=order[0],
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
@@ -245,6 +250,7 @@ class TeamBuilderEnvironment:
         ts = state.env.ts
         curr_order = state.env.curr_order
         curr_attribute = state.env.curr_attribute
+        curr_position = state.env.curr_position
         action_index = action_index.squeeze()
 
         new_packed_team_member_tokens = state.history.packed_team_member_tokens.at[
@@ -268,6 +274,7 @@ class TeamBuilderEnvironment:
                 env=state.env.replace(
                     ts=next_ts,
                     ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
+                    human_prob=jnp.array(0.0, dtype=jnp.float32),
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -340,7 +347,10 @@ class TeamBuilderEnvironment:
                 False
             )  # Don't mask yourself
 
-            species_pool = species_pool & ~other_species_mask
+            # Mask duplicate species from formes
+            formes_mask = self.formes_mask[other_species].all(axis=0)
+
+            species_pool = species_pool & ~other_species_mask & formes_mask
 
             # Finalize species mask for this step
             next_species_mask = jnp.where(
@@ -395,6 +405,103 @@ class TeamBuilderEnvironment:
             )
             final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
 
+            # --- Human usage probability for this timestep (mask-normalized) ---
+            # Species of the current member (used for attribute-specific probs)
+            curr_species_token = packed_set_tokens[
+                curr_position, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+
+            # Teammate co-occurrence: needed when choosing species
+            all_team_species = packed_set_tokens[
+                :, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
+            ]
+            is_other_member = jnp.arange(self._num_team_members) != curr_position
+            has_species = all_team_species != 0
+            is_valid_teammate = is_other_member & has_species
+            teammate_cooccurrences = self.teammate_usage[action_index, all_team_species]
+            # clip(min=1) prevents NaN from 0/0 in JAX's eager trace; the outer
+            # jnp.where below further guards against using this value when there
+            # are no valid teammates.
+            n_valid_teammates = is_valid_teammate.sum().clip(min=1)
+            mean_teammate_cooccurrence = (
+                jnp.where(is_valid_teammate, teammate_cooccurrences, 0.0).sum()
+                / n_valid_teammates
+            )
+
+            species_is_known = curr_species_token != 0
+
+            curr_is_ev_attr = (
+                curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV
+            ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
+            curr_ev_col = (
+                curr_attribute - PackedSetFeature.PACKED_SET_FEATURE__HP_EV
+            ).clip(0, 5)
+
+            is_move_attr = (
+                curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__MOVE1
+            ) & (curr_attribute <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4)
+
+            # Normalize a usage vector over the valid action mask to get the
+            # conditional probability of the chosen action.  If no valid action
+            # has non-zero usage the result is 0 (1e-8 floor prevents NaN from 0/0).
+            def _masked_prob(usage_vec, mask):
+                masked = usage_vec * mask.astype(jnp.float32)
+                return masked[action_index] / masked.sum().clip(min=1e-8)
+
+            # Compute mask-normalized probs for each attribute type.
+            # Species is additionally weighted by teammate co-occurrence because
+            # its usage rate alone does not account for synergy with existing members.
+            species_human_prob = _masked_prob(
+                self.species_usage, state.env.species_mask
+            ) * jnp.where(
+                is_valid_teammate.any(),
+                mean_teammate_cooccurrence,
+                jnp.array(1.0, dtype=jnp.float32),
+            )
+
+            # Combine all mutually-exclusive per-attribute probabilities into one
+            # scalar using jnp.select (exactly one condition is true per timestep).
+            human_prob = jnp.select(
+                condlist=[
+                    # Species: mask-normalized usage * teammate co-occurrence
+                    curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ITEM)
+                    & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ABILITY)
+                    & species_is_known,
+                    is_move_attr & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE)
+                    & species_is_known,
+                    (curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE)
+                    & species_is_known,
+                    curr_is_ev_attr & species_is_known,
+                ],
+                choicelist=[
+                    species_human_prob,
+                    _masked_prob(
+                        self.item_usage[curr_species_token], state.env.item_mask
+                    ),
+                    _masked_prob(
+                        self.ability_usage[curr_species_token], state.env.ability_mask
+                    ),
+                    _masked_prob(
+                        self.move_usage[curr_species_token], state.env.move_mask
+                    ),
+                    _masked_prob(
+                        self.teratype_usage[curr_species_token],
+                        state.env.teratype_mask,
+                    ),
+                    _masked_prob(
+                        self.nature_usage[curr_species_token], state.env.nature_mask
+                    ),
+                    _masked_prob(
+                        self.ev_usage[curr_species_token, curr_ev_col],
+                        state.env.ev_mask,
+                    ),
+                ],
+                default=jnp.array(0.0, dtype=jnp.float32),
+            )
+
             return state.replace(
                 env=state.env.replace(
                     species_mask=next_species_mask,
@@ -409,11 +516,7 @@ class TeamBuilderEnvironment:
                     curr_order=next_order,
                     curr_attribute=next_attribute,
                     curr_position=next_position,
-                    species_reward=jnp.where(
-                        curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
-                        jnp.take(self.species_usage, action_index, axis=0, mode="clip"),
-                        jnp.array(0.0, dtype=jnp.float32),
-                    ),
+                    human_prob=human_prob,
                     done=jnp.array(False, dtype=jnp.bool),
                 ),
                 history=state.history.replace(

@@ -13,10 +13,10 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl.environment.data import CAT_VF_SUPPORT, STOI
+from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
-from rl.learner.buffer import BuilderTrajectoryStore, DirectRatioLimiter, ReplayBuffer
+from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
     Porygon2LearnerConfig,
@@ -144,6 +144,13 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
+def power_schedule(
+    coef: float, step: int, decay: float, floor: float, ceil: float
+) -> jax.Array:
+    x = coef / ((step + 1) ** decay)
+    return jnp.clip(x, floor, ceil)
+
+
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -185,11 +192,6 @@ def train_step(
     builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
     valid = jnp.concatenate((jnp.ones_like(builder_valid), player_valid), axis=0)
 
-    actor_builder_entropy = -jnp.where(builder_valid, builder_actor_log_prob, 0)
-    actor_builder_conditional_entropy = jnp.flip(
-        jnp.cumsum(jnp.flip(actor_builder_entropy, axis=0), axis=0), axis=0
-    )
-
     value_probs = jnp.exp(
         jnp.concatenate(
             (builder_actor_value_head.log_probs, player_actor_value_head.log_probs),
@@ -211,12 +213,57 @@ def train_step(
     cat_value_delta = value_target - value_probs
     scalar_value_delta = cat_value_delta @ cat_vf_support
 
-    td_lambdas = config.td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
-    gae_lambdas = config.gae_lambda * valid.astype(cat_value_delta.dtype)
+    builder_td_lambdas = config.builder_td_lambda * jnp.ones_like(
+        builder_valid, dtype=cat_value_delta.dtype
+    )
+    player_td_lambdas = config.player_td_lambda * player_valid.astype(
+        cat_value_delta.dtype
+    )
+    td_lambdas = jnp.concatenate((builder_td_lambdas, player_td_lambdas))
+
+    builder_gae_lambdas = config.builder_gae_lambda * jnp.ones_like(
+        builder_valid, dtype=cat_value_delta.dtype
+    )
+    player_gae_lambdas = config.player_gae_lambda * player_valid.astype(
+        cat_value_delta.dtype
+    )
+    gae_lambdas = jnp.concatenate((builder_gae_lambdas, player_gae_lambdas))
+
+    num_builder = builder_valid.shape[0]
+    builder_scalar_delta = scalar_value_delta[:num_builder]
+    player_scalar_delta = scalar_value_delta[num_builder:]
+
+    builder_nll = -builder_actor_log_prob
+    builder_ent_pred = builder_actor_conditional_entropy_head.logits
+
+    next_builder_ent_pred = jnp.concatenate(
+        [builder_ent_pred[1:], jnp.zeros_like(builder_ent_pred[:1])], axis=0
+    )
+    builder_ent_delta = (
+        (builder_nll / config.normalising_constant)
+        + next_builder_ent_pred
+        - builder_ent_pred
+    )
+    entropy_temp = power_schedule(
+        config.entropy_loss_coef,
+        jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
+        config.entropy_temp_decay,
+        config.entropy_temp_floor,
+        config.entropy_temp_ceil,
+    )
+    combined_builder_delta = builder_scalar_delta + entropy_temp * builder_ent_delta
+    combined_scalar_delta = jnp.concatenate(
+        [combined_builder_delta, player_scalar_delta], axis=0
+    )
 
     segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
-    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
-    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
+    # Need to expand td_lambdas to match the shape of cat_value_delta for proper broadcasting
+    returns = segmented_cumsum(cat_value_delta, td_lambdas[..., None]) + value_probs
+    advantages = segmented_cumsum(combined_scalar_delta, gae_lambdas)
+
+    ent_returns = (
+        segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
+    )
 
     builder_returns = returns[: builder_valid.shape[0]]
     builder_advantages = advantages[: builder_valid.shape[0]]
@@ -227,12 +274,6 @@ def train_step(
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
-
-    player_uniform_prob = 1.0 / action_mask_sum.clip(min=1)
-    player_uniform_log_prob = jnp.log(player_uniform_prob)
-
-    scale = 1 / config.gradient_accumulation_steps
-    entropy_decay = 1 / (jnp.floor((player_state.step_count + 1) * scale) ** 0.3)
 
     def player_loss_fn(params: Params):
 
@@ -247,12 +288,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-
         learner_log_prob = learner_action_head.log_prob
-
-        # Calculate the log ratios.
-        learner_uniform_log_ratio = learner_log_prob - player_uniform_log_prob
-        learner_uniform_ratio = jnp.exp(learner_uniform_log_ratio)
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
@@ -277,11 +313,15 @@ def train_step(
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
-        loss_entropy = backward_kl_loss(
-            policy_ratio=learner_uniform_ratio,
-            log_policy_ratio=learner_uniform_log_ratio,
-            valid=player_valid,
-        )
+
+        # The log of the number of valid actions
+        log_num_valid_actions = jnp.log(action_mask_sum.clip(min=1))
+
+        # magnet_kl = -entropy + xe
+        exact_magnet_kl = log_num_valid_actions - learner_action_head.entropy
+
+        # Average over valid transitions
+        loss_entropy = average(exact_magnet_kl, player_valid)
 
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -298,7 +338,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * entropy_decay * loss_entropy
+            + entropy_temp * config.player_entropy_pred_coef * loss_entropy
         )
 
         return loss, dict(
@@ -344,18 +384,10 @@ def train_step(
         learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        ratio = learner_actor_ratio
-
         # Calculate the losses.
         loss_pg = policy_gradient_loss(
-            policy_ratios=ratio,
-            advantages=builder_advantages
-            + config.builder_entropy_loss_coef
-            * entropy_decay
-            * (
-                actor_builder_conditional_entropy / config.normalising_constant
-                - builder_actor_conditional_entropy_head.logits
-            ),
+            policy_ratios=learner_actor_ratio,
+            advantages=builder_advantages,
             valid=builder_valid,
             clip_ppo=config.clip_ppo,
         )
@@ -373,7 +405,7 @@ def train_step(
         # Estimator for entropy
         loss_entropy = mse_value_loss(
             pred=conditional_entropy_head.logits,
-            target=actor_builder_conditional_entropy / config.normalising_constant,
+            target=ent_returns,
             valid=builder_valid,
         )
 
@@ -388,11 +420,30 @@ def train_step(
             valid=builder_valid,
         )
 
+        # 1. Shift the logic (Your temporal alignment is still correct!)
+        human_prob_raw = builder_transitions.env_output.human_prob
+        human_prob = jnp.concatenate(
+            [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
+        )
+
+        human_valid_mask = (
+            builder_transitions.env_output.curr_attribute
+            != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+        ) & (
+            builder_transitions.env_output.curr_attribute
+            != PackedSetFeature.PACKED_SET_FEATURE__GENDER
+        )
+
+        loss_human = -average(
+            human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
+        )
+
         loss = (
             config.builder_policy_loss_coef * loss_pg
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
-            + loss_entropy
+            + config.builder_entropy_pred_coef * loss_entropy
+            + entropy_temp * config.builder_human_loss_coef * loss_human
         )
 
         return loss, dict(
@@ -400,11 +451,14 @@ def train_step(
             builder_loss_v=loss_v,
             builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
+            builder_loss_human=loss_human,
             # Head entropies
             builder_entropy=builder_entropy,
             # Ratios
             builder_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=builder_valid, clip_ppo=config.clip_ppo
+                policy_ratios=learner_actor_ratio,
+                valid=builder_valid,
+                clip_ppo=config.clip_ppo,
             ),
             builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
             # Approx KL values
@@ -440,8 +494,8 @@ def train_step(
     training_logs.update(
         dict(
             builder_loss=builder_loss_val,
-            builder_inital_entropy=jnp.mean(actor_builder_conditional_entropy[0])
-            / config.normalising_constant,
+            builder_inital_entropy=jnp.mean(ent_returns[0])
+            * config.normalising_constant,
             builder_param_norm=optax.global_norm(builder_state.params),
             builder_gradient_norm=optax.global_norm(builder_grads),
             builder_norm_adv_mean=average(builder_advantages, builder_valid),
@@ -475,7 +529,7 @@ def train_step(
             player_frame_count=player_state.frame_count,
             builder_frame_count=builder_state.frame_count,
             training_step=player_state.step_count,
-            entropy_decay_coeff=entropy_decay,
+            entropy_decay_coeff=entropy_temp,
         )
     )
 
@@ -534,22 +588,19 @@ class Learner:
         self.gpu_lock = gpu_lock or nullcontext()
 
         self.done = False
-        self.team_store = BuilderTrajectoryStore()
-        self.replay = ReplayBuffer(self.config.replay_buffer_capacity)
-
-        # Rate Limiting
-        self.controller = DirectRatioLimiter(
-            target_rr=self.config.target_replay_ratio,
-            batch_size=self.config.batch_size,
-            warmup_trajectories=self.config.batch_size * 16,
+        self.builder_replay = BuilderTrajectoryStore(
+            max_size=self.config.builder_replay_buffer_capacity,
+            max_reuses=self.config.builder_replay_ratio,
         )
-        self.controller.set_replay_buffer_len_fn(lambda: len(self.replay))
+        self.player_replay = PlayerTrajectoryStore(
+            max_size=self.config.player_replay_buffer_capacity,
+            max_reuses=self.config.player_replay_ratio,
+        )
 
         # Threading
         self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
 
         # Progress Bars
-        self.producer_progress = tqdm(desc="producer", smoothing=0.1)
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
@@ -561,34 +612,48 @@ class Learner:
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
-        self.controller.wait_for_produce_permission()
-        if self.done:
-            return
+        add_cond = self.player_replay._add_cv
+        with add_cond:
+            add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
+            if self.done:
+                return
+            self.player_replay.add(traj)
 
-        self.producer_progress.update(1)
-        self.replay.add(traj)
-        self.controller.notify_produced(n_trajectories=1)
+        sample_cond = self.player_replay._sample_cv
+        with sample_cond:
+            sample_cond.notify_all()
 
     def host_to_device_worker(self):
         """Background thread to batch data and push to GPU queue."""
         max_burst = 8
-        batch_size = self.config.batch_size
+        minibatch_size = self.config.batch_size
+        batch_size = minibatch_size * self.config.gradient_accumulation_steps
 
         while not self.done:
             # Burst processing to minimize lock contention overhead
             for _ in range(max_burst):
-                self.controller.wait_for_consume_permission()
                 if self.done:
                     break
 
-                batch = self.replay.sample(batch_size)
-                self.consumer_progress.update(batch_size)
+                sample_cond = self.player_replay._sample_cv
+                with sample_cond:
+                    sample_cond.wait_for(
+                        lambda: self.done
+                        or self.player_replay.ready_to_sample(batch_size)
+                    )
+                    if self.done:
+                        break
+                    batch = self.player_replay.sample(minibatch_size)
+
+                add_cond = self.player_replay._add_cv
+                with add_cond:
+                    add_cond.notify_all()
+
+                self.consumer_progress.update(minibatch_size)
 
                 # Process pure data outside lock
                 stacked = _stack_and_pad_batch(batch)
                 self.device_q.put(stacked)
-
-                self.controller.notify_consumed(n_trajectories=batch_size)
 
         logger.info("host_to_device_worker exiting.")
 
@@ -597,7 +662,9 @@ class Learner:
         High-level training loop.
         Delegates computation to _execute_model_update and I/O to _handle_periodic_tasks.
         """
-        transfer_thread = threading.Thread(target=self.host_to_device_worker)
+        transfer_thread = threading.Thread(
+            target=self.host_to_device_worker, daemon=True
+        )
         transfer_thread.start()
 
         try:
@@ -624,12 +691,39 @@ class Learner:
                     self._manage_league(step)
                     prev_league_check_step = step
 
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received. Saving checkpoint...")
+            save_train_state(
+                self.wandb_run,
+                self.config,
+                self.player_state,
+                self.builder_state,
+                self.league,
+            )
+            raise
         except Exception as e:
             logger.error(f"Learner training crashed: {e}")
             traceback.print_exc()
             raise e
         finally:
             self.done = True
+            # device_q has maxsize=1; drain the single pending item (if any) to
+            # unblock host_to_device_worker if it is blocked on put().
+            try:
+                self.device_q.get_nowait()
+            except queue.Empty:
+                pass
+
+            for cond in [
+                self.player_replay._add_cv,
+                self.player_replay._sample_cv,
+                self.builder_replay._add_cv,
+                self.builder_replay._sample_cv,
+            ]:
+                with cond:
+                    cond.notify_all()
+
+            transfer_thread.join(timeout=10)
             print("Training Finished.")
 
     def _train_step(self, batch: Trajectory) -> dict | None:
@@ -668,11 +762,6 @@ class Learner:
 
         # Console Progress
         self.train_progress.update(1)
-        rr = self.controller._get_current_rr()
-        self.train_progress.set_description(f"batches - rr: {rr:.2f}")
-
-        # Metrics
-        logs["replay_ratio"] = rr
 
         if step % self.config.save_interval_steps == 0:
             logs.update(self._get_usage_counts())
@@ -699,7 +788,7 @@ class Learner:
         if self._should_add_new_player():
             print(f"Adding new player to league @ {step}")
             self.league.add_player(self._create_params_container(step))
-            self.replay.reset_species_counts()
+            self.player_replay.reset_usage_counts()
 
     def _should_add_new_player(self) -> bool:
         latest = self.league.get_latest_player()
@@ -745,14 +834,21 @@ class Learner:
         )
 
     def _get_usage_counts(self):
-        names = list(STOI["species"])
-        counts = self.replay._species_counts
+        result = {}
 
-        table = wandb.Table(columns=["species", "usage"])
-        for name, count in zip(names, counts):
-            table.add_data(name, count)
+        for key, counts in [
+            ("species", self.player_replay._species_counts),
+            ("items", self.player_replay._item_counts),
+            ("abilities", self.player_replay._ability_counts),
+            ("moves", self.player_replay._move_counts),
+        ]:
+            names = list(STOI[key])
+            table = wandb.Table(columns=[key, "usage"])
+            for name, count in zip(names, counts):
+                table.add_data(name, count)
+            result[f"{key}_usage"] = table
 
-        return {"species_usage": table}
+        return result
 
     def _get_league_winrates(self):
         current = self.league.get_main_player()

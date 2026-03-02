@@ -1,10 +1,9 @@
-import random
 import threading
-from collections import deque
 
 import numpy as np
+from tqdm import tqdm
 
-from rl.environment.data import NUM_SPECIES
+from rl.environment.data import NUM_ABILITIES, NUM_ITEMS, NUM_MOVES, NUM_SPECIES
 from rl.environment.interfaces import (
     BuilderHistoryOutput,
     BuilderTransition,
@@ -29,6 +28,8 @@ class BuilderTrajectoryStore:
         self._add_cv = threading.Condition()
         self._sample_cv = threading.Condition()
 
+        self._progress = tqdm(desc="builder_producer", smoothing=0.1)
+
     @classmethod
     def from_trajectories(
         cls,
@@ -41,6 +42,12 @@ class BuilderTrajectoryStore:
         for trajectory in trajectories:
             store.add_trajectory(trajectory)
         return store
+
+    def is_full(self, limit: int = None) -> bool:
+        """Returns True if the store has reached its maximum capacity."""
+        if limit is None:
+            limit = self._max_size
+        return len(self._trajectories) >= limit
 
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
@@ -77,6 +84,8 @@ class BuilderTrajectoryStore:
             self._trajectories[replace_index] = item_to_store
             self._reuses[replace_index] = 0
 
+        self._progress.update(1)
+
     def sample_trajectory(
         self, increment: bool = True
     ) -> tuple[BuilderTransition, BuilderHistoryOutput]:
@@ -91,166 +100,132 @@ class BuilderTrajectoryStore:
         return self._trajectories[sample_index]
 
 
-class ReplayRatioTokenBucket:
-    """Token bucket in TRAJECTORY units.
-
-    - on_trajectories(n): mint target_rr * n tokens
-    - can_consume(cost): do we have >= cost tokens?
-    - consume(cost): spend tokens
-    """
-
-    __slots__ = ("target_rr", "tokens", "capacity")
-
-    def __init__(self, target_rr: float, capacity: float):
-        self.target_rr = float(target_rr)
-        self.tokens = 0.0
-        self.capacity = float(capacity)  # in 'trajectory-tokens'
-
-    def on_trajectories(self, n: int) -> None:
-        self.tokens = min(self.capacity, self.tokens + self.target_rr * max(0, int(n)))
-
-    def can_consume(self, cost_traj: int) -> bool:
-        return self.tokens >= float(cost_traj)
-
-    def consume(self, cost_traj: int) -> None:
-        self.tokens -= float(cost_traj)
-        if self.tokens < 0.0:
-            self.tokens = 0.0
-
-
-class DirectRatioLimiter:
-    """
-    Forces producer/consumer threads to maintain a target replay ratio.
-
-    This controller directly tracks the total number of trajectories
-    produced vs. consumed (processed) and uses a threading.Condition
-    to throttle the "winning" thread.
-
-    rr = total_consumed / total_produced
-    """
-
-    def __init__(
-        self, target_rr: float, batch_size: int, warmup_trajectories: int = 1000
-    ):
-        self.target_rr = float(target_rr)
-        self.batch_size = int(batch_size)
-        self.warmup_trajectories = int(warmup_trajectories)
-
-        self.total_produced = 0
-        self.total_consumed = 0
-
-        # This controller needs to check the replay buffer's length
-        # directly to make data + ratio checks atomic.
-        self.replay_buffer_len_fn = lambda: 0
-        self.cv = threading.Condition()
-
-    def set_replay_buffer_len_fn(self, len_fn):
-        """Pass in the ReplayBuffer's len() function."""
-        self.replay_buffer_len_fn = len_fn
-
-    def _get_current_rr(self) -> float:
-        if self.total_produced == 0:
-            return 0.0
-        # This is (processed / produced). Can be > 1.0
-        return self.total_consumed / self.total_produced
-
-    def wait_for_produce_permission(self):
-        """Called by the Actor (Producer)."""
-        with self.cv:
-            if self.total_produced < self.warmup_trajectories:
-                return  # Warmup, always allow
-
-            # THIS IS THE FIX:
-            # Wait if the ratio is LOW (e.g., 1.3 < 2.5)
-            # This means the producer is "winning" (too far ahead).
-            # So, we throttle the producer to let the consumer catch up.
-            self.cv.wait_for(lambda: self._get_current_rr() >= self.target_rr)
-
-    def notify_produced(self, n_trajectories: int = 1):
-        """Called by the Actor (Producer) after adding to replay."""
-        with self.cv:
-            self.total_produced += n_trajectories
-            # Wake up any waiting consumers
-            self.cv.notify_all()
-
-    def wait_for_consume_permission(self):
-        """Called by the Learner (Consumer)."""
-        with self.cv:
-            # We must check for data *and* ratio atomically.
-
-            # 1. Wait if we are starved for data.
-            #    This check MUST come first.
-            self.cv.wait_for(lambda: self.replay_buffer_len_fn() >= self.batch_size)
-
-            # 2. Wait if the ratio is HIGH (e.g., 2.6 > 2.5)
-            #    This means the consumer is "winning" (too far ahead).
-            #    So, we throttle the consumer to let the producer catch up.
-            self.cv.wait_for(lambda: self._get_current_rr() < self.target_rr)
-
-            # If we pass both checks, we are allowed to consume
-            return
-
-    def notify_consumed(self, n_trajectories: int):
-        """Called by the Learner (Consumer) after sampling a batch."""
-        with self.cv:
-            self.total_consumed += n_trajectories
-            # Wake up any waiting producers
-            self.cv.notify_all()
-
-
 def calculate_tracking(old: np.ndarray, new: np.ndarray, tau: float, minlength: int):
     return (1 - tau) * old + tau * np.bincount(new.reshape(-1), minlength=minlength)
 
 
-class ReplayBuffer:
-    """Thread-safe uniform replay for [T, ...] trajectories."""
+class PlayerTrajectoryStore:
+    """Stores player trajectories for later use by the learner.
 
-    def __init__(self, capacity: int):
-        self._buf: deque[Trajectory] = deque(maxlen=capacity)
-        self._size = 0
-        self._lock = threading.Lock()
-        self._not_empty = threading.Condition(self._lock)
+    Mirrors the structure of BuilderTrajectoryStore: trajectories are kept
+    until they have been sampled at least max_reuses times, after which they
+    become eligible for replacement.
+    """
+
+    def __init__(self, max_size: int = 1000, max_reuses: int = 5):
+        self._trajectories: dict[int, Trajectory] = {}
+        self._reuses = np.zeros(max_size, dtype=int)
+        self._valid = np.zeros(max_size, dtype=bool)
+
+        self._max_size = max_size
+        self._max_reuses = max_reuses
+
+        self._add_cv = threading.Condition()
+        self._sample_cv = threading.Condition()
+
+        self._progress = tqdm(desc="player_producer", smoothing=0.1)
 
         # Tracking
         self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+        self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
+        self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
+        self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
         self._tau = 1e-3
 
-    def reset_species_counts(self):
-        with self._lock:
-            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+    def is_full(self, limit: int = None) -> bool:
+        """Returns True if the store has reached its maximum capacity."""
+        if limit is None:
+            limit = self._max_size
+        return len(self._trajectories) >= limit
+
+    def ready_to_sample(self, n: int = None) -> bool:
+        """Returns True if there is at least one trajectory that can be sampled."""
+        if n is None:
+            return np.any((self._reuses < self._max_reuses) & self._valid)
+        else:
+            return np.sum((self._reuses < self._max_reuses) & self._valid) >= n
+
+    def ready_to_add(self) -> bool:
+        """Returns True if there is capacity to add a new trajectory."""
+        return len(self._trajectories) < self._max_size or np.any(
+            self._reuses >= self._max_reuses
+        )
+
+    def reset_usage_counts(self):
+        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+        self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
+        self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
+        self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
+
+    def _update_usage_counts(self, tokens: np.ndarray):
+        """Updates EMA usage counts for species, items, abilities, and moves."""
+        self._species_counts = calculate_tracking(
+            self._species_counts,
+            tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES].reshape(-1),
+            self._tau,
+            NUM_SPECIES,
+        )
+        self._item_counts = calculate_tracking(
+            self._item_counts,
+            tokens[..., PackedSetFeature.PACKED_SET_FEATURE__ITEM].reshape(-1),
+            self._tau,
+            NUM_ITEMS,
+        )
+        self._ability_counts = calculate_tracking(
+            self._ability_counts,
+            tokens[..., PackedSetFeature.PACKED_SET_FEATURE__ABILITY].reshape(-1),
+            self._tau,
+            NUM_ABILITIES,
+        )
+        self._move_counts = calculate_tracking(
+            self._move_counts,
+            np.stack(
+                [
+                    tokens[..., PackedSetFeature.PACKED_SET_FEATURE__MOVE1],
+                    tokens[..., PackedSetFeature.PACKED_SET_FEATURE__MOVE2],
+                    tokens[..., PackedSetFeature.PACKED_SET_FEATURE__MOVE3],
+                    tokens[..., PackedSetFeature.PACKED_SET_FEATURE__MOVE4],
+                ],
+                axis=-1,
+            ).reshape(-1),
+            self._tau,
+            NUM_MOVES,
+        )
 
     def add(self, traj: Trajectory):
-        with self._lock:
-            self._species_counts = calculate_tracking(
-                self._species_counts,
-                traj.builder_history.packed_team_member_tokens[
-                    ..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES
-                ].reshape(-1),
-                self._tau,
-                NUM_SPECIES,
-            )
-            if self._size == len(self._buf):  # buffer full and maxlen hit
-                # deque will evict leftmost; keep _size consistent with len
-                pass
-            else:
-                self._size += 1
+        """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
+        self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 
-            self._buf.append(traj)
-            self._not_empty.notify()
+        if len(self._trajectories) < self._max_size:
+            current_index = len(self._trajectories)
+            self._trajectories[current_index] = traj
+            self._reuses[current_index] = 0
+            self._valid[current_index] = True
+        else:
+            available_indices = np.where(self._reuses >= self._max_reuses)[0]
+            if len(available_indices) == 0:
+                print(
+                    "Trajectory store is full and no trajectories are available for replacement."
+                )
+                return
+            replace_index = np.random.choice(available_indices)
+            self._trajectories[replace_index] = traj
+            self._reuses[replace_index] = 0
 
-    def can_sample(self, n: int) -> bool:
-        with self._lock:
-            return self._size >= n
+        self._progress.update(1)
 
-    def sample(self, n: int):
-        with self._lock:
-            while self._size < n:
-                self._not_empty.wait()
-            # Uniform without replacement
-            idxs = random.sample(range(self._size), n)
-            out = [self._buf[i] for i in idxs]
-            return out
+    def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
+        """Samples n trajectories uniformly from those with fewer than max_reuses."""
+        valid_indices = (self._reuses < self._max_reuses) & self._valid
+        available_indices = np.where(valid_indices)[0]
+
+        sample_indices = np.random.choice(available_indices, size=n, replace=False)
+        if increment:
+            unique_indices, counts = np.unique(sample_indices, return_counts=True)
+            for idx, count in zip(unique_indices, counts):
+                self._reuses[idx] += count
+
+        return [self._trajectories[i] for i in sample_indices]
 
     def __len__(self):
-        with self._lock:
-            return self._size
+        return len(self._trajectories)
