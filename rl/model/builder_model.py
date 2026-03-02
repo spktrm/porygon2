@@ -287,6 +287,16 @@ class Porygon2BuilderModel(nn.Module):
             (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
         )
 
+        # Niche-free encoding: keep SOS at both prefix positions so the discriminator
+        # cannot trivially decode z from the hidden state.
+        sos = self.sos_embedding.astype(self.cfg.dtype)
+        packed_no_niche = jnp.concatenate(
+            (sos, sos, packed_set_embeddings[1:]), axis=0
+        )
+        seq_len = packed_no_niche.shape[0]
+        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
+        hidden_no_niche = self.norm_out(self.encoder(packed_no_niche, causal_mask))
+
         # Prepend player niche (pos 0) and opponent niche (pos 1) instead of the single SOS.
         player_niche_emb = jnp.take(
             self.niche_embedding.astype(self.cfg.dtype), player_niche_id, axis=0
@@ -297,7 +307,7 @@ class Porygon2BuilderModel(nn.Module):
 
         niche_pos_emb = self.niche_pos_embedding.astype(self.cfg.dtype)
 
-        packed_set_embeddings = jnp.concatenate(
+        packed_with_niche = jnp.concatenate(
             (
                 player_niche_emb + niche_pos_emb[0],
                 opponent_niche_emb + niche_pos_emb[1],
@@ -305,14 +315,14 @@ class Porygon2BuilderModel(nn.Module):
             ),
             axis=0,
         )
-        seq_len = packed_set_embeddings.shape[0]
-        causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
-        packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
-        return self.norm_out(packed_set_embeddings)
+        hidden_with_niche = self.norm_out(self.encoder(packed_with_niche, causal_mask))
+
+        return hidden_with_niche, hidden_no_niche
 
     def _forward(
         self,
         hidden_state: jax.Array,
+        hidden_state_no_niche: jax.Array,
         env_step: BuilderEnvOutput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
@@ -324,8 +334,8 @@ class Porygon2BuilderModel(nn.Module):
 
         value_head = self._forward_value_head(hidden_state)
         conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
-        discriminator_head = self._forward_discriminator_head(hidden_state)
-        diayn_value_head = self._forward_diayn_value_head(hidden_state)
+        discriminator_head = self._forward_discriminator_head(hidden_state_no_niche)
+        diayn_value_head = self._forward_diayn_value_head(hidden_state_no_niche)
 
         species_head = self.species_head(
             self.species_head_mlp(hidden_state),
@@ -489,7 +499,7 @@ class Porygon2BuilderModel(nn.Module):
         team_tokens = actor_input.history.packed_team_member_tokens
         order = actor_input.history.order
 
-        hidden_states = self._encode_team(
+        hidden_states, hidden_states_no_niche = self._encode_team(
             jnp.take(team_tokens, order, axis=0),
             actor_input.history.member_position,
             actor_input.history.member_attribute,
@@ -502,12 +512,14 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
+        hidden_state_no_niche = jnp.take(hidden_states_no_niche, actor_input.env.ts, axis=0)
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
-            in_axes=(0, 0, 0, None, None, None, None),
+            in_axes=(0, 0, 0, 0, None, None, None, None),
         )(
             hidden_state,
+            hidden_state_no_niche,
             actor_input.env,
             actor_output,
             species_keys,
