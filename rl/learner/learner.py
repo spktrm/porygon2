@@ -244,14 +244,25 @@ def train_step(
         + next_builder_ent_pred
         - builder_ent_pred
     )
-    entropy_temp = power_schedule(
-        config.entropy_loss_coef,
+
+    player_entropy_temp = power_schedule(
+        config.player_temp_coef,
         jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
-        config.entropy_temp_decay,
-        config.entropy_temp_floor,
-        config.entropy_temp_ceil,
+        config.player_entropy_temp_decay,
+        config.player_entropy_temp_floor,
+        config.player_entropy_temp_ceil,
     )
-    combined_builder_delta = builder_scalar_delta + entropy_temp * builder_ent_delta
+    builder_entropy_temp = power_schedule(
+        config.builder_temp_coef,
+        jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
+        config.builder_entropy_temp_decay,
+        config.builder_entropy_temp_floor,
+        config.builder_entropy_temp_ceil,
+    )
+
+    combined_builder_delta = (
+        builder_scalar_delta + builder_entropy_temp * builder_ent_delta
+    )
     combined_scalar_delta = jnp.concatenate(
         [combined_builder_delta, player_scalar_delta], axis=0
     )
@@ -338,7 +349,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + entropy_temp * config.player_entropy_pred_coef * loss_entropy
+            + config.player_entropy_coef * player_entropy_temp * loss_entropy
         )
 
         return loss, dict(
@@ -443,7 +454,7 @@ def train_step(
             + config.builder_value_loss_coef * loss_v
             + config.builder_kl_loss_coef * loss_backward_kl
             + config.builder_entropy_pred_coef * loss_entropy
-            + entropy_temp * config.builder_human_loss_coef * loss_human
+            + config.builder_human_loss_coef * builder_entropy_temp * loss_human
         )
 
         return loss, dict(
@@ -529,7 +540,8 @@ def train_step(
             player_frame_count=player_state.frame_count,
             builder_frame_count=builder_state.frame_count,
             training_step=player_state.step_count,
-            entropy_decay_coeff=entropy_temp,
+            player_entropy_decay_coeff=player_entropy_temp,
+            builder_entropy_decay_coeff=builder_entropy_temp,
         )
     )
 
