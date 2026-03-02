@@ -51,12 +51,27 @@ def run_training_actor_pair(
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
 
+            # Sample random niche IDs for diversity (DIAYN).
+            num_niches = player._learner.config.num_niches
+            niche_ids = np.random.randint(0, num_niches, size=2)
+            player_niche_id, opponent_niche_id = int(niche_ids[0]), int(niche_ids[1])
+
             # Grab the result from either self play or playing historical opponents
-            future1 = executor.submit(player.unroll_and_push, player_params)
+            future1 = executor.submit(
+                player.unroll_and_push,
+                player_params,
+                True,
+                player_niche_id,
+                opponent_niche_id,
+            )
 
             # Will only push if is_trainable is True
             future2 = executor.submit(
-                opponent.unroll_and_push, opponent_params, is_trainable
+                opponent.unroll_and_push,
+                opponent_params,
+                is_trainable,
+                opponent_niche_id,
+                player_niche_id,
             )
             trajectory = future1.result()
             future2.result()

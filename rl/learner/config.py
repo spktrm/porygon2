@@ -105,6 +105,11 @@ class Porygon2LearnerConfig:
     entropy_temp_ceil: float = 1.0
     entropy_temp_floor: float = 1e-3
 
+    # DIAYN diversity params
+    num_niches: int = 8
+    builder_diayn_loss_coef: float = 0.1
+    player_diayn_loss_coef: float = 0.1
+
     # Smogon Generation
     generation: GenT = 9
     smogon_format: SmogonFormatT = "ou"

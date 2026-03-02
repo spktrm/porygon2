@@ -22,6 +22,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
+    RegressionValueLogitHead,
     sample_categorical,
 )
 from rl.model.modules import MLP
@@ -45,6 +46,21 @@ class Porygon2PlayerModel(nn.Module):
 
         self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
+
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
+        self.niche_embedding = self.param(
+            "niche_embedding",
+            embedding_init,
+            (self.cfg.num_niches, self.cfg.entity_size),
+        )
+
+        self.discriminator_head_mlp = MLP()
+        self.discriminator_head = RegressionValueLogitHead(self.cfg.discriminator_head)
+
+        self.diayn_value_head_mlp = MLP()
+        self.diayn_value_head = RegressionValueLogitHead(self.cfg.diayn_value_head)
 
     def post_head(
         self,
@@ -94,6 +110,14 @@ class Porygon2PlayerModel(nn.Module):
         x = self.value_head_mlp(x)
         return self.value_head(x)
 
+    def _forward_discriminator_head(self, x: jax.Array):
+        x = self.discriminator_head_mlp(x)
+        return self.discriminator_head(x)
+
+    def _forward_diayn_value_head(self, x: jax.Array):
+        x = self.diayn_value_head_mlp(x)
+        return self.diayn_value_head(x)
+
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
@@ -115,8 +139,15 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         value_head = self._forward_value_head(state_embedding)
+        discriminator_head = self._forward_discriminator_head(state_embedding)
+        diayn_value_head = self._forward_diayn_value_head(state_embedding)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            discriminator_head=discriminator_head,
+            diayn_value_head=diayn_value_head,
+        )
 
     def __call__(
         self,
@@ -131,6 +162,15 @@ class Porygon2PlayerModel(nn.Module):
         state_embedding, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
+
+        # Condition on niche_id by adding the niche embedding to every timestep.
+        niche_id_scalar = jnp.squeeze(actor_input.niche_id)
+        niche_emb = jnp.take(
+            jnp.asarray(self.niche_embedding, dtype=state_embedding.dtype),
+            niche_id_scalar,
+            axis=0,
+        )
+        state_embedding = state_embedding + niche_emb[None, :]
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)

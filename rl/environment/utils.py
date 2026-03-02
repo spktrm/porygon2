@@ -254,7 +254,12 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     )
     history: PlayerHistoryOutput = jax.tree.map(lambda x: x[:, None, ...], ts.history)
     return (
-        PlayerActorInput(env=env, packed_history=packed_history, history=history),
+        PlayerActorInput(
+            env=env,
+            packed_history=packed_history,
+            history=history,
+            niche_id=np.zeros((1, 1), dtype=np.int32),
+        ),
         PlayerActorOutput(
             value_head=CategoricalValueHeadOutput(
                 logits=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
@@ -265,6 +270,12 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
                 action_index=env.action_mask.reshape(
                     env.action_mask.shape[:-2] + (-1,)
                 ).argmax(-1)
+            ),
+            discriminator_head=RegressionValueHeadOutput(
+                logits=np.zeros((env.done.shape[0], 1, 8), dtype=np.float32)
+            ),
+            diayn_value_head=RegressionValueHeadOutput(
+                logits=np.zeros((env.done.shape[0], 1), dtype=np.float32)
             ),
         ),
     )
@@ -345,10 +356,17 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 order=order,
                 member_attribute=member_attribute,
                 member_position=member_position,
+                niche_id=np.zeros((1, 1), dtype=np.int32),
             ),
         ),
         BuilderActorOutput(
             conditional_entropy_head=RegressionValueHeadOutput(
+                logits=np.zeros_like(done, dtype=np.float32)
+            ),
+            discriminator_head=RegressionValueHeadOutput(
+                logits=np.zeros((done.shape[0], 1, 8), dtype=np.float32)
+            ),
+            diayn_value_head=RegressionValueHeadOutput(
                 logits=np.zeros_like(done, dtype=np.float32)
             ),
             value_head=CategoricalValueHeadOutput(

@@ -21,6 +21,7 @@ class BuilderTrajectoryStore:
         ] = {}
         self._reuses = np.zeros(max_size, dtype=int)
         self._valid = np.zeros(max_size, dtype=bool)
+        self._niche_ids = np.full(max_size, -1, dtype=np.int32)
 
         self._max_size = max_size
         self._max_reuses = max_reuses
@@ -33,14 +34,14 @@ class BuilderTrajectoryStore:
     @classmethod
     def from_trajectories(
         cls,
-        trajectories: list[BuilderTransition],
+        trajectories: list[tuple],
         max_size: int = 1000,
         max_reuses: int = 5,
     ):
-        """Initializes the store with a list of trajectories. Primarily for testing."""
+        """Initializes the store with a list of (trajectory, history) tuples. Primarily for testing."""
         store = cls(max_size=max_size, max_reuses=max_reuses)
-        for trajectory in trajectories:
-            store.add_trajectory(trajectory)
+        for trajectory, history in trajectories:
+            store.add_trajectory(trajectory, history)
         return store
 
     def is_full(self, limit: int = None) -> bool:
@@ -67,12 +68,14 @@ class BuilderTrajectoryStore:
         if not capacity, check if any trajectories have been reused more than max_reuses, if so, remove them and add the new trajectory
         """
         item_to_store = (trajectory, history)
+        niche_id = int(np.asarray(history.niche_id).flat[0])
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)
             self._trajectories[current_index] = item_to_store
             self._reuses[current_index] = 0
             self._valid[current_index] = True
+            self._niche_ids[current_index] = niche_id
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
@@ -83,15 +86,23 @@ class BuilderTrajectoryStore:
             replace_index = np.random.choice(available_indices)
             self._trajectories[replace_index] = item_to_store
             self._reuses[replace_index] = 0
+            self._niche_ids[replace_index] = niche_id
 
         self._progress.update(1)
 
     def sample_trajectory(
-        self, increment: bool = True
+        self, niche_id: int | None = None, increment: bool = True
     ) -> tuple[BuilderTransition, BuilderHistoryOutput]:
-        """samples a trajectory uniformly from those with less than max_reuses, and increments its reuse count"""
+        """samples a trajectory uniformly from those with less than max_reuses, and increments its reuse count.
+        If niche_id is provided, prefers trajectories with that niche_id; falls back to any if none match."""
 
         valid_indices = (self._reuses < self._max_reuses) & self._valid
+        if niche_id is not None:
+            niche_valid = valid_indices & (self._niche_ids == niche_id)
+            if np.any(niche_valid):
+                valid_indices = niche_valid
+            # else: fall back to any available trajectory
+
         available_indices = np.where(valid_indices)[0]
 
         sample_index = np.random.choice(available_indices).item()

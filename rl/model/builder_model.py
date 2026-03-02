@@ -154,6 +154,18 @@ class Porygon2BuilderModel(nn.Module):
         self.conditional_entropy_head_mlp = MLP()
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
+        self.niche_embedding = self.param(
+            "niche_embedding",
+            embedding_init,
+            (self.cfg.num_niches, entity_size),
+        )
+
+        self.discriminator_head_mlp = MLP()
+        self.discriminator_head = RegressionValueLogitHead(self.cfg.discriminator_head)
+
+        self.diayn_value_head_mlp = MLP()
+        self.diayn_value_head = RegressionValueLogitHead(self.cfg.diayn_value_head)
+
     def _embed_species(self, token: jax.Array):
         mask = ~(
             (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
@@ -193,6 +205,14 @@ class Porygon2BuilderModel(nn.Module):
     def _forward_conditional_entropy_head(self, embedding: jax.Array):
         embedding = self.conditional_entropy_head_mlp(embedding)
         return self.conditional_entropy_head(embedding)
+
+    def _forward_discriminator_head(self, embedding: jax.Array):
+        embedding = self.discriminator_head_mlp(embedding)
+        return self.discriminator_head(embedding)
+
+    def _forward_diayn_value_head(self, embedding: jax.Array):
+        embedding = self.diayn_value_head_mlp(embedding)
+        return self.diayn_value_head(embedding)
 
     def _encode_team(
         self,
@@ -282,6 +302,8 @@ class Porygon2BuilderModel(nn.Module):
 
         value_head = self._forward_value_head(hidden_state)
         conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
+        discriminator_head = self._forward_discriminator_head(hidden_state)
+        diayn_value_head = self._forward_diayn_value_head(hidden_state)
 
         species_head = self.species_head(
             self.species_head_mlp(hidden_state),
@@ -427,6 +449,8 @@ class Porygon2BuilderModel(nn.Module):
             action_head=action_head,
             value_head=value_head,
             conditional_entropy_head=conditional_entropy_head,
+            discriminator_head=discriminator_head,
+            diayn_value_head=diayn_value_head,
         )
 
     def __call__(
@@ -454,6 +478,13 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
+
+        # Condition on niche_id by adding the niche embedding to every timestep.
+        niche_id_scalar = jnp.squeeze(actor_input.history.niche_id)
+        niche_emb = jnp.take(
+            self.niche_embedding.astype(self.cfg.dtype), niche_id_scalar, axis=0
+        )
+        hidden_state = hidden_state + niche_emb[None, :]
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),

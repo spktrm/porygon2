@@ -169,6 +169,7 @@ def train_step(
         env=player_transitions.env_output,
         packed_history=player_packed_history,
         history=player_history,
+        niche_id=batch.niche_id,
     )
     builder_actor_input = BuilderActorInput(
         env=builder_transitions.env_output,
@@ -251,9 +252,62 @@ def train_step(
         config.entropy_temp_floor,
         config.entropy_temp_ceil,
     )
-    combined_builder_delta = builder_scalar_delta + entropy_temp * builder_ent_delta
+
+    # DIAYN intrinsic reward for builder: log q(z | s) using actor's discriminator.
+    # niche_id has shape (1, B): one niche id per trajectory, stacked over batch.
+    # Index [0] gives shape (B,) for use in one-hot and per-batch discriminator loss.
+    niche_id = batch.niche_id[0]  # (B,)
+    niche_id_one_hot = jax.nn.one_hot(
+        niche_id, config.num_niches, dtype=builder_ent_pred.dtype
+    )  # (B, num_niches)
+    builder_actor_discriminator_logits = (
+        builder_transitions.agent_output.actor_output.discriminator_head.logits
+    )  # (T, B, num_niches)
+    builder_actor_discriminator_log_q = jax.nn.log_softmax(
+        builder_actor_discriminator_logits.astype(jnp.float32), axis=-1
+    )
+    builder_diayn_reward = jnp.sum(
+        builder_actor_discriminator_log_q * niche_id_one_hot[None], axis=-1
+    )  # (T, B)
+    builder_actor_diayn_value_pred = (
+        builder_transitions.agent_output.actor_output.diayn_value_head.logits
+    )  # (T, B)
+    next_builder_diayn_pred = jnp.concatenate(
+        [builder_actor_diayn_value_pred[1:], jnp.zeros_like(builder_actor_diayn_value_pred[:1])],
+        axis=0,
+    )
+    builder_diayn_delta = (
+        builder_diayn_reward + next_builder_diayn_pred - builder_actor_diayn_value_pred
+    )
+
+    # DIAYN intrinsic reward for player: log q(z | s) using actor's discriminator.
+    player_actor_discriminator_logits = (
+        player_transitions.agent_output.actor_output.discriminator_head.logits
+    )  # (T, B, num_niches)
+    player_actor_discriminator_log_q = jax.nn.log_softmax(
+        player_actor_discriminator_logits.astype(jnp.float32), axis=-1
+    )
+    player_diayn_reward = jnp.sum(
+        player_actor_discriminator_log_q * niche_id_one_hot[None], axis=-1
+    )  # (T, B)
+    player_actor_diayn_value_pred = (
+        player_transitions.agent_output.actor_output.diayn_value_head.logits
+    )  # (T, B)
+    next_player_diayn_pred = jnp.concatenate(
+        [player_actor_diayn_value_pred[1:], jnp.zeros_like(player_actor_diayn_value_pred[:1])],
+        axis=0,
+    )
+    player_diayn_delta = (
+        player_diayn_reward + next_player_diayn_pred - player_actor_diayn_value_pred
+    )
+
+    combined_builder_delta = (
+        builder_scalar_delta
+        + entropy_temp * builder_ent_delta
+        + config.builder_diayn_loss_coef * builder_diayn_delta
+    )
     combined_scalar_delta = jnp.concatenate(
-        [combined_builder_delta, player_scalar_delta], axis=0
+        [combined_builder_delta, player_scalar_delta + config.player_diayn_loss_coef * player_diayn_delta], axis=0
     )
 
     segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
@@ -263,6 +317,15 @@ def train_step(
 
     ent_returns = (
         segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
+    )
+
+    builder_diayn_returns = (
+        segmented_cumsum(builder_diayn_delta, builder_td_lambdas)
+        + builder_actor_diayn_value_pred
+    )
+    player_diayn_returns = (
+        segmented_cumsum(player_diayn_delta, player_td_lambdas)
+        + player_actor_diayn_value_pred
     )
 
     builder_returns = returns[: builder_valid.shape[0]]
@@ -334,11 +397,31 @@ def train_step(
             valid=player_valid,
         )
 
+        # DIAYN discriminator loss: train player discriminator to predict niche_id.
+        player_discriminator_logits = player_pred.discriminator_head.logits  # (T, B, num_niches)
+        niche_id_one_hot_f = niche_id_one_hot.astype(player_discriminator_logits.dtype)
+        loss_player_discriminator = average(
+            optax.softmax_cross_entropy(
+                player_discriminator_logits,
+                jnp.broadcast_to(niche_id_one_hot_f[None], player_discriminator_logits.shape),
+            ),
+            player_valid,
+        )
+
+        # DIAYN value head loss: predict cumulative DIAYN reward.
+        loss_player_diayn_value = mse_value_loss(
+            pred=player_pred.diayn_value_head.logits,
+            target=player_diayn_returns,
+            valid=player_valid,
+        )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + entropy_temp * config.player_entropy_pred_coef * loss_entropy
+            + config.player_diayn_loss_coef * loss_player_discriminator
+            + config.player_diayn_loss_coef * loss_player_diayn_value
         )
 
         return loss, dict(
@@ -347,6 +430,8 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_discriminator=loss_player_discriminator,
+            player_loss_diayn_value=loss_player_diayn_value,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -420,6 +505,24 @@ def train_step(
             valid=builder_valid,
         )
 
+        # DIAYN discriminator loss: train builder discriminator to predict niche_id.
+        builder_discriminator_logits = pred.discriminator_head.logits  # (T, B, num_niches)
+        niche_id_one_hot_f = niche_id_one_hot.astype(builder_discriminator_logits.dtype)
+        loss_builder_discriminator = average(
+            optax.softmax_cross_entropy(
+                builder_discriminator_logits,
+                jnp.broadcast_to(niche_id_one_hot_f[None], builder_discriminator_logits.shape),
+            ),
+            builder_valid,
+        )
+
+        # DIAYN value head loss: predict cumulative DIAYN reward.
+        loss_builder_diayn_value = mse_value_loss(
+            pred=pred.diayn_value_head.logits,
+            target=builder_diayn_returns,
+            valid=builder_valid,
+        )
+
         # 1. Shift the logic (Your temporal alignment is still correct!)
         human_prob_raw = builder_transitions.env_output.human_prob
         human_prob = jnp.concatenate(
@@ -444,6 +547,8 @@ def train_step(
             + config.builder_kl_loss_coef * loss_backward_kl
             + config.builder_entropy_pred_coef * loss_entropy
             + entropy_temp * config.builder_human_loss_coef * loss_human
+            + config.builder_diayn_loss_coef * loss_builder_discriminator
+            + config.builder_diayn_loss_coef * loss_builder_diayn_value
         )
 
         return loss, dict(
@@ -452,6 +557,8 @@ def train_step(
             builder_loss_kl_rl=loss_backward_kl,
             builder_loss_entropy=loss_entropy,
             builder_loss_human=loss_human,
+            builder_loss_discriminator=loss_builder_discriminator,
+            builder_loss_diayn_value=loss_builder_diayn_value,
             # Head entropies
             builder_entropy=builder_entropy,
             # Ratios
@@ -566,6 +673,7 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
+        niche_id=stacked_trajectory.niche_id,
     )
 
 

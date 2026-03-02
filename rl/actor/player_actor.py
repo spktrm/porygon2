@@ -46,6 +46,7 @@ class PlayerActor:
             env=timestep.env,
             packed_history=clip_packed_history(timestep.packed_history, resolution=128),
             history=clip_history(timestep.history, resolution=128),
+            niche_id=timestep.niche_id,
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
@@ -55,7 +56,13 @@ class PlayerActor:
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
 
-    def unroll(self, rng_key: jax.Array, player_params: Params) -> Trajectory:
+    def unroll(
+        self,
+        rng_key: jax.Array,
+        player_params: Params,
+        niche_id: int = 0,
+        opponent_niche_id: int = 0,
+    ) -> Trajectory:
         """Run unroll_length agent/environment steps, returning the trajectory."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
@@ -64,7 +71,7 @@ class PlayerActor:
         with sample_cond:
             sample_cond.wait_for(self._learner.builder_replay.ready_to_sample)
             builder_trajectory, builder_history = (
-                self._learner.builder_replay.sample_trajectory()
+                self._learner.builder_replay.sample_trajectory(niche_id=niche_id)
             )
 
         add_cond = self._learner.builder_replay._add_cv
@@ -81,6 +88,17 @@ class PlayerActor:
             )
 
         player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
+
+        # Use the actual niche_id from the sampled builder trajectory (may differ from
+        # requested if a fallback was needed in the builder replay store).
+        actual_niche_id = int(np.asarray(builder_history.niche_id).flat[0])
+        niche_id_arr = np.array([[actual_niche_id]], dtype=np.int32)
+        player_actor_input = PlayerActorInput(
+            env=player_actor_input.env,
+            packed_history=player_actor_input.packed_history,
+            history=player_actor_input.history,
+            niche_id=niche_id_arr,
+        )
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
@@ -99,7 +117,13 @@ class PlayerActor:
                 break
 
             action = self.player_agent_output_to_action(player_agent_output)
-            player_actor_input = self._env.step(action)
+            next_actor_input = self._env.step(action)
+            player_actor_input = PlayerActorInput(
+                env=next_actor_input.env,
+                packed_history=next_actor_input.packed_history,
+                history=next_actor_input.history,
+                niche_id=niche_id_arr,
+            )
 
         if len(player_traj) < self._unroll_length:
             player_traj += [player_transition] * (
@@ -118,6 +142,7 @@ class PlayerActor:
             player_transitions=player_trajectory,
             player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
+            niche_id=np.array([actual_niche_id], dtype=np.int32),
         )
 
         return promote_map(trajectory)
@@ -132,12 +157,23 @@ class PlayerActor:
     def reset_game_id(self):
         self._env._reset_game_id()
 
-    def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
+    def unroll_and_push(
+        self,
+        params_container: ParamsContainer,
+        do_push: bool = True,
+        niche_id: int = 0,
+        opponent_niche_id: int = 0,
+    ):
         """Run one unroll and send trajectory to learner."""
         player_params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
 
-        act_out = self.unroll(rng_key=subkey, player_params=player_params)
+        act_out = self.unroll(
+            rng_key=subkey,
+            player_params=player_params,
+            niche_id=niche_id,
+            opponent_niche_id=opponent_niche_id,
+        )
         self.reset_game_id()
 
         if self._env.username.startswith("train") and do_push:

@@ -41,6 +41,7 @@ class PlayerActorInput:
         default_factory=PlayerPackedHistoryOutput
     )
     history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+    niche_id: ArrayLike = ()
 
 
 @dataclass
@@ -77,6 +78,12 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    discriminator_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    diayn_value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
 
 
 @dataclass
@@ -117,6 +124,7 @@ class BuilderHistoryOutput:
     order: ArrayLike = ()
     member_position: ArrayLike = ()
     member_attribute: ArrayLike = ()
+    niche_id: ArrayLike = ()
 
 
 @dataclass
@@ -133,6 +141,12 @@ class BuilderActorOutput:
     )
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
+    )
+    discriminator_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    diayn_value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
     )
 
 
@@ -157,6 +171,8 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+
+    niche_id: ArrayLike = ()
 
 
 @dataclass

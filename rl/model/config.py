@@ -118,9 +118,19 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.output_decoder.need_pos = False
 
     # Policy Head Configuration
+    cfg.num_niches = 8
+
     cfg.entropy_head = ConfigDict()
     cfg.entropy_head.logits = ConfigDict()
     cfg.entropy_head.logits.features = 1
+
+    cfg.discriminator_head = ConfigDict()
+    cfg.discriminator_head.logits = ConfigDict()
+    cfg.discriminator_head.logits.features = cfg.num_niches
+
+    cfg.diayn_value_head = ConfigDict()
+    cfg.diayn_value_head.logits = ConfigDict()
+    cfg.diayn_value_head.logits.features = 1
 
     cfg.value_head = ConfigDict()
     cfg.value_head.logits = ConfigDict()
@@ -199,6 +209,16 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.entropy_head = ConfigDict()
     cfg.entropy_head.logits = ConfigDict()
     cfg.entropy_head.logits.features = 1
+
+    cfg.num_niches = 8
+
+    cfg.discriminator_head = ConfigDict()
+    cfg.discriminator_head.logits = ConfigDict()
+    cfg.discriminator_head.logits.features = cfg.num_niches
+
+    cfg.diayn_value_head = ConfigDict()
+    cfg.diayn_value_head.logits = ConfigDict()
+    cfg.diayn_value_head.logits.features = 1
 
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.features = 3
