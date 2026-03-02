@@ -223,6 +223,8 @@ class Porygon2BuilderModel(nn.Module):
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
+        player_niche_id: jax.Array,
+        opponent_niche_id: jax.Array,
     ):
         species_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -282,6 +284,17 @@ class Porygon2BuilderModel(nn.Module):
 
         packed_set_embeddings = jnp.concatenate(
             (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
+        )
+
+        # Prepend player niche (pos 0) and opponent niche (pos 1) instead of the single SOS.
+        player_niche_emb = jnp.take(
+            self.niche_embedding.astype(self.cfg.dtype), player_niche_id, axis=0
+        )[None]
+        opponent_niche_emb = jnp.take(
+            self.niche_embedding.astype(self.cfg.dtype), opponent_niche_id, axis=0
+        )[None]
+        packed_set_embeddings = jnp.concatenate(
+            (player_niche_emb, opponent_niche_emb, packed_set_embeddings[1:]), axis=0
         )
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
@@ -475,16 +488,11 @@ class Porygon2BuilderModel(nn.Module):
             ability_keys,
             item_keys,
             move_keys,
+            player_niche_id=jnp.squeeze(actor_input.history.niche_id),
+            opponent_niche_id=jnp.squeeze(actor_input.history.opponent_niche_id),
         )
 
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
-
-        # Condition on niche_id by adding the niche embedding to every timestep.
-        niche_id_scalar = jnp.squeeze(actor_input.history.niche_id)
-        niche_emb = jnp.take(
-            self.niche_embedding.astype(self.cfg.dtype), niche_id_scalar, axis=0
-        )
-        hidden_state = hidden_state + niche_emb[None, :]
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),

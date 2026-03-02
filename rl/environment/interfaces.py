@@ -125,6 +125,7 @@ class BuilderHistoryOutput:
     member_position: ArrayLike = ()
     member_attribute: ArrayLike = ()
     niche_id: ArrayLike = ()
+    opponent_niche_id: ArrayLike = ()
 
 
 @dataclass

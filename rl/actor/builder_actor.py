@@ -36,10 +36,12 @@ class BuilderActor:
         builder_subkeys = split_rng(rng_key, builder_unroll_length + 1)
         build_traj = []
 
-        # Sample a random niche id for diversity (DIAYN).
+        # Sample random niche IDs for diversity (DIAYN).
         num_niches = self._learner.config.num_niches
         niche_id = int(np.random.randint(0, num_niches))
+        opponent_niche_id = int(np.random.randint(0, num_niches))
         niche_id_arr = np.array([niche_id], dtype=np.int32)
+        opponent_niche_id_arr = np.array([opponent_niche_id], dtype=np.int32)
 
         # Reset the builder environment.
         builder_actor_input = self._env.reset(builder_subkeys[0])
@@ -51,6 +53,7 @@ class BuilderActor:
                 member_position=builder_actor_input.history.member_position,
                 member_attribute=builder_actor_input.history.member_attribute,
                 niche_id=niche_id_arr,
+                opponent_niche_id=opponent_niche_id_arr,
             ),
         )
 
@@ -77,6 +80,7 @@ class BuilderActor:
                     member_position=next_actor_input.history.member_position,
                     member_attribute=next_actor_input.history.member_attribute,
                     niche_id=niche_id_arr,
+                    opponent_niche_id=opponent_niche_id_arr,
                 ),
             )
 

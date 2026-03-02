@@ -71,7 +71,9 @@ class PlayerActor:
         with sample_cond:
             sample_cond.wait_for(self._learner.builder_replay.ready_to_sample)
             builder_trajectory, builder_history = (
-                self._learner.builder_replay.sample_trajectory(niche_id=niche_id)
+                self._learner.builder_replay.sample_trajectory(
+                    niche_id=niche_id, opponent_niche_id=opponent_niche_id
+                )
             )
 
         add_cond = self._learner.builder_replay._add_cv

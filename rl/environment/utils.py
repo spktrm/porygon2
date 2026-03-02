@@ -357,6 +357,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 member_attribute=member_attribute,
                 member_position=member_position,
                 niche_id=np.zeros((1, 1), dtype=np.int32),
+                opponent_niche_id=np.zeros((1, 1), dtype=np.int32),
             ),
         ),
         BuilderActorOutput(

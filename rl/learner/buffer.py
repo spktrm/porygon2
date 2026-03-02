@@ -22,6 +22,7 @@ class BuilderTrajectoryStore:
         self._reuses = np.zeros(max_size, dtype=int)
         self._valid = np.zeros(max_size, dtype=bool)
         self._niche_ids = np.full(max_size, -1, dtype=np.int32)
+        self._opponent_niche_ids = np.full(max_size, -1, dtype=np.int32)
 
         self._max_size = max_size
         self._max_reuses = max_reuses
@@ -69,6 +70,7 @@ class BuilderTrajectoryStore:
         """
         item_to_store = (trajectory, history)
         niche_id = int(np.asarray(history.niche_id).flat[0])
+        opponent_niche_id = int(np.asarray(history.opponent_niche_id).flat[0])
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)
@@ -76,6 +78,7 @@ class BuilderTrajectoryStore:
             self._reuses[current_index] = 0
             self._valid[current_index] = True
             self._niche_ids[current_index] = niche_id
+            self._opponent_niche_ids[current_index] = opponent_niche_id
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
@@ -87,18 +90,26 @@ class BuilderTrajectoryStore:
             self._trajectories[replace_index] = item_to_store
             self._reuses[replace_index] = 0
             self._niche_ids[replace_index] = niche_id
+            self._opponent_niche_ids[replace_index] = opponent_niche_id
 
         self._progress.update(1)
 
     def sample_trajectory(
-        self, niche_id: int | None = None, increment: bool = True
+        self,
+        niche_id: int | None = None,
+        opponent_niche_id: int | None = None,
+        increment: bool = True,
     ) -> tuple[BuilderTransition, BuilderHistoryOutput]:
         """samples a trajectory uniformly from those with less than max_reuses, and increments its reuse count.
-        If niche_id is provided, prefers trajectories with that niche_id; falls back to any if none match."""
+        If niche_id and/or opponent_niche_id are provided, filters by them; falls back to any if none match."""
 
         valid_indices = (self._reuses < self._max_reuses) & self._valid
-        if niche_id is not None:
-            niche_valid = valid_indices & (self._niche_ids == niche_id)
+        if niche_id is not None or opponent_niche_id is not None:
+            niche_valid = valid_indices.copy()
+            if niche_id is not None:
+                niche_valid = niche_valid & (self._niche_ids == niche_id)
+            if opponent_niche_id is not None:
+                niche_valid = niche_valid & (self._opponent_niche_ids == opponent_niche_id)
             if np.any(niche_valid):
                 valid_indices = niche_valid
             # else: fall back to any available trajectory
