@@ -155,9 +155,10 @@ class Porygon2BuilderModel(nn.Module):
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
         self.niche_embedding = self.param(
-            "niche_embedding",
-            embedding_init,
-            (self.cfg.num_niches, entity_size),
+            "niche_embedding", embedding_init, (self.cfg.num_niches, entity_size)
+        )
+        self.niche_pos_embedding = self.param(
+            "niche_pos_embedding", embedding_init, (2, entity_size)
         )
 
         self.discriminator_head_mlp = MLP()
@@ -293,8 +294,16 @@ class Porygon2BuilderModel(nn.Module):
         opponent_niche_emb = jnp.take(
             self.niche_embedding.astype(self.cfg.dtype), opponent_niche_id, axis=0
         )[None]
+
+        niche_pos_emb = self.niche_pos_embedding.astype(self.cfg.dtype)
+
         packed_set_embeddings = jnp.concatenate(
-            (player_niche_emb, opponent_niche_emb, packed_set_embeddings[1:]), axis=0
+            (
+                player_niche_emb + niche_pos_emb[0],
+                opponent_niche_emb + niche_pos_emb[1],
+                packed_set_embeddings[1:],
+            ),
+            axis=0,
         )
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
