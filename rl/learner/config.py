@@ -43,13 +43,17 @@ SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
     num_steps = 5_000_000
-    num_player_actors: int = 8
+    num_player_actors: int = 12
     num_builder_actors: int = 4
     num_eval_actors: int = 2
 
     unroll_length: int = 128
-    replay_buffer_capacity: int = 1024 * 6
-    theoretical_buffer_capacity: int = replay_buffer_capacity * unroll_length
+
+    # Replay buffer params
+    player_replay_buffer_capacity: int = 1024 * 6
+    player_replay_ratio: int = 2
+    builder_replay_buffer_capacity: int = 1024
+    builder_replay_ratio: int = 5
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -62,12 +66,11 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
-    target_replay_ratio: float = 2.0
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 2e-4
-    builder_learning_rate: float = 2e-4
+    player_learning_rate: float = 5e-5
+    builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     gradient_accumulation_steps: int = 8
@@ -77,22 +80,30 @@ class Porygon2LearnerConfig:
     builder_ema_decay: float = 1e-3
 
     # Advantage estimation params
-    td_lambda: float = 0.9
-    gae_lambda: float = 0.9
+    player_td_lambda: float = 0.8
+    player_gae_lambda: float = 0.5
+    builder_td_lambda: float = 1.0
+    builder_gae_lambda: float = 1.0
     clip_ppo: float = 0.3
 
     # Loss coefficients
+    ## Player
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 0.05
-
+    player_entropy_pred_coef: float = 0.5
+    ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_kl_prior_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 0.1
-    normalising_constant: int = 20
+    builder_entropy_pred_coef: float = 0.1
+    builder_human_loss_coef: float = 2.0
+    ## Entropy
+    normalising_constant: int = 100
+    entropy_loss_coef: float = 1.0
+    entropy_temp_decay: float = 0.3
+    entropy_temp_ceil: float = 1.0
+    entropy_temp_floor: float = 1e-3
 
     # Smogon Generation
     generation: GenT = 9

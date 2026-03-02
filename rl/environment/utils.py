@@ -337,7 +337,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 curr_attribute=member_attribute,
                 curr_position=member_position,
                 done=done,
-                species_reward=np.zeros_like(done, dtype=np.float32),
+                human_prob=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
             ),
             history=BuilderHistoryOutput(

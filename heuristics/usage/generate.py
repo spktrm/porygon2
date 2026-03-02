@@ -144,6 +144,49 @@ def construct_gender_usage(
     return usage_array
 
 
+def construct_formes_usage(
+    data: UsageType, pokedex_df: pd.DataFrame
+) -> npt.NDArray[np.float32]:
+
+    usage_array = np.zeros(
+        (len(STOI["species"]), len(STOI["species"])), dtype=np.float32
+    )
+
+    for _, row in pokedex_df.iterrows():
+        pokemon_id = toid(row.id)
+        if pokemon_id not in STOI["species"]:
+            print(
+                f"Warning: Pokemon ID '{row.id}' not found in STOI['species']. Skipping."
+            )
+            continue
+
+        row_idx = STOI["species"][pokemon_id]
+
+        other_formes = (
+            set()
+            if isinstance(row.otherFormes, float)
+            else set(map(toid, row.otherFormes))
+        )
+        base_species = pokedex_df.loc[pokedex_df.baseSpecies == row.baseSpecies]
+        other_formes.update(map(toid, base_species.id.tolist()))
+
+        if len(other_formes) > 0:
+            for other_form_id in other_formes:
+                if other_form_id in STOI["species"]:
+                    usage_array[row_idx, STOI["species"][other_form_id]] = 1.0
+                else:
+                    print(
+                        f"Warning: Pokemon ID '{other_form_id}' not found in STOI['species']. Skipping."
+                    )
+
+            usage_array[row_idx] = 1 - usage_array[row_idx]
+
+    # Ensure missing/invalid species have a default mask of all ones
+    usage_array[0] = 1.0
+
+    return usage_array
+
+
 def construct_nature_usage(data: UsageType) -> npt.NDArray[np.float32]:
     usage_array = np.zeros(
         (len(STOI["species"]), len(STOI["natures"])), dtype=np.float32
@@ -206,6 +249,17 @@ def construct_species_usage(data: UsageType) -> npt.NDArray[np.float32]:
     return usage_array
 
 
+def postprocess_usage_array(
+    usage_array: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    if usage_array.ndim == 2:
+        num_valid_mask = np.where((usage_array > 0).sum(axis=1))[0]
+        usage_array[num_valid_mask] = usage_array[num_valid_mask] / usage_array[
+            num_valid_mask
+        ].sum(axis=1, keepdims=True)
+    return usage_array
+
+
 def save_usage_array(
     stat: str, usage_array: npt.NDArray[np.float32], generation: int, smogon_format: str
 ):
@@ -244,7 +298,7 @@ async def fetch_and_process(
                 ("nature", construct_nature_usage),
             ]:
                 try:
-                    usage_array = usage_func(data)
+                    usage_array = postprocess_usage_array(usage_func(data))
                     # usage_array = usage_array + ~(usage_array.any(axis=-1)[..., None])
                 except Exception as e:
                     logger.error(
@@ -254,9 +308,18 @@ async def fetch_and_process(
                 else:
                     save_usage_array(stat, usage_array, generation, smogon_format)
 
-            usage_array = construct_gender_usage(data, pokedex_df)
-            save_usage_array("gender", usage_array, generation, smogon_format)
-
+            for stat, usage_func in [
+                ("gender", construct_gender_usage),
+                ("formes", construct_formes_usage),
+            ]:
+                try:
+                    usage_array = postprocess_usage_array(usage_func(data, pokedex_df))
+                    save_usage_array(stat, usage_array, generation, smogon_format)
+                except Exception as e:
+                    logger.error(
+                        f"Error processing {stat} for gen{generation}{smogon_format}: {e}"
+                    )
+                    continue
             return  # Success
 
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
