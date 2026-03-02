@@ -94,12 +94,10 @@ class PlayerActor:
         # Use the actual niche_id from the sampled builder trajectory (may differ from
         # requested if a fallback was needed in the builder replay store).
         actual_niche_id = int(np.asarray(builder_history.niche_id).flat[0])
-        niche_id_arr = np.array([[actual_niche_id]], dtype=np.int32)
         player_actor_input = PlayerActorInput(
             env=player_actor_input.env,
             packed_history=player_actor_input.packed_history,
             history=player_actor_input.history,
-            niche_id=niche_id_arr,
         )
 
         # Rollout the player environment.
@@ -124,7 +122,6 @@ class PlayerActor:
                 env=next_actor_input.env,
                 packed_history=next_actor_input.packed_history,
                 history=next_actor_input.history,
-                niche_id=niche_id_arr,
             )
 
         if len(player_traj) < self._unroll_length:

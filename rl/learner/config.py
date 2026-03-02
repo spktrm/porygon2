@@ -108,7 +108,6 @@ class Porygon2LearnerConfig:
     # DIAYN diversity params
     num_niches: int = 8
     builder_diayn_loss_coef: float = 0.1
-    player_diayn_loss_coef: float = 0.1
 
     # Smogon Generation
     generation: GenT = 9

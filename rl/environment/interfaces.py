@@ -41,7 +41,6 @@ class PlayerActorInput:
         default_factory=PlayerPackedHistoryOutput
     )
     history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
-    niche_id: ArrayLike = ()
 
 
 @dataclass
@@ -78,12 +77,6 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    discriminator_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
-    diayn_value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
 
 
 @dataclass

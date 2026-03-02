@@ -258,7 +258,6 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
             env=env,
             packed_history=packed_history,
             history=history,
-            niche_id=np.zeros((1, 1), dtype=np.int32),
         ),
         PlayerActorOutput(
             value_head=CategoricalValueHeadOutput(
@@ -270,12 +269,6 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
                 action_index=env.action_mask.reshape(
                     env.action_mask.shape[:-2] + (-1,)
                 ).argmax(-1)
-            ),
-            discriminator_head=RegressionValueHeadOutput(
-                logits=np.zeros((env.done.shape[0], 1, 8), dtype=np.float32)
-            ),
-            diayn_value_head=RegressionValueHeadOutput(
-                logits=np.zeros((env.done.shape[0], 1), dtype=np.float32)
             ),
         ),
     )
