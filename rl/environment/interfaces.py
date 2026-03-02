@@ -109,6 +109,8 @@ class BuilderEnvOutput:
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
+    niche_id: ArrayLike = ()
+    opponent_niche_id: ArrayLike = ()
 
 
 @dataclass
@@ -117,8 +119,6 @@ class BuilderHistoryOutput:
     order: ArrayLike = ()
     member_position: ArrayLike = ()
     member_attribute: ArrayLike = ()
-    niche_id: ArrayLike = ()
-    opponent_niche_id: ArrayLike = ()
 
 
 @dataclass

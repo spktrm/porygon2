@@ -46,7 +46,6 @@ class PlayerActor:
             env=timestep.env,
             packed_history=clip_packed_history(timestep.packed_history, resolution=128),
             history=clip_history(timestep.history, resolution=128),
-            niche_id=timestep.niche_id,
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
@@ -91,9 +90,9 @@ class PlayerActor:
 
         player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
 
-        # Use the actual niche_id from the sampled builder trajectory (may differ from
-        # requested if a fallback was needed in the builder replay store).
-        actual_niche_id = int(np.asarray(builder_history.niche_id).flat[0])
+        # Use the actual niche_id from the sampled builder trajectory's env output
+        # (may differ from requested if a fallback was needed in the builder replay store).
+        actual_niche_id = int(np.asarray(builder_trajectory.env_output.niche_id).flat[0])
         player_actor_input = PlayerActorInput(
             env=player_actor_input.env,
             packed_history=player_actor_input.packed_history,

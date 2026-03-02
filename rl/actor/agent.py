@@ -117,7 +117,6 @@ class Agent:
                 lambda t: t[:, ...], actor_input.packed_history
             ),
             history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
-            niche_id=actor_input.niche_id[:, ...],
         )
 
         actor_output = self._player_apply_fn(

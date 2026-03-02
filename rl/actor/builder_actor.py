@@ -3,7 +3,7 @@ import numpy as np
 
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
-from rl.environment.interfaces import BuilderActorInput, BuilderHistoryOutput, BuilderTransition
+from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
 from rl.learner.learner import Learner
 from rl.model.utils import Params, ParamsContainer
@@ -43,18 +43,11 @@ class BuilderActor:
         niche_id_arr = np.array([niche_id], dtype=np.int32)
         opponent_niche_id_arr = np.array([opponent_niche_id], dtype=np.int32)
 
-        # Reset the builder environment.
-        builder_actor_input = self._env.reset(builder_subkeys[0])
-        builder_actor_input = BuilderActorInput(
-            env=builder_actor_input.env,
-            history=BuilderHistoryOutput(
-                packed_team_member_tokens=builder_actor_input.history.packed_team_member_tokens,
-                order=builder_actor_input.history.order,
-                member_position=builder_actor_input.history.member_position,
-                member_attribute=builder_actor_input.history.member_attribute,
-                niche_id=niche_id_arr,
-                opponent_niche_id=opponent_niche_id_arr,
-            ),
+        # Reset the builder environment with sampled niche IDs.
+        builder_actor_input = self._env.reset(
+            builder_subkeys[0],
+            niche_id_arr[0],
+            opponent_niche_id_arr[0],
         )
 
         # Rollout the builder environment.
@@ -71,18 +64,7 @@ class BuilderActor:
             build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
-            next_actor_input = self._env.step(builder_agent_output)
-            builder_actor_input = BuilderActorInput(
-                env=next_actor_input.env,
-                history=BuilderHistoryOutput(
-                    packed_team_member_tokens=next_actor_input.history.packed_team_member_tokens,
-                    order=next_actor_input.history.order,
-                    member_position=next_actor_input.history.member_position,
-                    member_attribute=next_actor_input.history.member_attribute,
-                    niche_id=niche_id_arr,
-                    opponent_niche_id=opponent_niche_id_arr,
-                ),
-            )
+            builder_actor_input = self._env.step(builder_agent_output)
 
         if len(build_traj) < builder_unroll_length:
             build_traj += [builder_transition] * (

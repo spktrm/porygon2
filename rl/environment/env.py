@@ -146,12 +146,12 @@ class TeamBuilderEnvironment:
             f"data/data/gen{generation}/{data_type}/{attribute}_{data_type}_{smogon_format}.npy"
         )
 
-    def reset(self, key: jax.Array) -> BuilderActorInput:
-        self.state = self._reset(key)
+    def reset(self, key: jax.Array, niche_id: jax.Array, opponent_niche_id: jax.Array) -> BuilderActorInput:
+        self.state = self._reset(key, niche_id, opponent_niche_id)
         return self.state
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def _reset(self, key: jax.Array) -> BuilderActorInput:
+    def _reset(self, key: jax.Array, niche_id: jax.Array, opponent_niche_id: jax.Array) -> BuilderActorInput:
         order = generate_order(key, self._num_team_members, NUM_PACKED_SET_FEATURES)
         member_position = order // NUM_PACKED_SET_FEATURES
         member_attribute = order % NUM_PACKED_SET_FEATURES
@@ -173,6 +173,8 @@ class TeamBuilderEnvironment:
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
                 done=jnp.array(False, dtype=jnp.bool),
+                niche_id=niche_id,
+                opponent_niche_id=opponent_niche_id,
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=jnp.zeros(

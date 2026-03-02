@@ -343,14 +343,14 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 done=done,
                 human_prob=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
+                niche_id=np.zeros((trajectory_length, 1), dtype=np.int32),
+                opponent_niche_id=np.zeros((trajectory_length, 1), dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,
                 order=order,
                 member_attribute=member_attribute,
                 member_position=member_position,
-                niche_id=np.zeros((1, 1), dtype=np.int32),
-                opponent_niche_id=np.zeros((1, 1), dtype=np.int32),
             ),
         ),
         BuilderActorOutput(

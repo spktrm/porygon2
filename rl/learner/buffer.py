@@ -69,8 +69,8 @@ class BuilderTrajectoryStore:
         if not capacity, check if any trajectories have been reused more than max_reuses, if so, remove them and add the new trajectory
         """
         item_to_store = (trajectory, history)
-        niche_id = int(np.asarray(history.niche_id).flat[0])
-        opponent_niche_id = int(np.asarray(history.opponent_niche_id).flat[0])
+        niche_id = int(np.asarray(trajectory.env_output.niche_id).flat[0])
+        opponent_niche_id = int(np.asarray(trajectory.env_output.opponent_niche_id).flat[0])
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)

@@ -507,8 +507,8 @@ class Porygon2BuilderModel(nn.Module):
             ability_keys,
             item_keys,
             move_keys,
-            player_niche_id=jnp.squeeze(actor_input.history.niche_id),
-            opponent_niche_id=jnp.squeeze(actor_input.history.opponent_niche_id),
+            player_niche_id=jnp.squeeze(actor_input.env.niche_id),
+            opponent_niche_id=jnp.squeeze(actor_input.env.opponent_niche_id),
         )
 
         hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
