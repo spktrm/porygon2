@@ -11,10 +11,15 @@ import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
 import { generateTeamFromArray, randomSampleTeam } from "./state";
 
+import { Teams } from "@pkmn/sim";
+import { TeamGenerators } from "@pkmn/randoms";
+
+Teams.setGeneratorFactory(TeamGenerators);
+
 interface PlayerDetails {
     userName: string;
     smogonFormat: string;
-    packedTeam: number[];
+    packedTeam: number[] | undefined;
 }
 
 interface WaitingPlayerResolveArgs {
@@ -58,11 +63,24 @@ export class WorkerHandler {
         return player;
     }
 
+    private generateTeam(
+        packedTeam: number[] | undefined,
+        smogonFormat: string,
+    ): string {
+        if (smogonFormat.includes("randombattle")) {
+            return Teams.pack(Teams.generate(smogonFormat));
+        }
+        if (packedTeam !== undefined) {
+            return generateTeamFromArray(packedTeam);
+        }
+        throw new Error("Unable to generate team");
+    }
+
     private async resetPlayerFromTrainingUserName(
         userName: string,
         gameId: string, // Added gameId param
         smogonFormat: string,
-        packedTeam: number[],
+        packedTeam: number[] | undefined,
     ): Promise<WaitingPlayerResolveArgs> {
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
@@ -104,10 +122,11 @@ export class WorkerHandler {
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
-                p1team: generateTeamFromArray(
+                p1team: this.generateTeam(
                     opponent.playerDetails.packedTeam,
+                    opponent.playerDetails.smogonFormat,
                 ),
-                p2team: generateTeamFromArray(packedTeam),
+                p2team: this.generateTeam(packedTeam, smogonFormat),
                 smogonFormat,
             });
 
@@ -148,9 +167,9 @@ export class WorkerHandler {
     private resetPlayerFromEvalUserName(
         userName: string,
         smogonFormat: string,
-        packedTeam: number[],
+        packedTeam: number[] | undefined,
     ) {
-        const teamString = generateTeamFromArray(packedTeam);
+        const teamString = this.generateTeam(packedTeam, smogonFormat);
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -239,7 +258,7 @@ export class WorkerHandler {
         userName: string,
         gameId: string, // Added param
         smogonFormat: string,
-        packedTeam: number[],
+        packedTeam: number[] | undefined,
         // We no longer need ckpt params for matchmaking logic
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {

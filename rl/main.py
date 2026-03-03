@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import argparse
 import concurrent.futures
+import functools
 import json
 import logging
 import os
@@ -174,7 +175,7 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state, mode="checkpoint"
+        learner_config, player_state, builder_state, mode="params"
     )
 
     logger.info("Initializing WandB...")
@@ -204,28 +205,35 @@ def main(args: argparse.Namespace):
         debug=debug,
     )
 
+    env_func = functools.partial(
+        SinglePlayerSyncEnvironment,
+        generation=learner_config.generation,
+        smogon_format=learner_config.smogon_format,
+    )
+
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=(
             learner_config.num_player_actors // 2 + learner_config.num_eval_actors
         )
     ) as executor:
-        logger.info(
-            f"Initializing {learner_config.num_builder_actors} builder actors..."
-        )
-        for builder_id in range(learner_config.num_builder_actors):
-            actor = BuilderActor(
-                agent=learning_agent,
-                learner=learner,
-                rng_seed=len(actor_threads) + salt,
+        if "randombattle" not in learner_config.smogon_format:
+            logger.info(
+                f"Initializing {learner_config.num_builder_actors} builder actors..."
             )
-            args = (actor, stop_signal)
-            actor_threads.append(
-                threading.Thread(
-                    target=run_builder_actor,
-                    args=args,
-                    name=f"BuilderActor-{builder_id}",
+            for builder_id in range(learner_config.num_builder_actors):
+                actor = BuilderActor(
+                    agent=learning_agent,
+                    learner=learner,
+                    rng_seed=len(actor_threads) + salt,
                 )
-            )
+                args = (actor, stop_signal)
+                actor_threads.append(
+                    threading.Thread(
+                        target=run_builder_actor,
+                        args=args,
+                        name=f"BuilderActor-{builder_id}",
+                    )
+                )
 
         logger.info(
             f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
@@ -234,10 +242,7 @@ def main(args: argparse.Namespace):
             actors = [
                 PlayerActor(
                     agent=learning_agent,
-                    env=SinglePlayerSyncEnvironment(
-                        f"train:p{player_id}g{game_id:02d}",
-                        generation=learner_config.generation,
-                    ),
+                    env=env_func(f"train:p{player_id}g{game_id:02d}"),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
                     rng_seed=len(actor_threads) + salt,
@@ -259,10 +264,7 @@ def main(args: argparse.Namespace):
         for eval_id in range(learner_config.num_eval_actors):
             actor = PlayerActor(
                 agent=eval_agent,
-                env=SinglePlayerSyncEnvironment(
-                    f"eval-heuristic:{eval_id:04d}",
-                    generation=learner_config.generation,
-                ),
+                env=env_func(f"eval-heuristic:{eval_id:04d}"),
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
                 rng_seed=len(actor_threads) + salt,

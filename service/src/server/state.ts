@@ -343,7 +343,7 @@ export function packedSetFromArraySlice(packedSetSlice: number[]): string {
     return `${nickname}|${species}|${item}|${ability}|${moves.join(",")}|${nature}|${evs.join(",")}|${gender}|${ivs}|${shiny}|${level}|${happiness},${hiddenpowertype},${pokeball},${gigantamax},${dynamaxlevel},${teratype}`;
 }
 
-export function generateTeamFromArray(packedTeam: number[]): string | null {
+export function generateTeamFromArray(packedTeam: number[]): string {
     const generatedSets: string[] = [];
     for (let i = 0; i < 6; i += 1) {
         const packedSetSlice = packedTeam.slice(

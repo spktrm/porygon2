@@ -37,7 +37,7 @@ class AdamWConfig:
 
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
-SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
+SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
 
 
 @chex.dataclass(frozen=True)
@@ -113,7 +113,7 @@ class Porygon2LearnerConfig:
 
     # Smogon Generation
     generation: GenT = 9
-    smogon_format: SmogonFormatT = "ou"
+    smogon_format: SmogonFormatT = "randombattle"
 
 
 def get_learner_config():
