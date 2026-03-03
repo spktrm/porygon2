@@ -302,8 +302,7 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
     net.from_nx(G)
 
     # Customize appearance
-    net.set_options(
-        """
+    net.set_options("""
     var options = {
         "nodes": {
             "font": {"size": 72},
@@ -322,8 +321,7 @@ def cosine_matrix_to_pyvis(cosine_matrix, labels=None, threshold=0.5):
             "minVelocity": 0.75
         }
     }
-    """
-    )
+    """)
 
     return net
 
