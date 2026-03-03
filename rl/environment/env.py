@@ -59,7 +59,7 @@ class SinglePlayerSyncEnvironment:
         self.last_state = process_state(environment_response.state)
         return self.last_state
 
-    def reset(self, packed_team: list[int]):
+    def reset(self, packed_team: list[int] = None):
         self.rqid = None
         reset_message = ClientRequest(
             reset=ResetRequest(

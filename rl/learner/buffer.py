@@ -112,7 +112,9 @@ class PlayerTrajectoryStore:
     become eligible for replacement.
     """
 
-    def __init__(self, max_size: int = 1000, max_reuses: int = 5):
+    def __init__(
+        self, max_size: int = 1000, max_reuses: int = 5, need_tracking: bool = False
+    ):
         self._trajectories: dict[int, Trajectory] = {}
         self._reuses = np.zeros(max_size, dtype=int)
         self._valid = np.zeros(max_size, dtype=bool)
@@ -126,11 +128,13 @@ class PlayerTrajectoryStore:
         self._progress = tqdm(desc="player_producer", smoothing=0.1)
 
         # Tracking
-        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
-        self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
-        self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
-        self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
-        self._tau = 1e-3
+        self.need_tracking = need_tracking
+        if need_tracking:
+            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+            self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
+            self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
+            self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
+            self._tau = 1e-3
 
     def is_full(self, limit: int = None) -> bool:
         """Returns True if the store has reached its maximum capacity."""
@@ -194,7 +198,8 @@ class PlayerTrajectoryStore:
 
     def add(self, traj: Trajectory):
         """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
-        self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
+        if self.need_tracking:
+            self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)

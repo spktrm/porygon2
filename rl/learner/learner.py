@@ -482,15 +482,10 @@ def train_step(
             ),
         )
 
+    training_logs = {}
+
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
-
-    builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
-    (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
-        builder_state.params
-    )
-
-    training_logs = {}
     training_logs.update(player_logs)
     training_logs.update(
         dict(
@@ -501,19 +496,6 @@ def train_step(
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )
     )
-    training_logs.update(builder_logs)
-    training_logs.update(
-        dict(
-            builder_loss=builder_loss_val,
-            builder_inital_entropy=jnp.mean(ent_returns[0])
-            * config.normalising_constant,
-            builder_param_norm=optax.global_norm(builder_state.params),
-            builder_gradient_norm=optax.global_norm(builder_grads),
-            builder_norm_adv_mean=average(builder_advantages, builder_valid),
-            builder_norm_adv_std=builder_advantages.std(where=builder_valid),
-        )
-    )
-
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         # Update target params and adv mean/std.
@@ -524,15 +506,34 @@ def train_step(
         frame_count=player_state.frame_count + player_valid.sum(),
     )
 
-    builder_state = builder_state.apply_gradients(grads=builder_grads)
-    builder_state = builder_state.replace(
-        # Update target params.
-        target_params=optax.incremental_update(
-            builder_state.params, builder_state.target_params, config.builder_ema_decay
-        ),
-        step_count=builder_state.step_count + 1,
-        frame_count=builder_state.frame_count + builder_valid.sum(),
-    )
+    if config.smogon_format != "randombattle":
+        builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
+        (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
+            builder_state.params
+        )
+        training_logs.update(builder_logs)
+        training_logs.update(
+            dict(
+                builder_loss=builder_loss_val,
+                builder_inital_entropy=jnp.mean(ent_returns[0])
+                * config.normalising_constant,
+                builder_param_norm=optax.global_norm(builder_state.params),
+                builder_gradient_norm=optax.global_norm(builder_grads),
+                builder_norm_adv_mean=average(builder_advantages, builder_valid),
+                builder_norm_adv_std=builder_advantages.std(where=builder_valid),
+            )
+        )
+        builder_state = builder_state.apply_gradients(grads=builder_grads)
+        builder_state = builder_state.replace(
+            # Update target params.
+            target_params=optax.incremental_update(
+                builder_state.params,
+                builder_state.target_params,
+                config.builder_ema_decay,
+            ),
+            step_count=builder_state.step_count + 1,
+            frame_count=builder_state.frame_count + builder_valid.sum(),
+        )
 
     training_logs.update(collect_batch_telemetry_data(batch, config))
     training_logs.update(
@@ -607,6 +608,7 @@ class Learner:
         self.player_replay = PlayerTrajectoryStore(
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
+            need_tracking=self.config.smogon_format != "randombattle",
         )
 
         # Threading
@@ -775,7 +777,10 @@ class Learner:
         # Console Progress
         self.train_progress.update(1)
 
-        if step % self.config.save_interval_steps == 0:
+        if (
+            self.config.smogon_format != "randombattle"
+            and step % self.config.save_interval_steps == 0
+        ):
             logs.update(self._get_usage_counts())
 
         if step % self.config.league_winrate_log_steps == 0:
