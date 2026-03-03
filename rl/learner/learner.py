@@ -148,7 +148,7 @@ def power_schedule(
     coef: float, step: int, decay: float, floor: float, ceil: float
 ) -> jax.Array:
     x = coef / ((step + 1) ** decay)
-    return jnp.clip(x, floor, ceil)
+    return jnp.clip(x, min=floor, max=ceil)
 
 
 def train_step(
@@ -179,6 +179,8 @@ def train_step(
     player_actor_value_head = player_transitions.agent_output.actor_output.value_head
     player_actor_log_prob = player_actor_action_head.log_prob
 
+    float_dtype = player_actor_log_prob.dtype
+
     builder_actor_conditional_entropy_head = (
         builder_transitions.agent_output.actor_output.conditional_entropy_head
     )
@@ -198,35 +200,33 @@ def train_step(
             axis=0,
         )
     )
-    cat_reward = jnp.concatenate(
-        (
-            jnp.zeros_like(builder_actor_value_head.log_probs),
-            player_transitions.env_output.win_reward.astype(value_probs.dtype),
-        )
+
+    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
+    player_reward = player_transitions.env_output.win_reward.astype(float_dtype)
+    final_reward = player_reward[-1]
+    builder_reward = (
+        jax.nn.one_hot(
+            builder_valid.sum(axis=0), builder_valid.shape[0], axis=0, dtype=float_dtype
+        )[..., None]
+        * final_reward
     )
+    cat_reward = jnp.concatenate((builder_reward, player_reward))
     value_target = (
         cat_reward
         + jnp.concatenate((value_probs[1:], value_probs[-1:])) * valid[..., None]
     )
-    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=value_probs.dtype)
 
     cat_value_delta = value_target - value_probs
     scalar_value_delta = cat_value_delta @ cat_vf_support
 
-    builder_td_lambdas = config.builder_td_lambda * jnp.ones_like(
-        builder_valid, dtype=cat_value_delta.dtype
-    )
-    player_td_lambdas = config.player_td_lambda * player_valid.astype(
-        cat_value_delta.dtype
-    )
+    builder_td_lambdas = (config.builder_td_lambda * builder_valid).astype(float_dtype)
+    player_td_lambdas = (config.player_td_lambda * player_valid).astype(float_dtype)
     td_lambdas = jnp.concatenate((builder_td_lambdas, player_td_lambdas))
 
-    builder_gae_lambdas = config.builder_gae_lambda * jnp.ones_like(
-        builder_valid, dtype=cat_value_delta.dtype
+    builder_gae_lambdas = (config.builder_gae_lambda * builder_valid).astype(
+        float_dtype
     )
-    player_gae_lambdas = config.player_gae_lambda * player_valid.astype(
-        cat_value_delta.dtype
-    )
+    player_gae_lambdas = (config.player_gae_lambda * player_valid).astype(float_dtype)
     gae_lambdas = jnp.concatenate((builder_gae_lambdas, player_gae_lambdas))
 
     num_builder = builder_valid.shape[0]

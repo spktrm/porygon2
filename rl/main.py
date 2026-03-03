@@ -1,5 +1,3 @@
-import os
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,6 +5,7 @@ import argparse
 import concurrent.futures
 import json
 import logging
+import os
 import threading
 import time
 
