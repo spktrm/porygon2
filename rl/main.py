@@ -175,7 +175,10 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state, mode="params"
+        learner_config,
+        player_state,
+        builder_state,
+        # mode="params",
     )
 
     logger.info("Initializing WandB...")

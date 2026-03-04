@@ -587,46 +587,43 @@ class Encoder(nn.Module):
             [
                 _encode_one_hot_private_entity(
                     private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__NATURE,
-                ),
-                _encode_one_hot_private_entity(
-                    private,
                     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE,
                 ),
             ],
             dtype=self.cfg.dtype,
         )
 
-        ev_features = private[
+        stat_features = private[
             np.array(
                 [
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_HP,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_ATK,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_DEF,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPA,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPD,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPE,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT,
                 ]
             )
-        ]
-        iv_features = private[
-            np.array(
-                [
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_HP,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_ATK,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_DEF,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPA,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPD,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPE,
-                ]
-            )
-        ]
+        ].astype(self.cfg.dtype)
+        stat_norm = jnp.linalg.norm(stat_features) + 1e-6
+        stat_mean = jnp.mean(stat_features)
+        stat_std = jnp.std(stat_features)
+        hp, atk, def_, spa, spd, spe = jnp.split(stat_features, 6)
 
         private_encoding = jnp.concatenate(
             [
                 boolean_code,
-                (ev_features / 255).astype(self.cfg.dtype),
-                (iv_features / 31).astype(self.cfg.dtype),
+                stat_features / stat_norm,
+                (stat_features - stat_mean) / (stat_std + 1e-6),
+                # log1p(200) is approximately 5.3, which scales the log features to a reasonable range given the max stats in Pokemon.
+                jnp.log1p(stat_features[1:]) - 5.3,
+                atk / (atk + spa + 1e-6),
+                spa / (atk + spa + 1e-6),
+                (hp * def_) / (hp * (def_ + spd) + 1e-6),
+                (hp * spd) / (hp * (def_ + spd) + 1e-6),
+                spe / (hp + def_ + spe + 1e-6),
+                # log1p(364) is approximately 5.9, which scales the log features to a reasonable range given the max stats in Pokemon.
+                jnp.log1p(stat_features[:1]) - 5.9,
             ],
             axis=-1,
         )

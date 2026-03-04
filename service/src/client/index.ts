@@ -18,7 +18,8 @@ const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://sim3.psim.us/showdown/websocket";
 // const server = "wss://pokeagentshowdown.com/showdown/websocket";
 const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
-const smogonFormat = "gen9ou";
+// const smogonFormat = "gen9ou";
+const smogonFormat = "gen9randombattle";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -152,6 +153,7 @@ class Battle {
         conn: Connection,
         username: string,
         team?: string,
+        smogonFormat?: string,
     ) {
         this.battleId = roomId;
         this.conn = conn;
@@ -163,7 +165,7 @@ class Battle {
         this.conn.send(`${this.battleId}|/timer on`);
         // this.ws.send(`${this.battleId}|${welcomeMessage}`);
         const unpackedTeam = team === undefined ? team : Teams.unpack(team);
-        if (!unpackedTeam) {
+        if (smogonFormat?.endsWith("randombattle") && !unpackedTeam) {
             throw new Error("Invalid team provided");
         }
         this.stream = new ClientStream();
@@ -172,7 +174,7 @@ class Battle {
             this.stream,
             {},
             false,
-            unpackedTeam,
+            unpackedTeam ?? [],
         );
         this.player.choose = (choice: string) => {
             this.conn.send(
@@ -264,6 +266,7 @@ class User {
     private teams: string[];
     private searchUpdated: boolean;
     private numBattles: number;
+    private currentFormat?: string;
 
     constructor(private readonly connection: Connection) {
         this.searchState = undefined;
@@ -271,6 +274,7 @@ class User {
         this.teams = [];
         this.searchUpdated = false;
         this.numBattles = 0;
+        this.currentFormat = undefined;
     }
 
     get isLoggedIn(): boolean {
@@ -284,6 +288,7 @@ class User {
             this.connection,
             this.username!,
             team,
+            this.currentFormat,
         );
         this.battles.addBattle(roomId, battle);
         battle.start().then(() => {
@@ -388,6 +393,7 @@ class User {
             }
         }
         await this.send(`|/search ${format}`);
+        this.currentFormat = format;
     }
 
     async updateSearch(
