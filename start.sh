@@ -1,6 +1,9 @@
 #!/bin/bash
 SESSION=train
 
+# Safely capture all script arguments, preserving spaces and quotes
+ARGS=$(printf "%q " "$@")
+
 cd service
 cd ../
 
@@ -24,6 +27,7 @@ tmux send-keys  -t "$SESSION":service.0 "npm run start" C-m
 tmux split-window -h -t "$SESSION":service.0
 tmux select-pane -t "$SESSION":service.1 -T "rl"
 tmux send-keys  -t "$SESSION":service.1 "source env/bin/activate" C-m
-tmux send-keys  -t "$SESSION":service.1 "python rl/main.py" C-m
+# Inject the captured arguments at the end of the python command
+tmux send-keys  -t "$SESSION":service.1 "python rl/main.py $ARGS" C-m
 
 tmux attach -t "$SESSION"
