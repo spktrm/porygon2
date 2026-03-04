@@ -33,13 +33,13 @@ def run_training_actor_pair(
     player: PlayerActor,
     opponent: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
-    stop_signal: list[bool],
+    stop_event: threading.Event,
 ):
     """Runs an actor to produce trajectories"""
 
     worker_id = threading.current_thread().name
 
-    while not stop_signal[0]:
+    while not stop_event.is_set():
         try:
             player_params = player.pull_main_player()
             opponent_params, is_trainable = player.get_match()
@@ -73,7 +73,7 @@ def run_training_actor_pair(
 def run_eval_heuristic(
     actor: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
-    stop_signal: list[bool],
+    stop_event: threading.Event,
     wandb_run: wandb.wandb_run.Run,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
@@ -83,7 +83,7 @@ def run_eval_heuristic(
 
     session_id = actor._env.username
 
-    while not stop_signal[0]:
+    while not stop_event.is_set():
         try:
             new_step_count = np.array(learner.player_state.step_count).item()
             if new_step_count > step_count:
@@ -109,8 +109,8 @@ def run_eval_heuristic(
         time.sleep(5)
 
 
-def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
-    while not stop_signal[0]:
+def run_builder_actor(actor: BuilderActor, stop_event: threading.Event):
+    while not stop_event.is_set():
         try:
             param_container = actor.pull_main_player()
             new_key = actor.split_rng()
@@ -150,7 +150,7 @@ def main(args: argparse.Namespace):
     actor_builder_network = get_builder_model(actor_builder_model_config)
 
     actor_threads: list[threading.Thread] = []
-    stop_signal = [False]
+    stop_event = threading.Event()
 
     player_state, builder_state = create_train_state(
         learner_player_network,
@@ -214,6 +214,9 @@ def main(args: argparse.Namespace):
         smogon_format=learner_config.smogon_format,
     )
 
+    def _make_thread(target, *thread_args, name: str) -> threading.Thread:
+        return threading.Thread(target=target, args=thread_args, name=name)
+
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=(
             learner_config.num_player_actors + learner_config.num_eval_actors
@@ -229,11 +232,11 @@ def main(args: argparse.Namespace):
                     learner=learner,
                     rng_seed=len(actor_threads) + salt,
                 )
-                args = (actor, stop_signal)
                 actor_threads.append(
-                    threading.Thread(
-                        target=run_builder_actor,
-                        args=args,
+                    _make_thread(
+                        run_builder_actor,
+                        actor,
+                        stop_event,
                         name=f"BuilderActor-{builder_id}",
                     )
                 )
@@ -252,11 +255,12 @@ def main(args: argparse.Namespace):
                 )
                 for player_id in range(2)
             ]
-            args = (*actors, executor, stop_signal)
             actor_threads.append(
-                threading.Thread(
-                    target=run_training_actor_pair,
-                    args=args,
+                _make_thread(
+                    run_training_actor_pair,
+                    *actors,
+                    executor,
+                    stop_event,
                     name=f"Selfplay-{game_id}",
                 )
             )
@@ -272,14 +276,18 @@ def main(args: argparse.Namespace):
                 learner=learner,
                 rng_seed=len(actor_threads) + salt,
             )
-            args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
-                threading.Thread(
-                    target=run_eval_heuristic, args=args, name=f"EvalActor-{eval_id}"
+                _make_thread(
+                    run_eval_heuristic,
+                    actor,
+                    executor,
+                    stop_event,
+                    wandb_run,
+                    name=f"EvalActor-{eval_id}",
                 )
             )
 
-        # Start the actors and learner.
+        # Start all actor threads.
         for t in actor_threads:
             t.start()
 
@@ -288,7 +296,7 @@ def main(args: argparse.Namespace):
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received. Shutting down gracefully...")
         finally:
-            stop_signal[0] = True
+            stop_event.set()
             for t in actor_threads:
                 t.join(timeout=30)
             try:
