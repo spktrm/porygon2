@@ -213,7 +213,7 @@ def main(args: argparse.Namespace):
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=(
-            learner_config.num_player_actors // 2 + learner_config.num_eval_actors
+            learner_config.num_player_actors + learner_config.num_eval_actors
         )
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
