@@ -882,7 +882,8 @@ function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
 
 function getArrayFromPrivatePokemon(
     candidate: Pokemon | null | undefined,
-    pokemonSet: PokemonSet,
+    // pokemonSet: PokemonSet,
+    pokemonSet: Protocol.Request.Pokemon,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
@@ -935,38 +936,20 @@ function getArrayFromPrivatePokemon(
             ? IndexValueFromEnum(MovesEnum, moveset[3])
             : MovesEnum.MOVES_ENUM___NULL;
 
-    const evs = pokemonSet.evs ?? {};
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_HP] =
-        evs.hp ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_ATK] =
-        evs.atk ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_DEF] =
-        evs.def ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPA] =
-        evs.spa ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPD] =
-        evs.spd ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPE] =
-        evs.spe ?? 0;
+    const stats = pokemonSet.stats ?? {};
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT] =
+        pokemonSet.maxhp;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT] =
+        stats.atk ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT] =
+        stats.def ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT] =
+        stats.spa ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT] =
+        stats.spd ?? 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT] =
+        stats.spe ?? 0;
 
-    const ivs = pokemonSet.ivs ?? {};
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_HP] =
-        ivs.hp ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_ATK] =
-        ivs.atk ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_DEF] =
-        ivs.def ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPA] =
-        ivs.spa ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPD] =
-        ivs.spd ?? 0;
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPE] =
-        ivs.spe ?? 0;
-
-    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__NATURE] =
-        pokemonSet.nature
-            ? IndexValueFromEnum(NaturesEnum, pokemonSet.nature)
-            : NaturesEnum.NATURES_ENUM__SERIOUS;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE] =
         pokemonSet.teraType
             ? IndexValueFromEnum(TypechartEnum, pokemonSet.teraType)
@@ -3784,14 +3767,7 @@ export class StateHandler {
             }
             for (const member of privateOrder) {
                 const name = toID(member.speciesForme);
-                const matchedSet = this.player.sets?.find((set) => {
-                    const setSpecies = toID(set.species);
-                    return (
-                        setSpecies === name ||
-                        setSpecies.includes(name) ||
-                        name.includes(setSpecies)
-                    );
-                });
+
                 const matchedTeamMate = this.player.privateBattle.sides[
                     playerIndex
                 ].team.find((teamMate) => {
@@ -3804,12 +3780,8 @@ export class StateHandler {
                         name.includes(setSpecies)
                     );
                 });
-                if (matchedSet === undefined) {
-                    throw new Error(`Pokemon ${name} not found in team`);
-                }
-
                 buffer.set(
-                    getArrayFromPrivatePokemon(matchedTeamMate, matchedSet),
+                    getArrayFromPrivatePokemon(matchedTeamMate, member),
                     offset,
                 );
                 offset += numPrivateEntityNodeFeatures;
