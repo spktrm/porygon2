@@ -115,6 +115,9 @@ class Porygon2LearnerConfig:
     generation: GenT = 9
     smogon_format: SmogonFormatT = "randombattle"
 
+    # Logging params
+    log_artifacts_online: bool = False
+
 
 def get_learner_config():
     return Porygon2LearnerConfig()
@@ -238,7 +241,9 @@ def save_train_state(
     save_path = save_train_state_locally(
         learner_config, player_state, builder_state, league
     )
-    if player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0:
+    if learner_config.log_artifacts_online and (
+        player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
+    ):
         wandb_run.log_artifact(
             artifact_or_path=save_path,
             name=f"latest-gen{learner_config.generation}",

@@ -178,7 +178,7 @@ export class WorkerHandler {
             p1Name: userName,
             p1team: teamString,
             p2Name: `baseline-${userName}`,
-            p2team: randomSampleTeam(smogonFormat),
+            p2team: this.generateTeam(undefined, smogonFormat),
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);

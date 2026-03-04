@@ -238,25 +238,25 @@ def main(args: argparse.Namespace):
         logger.info(
             f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
         )
-        for game_id in range(learner_config.num_player_actors // 2):
-            actors = [
-                PlayerActor(
-                    agent=learning_agent,
-                    env=env_func(f"train:p{player_id}g{game_id:02d}"),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
-                    rng_seed=len(actor_threads) + salt,
-                )
-                for player_id in range(2)
-            ]
-            args = (*actors, executor, stop_signal)
-            actor_threads.append(
-                threading.Thread(
-                    target=run_training_actor_pair,
-                    args=args,
-                    name=f"Selfplay-{game_id}",
-                )
-            )
+        # for game_id in range(learner_config.num_player_actors // 2):
+        #     actors = [
+        #         PlayerActor(
+        #             agent=learning_agent,
+        #             env=env_func(f"train:p{player_id}g{game_id:02d}"),
+        #             unroll_length=learner_config.unroll_length,
+        #             learner=learner,
+        #             rng_seed=len(actor_threads) + salt,
+        #         )
+        #         for player_id in range(2)
+        #     ]
+        #     args = (*actors, executor, stop_signal)
+        #     actor_threads.append(
+        #         threading.Thread(
+        #             target=run_training_actor_pair,
+        #             args=args,
+        #             name=f"Selfplay-{game_id}",
+        #         )
+        #     )
 
         logger.info(
             f"Initializing {learner_config.num_eval_actors} evaluation actors..."
