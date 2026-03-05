@@ -2,11 +2,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import argparse
-import concurrent.futures
 import functools
 import json
 import logging
 import os
+import queue
 import threading
 import time
 
@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 def run_training_actor_pair(
     player: PlayerActor,
     opponent: PlayerActor,
-    executor: concurrent.futures.ThreadPoolExecutor,
     stop_event: threading.Event,
 ):
     """Runs an actor to produce trajectories"""
@@ -51,15 +50,23 @@ def run_training_actor_pair(
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
 
-            # Grab the result from either self play or playing historical opponents
-            future1 = executor.submit(player.unroll_and_push, player_params)
+            # Run the opponent in a background thread; run the player in this thread.
+            # Both sides of the game must be active concurrently.
+            opp_exc: queue.Queue[Exception] = queue.Queue()
 
-            # Will only push if is_trainable is True
-            future2 = executor.submit(
-                opponent.unroll_and_push, opponent_params, is_trainable
-            )
-            trajectory = future1.result()
-            future2.result()
+            def run_opponent():
+                try:
+                    opponent.unroll_and_push(opponent_params, is_trainable)
+                except Exception as exc:
+                    opp_exc.put(exc)
+
+            opp_thread = threading.Thread(target=run_opponent, daemon=True)
+            opp_thread.start()
+            trajectory = player.unroll_and_push(player_params)
+            opp_thread.join()
+
+            if not opp_exc.empty():
+                raise opp_exc.get()
 
             if not is_trainable:
                 player.update_player_league_stats(
@@ -72,7 +79,6 @@ def run_training_actor_pair(
 
 def run_eval_heuristic(
     actor: PlayerActor,
-    executor: concurrent.futures.ThreadPoolExecutor,
     stop_event: threading.Event,
     wandb_run: wandb.wandb_run.Run,
 ):
@@ -91,8 +97,7 @@ def run_eval_heuristic(
 
                 player = actor.pull_main_player()
 
-                future1 = executor.submit(actor.unroll_and_push, player)
-                eval_trajectory = future1.result()
+                eval_trajectory = actor.unroll_and_push(player)
 
                 payoff = (
                     eval_trajectory.player_transitions.env_output.win_reward[-1]
@@ -217,94 +222,87 @@ def main(args: argparse.Namespace):
     def _make_thread(target, *thread_args, name: str) -> threading.Thread:
         return threading.Thread(target=target, args=thread_args, name=name)
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(
-            learner_config.num_player_actors + learner_config.num_eval_actors
-        )
-    ) as executor:
-        if "randombattle" not in learner_config.smogon_format:
-            logger.info(
-                f"Initializing {learner_config.num_builder_actors} builder actors..."
-            )
-            for builder_id in range(learner_config.num_builder_actors):
-                actor = BuilderActor(
-                    agent=learning_agent,
-                    learner=learner,
-                    rng_seed=len(actor_threads) + salt,
-                )
-                actor_threads.append(
-                    _make_thread(
-                        run_builder_actor,
-                        actor,
-                        stop_event,
-                        name=f"BuilderActor-{builder_id}",
-                    )
-                )
-
+    if "randombattle" not in learner_config.smogon_format:
         logger.info(
-            f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
+            f"Initializing {learner_config.num_builder_actors} builder actors..."
         )
-        for game_id in range(learner_config.num_player_actors // 2):
-            actors = [
-                PlayerActor(
-                    agent=learning_agent,
-                    env=env_func(f"train:p{player_id}g{game_id:02d}"),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
-                    rng_seed=len(actor_threads) + salt,
-                )
-                for player_id in range(2)
-            ]
-            actor_threads.append(
-                _make_thread(
-                    run_training_actor_pair,
-                    *actors,
-                    executor,
-                    stop_event,
-                    name=f"Selfplay-{game_id}",
-                )
-            )
-
-        logger.info(
-            f"Initializing {learner_config.num_eval_actors} evaluation actors..."
-        )
-        for eval_id in range(learner_config.num_eval_actors):
-            actor = PlayerActor(
-                agent=eval_agent,
-                env=env_func(f"eval-heuristic:{eval_id:04d}"),
-                unroll_length=learner_config.unroll_length,
+        for builder_id in range(learner_config.num_builder_actors):
+            actor = BuilderActor(
+                agent=learning_agent,
                 learner=learner,
                 rng_seed=len(actor_threads) + salt,
             )
             actor_threads.append(
                 _make_thread(
-                    run_eval_heuristic,
+                    run_builder_actor,
                     actor,
-                    executor,
                     stop_event,
-                    wandb_run,
-                    name=f"EvalActor-{eval_id}",
+                    name=f"BuilderActor-{builder_id}",
                 )
             )
 
-        # Start all actor threads.
-        for t in actor_threads:
-            t.start()
+    logger.info(
+        f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
+    )
+    for game_id in range(learner_config.num_player_actors // 2):
+        actors = [
+            PlayerActor(
+                agent=learning_agent,
+                env=env_func(f"train:p{player_id}g{game_id:02d}"),
+                unroll_length=learner_config.unroll_length,
+                learner=learner,
+                rng_seed=len(actor_threads) + salt,
+            )
+            for player_id in range(2)
+        ]
+        actor_threads.append(
+            _make_thread(
+                run_training_actor_pair,
+                *actors,
+                stop_event,
+                name=f"Selfplay-{game_id}",
+            )
+        )
 
+    logger.info(
+        f"Initializing {learner_config.num_eval_actors} evaluation actors..."
+    )
+    for eval_id in range(learner_config.num_eval_actors):
+        actor = PlayerActor(
+            agent=eval_agent,
+            env=env_func(f"eval-heuristic:{eval_id:04d}"),
+            unroll_length=learner_config.unroll_length,
+            learner=learner,
+            rng_seed=len(actor_threads) + salt,
+        )
+        actor_threads.append(
+            _make_thread(
+                run_eval_heuristic,
+                actor,
+                stop_event,
+                wandb_run,
+                name=f"EvalActor-{eval_id}",
+            )
+        )
+
+    # Start all actor threads.
+    for t in actor_threads:
+        t.start()
+
+    try:
+        learner.train()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received. Shutting down gracefully...")
+    finally:
+        stop_event.set()
+        for t in actor_threads:
+            t.join(timeout=30)
         try:
-            learner.train()
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received. Shutting down gracefully...")
-        finally:
-            stop_event.set()
-            for t in actor_threads:
-                t.join(timeout=30)
-            try:
-                wandb_run.finish()
-            except Exception:
-                logger.warning(
-                    "wandb_run.finish() failed during shutdown", exc_info=True
-                )
+            wandb_run.finish()
+        except Exception:
+            logger.warning(
+                "wandb_run.finish() failed during shutdown", exc_info=True
+            )
 
     logger.info("Training run complete.")
 
