@@ -320,12 +320,15 @@ def train_step(
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )
     )
-    player_state = player_state.apply_gradients(grads=player_grads)
+    if not config.freeze_player:
+        player_state = player_state.apply_gradients(grads=player_grads)
+        player_state = player_state.replace(
+            # Update target params and adv mean/std.
+            target_params=optax.incremental_update(
+                player_state.params, player_state.target_params, config.player_ema_decay
+            ),
+        )
     player_state = player_state.replace(
-        # Update target params and adv mean/std.
-        target_params=optax.incremental_update(
-            player_state.params, player_state.target_params, config.player_ema_decay
-        ),
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
     )

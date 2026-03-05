@@ -115,6 +115,12 @@ class Porygon2LearnerConfig:
     generation: GenT = 9
     smogon_format: SmogonFormatT = "randombattle"
 
+    # Finetuning params
+    # When True, the player parameters and optimizer state are frozen during training.
+    # Use this when finetuning the builder for a specific format (e.g. gen9ou) after
+    # pre-training the player on gen9randombattle, so the player policy is preserved.
+    freeze_player: bool = False
+
     # Logging params
     log_artifacts_online: bool = False
 
@@ -335,6 +341,44 @@ def load_from_scratch(
     return player_state, builder_state, league
 
 
+def load_player_params_for_finetune(
+    ckpt_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_state: Porygon2PlayerTrainState,
+    builder_state: Porygon2BuilderTrainState,
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+    """
+    Transfer learning: loads player params from an existing checkpoint while keeping
+    the builder state freshly initialized.
+
+    Use this when finetuning a format-specific builder (e.g. gen9ou) after pre-training
+    the player on gen9randombattle.  The player optimizer state and step/frame counts are
+    reset so training starts fresh for the new format, while the learned player policy is
+    preserved.  The builder starts from its randomly-initialized state so it can learn
+    format-specific team building without carrying over stale randombattle builder weights.
+    """
+    print(f"Loading player params for finetuning from {ckpt_path}")
+    with open(ckpt_path, "rb") as f:
+        ckpt_data = pickle.load(f)
+
+    ckpt_player_state = ckpt_data.get("player_state")
+    if ckpt_player_state is None:
+        raise ValueError(f"Checkpoint at {ckpt_path} contains no player_state.")
+
+    # Load player params and sync target_params; optimizer state and counts are kept
+    # from the freshly initialized player_state (i.e. reset for the new training run).
+    player_state = player_state.replace(
+        params=ckpt_player_state["params"],
+        target_params=ckpt_player_state["params"],
+    )
+
+    # Builder state is intentionally left as freshly initialized.
+    # Initialize a fresh league for the new format.
+    league = _init_league(learner_config, player_state, builder_state)
+
+    return player_state, builder_state, league
+
+
 def load_from_checkpoint(
     ckpt_path: str,
     learner_config: Porygon2LearnerConfig,
@@ -438,8 +482,30 @@ def load_train_state(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-    mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
+    mode: Literal["scratch", "checkpoint", "params", "finetune"] = "checkpoint",
+    player_ckpt_path: str | None = None,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+    """Load or initialize training state.
+
+    Args:
+        learner_config: Learner configuration.
+        player_state: Freshly initialized player train state.
+        builder_state: Freshly initialized builder train state.
+        mode: How to initialize state:
+            ``"scratch"``      – start from random init, ignore any checkpoint.
+            ``"checkpoint"``   – full restoration from the latest checkpoint
+                                 (params, opt_state, step counts, league).
+            ``"params"``       – load params only from the latest checkpoint;
+                                 optimizer state and counts are reset.
+            ``"finetune"``     – load *player* params only from a checkpoint
+                                 (latest in current gen dir, or ``player_ckpt_path``),
+                                 leaving the builder freshly initialized.  Use this
+                                 when switching from randombattle pre-training to a
+                                 format-specific builder fine-tune (e.g. gen9ou).
+        player_ckpt_path: Explicit path to a checkpoint used as the player-param
+            source in ``"finetune"`` mode.  When omitted the latest checkpoint in
+            the current generation's checkpoint directory is used.
+    """
 
     latest_ckpt = _get_checkpoint_path(learner_config)
 
@@ -447,18 +513,32 @@ def load_train_state(
     if mode == "scratch":
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 2. No checkpoint found -> Fallback to Scratch
+    # 2. Finetune: load player params only, keep builder fresh
+    if mode == "finetune":
+        source_ckpt = player_ckpt_path or latest_ckpt
+        if not source_ckpt:
+            raise FileNotFoundError(
+                "No checkpoint found for 'finetune' mode. "
+                "Provide an explicit player_ckpt_path or ensure a checkpoint exists in "
+                f"./ckpts/gen{learner_config.generation}/. "
+                "Falling back to scratch would discard the pre-trained player policy."
+            )
+        return load_player_params_for_finetune(
+            source_ckpt, learner_config, player_state, builder_state
+        )
+
+    # 3. No checkpoint found -> Fallback to Scratch
     if not latest_ckpt:
         print("No checkpoint found. Defaulting to scratch.")
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 3. Load Params Only
+    # 4. Load Params Only
     if mode == "params":
         return load_from_params(
             latest_ckpt, learner_config, player_state, builder_state
         )
 
-    # 4. Standard Checkpoint Load (Default)
+    # 5. Standard Checkpoint Load (Default)
     return load_from_checkpoint(
         latest_ckpt, learner_config, player_state, builder_state
     )
