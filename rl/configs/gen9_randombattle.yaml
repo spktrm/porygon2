@@ -7,10 +7,128 @@
 # Usage:
 #   python -m rl.main --config rl/configs/gen9_randombattle.yaml
 
+# ---------------------------------------------------------------------------
+# Format
+# ---------------------------------------------------------------------------
 generation: 9
-smogon_format: randombattle
+smogon_format: randombattle   # ou | uu | ru | nu | pu | ubers | randombattle
 
-# Resume from the latest checkpoint in ./ckpts/gen9/ (or start from scratch if
-# none exists).
+# ---------------------------------------------------------------------------
+# Checkpoint loading
+# ---------------------------------------------------------------------------
+# How training state is initialized:
+#   scratch    - start from random init, ignore any checkpoint.
+#   checkpoint - full restoration (params, opt_state, step counts, league).
+#   params     - load params only; reset optimizer state and step counts.
+#   finetune   - load player params only; keep builder freshly initialized
+#                (see gen9_ou_finetune.yaml).
 load_mode: checkpoint
+# Explicit source checkpoint for "finetune" mode.  Leave empty to use the
+# latest checkpoint in ./ckpts/gen<generation>/.
+player_ckpt_path: ""
+# Freeze player params/optimizer during train_step.  Set true in Phase 2.
 freeze_player: false
+
+# ---------------------------------------------------------------------------
+# Training loop
+# ---------------------------------------------------------------------------
+num_steps: 5000000
+
+# ---------------------------------------------------------------------------
+# Actors
+# ---------------------------------------------------------------------------
+num_player_actors: 12
+num_builder_actors: 4   # unused for randombattle; no builder actors are spawned
+num_eval_actors: 2
+unroll_length: 128
+
+# ---------------------------------------------------------------------------
+# Replay buffer
+# ---------------------------------------------------------------------------
+player_replay_buffer_capacity: 6144   # 1024 * 6
+player_replay_ratio: 2
+builder_replay_buffer_capacity: 1024
+builder_replay_ratio: 5
+
+# ---------------------------------------------------------------------------
+# Self-play / league
+# ---------------------------------------------------------------------------
+save_interval_steps: 20000
+cloud_save_interval_steps: 100000
+league_winrate_log_steps: 1000
+add_player_min_frames: 2000000
+add_player_max_frames: 30000000
+minimum_historical_player_steps: 100000
+league_size: 16
+
+# ---------------------------------------------------------------------------
+# Batch
+# ---------------------------------------------------------------------------
+batch_size: 4
+
+# ---------------------------------------------------------------------------
+# Optimizer (AdamW)
+# ---------------------------------------------------------------------------
+adam:
+  b1: 0.9
+  b2: 0.999
+  eps: 1.0e-8
+  weight_decay: 0
+
+player_learning_rate: 5.0e-5
+builder_learning_rate: 5.0e-5
+player_clip_gradient: 1.0
+builder_clip_gradient: 1.0
+gradient_accumulation_steps: 8
+
+# ---------------------------------------------------------------------------
+# EMA target-network decay
+# ---------------------------------------------------------------------------
+player_ema_decay: 1.0e-3
+builder_ema_decay: 1.0e-3
+
+# ---------------------------------------------------------------------------
+# Advantage / return estimation
+# ---------------------------------------------------------------------------
+player_td_lambda: 0.8
+player_gae_lambda: 0.5
+builder_td_lambda: 1.0
+builder_gae_lambda: 1.0
+clip_ppo: 0.3
+
+# ---------------------------------------------------------------------------
+# Loss coefficients — player
+# ---------------------------------------------------------------------------
+player_policy_loss_coef: 1.0
+player_value_loss_coef: 1.0
+player_kl_loss_coef: 0.1
+player_entropy_coef: 1.0
+
+# ---------------------------------------------------------------------------
+# Loss coefficients — builder
+# ---------------------------------------------------------------------------
+builder_policy_loss_coef: 1.0
+builder_value_loss_coef: 0.5
+builder_kl_loss_coef: 0.1
+builder_entropy_pred_coef: 1.0
+builder_human_loss_coef: 0.1   # weight of human-team alignment loss
+
+# ---------------------------------------------------------------------------
+# Entropy temperature schedule  (coef / (step + 1)^decay, clipped to [floor, ceil])
+# ---------------------------------------------------------------------------
+normalising_constant: 100
+
+player_temp_coef: 0.5
+player_entropy_temp_decay: 0.3
+player_entropy_temp_ceil: 0.5
+player_entropy_temp_floor: 1.0e-3
+
+builder_temp_coef: 0.1
+builder_entropy_temp_decay: 0.25
+builder_entropy_temp_ceil: 1.0
+builder_entropy_temp_floor: 1.0e-3
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log_artifacts_online: false

@@ -43,7 +43,7 @@ SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig:
-    num_steps = 5_000_000
+    num_steps: int = 5_000_000
     num_player_actors: int = 12
     num_builder_actors: int = 4
     num_eval_actors: int = 2
@@ -166,6 +166,9 @@ def load_learner_config(path: str) -> "Porygon2LearnerConfig":
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
+    # Pop 'adam' before spreading **data so the nested dict isn't passed as a
+    # raw dict to Porygon2LearnerConfig (which expects an AdamWConfig instance).
+    # data is a local variable from yaml.safe_load so mutation is safe here.
     adam_data = data.pop("adam", None)
     adam_kwargs: dict = {}
     if adam_data is not None:
