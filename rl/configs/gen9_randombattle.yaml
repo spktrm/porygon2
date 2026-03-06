@@ -1,0 +1,16 @@
+# Phase 1 — Gen 9 Random Battle pre-training.
+#
+# The builder model is automatically disabled for the randombattle format so
+# only the player model trains here.  Run this phase first to learn a strong
+# general battle policy before finetuning on a specific teambuilding format.
+#
+# Usage:
+#   python -m rl.main --config rl/configs/gen9_randombattle.yaml
+
+generation: 9
+smogon_format: randombattle
+
+# Resume from the latest checkpoint in ./ckpts/gen9/ (or start from scratch if
+# none exists).
+load_mode: checkpoint
+freeze_player: false

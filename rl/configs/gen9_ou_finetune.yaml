@@ -1,0 +1,30 @@
+# Phase 2 — Gen 9 OU builder bootstrap (player frozen).
+#
+# Load the player weights from the randombattle pre-training checkpoint and
+# freeze them.  Only the builder model trains during this phase, learning
+# format-specific teambuilding without destabilising the battle policy.
+#
+# Steps:
+#   1. Finish Phase 1 (gen9_randombattle.yaml) so a checkpoint exists in
+#      ./ckpts/gen9/.
+#   2. Run this config to bootstrap the builder.
+#      The latest checkpoint in ./ckpts/gen9/ is used automatically for the
+#      player weights.  Set player_ckpt_path to an explicit path if needed.
+#
+# Usage:
+#   python -m rl.main --config rl/configs/gen9_ou_finetune.yaml
+
+generation: 9
+smogon_format: ou
+
+# Transfer player weights from the randombattle checkpoint; keep builder fresh.
+load_mode: finetune
+# Optional: supply an explicit checkpoint path.  Leave empty to use the latest
+# checkpoint found in ./ckpts/gen9/.
+player_ckpt_path: ""
+
+# Keep the pre-trained player policy frozen while the builder bootstraps.
+freeze_player: true
+
+# Builder-specific loss coefficient tuning for OU teambuilding.
+builder_human_loss_coef: 0.5

@@ -19,7 +19,12 @@ from rl.actor.agent import Agent
 from rl.actor.builder_actor import BuilderActor
 from rl.actor.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.learner.config import create_train_state, get_learner_config, load_train_state
+from rl.learner.config import (
+    create_train_state,
+    get_learner_config,
+    load_learner_config,
+    load_train_state,
+)
 from rl.learner.learner import CAT_VF_SUPPORT, Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -128,7 +133,10 @@ def main(args: argparse.Namespace):
 
     salt = int(time.time())
 
-    learner_config = get_learner_config()
+    if args.config:
+        learner_config = load_learner_config(args.config)
+    else:
+        learner_config = get_learner_config()
     logger.info(f"Learner Config: {learner_config}")
 
     learner_player_model_config = get_player_model_config(
@@ -178,7 +186,6 @@ def main(args: argparse.Namespace):
         learner_config,
         player_state,
         builder_state,
-        # mode="params",
     )
 
     logger.info("Initializing WandB...")
@@ -310,6 +317,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the RL learner.")
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug mode", default=False
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=(
+            "Path to a YAML learner config file (e.g. rl/configs/gen9_randombattle.yaml). "
+            "When omitted, all training hyperparameters use their built-in defaults."
+        ),
     )
     args = parser.parse_args()
     main(args)

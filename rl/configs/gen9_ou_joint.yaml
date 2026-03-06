@@ -1,0 +1,24 @@
+# Phase 3 — Gen 9 OU joint fine-tuning (both models train).
+#
+# After the builder has been bootstrapped via gen9_ou_finetune.yaml, unfreeze
+# the player and let both models improve together on OU battles.
+#
+# A lower player learning rate is recommended to avoid undoing the strong
+# randombattle policy while adapting to OU team compositions.
+#
+# Usage:
+#   python -m rl.main --config rl/configs/gen9_ou_joint.yaml
+
+generation: 9
+smogon_format: ou
+
+# Resume from the latest OU checkpoint (written during Phase 2).
+load_mode: checkpoint
+freeze_player: false
+
+# Lower player learning rate to preserve the pre-trained battle policy.
+player_learning_rate: 1.0e-5
+builder_learning_rate: 5.0e-5
+
+# Builder-specific loss coefficient tuning for OU teambuilding.
+builder_human_loss_coef: 0.5
