@@ -21,7 +21,6 @@ from rl.actor.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.learner.config import (
     create_train_state,
-    get_learner_config,
     load_learner_config,
     load_train_state,
 )
@@ -133,10 +132,7 @@ def main(args: argparse.Namespace):
 
     salt = int(time.time())
 
-    if args.config:
-        learner_config = load_learner_config(args.config)
-    else:
-        learner_config = get_learner_config()
+    learner_config = load_learner_config(args.config)
     logger.info(f"Learner Config: {learner_config}")
 
     learner_player_model_config = get_player_model_config(
@@ -321,11 +317,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help=(
-            "Path to a YAML learner config file (e.g. rl/configs/gen9_randombattle.yaml). "
-            "When omitted, all training hyperparameters use their built-in defaults."
-        ),
+        required=True,
+        help="Path to a YAML learner config file (e.g. rl/configs/gen9_randombattle.yaml).",
     )
     args = parser.parse_args()
     main(args)

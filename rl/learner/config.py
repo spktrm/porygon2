@@ -138,12 +138,6 @@ class Porygon2LearnerConfig:
     # Logging params
     log_artifacts_online: bool = False
 
-
-def get_learner_config() -> "Porygon2LearnerConfig":
-    """Return a config with all defaults (no YAML file required)."""
-    return Porygon2LearnerConfig()
-
-
 def load_learner_config(path: str) -> "Porygon2LearnerConfig":
     """Load a ``Porygon2LearnerConfig`` from a YAML file.
 
