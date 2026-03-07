@@ -48,11 +48,6 @@ class RegressionValueHeadOutput:
     logits: ArrayLike = ()
 
 
-@dataclass
-class DiscriminatorHeadOutput:
-    logits: ArrayLike = ()
-    log_probs: ArrayLike = ()
-
 
 @dataclass
 class CategoricalValueHeadOutput:
@@ -135,8 +130,8 @@ class BuilderActorInput:
 @dataclass
 class BuilderActorOutput:
     action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    discriminator_head: DiscriminatorHeadOutput = field(
-        default_factory=DiscriminatorHeadOutput
+    discriminator_head: PolicyHeadOutput = field(
+        default_factory=PolicyHeadOutput
     )
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput

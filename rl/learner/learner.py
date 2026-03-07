@@ -386,7 +386,7 @@ def train_step(
         z_id = builder_transitions.agent_output.actor_output.z_id
         num_skills = config.num_latent_skills
         disc_log_q_z = jnp.take_along_axis(
-            builder_actor_discriminator_head.log_probs,
+            builder_actor_discriminator_head.log_policy,
             z_id[..., None],
             axis=-1,
         ).squeeze(-1)
@@ -460,7 +460,7 @@ def train_step(
             # Discriminator cross-entropy loss: -log q(z|s)
             loss_discriminator = -average(
                 jnp.take_along_axis(
-                    discriminator_head.log_probs,
+                    discriminator_head.log_policy,
                     z_id[..., None],
                     axis=-1,
                 ).squeeze(-1),
