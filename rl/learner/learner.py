@@ -385,11 +385,7 @@ def train_step(
         # DIAYN discriminator reward
         z_id = builder_transitions.agent_output.actor_output.z_id
         num_skills = config.num_latent_skills
-        disc_log_q_z = jnp.take_along_axis(
-            builder_actor_discriminator_head.log_policy,
-            z_id[..., None],
-            axis=-1,
-        ).squeeze(-1)
+        disc_log_q_z = builder_actor_discriminator_head.log_prob
         diversity_reward = disc_log_q_z + jnp.log(num_skills)
 
         # Only activate diversity reward for states where the player won
@@ -459,11 +455,7 @@ def train_step(
 
             # Discriminator cross-entropy loss: -log q(z|s)
             loss_discriminator = -average(
-                jnp.take_along_axis(
-                    discriminator_head.log_policy,
-                    z_id[..., None],
-                    axis=-1,
-                ).squeeze(-1),
+                discriminator_head.log_prob,
                 builder_valid,
             )
 
