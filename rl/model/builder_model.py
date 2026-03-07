@@ -465,7 +465,8 @@ class Porygon2BuilderModel(nn.Module):
             move_keys,
         )
 
-        # Read z_id from environment input
+        # Read z_id from environment input; z_id is constant across all timesteps
+        # in an episode, so we take the first element to get the scalar value.
         z_id = actor_input.env.z_id[0]
 
         # Condition hidden states with z embedding
