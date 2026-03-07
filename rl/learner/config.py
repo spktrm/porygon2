@@ -99,17 +99,17 @@ class Porygon2LearnerConfig:
     builder_entropy_pred_coef: float = 1.0
     builder_human_loss_coef: float = 0.1
     ## Entropy
-    normalising_constant: int = 100
+    normalising_constant: int = 10
 
     player_temp_coef: float = 0.5
     player_entropy_temp_decay: float = 0.3
     player_entropy_temp_ceil: float = 0.5
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.1
-    builder_entropy_temp_decay: float = 0.25
+    builder_temp_coef: float = 0.3
+    builder_entropy_temp_decay: float = 0.15
     builder_entropy_temp_ceil: float = 1.0
-    builder_entropy_temp_floor: float = 1e-3
+    builder_entropy_temp_floor: float = 0.05
 
     # Smogon Generation
     generation: GenT = 9
