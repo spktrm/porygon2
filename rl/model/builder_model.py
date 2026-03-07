@@ -44,9 +44,9 @@ from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
     CategoricalValueLogitHead,
+    DiscriminatorLogitHead,
     HeadParams,
     PolicyQKHead,
-    RegressionValueLogitHead,
 )
 from rl.model.modules import MLP, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
@@ -151,8 +151,14 @@ class Porygon2BuilderModel(nn.Module):
         self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
-        self.conditional_entropy_head_mlp = MLP()
-        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
+        self.discriminator_head_mlp = MLP()
+        self.discriminator_head = DiscriminatorLogitHead(self.cfg.discriminator_head)
+
+        self.z_embedding = self.param(
+            "z_embedding",
+            embedding_init,
+            (self.cfg.num_latent_skills, entity_size),
+        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -190,9 +196,9 @@ class Porygon2BuilderModel(nn.Module):
         embedding = self.value_head_mlp(embedding)
         return self.value_head(embedding)
 
-    def _forward_conditional_entropy_head(self, embedding: jax.Array):
-        embedding = self.conditional_entropy_head_mlp(embedding)
-        return self.conditional_entropy_head(embedding)
+    def _forward_discriminator_head(self, embedding: jax.Array):
+        embedding = self.discriminator_head_mlp(embedding)
+        return self.discriminator_head(embedding)
 
     def _encode_team(
         self,
@@ -270,70 +276,75 @@ class Porygon2BuilderModel(nn.Module):
 
     def _forward(
         self,
-        hidden_state: jax.Array,
+        conditioned_hidden_state: jax.Array,
+        unconditioned_hidden_state: jax.Array,
         env_step: BuilderEnvOutput,
         actor_output: BuilderActorOutput,
         species_keys: jax.Array,
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
+        *,
+        z_id: jax.Array,
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
-        value_head = self._forward_value_head(hidden_state)
-        conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
+        value_head = self._forward_value_head(conditioned_hidden_state)
+        discriminator_head = self._forward_discriminator_head(
+            unconditioned_hidden_state
+        )
 
         species_head = self.species_head(
-            self.species_head_mlp(hidden_state),
+            self.species_head_mlp(conditioned_hidden_state),
             species_keys,
             actor_output.action_head,
             env_step.species_mask,
             head_params=head_params,
         )
         item_head = self.item_head(
-            self.item_head_mlp(hidden_state),
+            self.item_head_mlp(conditioned_hidden_state),
             item_keys,
             actor_output.action_head,
             env_step.item_mask,
             head_params=head_params,
         )
         ability_head = self.ability_head(
-            self.ability_head_mlp(hidden_state),
+            self.ability_head_mlp(conditioned_hidden_state),
             ability_keys,
             actor_output.action_head,
             env_step.ability_mask,
             head_params=head_params,
         )
         move_head = self.move_head(
-            self.move_head_mlp(hidden_state),
+            self.move_head_mlp(conditioned_hidden_state),
             move_keys,
             actor_output.action_head,
             env_step.move_mask,
             head_params=head_params,
         )
         ev_head = self.ev_head(
-            self.ev_head_mlp(hidden_state),
+            self.ev_head_mlp(conditioned_hidden_state),
             self.ev_embedding,
             actor_output.action_head,
             env_step.ev_mask,
             head_params=head_params,
         )
         nature_head = self.nature_head(
-            self.nature_head_mlp(hidden_state),
+            self.nature_head_mlp(conditioned_hidden_state),
             self.nature_embedding,
             actor_output.action_head,
             env_step.nature_mask,
             head_params=head_params,
         )
         gender_head = self.gender_head(
-            self.gender_head_mlp(hidden_state),
+            self.gender_head_mlp(conditioned_hidden_state),
             self.gender_embedding,
             actor_output.action_head,
             env_step.gender_mask,
             head_params=head_params,
         )
         teratype_head = self.teratype_head(
-            self.teratype_head_mlp(hidden_state),
+            self.teratype_head_mlp(conditioned_hidden_state),
             self.typechart_embedding,
             actor_output.action_head,
             env_step.teratype_mask,
@@ -426,7 +437,8 @@ class Porygon2BuilderModel(nn.Module):
         return BuilderActorOutput(
             action_head=action_head,
             value_head=value_head,
-            conditional_entropy_head=conditional_entropy_head,
+            discriminator_head=discriminator_head,
+            z_id=z_id,
         )
 
     def __call__(
@@ -443,7 +455,7 @@ class Porygon2BuilderModel(nn.Module):
         team_tokens = actor_input.history.packed_team_member_tokens
         order = actor_input.history.order
 
-        hidden_states = self._encode_team(
+        unconditioned_hidden_states = self._encode_team(
             jnp.take(team_tokens, order, axis=0),
             actor_input.history.member_position,
             actor_input.history.member_attribute,
@@ -453,13 +465,30 @@ class Porygon2BuilderModel(nn.Module):
             move_keys,
         )
 
-        hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
+        # Read z_id from environment input
+        z_id = actor_input.env.z_id[0]
+
+        # Condition hidden states with z embedding
+        z_emb = jnp.take(
+            self.z_embedding.astype(self.cfg.dtype), z_id, axis=0
+        )
+        conditioned_hidden_states = unconditioned_hidden_states + z_emb
+
+        conditioned_hidden_state = jnp.take(
+            conditioned_hidden_states, actor_input.env.ts, axis=0
+        )
+        unconditioned_hidden_state = jnp.take(
+            unconditioned_hidden_states, actor_input.env.ts, axis=0
+        )
 
         return jax.vmap(
-            functools.partial(self._forward, head_params=head_params),
-            in_axes=(0, 0, 0, None, None, None, None),
+            functools.partial(
+                self._forward, z_id=z_id, head_params=head_params
+            ),
+            in_axes=(0, 0, 0, 0, None, None, None, None),
         )(
-            hidden_state,
+            conditioned_hidden_state,
+            unconditioned_hidden_state,
             actor_input.env,
             actor_output,
             species_keys,

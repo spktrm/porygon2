@@ -338,8 +338,8 @@ def train_step(
             history=builder_history,
         )
 
-        builder_actor_conditional_entropy_head = (
-            builder_transitions.agent_output.actor_output.conditional_entropy_head
+        builder_actor_discriminator_head = (
+            builder_transitions.agent_output.actor_output.discriminator_head
         )
         builder_actor_action_head = (
             builder_transitions.agent_output.actor_output.action_head
@@ -382,17 +382,19 @@ def train_step(
             float_dtype
         )
 
-        builder_nll = -builder_actor_log_prob
-        builder_ent_pred = builder_actor_conditional_entropy_head.logits
+        # DIAYN discriminator reward
+        z_id = builder_transitions.agent_output.actor_output.z_id
+        num_skills = config.num_latent_skills
+        disc_log_q_z = jnp.take_along_axis(
+            builder_actor_discriminator_head.log_probs,
+            z_id[..., None],
+            axis=-1,
+        ).squeeze(-1)
+        diversity_reward = disc_log_q_z + jnp.log(num_skills)
 
-        next_builder_ent_pred = jnp.concatenate(
-            [builder_ent_pred[1:], jnp.zeros_like(builder_ent_pred[:1])], axis=0
-        )
-        builder_ent_delta = (
-            (builder_nll / config.normalising_constant)
-            + next_builder_ent_pred
-            - builder_ent_pred
-        )
+        # Only activate diversity reward for states where the player won
+        player_won = (final_reward @ cat_vf_support) > 0
+        diversity_reward = diversity_reward * player_won
 
         builder_entropy_temp = power_schedule(
             config.builder_temp_coef,
@@ -403,7 +405,7 @@ def train_step(
         )
 
         combined_builder_delta = (
-            builder_scalar_delta + builder_entropy_temp * builder_ent_delta
+            builder_scalar_delta + builder_entropy_temp * diversity_reward
         )
 
         builder_returns = (
@@ -412,10 +414,6 @@ def train_step(
         )
         builder_advantages = segmented_cumsum(
             combined_builder_delta, builder_gae_lambdas
-        )
-
-        ent_returns = (
-            segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
         )
 
         def builder_loss_fn(params: Params):
@@ -429,7 +427,7 @@ def train_step(
                 )
             )
 
-            conditional_entropy_head = pred.conditional_entropy_head
+            discriminator_head = pred.discriminator_head
             learner_value_head = pred.value_head
             learner_action_head = pred.action_head
 
@@ -456,11 +454,14 @@ def train_step(
 
             builder_entropy = average(learner_action_head.entropy, builder_valid)
 
-            # Estimator for entropy
-            loss_entropy = mse_value_loss(
-                pred=conditional_entropy_head.logits,
-                target=ent_returns,
-                valid=builder_valid,
+            # Discriminator cross-entropy loss: -log q(z|s)
+            loss_discriminator = -average(
+                jnp.take_along_axis(
+                    discriminator_head.log_probs,
+                    z_id[..., None],
+                    axis=-1,
+                ).squeeze(-1),
+                builder_valid,
             )
 
             loss_forward_kl = forward_kl_loss(
@@ -496,7 +497,7 @@ def train_step(
                 config.builder_policy_loss_coef * loss_pg
                 + config.builder_value_loss_coef * loss_v
                 + config.builder_kl_loss_coef * loss_backward_kl
-                + config.builder_entropy_pred_coef * loss_entropy
+                + config.builder_discriminator_coef * loss_discriminator
                 + config.builder_human_loss_coef * loss_human
             )
 
@@ -504,7 +505,7 @@ def train_step(
                 builder_loss_pg=loss_pg,
                 builder_loss_v=loss_v,
                 builder_loss_kl_rl=loss_backward_kl,
-                builder_loss_entropy=loss_entropy,
+                builder_loss_discriminator=loss_discriminator,
                 builder_loss_human=loss_human,
                 # Head entropies
                 builder_entropy=builder_entropy,
@@ -533,8 +534,6 @@ def train_step(
         training_logs.update(
             dict(
                 builder_loss=builder_loss_val,
-                builder_inital_entropy=jnp.mean(ent_returns[0])
-                * config.normalising_constant,
                 builder_param_norm=optax.global_norm(builder_state.params),
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),

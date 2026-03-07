@@ -149,6 +149,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     cfg.entity_size = entity_size
     cfg.generation = generation
     cfg.dtype = DEFAULT_DTYPE
+    cfg.num_latent_skills = 8
 
     num_layers = 4
     num_heads = num_heads
@@ -182,7 +183,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     for name in [
         "value_head",
-        "entropy_head",
+        "discriminator_head",
         "species_head",
         "item_head",
         "ability_head",
@@ -196,9 +197,9 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         head_cfg = ConfigDict()
         setattr(cfg, name, head_cfg)
 
-    cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
+    cfg.discriminator_head = ConfigDict()
+    cfg.discriminator_head.logits = ConfigDict()
+    cfg.discriminator_head.logits.features = cfg.num_latent_skills
 
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.features = 3
