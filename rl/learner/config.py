@@ -97,7 +97,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_entropy_pred_coef: float = 1.0
-    builder_human_loss_coef: float = 0.1
+    builder_human_loss_coef: float = 0.2
     ## Entropy
     normalising_constant: int = 100
 
@@ -113,7 +113,7 @@ class Porygon2LearnerConfig:
 
     # Smogon Generation
     generation: GenT = 9
-    smogon_format: SmogonFormatT = "randombattle"
+    smogon_format: SmogonFormatT = "ou"
 
     # Logging params
     log_artifacts_online: bool = False

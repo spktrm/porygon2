@@ -169,8 +169,8 @@ def main(args: argparse.Namespace):
         actor_player_network.apply,
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
-        player_head_params=HeadParams(temp=0.8, min_p=0.1),
-        builder_head_params=HeadParams(temp=0.8, min_p=0.1),
+        player_head_params=HeadParams(temp=0.8),
+        builder_head_params=HeadParams(temp=0.8),
     )
 
     logger.info("Loading train state...")
@@ -178,7 +178,7 @@ def main(args: argparse.Namespace):
         learner_config,
         player_state,
         builder_state,
-        # mode="params",
+        mode="checkpoint",
     )
 
     logger.info("Initializing WandB...")
@@ -215,9 +215,7 @@ def main(args: argparse.Namespace):
     )
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(
-            learner_config.num_player_actors + learner_config.num_eval_actors
-        )
+        max_workers=(learner_config.num_player_actors + learner_config.num_eval_actors)
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
             logger.info(

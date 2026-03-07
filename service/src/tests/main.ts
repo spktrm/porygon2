@@ -80,7 +80,12 @@ async function playerController(player: TrainablePlayerAI) {
     return { historyLength, packedHistoryLength };
 }
 
-const testFormats = ["gen9randomdoublesbattle", "gen9vgc2025regibo3", "gen9ou"];
+const testFormats = [
+    "gen9randomdoublesbattle",
+    // "gen9vgc2025regibo3",
+    "gen9ou",
+    "gen9randombattle",
+];
 const testPackedTeamArray = [
     0, 397, 40, 289, 850, 364, 857, 639, 11, 5, 58, 2, 0, 23, 23, 17, 4, 23, 0,
     132, 141, 118, 103, 825, 58, 725, 17, 4, 12, 63, 3, 0, 3, 11, 13, 20, 0,
@@ -90,19 +95,29 @@ const testPackedTeamArray = [
     199, 925, 880, 808, 530, 15, 6, 0, 26, 2, 16, 48, 2, 8, 7,
 ];
 
+function generateTeamFromStratgies(strategies: string[]) {
+    const stratIdx = Math.floor(Math.random() * strategies.length);
+    return strategies[stratIdx];
+}
+
 async function runBattle() {
     console.log("Creating battle...");
 
     const smogonFormat =
         testFormats[Math.floor(Math.random() * testFormats.length)];
+    const teamGenerationStrategies = [
+        generateTeamFromArray(testPackedTeamArray),
+        getSampleTeam("gen9ou", "Zoroark"),
+    ];
+    if (smogonFormat === "gen9randombattle") {
+        teamGenerationStrategies.push(Teams.pack(Teams.generate(smogonFormat)));
+    }
+
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: `baseline-eval-heuristic:0`,
         p1team: getSampleTeam("gen9ou", "Zoroark"),
-        p2team:
-            Math.random() < 0.5
-                ? generateTeamFromArray(testPackedTeamArray)
-                : getSampleTeam("gen9ou", "Zoroark"),
+        p2team: generateTeamFromStratgies(teamGenerationStrategies),
         smogonFormat,
     };
     const { p1, p2 } = createBattle(battleOptions, false);

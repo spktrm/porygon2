@@ -16,24 +16,10 @@ from rl.model.utils import legal_log_policy, legal_policy
 
 class HeadParams(NamedTuple):
     temp: float = 1.0
-    min_p: float = 0.0
 
 
-def sample_categorical(log_probs: jax.Array, rng_key: jax.Array, min_p: float = 0):
-    # Fast path: no min_p adjustment, sample directly from logits.
-    if min_p <= 0.0:
-        return jax.random.categorical(rng_key, log_probs, axis=-1)
-
-    # Convert to probs, clamp, renormalize, then go back to log-space for sampling.
-    probs = jnp.exp(log_probs)
-    probs = jnp.where(probs >= min_p * probs.max(), probs, 0)
-    probs = probs / probs.sum(axis=-1, keepdims=True)
-
-    # Avoid log(0) just in case of numerical edge cases
-    log_probs = jnp.log(probs)
-    log_probs = jnp.nan_to_num(log_probs, neginf=jnp.finfo(log_probs.dtype).min)
-
-    return jax.random.categorical(rng_key, log_probs, axis=-1)
+def sample_categorical(logits: jax.Array, rng_key: jax.Array):
+    return jax.random.categorical(rng_key, logits, axis=-1)
 
 
 class PolicyQKHead(nn.Module):
@@ -65,9 +51,8 @@ class PolicyQKHead(nn.Module):
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
+                jnp.where(valid_mask, logits, jnp.finfo(logits.dtype).min),
                 self.make_rng("sampling"),
-                min_p=head_params.min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
