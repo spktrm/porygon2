@@ -404,14 +404,8 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
-        # Entropy bonus: higher entropy adds to advantage, encouraging exploration.
-        # Decays at same rate as diversity reward via builder_entropy_temp.
-        builder_entropy_bonus = builder_actor_action_head.entropy
-
         combined_builder_delta = (
-            builder_scalar_delta
-            + builder_entropy_temp * diversity_reward
-            + builder_entropy_temp * config.builder_entropy_coef * builder_entropy_bonus
+            builder_scalar_delta + builder_entropy_temp * diversity_reward
         )
 
         builder_returns = (
@@ -460,6 +454,9 @@ def train_step(
 
             builder_entropy = average(learner_action_head.entropy, builder_valid)
 
+            # Entropy loss: minimizing -entropy maximizes entropy, encouraging exploration
+            loss_builder_entropy = -builder_entropy
+
             # Discriminator cross-entropy loss: -log q(z|s)
             loss_discriminator = -average(
                 jnp.take_along_axis(
@@ -505,6 +502,7 @@ def train_step(
                 + config.builder_kl_loss_coef * loss_backward_kl
                 + config.builder_discriminator_coef * loss_discriminator
                 + config.builder_human_loss_coef * loss_human
+                + config.builder_entropy_coef * builder_entropy_temp * loss_builder_entropy
             )
 
             return loss, dict(
@@ -512,6 +510,7 @@ def train_step(
                 builder_loss_v=loss_v,
                 builder_loss_kl_rl=loss_backward_kl,
                 builder_loss_discriminator=loss_discriminator,
+                builder_loss_entropy=loss_builder_entropy,
                 builder_loss_human=loss_human,
                 # Head entropies
                 builder_entropy=builder_entropy,
@@ -549,14 +548,6 @@ def train_step(
                 ),
                 builder_scalar_delta_magnitude=average(
                     jnp.abs(builder_scalar_delta), builder_valid
-                ),
-                builder_entropy_bonus_magnitude=average(
-                    jnp.abs(
-                        builder_entropy_temp
-                        * config.builder_entropy_coef
-                        * builder_entropy_bonus
-                    ),
-                    builder_valid,
                 ),
             )
         )
