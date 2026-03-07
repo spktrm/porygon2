@@ -30,7 +30,6 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderEnvOutput,
     BuilderHistoryOutput,
-    DiscriminatorHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
@@ -351,11 +350,8 @@ def get_ex_builder_step(
             ),
         ),
         BuilderActorOutput(
-            discriminator_head=DiscriminatorHeadOutput(
-                logits=np.zeros(
-                    (done.shape[0], 1, num_latent_skills), dtype=np.float32
-                ),
-                log_probs=np.zeros(
+            discriminator_head=PolicyHeadOutput(
+                log_policy=np.zeros(
                     (done.shape[0], 1, num_latent_skills), dtype=np.float32
                 ),
             ),

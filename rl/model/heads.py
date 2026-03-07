@@ -7,7 +7,6 @@ from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
-    DiscriminatorHeadOutput,
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
@@ -109,4 +108,4 @@ class DiscriminatorLogitHead(nn.Module):
         x = activation_fn(layer_norm(x))
         x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
         log_probs = nn.log_softmax(x, axis=-1)
-        return DiscriminatorHeadOutput(logits=x, log_probs=log_probs)
+        return PolicyHeadOutput(log_policy=log_probs)
