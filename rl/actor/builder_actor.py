@@ -17,6 +17,7 @@ class BuilderActor:
         self._env = TeamBuilderEnvironment(
             generation=learner.config.generation,
             smogon_format=learner.config.smogon_format,
+            num_latent_skills=learner.config.num_latent_skills,
         )
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)

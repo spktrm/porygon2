@@ -49,6 +49,12 @@ class RegressionValueHeadOutput:
 
 
 @dataclass
+class DiscriminatorHeadOutput:
+    logits: ArrayLike = ()
+    log_probs: ArrayLike = ()
+
+
+@dataclass
 class CategoricalValueHeadOutput:
     logits: ArrayLike = ()
     log_probs: ArrayLike = ()
@@ -109,6 +115,7 @@ class BuilderEnvOutput:
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
+    z_id: ArrayLike = ()
 
 
 @dataclass
@@ -128,12 +135,13 @@ class BuilderActorInput:
 @dataclass
 class BuilderActorOutput:
     action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    conditional_entropy_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
+    discriminator_head: DiscriminatorHeadOutput = field(
+        default_factory=DiscriminatorHeadOutput
     )
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
+    z_id: ArrayLike = ()
 
 
 @dataclass

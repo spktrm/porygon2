@@ -30,13 +30,13 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     BuilderEnvOutput,
     BuilderHistoryOutput,
+    DiscriminatorHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
     PolicyHeadOutput,
-    RegressionValueHeadOutput,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
@@ -300,7 +300,9 @@ def generate_order(key: jax.Array, r: int, N: int):
     return sorted_indices[valid_positions[: r * (N - 1)]]
 
 
-def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
+def get_ex_builder_step(
+    num_latent_skills: int = 8,
+) -> tuple[BuilderActorInput, BuilderActorOutput]:
     trajectory_length = 6 * (NUM_PACKED_SET_FEATURES - 1)
     6 * NUM_PACKED_SET_FEATURES
     done = np.zeros((trajectory_length, 1), dtype=np.bool_)
@@ -339,6 +341,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 done=done,
                 human_prob=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
+                z_id=np.zeros_like(done, dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,
@@ -348,8 +351,13 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             ),
         ),
         BuilderActorOutput(
-            conditional_entropy_head=RegressionValueHeadOutput(
-                logits=np.zeros_like(done, dtype=np.float32)
+            discriminator_head=DiscriminatorHeadOutput(
+                logits=np.zeros(
+                    (done.shape[0], 1, num_latent_skills), dtype=np.float32
+                ),
+                log_probs=np.zeros(
+                    (done.shape[0], 1, num_latent_skills), dtype=np.float32
+                ),
             ),
             value_head=CategoricalValueHeadOutput(
                 logits=np.zeros((done.shape[0], 1, 3), dtype=np.float32),
@@ -359,6 +367,7 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
+            z_id=np.zeros_like(done, dtype=np.int32),
         ),
     )
 

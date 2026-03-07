@@ -96,10 +96,10 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_entropy_pred_coef: float = 1.0
+    builder_discriminator_coef: float = 1.0
     builder_human_loss_coef: float = 0.2
-    ## Entropy
-    normalising_constant: int = 100
+    ## DIAYN
+    num_latent_skills: int = 8
 
     player_temp_coef: float = 0.5
     player_entropy_temp_decay: float = 0.3
