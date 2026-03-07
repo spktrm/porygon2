@@ -196,9 +196,9 @@ class Porygon2BuilderModel(nn.Module):
         embedding = self.value_head_mlp(embedding)
         return self.value_head(embedding)
 
-    def _forward_discriminator_head(self, embedding: jax.Array):
+    def _forward_discriminator_head(self, embedding: jax.Array, z_id: jax.Array):
         embedding = self.discriminator_head_mlp(embedding)
-        return self.discriminator_head(embedding)
+        return self.discriminator_head(embedding, z_id)
 
     def _encode_team(
         self,
@@ -291,7 +291,7 @@ class Porygon2BuilderModel(nn.Module):
 
         value_head = self._forward_value_head(conditioned_hidden_state)
         discriminator_head = self._forward_discriminator_head(
-            unconditioned_hidden_state
+            unconditioned_hidden_state, z_id
         )
 
         species_head = self.species_head(

@@ -104,8 +104,22 @@ class DiscriminatorLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, x: jax.Array):
+    def __call__(self, x: jax.Array, z_id: jax.Array):
         x = activation_fn(layer_norm(x))
         x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
-        log_probs = nn.log_softmax(x, axis=-1)
-        return PolicyHeadOutput(log_policy=log_probs)
+        log_policy = nn.log_softmax(x, axis=-1)
+        policy = jnp.exp(log_policy)
+        entropy = -jnp.sum(policy * log_policy, axis=-1)
+
+        log_prob = jnp.take(log_policy, z_id, axis=-1, mode="clip")
+
+        num_skills = x.shape[-1]
+        normalized_entropy = entropy / jnp.log(num_skills).astype(entropy.dtype)
+
+        return PolicyHeadOutput(
+            action_index=z_id,
+            log_prob=log_prob,
+            entropy=entropy,
+            normalized_entropy=normalized_entropy,
+            log_policy=log_policy,
+        )
