@@ -97,6 +97,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_discriminator_coef: float = 1.0
+    builder_entropy_coef: float = 1.0
     builder_human_loss_coef: float = 0.2
     ## DIAYN
     num_latent_skills: int = 8

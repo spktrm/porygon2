@@ -404,8 +404,14 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
+        # Entropy bonus: higher entropy adds to advantage, encouraging exploration.
+        # Decays at same rate as diversity reward via builder_entropy_temp.
+        builder_entropy_bonus = builder_actor_action_head.entropy
+
         combined_builder_delta = (
-            builder_scalar_delta + builder_entropy_temp * diversity_reward
+            builder_scalar_delta
+            + builder_entropy_temp * diversity_reward
+            + builder_entropy_temp * config.builder_entropy_coef * builder_entropy_bonus
         )
 
         builder_returns = (
@@ -538,6 +544,20 @@ def train_step(
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
+                builder_diversity_reward_magnitude=average(
+                    jnp.abs(builder_entropy_temp * diversity_reward), builder_valid
+                ),
+                builder_scalar_delta_magnitude=average(
+                    jnp.abs(builder_scalar_delta), builder_valid
+                ),
+                builder_entropy_bonus_magnitude=average(
+                    jnp.abs(
+                        builder_entropy_temp
+                        * config.builder_entropy_coef
+                        * builder_entropy_bonus
+                    ),
+                    builder_valid,
+                ),
             )
         )
         builder_state = builder_state.apply_gradients(grads=builder_grads)
