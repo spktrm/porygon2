@@ -396,7 +396,7 @@ def train_step(
 
         builder_entropy_temp = power_schedule(
             config.builder_temp_coef,
-            jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
+            jnp.floor(builder_state.step_count / config.gradient_accumulation_steps),
             config.builder_entropy_temp_decay,
             config.builder_entropy_temp_floor,
             config.builder_entropy_temp_ceil,
@@ -497,7 +497,7 @@ def train_step(
                 + config.builder_value_loss_coef * loss_v
                 + config.builder_kl_loss_coef * loss_backward_kl
                 + config.builder_entropy_pred_coef * loss_entropy
-                + config.builder_human_loss_coef * builder_entropy_temp * loss_human
+                + config.builder_human_loss_coef * loss_human
             )
 
             return loss, dict(

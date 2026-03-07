@@ -152,7 +152,6 @@ class Battle {
         roomId: string,
         conn: Connection,
         username: string,
-        team?: string,
         smogonFormat?: string,
     ) {
         this.battleId = roomId;
@@ -160,21 +159,16 @@ class Battle {
         this.active = true;
         this.username = username;
         this.prevMessage = undefined;
-        this.team = team;
 
         this.conn.send(`${this.battleId}|/timer on`);
         // this.ws.send(`${this.battleId}|${welcomeMessage}`);
-        const unpackedTeam = team === undefined ? team : Teams.unpack(team);
-        if (smogonFormat?.endsWith("randombattle") && !unpackedTeam) {
-            throw new Error("Invalid team provided");
-        }
+
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
             this.username,
             this.stream,
             {},
             false,
-            unpackedTeam ?? [],
         );
         this.player.choose = (choice: string) => {
             this.conn.send(
@@ -282,12 +276,10 @@ class User {
     }
 
     createNewBattle(roomId: string) {
-        const team = this.teams.shift();
         const battle = new Battle(
             roomId,
             this.connection,
             this.username!,
-            team,
             this.currentFormat,
         );
         this.battles.addBattle(roomId, battle);

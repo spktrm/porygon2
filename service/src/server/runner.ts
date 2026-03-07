@@ -8,7 +8,7 @@ import {
 } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { Battle } from "@pkmn/client";
-import { Generations, PokemonSet } from "@pkmn/data";
+import { Generations } from "@pkmn/data";
 import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
@@ -22,7 +22,6 @@ import {
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
-import { numActionFeatures } from "./data";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -156,7 +155,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
     publicBattle: Battle;
-    sets: PokemonSet[] | undefined;
     eventHandler: EventHandler;
 
     tasks: TaskQueueSystem<StepRequest>;
@@ -185,7 +183,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             seed?: PRNG | PRNGSeed | null;
         } = {},
         debug: boolean = false,
-        sets?: PokemonSet[],
     ) {
         super(playerStream, options, debug);
 
@@ -193,7 +190,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.privateBattle = new Battle(new Generations(Dex), null);
         this.publicBattle = new Battle(new Generations(Dex), null);
-        this.sets = sets;
         this.eventHandler = new EventHandler(this);
         this.done = false;
         this.choices = [];
@@ -584,20 +580,8 @@ export function createBattle(
         team: Teams.pack(p2Sets),
     };
 
-    const p1 = new TrainablePlayerAI(
-        p1spec.name,
-        streams.p1,
-        {},
-        debug,
-        p1Sets,
-    );
-    const p2 = new TrainablePlayerAI(
-        p2spec.name,
-        streams.p2,
-        {},
-        debug,
-        p2Sets,
-    );
+    const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);
+    const p2 = new TrainablePlayerAI(p2spec.name, streams.p2, {}, debug);
 
     p1.start();
     p2.start();

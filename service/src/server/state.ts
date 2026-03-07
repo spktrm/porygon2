@@ -3730,11 +3730,6 @@ export class StateHandler {
     }
 
     getPrivateTeam(playerIndex: number): Int16Array {
-        let sets = this.player.sets;
-        if (sets === undefined) {
-            throw new Error("Team is undefined");
-        }
-
         const request = this.player.getRequest();
         if (request === undefined) {
             throw new Error("Request is undefined");
