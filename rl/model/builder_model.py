@@ -209,6 +209,7 @@ class Porygon2BuilderModel(nn.Module):
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
+        sos_token: jax.Array = None,
     ):
         species_embeddings = (
             attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -266,8 +267,11 @@ class Porygon2BuilderModel(nn.Module):
             ).reshape(-1, self.cfg.entity_size)
         )
 
+        if sos_token is None:
+            sos_token = self.sos_embedding.astype(self.cfg.dtype)
+
         packed_set_embeddings = jnp.concatenate(
-            (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
+            (sos_token, packed_set_embeddings), axis=0
         )
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
@@ -469,9 +473,21 @@ class Porygon2BuilderModel(nn.Module):
         # in an episode, so we take the first element to get the scalar value.
         z_id = actor_input.env.z_id[0]
 
-        # Condition hidden states with z embedding
-        z_emb = jnp.take(self.z_embedding.astype(self.cfg.dtype), z_id, axis=0)
-        conditioned_hidden_states = unconditioned_hidden_states + z_emb
+        # Condition hidden states by running a second encode pass with
+        # the z embedding (looked up by z_id) as the SOS token.
+        z_sos = jnp.take(
+            self.z_embedding.astype(self.cfg.dtype), z_id, axis=0
+        )[None]
+        conditioned_hidden_states = self._encode_team(
+            jnp.take(team_tokens, order, axis=0),
+            actor_input.history.member_position,
+            actor_input.history.member_attribute,
+            species_keys,
+            ability_keys,
+            item_keys,
+            move_keys,
+            sos_token=z_sos,
+        )
 
         conditioned_hidden_state = jnp.take(
             conditioned_hidden_states, actor_input.env.ts, axis=0
