@@ -386,6 +386,9 @@ def train_step(
         num_skills = config.num_latent_skills
         disc_log_q_z = builder_actor_discriminator_head.log_prob
         diversity_reward = disc_log_q_z + jnp.log(num_skills)
+        diversity_reward_sum = jnp.where(builder_valid, diversity_reward, 0).sum(
+            axis=0, keepdims=True
+        )
 
         # Only activate diversity reward for states where the player won
         player_won = (final_reward @ cat_vf_support) > 0
@@ -400,7 +403,8 @@ def train_step(
         )
 
         combined_builder_delta = (
-            builder_scalar_delta + builder_entropy_temp * diversity_reward
+            builder_scalar_delta
+            + config.diversity_reward_coeff * diversity_reward / diversity_reward_sum
         )
 
         builder_returns = (
@@ -441,10 +445,9 @@ def train_step(
 
             loss_v = average(
                 optax.softmax_cross_entropy(
-                    logits=learner_value_head.logits,
-                    labels=builder_returns,
+                    logits=learner_value_head.logits, labels=builder_returns
                 ),
-                jnp.ones_like(builder_valid),
+                builder_valid,
             )
 
             builder_entropy = average(learner_action_head.entropy, builder_valid)
