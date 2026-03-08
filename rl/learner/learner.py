@@ -383,7 +383,6 @@ def train_step(
         )
 
         # DIAYN discriminator reward
-        z_id = builder_transitions.agent_output.actor_output.z_id
         num_skills = config.num_latent_skills
         disc_log_q_z = builder_actor_discriminator_head.log_prob
         diversity_reward = disc_log_q_z + jnp.log(num_skills)
@@ -454,10 +453,7 @@ def train_step(
             loss_builder_entropy = -builder_entropy
 
             # Discriminator cross-entropy loss: -log q(z|s)
-            loss_discriminator = -average(
-                discriminator_head.log_prob,
-                builder_valid,
-            )
+            loss_discriminator = -average(discriminator_head.log_prob, builder_valid)
 
             loss_forward_kl = forward_kl_loss(
                 policy_ratio=learner_actor_ratio,
@@ -494,7 +490,9 @@ def train_step(
                 + config.builder_kl_loss_coef * loss_backward_kl
                 + config.builder_discriminator_coef * loss_discriminator
                 + config.builder_human_loss_coef * loss_human
-                + config.builder_entropy_coef * builder_entropy_temp * loss_builder_entropy
+                + config.builder_entropy_coef
+                * builder_entropy_temp
+                * loss_builder_entropy
             )
 
             return loss, dict(
