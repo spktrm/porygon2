@@ -470,9 +470,7 @@ class Porygon2BuilderModel(nn.Module):
         z_id = actor_input.env.z_id[0]
 
         # Condition hidden states with z embedding
-        z_emb = jnp.take(
-            self.z_embedding.astype(self.cfg.dtype), z_id, axis=0
-        )
+        z_emb = jnp.take(self.z_embedding.astype(self.cfg.dtype), z_id, axis=0)
         conditioned_hidden_states = unconditioned_hidden_states + z_emb
 
         conditioned_hidden_state = jnp.take(
@@ -483,9 +481,7 @@ class Porygon2BuilderModel(nn.Module):
         )
 
         return jax.vmap(
-            functools.partial(
-                self._forward, z_id=z_id, head_params=head_params
-            ),
+            functools.partial(self._forward, z_id=z_id, head_params=head_params),
             in_axes=(0, 0, 0, 0, None, None, None, None),
         )(
             conditioned_hidden_state,
@@ -613,6 +609,7 @@ def main(generation: int = 9):
     )
 
     builder_env = TeamBuilderEnvironment(generation=generation, smogon_format="ou")
+    niches = {}
 
     i = 0
     while True:
@@ -650,7 +647,13 @@ def main(generation: int = 9):
         team_tokens = builder_actor_input.history.packed_team_member_tokens.reshape(
             -1, NUM_PACKED_SET_FEATURES
         )
-        print("\n".join(get_packed_team_string(team_tokens).split("]")))
+        team_list = get_packed_team_string(team_tokens).split("]")
+        print("\n".join(team_list))
+
+        z_id = builder_trajectory.env_output.z_id[0].item()
+        if z_id not in niches:
+            niches[z_id] = []
+        niches[z_id].append(team_list)
 
         assert np.all(
             team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES]
