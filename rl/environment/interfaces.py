@@ -109,7 +109,6 @@ class BuilderEnvOutput:
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()
     validator_reward: ArrayLike = ()
-    z_id: ArrayLike = ()
 
 
 @dataclass
@@ -129,11 +128,9 @@ class BuilderActorInput:
 @dataclass
 class BuilderActorOutput:
     action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
-    discriminator_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
-    z_id: ArrayLike = ()
 
 
 @dataclass
