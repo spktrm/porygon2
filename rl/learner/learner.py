@@ -493,9 +493,7 @@ def train_step(
                 + config.builder_kl_loss_coef * loss_backward_kl
                 + config.builder_discriminator_coef * loss_discriminator
                 + config.builder_human_loss_coef * loss_human
-                + config.builder_entropy_coef
-                * builder_entropy_temp
-                * loss_builder_entropy
+                + config.builder_entropy_coef * loss_builder_entropy
             )
 
             return loss, dict(
@@ -537,7 +535,7 @@ def train_step(
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
                 builder_diversity_reward_magnitude=average(
-                    jnp.abs(builder_entropy_temp * diversity_reward), builder_valid
+                    jnp.abs(diversity_reward), builder_valid
                 ),
                 builder_scalar_delta_magnitude=average(
                     jnp.abs(builder_scalar_delta), builder_valid
