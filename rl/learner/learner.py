@@ -338,9 +338,6 @@ def train_step(
             history=builder_history,
         )
 
-        builder_actor_discriminator_head = (
-            builder_transitions.agent_output.actor_output.discriminator_head
-        )
         builder_actor_action_head = (
             builder_transitions.agent_output.actor_output.action_head
         )

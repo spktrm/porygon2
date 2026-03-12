@@ -42,11 +42,7 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import (
-    CategoricalValueLogitHead,
-    HeadParams,
-    PolicyQKHead,
-)
+from rl.model.heads import CategoricalValueLogitHead, HeadParams, PolicyQKHead
 from rl.model.modules import MLP, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -443,13 +439,13 @@ class Porygon2BuilderModel(nn.Module):
             move_keys,
         )
 
-        hidden_states = jnp.take(hidden_states, actor_input.env.ts, axis=0)
+        hidden_state = jnp.take(hidden_states, actor_input.env.ts, axis=0)
 
         return jax.vmap(
             functools.partial(self._forward, head_params=head_params),
             in_axes=(0, 0, 0, None, None, None, None),
         )(
-            hidden_states,
+            hidden_state,
             actor_input.env,
             actor_output,
             species_keys,
