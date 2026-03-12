@@ -340,7 +340,6 @@ def get_ex_builder_step(
                 done=done,
                 human_prob=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
-                z_id=np.zeros_like(done, dtype=np.int32),
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=packed_team_member_tokens,
@@ -364,7 +363,6 @@ def get_ex_builder_step(
             action_head=PolicyHeadOutput(
                 action_index=np.zeros_like(done, dtype=np.int32)
             ),
-            z_id=np.zeros_like(done, dtype=np.int32),
         ),
     )
 

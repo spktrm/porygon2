@@ -382,18 +382,6 @@ def train_step(
             float_dtype
         )
 
-        # DIAYN discriminator reward
-        num_skills = config.num_latent_skills
-        disc_log_q_z = builder_actor_discriminator_head.log_prob
-        diversity_reward = disc_log_q_z + jnp.log(num_skills)
-        diversity_reward_sum = jnp.where(builder_valid, diversity_reward, 0).sum(
-            axis=0, keepdims=True
-        )
-
-        # Only activate diversity reward for states where the player won
-        player_won = (final_reward @ cat_vf_support) > 0
-        diversity_reward = diversity_reward * player_won
-
         builder_entropy_temp = power_schedule(
             config.builder_temp_coef,
             jnp.floor(builder_state.step_count / config.gradient_accumulation_steps),
@@ -402,18 +390,11 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
-        combined_builder_delta = (
-            builder_scalar_delta
-            + config.diversity_reward_coeff * diversity_reward / diversity_reward_sum
-        )
-
         builder_returns = (
             segmented_cumsum(builder_value_delta, builder_td_lambdas[..., None])
             + builder_value_probs
         )
-        builder_advantages = segmented_cumsum(
-            combined_builder_delta, builder_gae_lambdas
-        )
+        builder_advantages = segmented_cumsum(builder_scalar_delta, builder_gae_lambdas)
 
         def builder_loss_fn(params: Params):
 
@@ -426,7 +407,6 @@ def train_step(
                 )
             )
 
-            discriminator_head = pred.discriminator_head
             learner_value_head = pred.value_head
             learner_action_head = pred.action_head
 
@@ -454,9 +434,6 @@ def train_step(
 
             # Entropy loss: minimizing -entropy maximizes entropy, encouraging exploration
             loss_builder_entropy = -builder_entropy
-
-            # Discriminator cross-entropy loss: -log q(z|s)
-            loss_discriminator = -average(discriminator_head.log_prob, builder_valid)
 
             loss_forward_kl = forward_kl_loss(
                 policy_ratio=learner_actor_ratio,
@@ -491,7 +468,6 @@ def train_step(
                 config.builder_policy_loss_coef * loss_pg
                 + config.builder_value_loss_coef * loss_v
                 + config.builder_kl_loss_coef * loss_backward_kl
-                + config.builder_discriminator_coef * loss_discriminator
                 + config.builder_human_loss_coef * loss_human
                 + config.builder_entropy_coef * loss_builder_entropy
             )
@@ -500,7 +476,6 @@ def train_step(
                 builder_loss_pg=loss_pg,
                 builder_loss_v=loss_v,
                 builder_loss_kl_rl=loss_backward_kl,
-                builder_loss_discriminator=loss_discriminator,
                 builder_loss_entropy=loss_builder_entropy,
                 builder_loss_human=loss_human,
                 # Head entropies
@@ -534,9 +509,6 @@ def train_step(
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
-                builder_diversity_reward_magnitude=average(
-                    jnp.abs(diversity_reward), builder_valid
-                ),
                 builder_scalar_delta_magnitude=average(
                     jnp.abs(builder_scalar_delta), builder_valid
                 ),

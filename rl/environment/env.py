@@ -154,12 +154,10 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self, key: jax.Array) -> BuilderActorInput:
-        key, z_key = jax.random.split(key)
+
         order = generate_order(key, self._num_team_members, NUM_PACKED_SET_FEATURES)
         member_position = order // NUM_PACKED_SET_FEATURES
         member_attribute = order % NUM_PACKED_SET_FEATURES
-
-        z_id = jax.random.randint(z_key, (), 0, self._num_latent_skills)
 
         return BuilderActorInput(
             env=BuilderEnvOutput(
@@ -178,7 +176,6 @@ class TeamBuilderEnvironment:
                 curr_attribute=member_attribute[0],
                 curr_position=member_position[0],
                 done=jnp.array(False, dtype=jnp.bool),
-                z_id=z_id,
             ),
             history=BuilderHistoryOutput(
                 packed_team_member_tokens=jnp.zeros(
