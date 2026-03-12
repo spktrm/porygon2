@@ -61,7 +61,7 @@ class Porygon2LearnerConfig:
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = 100_000
+    minimum_historical_player_steps: int = 1_000_000
     league_size: int = 16
 
     # Batch iteration params
@@ -97,7 +97,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_discriminator_coef: float = 1.0
-    builder_entropy_coef: float = 0.1
+    builder_entropy_coef: float = 0.01
     builder_human_loss_coef: float = 0.0
     ## DIAYN
     num_latent_skills: int = 8
