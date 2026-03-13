@@ -63,10 +63,11 @@ export class WorkerHandler {
         return player;
     }
 
-    private generateTeam(
-        packedTeam: number[] | undefined,
-        smogonFormat: string,
-    ): string {
+    private generateTeam(args: {
+        packedTeam: number[] | undefined;
+        smogonFormat: string;
+    }): string {
+        const { packedTeam, smogonFormat } = args;
         if (smogonFormat.includes("randombattle")) {
             return Teams.pack(Teams.generate(smogonFormat));
         }
@@ -76,12 +77,13 @@ export class WorkerHandler {
         throw new Error("Unable to generate team");
     }
 
-    private async resetPlayerFromTrainingUserName(
-        userName: string,
-        gameId: string, // Added gameId param
-        smogonFormat: string,
-        packedTeam: number[] | undefined,
-    ): Promise<WaitingPlayerResolveArgs> {
+    private async resetPlayerFromTrainingUserName(args: {
+        userName: string;
+        gameId: string; // Added gameId param
+        smogonFormat: string;
+        packedTeam: number[] | undefined;
+    }): Promise<WaitingPlayerResolveArgs> {
+        const { userName, gameId, smogonFormat, packedTeam } = args;
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
@@ -122,11 +124,11 @@ export class WorkerHandler {
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
-                p1team: this.generateTeam(
-                    opponent.playerDetails.packedTeam,
-                    opponent.playerDetails.smogonFormat,
-                ),
-                p2team: this.generateTeam(packedTeam, smogonFormat),
+                p1team: this.generateTeam({
+                    packedTeam: opponent.playerDetails.packedTeam,
+                    smogonFormat: opponent.playerDetails.smogonFormat,
+                }),
+                p2team: this.generateTeam({ packedTeam, smogonFormat }),
                 smogonFormat,
             });
 
@@ -164,12 +166,13 @@ export class WorkerHandler {
         }
     }
 
-    private resetPlayerFromEvalUserName(
-        userName: string,
-        smogonFormat: string,
-        packedTeam: number[] | undefined,
-    ) {
-        const teamString = this.generateTeam(packedTeam, smogonFormat);
+    private resetPlayerFromEvalUserName(args: {
+        userName: string;
+        smogonFormat: string;
+        packedTeam: number[] | undefined;
+    }) {
+        const { userName, smogonFormat, packedTeam } = args;
+        const teamString = this.generateTeam({ packedTeam, smogonFormat });
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -178,7 +181,7 @@ export class WorkerHandler {
             p1Name: userName,
             p1team: teamString,
             p2Name: `baseline-${userName}`,
-            p2team: this.generateTeam(undefined, smogonFormat),
+            p2team: this.generateTeam({ packedTeam: undefined, smogonFormat }),
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
@@ -263,19 +266,19 @@ export class WorkerHandler {
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(
-                this.resetPlayerFromEvalUserName(
+                this.resetPlayerFromEvalUserName({
                     userName,
                     smogonFormat,
                     packedTeam,
-                ),
+                }),
             );
         } else {
-            return this.resetPlayerFromTrainingUserName(
+            return this.resetPlayerFromTrainingUserName({
                 userName,
                 gameId,
                 smogonFormat,
                 packedTeam,
-            );
+            });
         }
     }
 
