@@ -182,6 +182,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     for name in [
         "value_head",
+        "entropy_head",
         "species_head",
         "item_head",
         "ability_head",
@@ -194,6 +195,10 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     ]:
         head_cfg = ConfigDict()
         setattr(cfg, name, head_cfg)
+
+    cfg.entropy_head = ConfigDict()
+    cfg.entropy_head.logits = ConfigDict()
+    cfg.entropy_head.logits.features = 1
 
     cfg.value_head.logits = ConfigDict()
     cfg.value_head.logits.features = 3

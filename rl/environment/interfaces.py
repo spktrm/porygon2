@@ -128,6 +128,9 @@ class BuilderActorInput:
 @dataclass
 class BuilderActorOutput:
     action_head: PolicyHeadOutput = field(default_factory=PolicyHeadOutput)
+    conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
