@@ -73,8 +73,9 @@ export class WorkerHandler {
         }
         if (packedTeam !== undefined) {
             return generateTeamFromArray(packedTeam);
+        } else {
+            return randomSampleTeam(smogonFormat);
         }
-        throw new Error("Unable to generate team");
     }
 
     private async resetPlayerFromTrainingUserName(args: {
