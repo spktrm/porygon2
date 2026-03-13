@@ -42,7 +42,12 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
-from rl.model.heads import CategoricalValueLogitHead, HeadParams, PolicyQKHead
+from rl.model.heads import (
+    CategoricalValueLogitHead,
+    HeadParams,
+    PolicyQKHead,
+    RegressionValueLogitHead,
+)
 from rl.model.modules import MLP, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
 
@@ -146,6 +151,9 @@ class Porygon2BuilderModel(nn.Module):
         self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
+        self.conditional_entropy_head_mlp = MLP()
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
+
     def _embed_species(self, token: jax.Array):
         mask = ~(
             (token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
@@ -181,6 +189,10 @@ class Porygon2BuilderModel(nn.Module):
     def _forward_value_head(self, embedding: jax.Array):
         embedding = self.value_head_mlp(embedding)
         return self.value_head(embedding)
+
+    def _forward_conditional_entropy_head(self, embedding: jax.Array):
+        embedding = self.conditional_entropy_head_mlp(embedding)
+        return self.conditional_entropy_head(embedding)
 
     def _encode_team(
         self,
@@ -272,6 +284,7 @@ class Porygon2BuilderModel(nn.Module):
     ) -> BuilderActorOutput:
 
         value_head = self._forward_value_head(hidden_state)
+        conditional_entropy_head = self._forward_conditional_entropy_head(hidden_state)
 
         species_head = self.species_head(
             self.species_head_mlp(hidden_state),
@@ -413,7 +426,11 @@ class Porygon2BuilderModel(nn.Module):
             .squeeze(),
         )
 
-        return BuilderActorOutput(action_head=action_head, value_head=value_head)
+        return BuilderActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            conditional_entropy_head=conditional_entropy_head,
+        )
 
     def __call__(
         self,

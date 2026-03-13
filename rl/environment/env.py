@@ -95,12 +95,10 @@ class TeamBuilderEnvironment:
         generation: int,
         smogon_format: str,
         num_team_members: int = 6,
-        num_latent_skills: int = 8,
     ):
         self._smogon_format = smogon_format
         self._generation = generation
         self._num_team_members = num_team_members
-        self._num_latent_skills = num_latent_skills
 
         load_arr = functools.partial(
             self._load_arr, generation=generation, smogon_format=smogon_format
