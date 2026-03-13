@@ -338,6 +338,9 @@ def train_step(
             history=builder_history,
         )
 
+        builder_actor_conditional_entropy_head = (
+            builder_transitions.agent_output.actor_output.conditional_entropy_head
+        )
         builder_actor_action_head = (
             builder_transitions.agent_output.actor_output.action_head
         )
@@ -387,11 +390,29 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
+        # Entropy prediction advantage calculation
+        builder_nll = -builder_actor_log_prob
+        builder_ent_pred = builder_actor_conditional_entropy_head.logits
+        next_builder_ent_pred = jnp.concatenate(
+            [builder_ent_pred[1:], jnp.zeros_like(builder_ent_pred[:1])], axis=0
+        )
+        builder_ent_delta = (
+            (builder_nll / config.builder_entropy_prediction_normalising_constant)
+            + next_builder_ent_pred
+            - builder_ent_pred
+        )
+        ent_returns = (
+            segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
+        )
+
         builder_returns = (
             segmented_cumsum(builder_value_delta, builder_td_lambdas[..., None])
             + builder_value_probs
         )
-        builder_advantages = segmented_cumsum(builder_scalar_delta, builder_gae_lambdas)
+        builder_advantages = segmented_cumsum(
+            builder_scalar_delta + builder_entropy_temp * builder_ent_delta,
+            builder_gae_lambdas,
+        )
 
         def builder_loss_fn(params: Params):
 
@@ -406,7 +427,7 @@ def train_step(
 
             learner_value_head = pred.value_head
             learner_action_head = pred.action_head
-
+            learner_conditional_entropy_head = pred.conditional_entropy_head
             learner_log_prob = learner_action_head.log_prob
 
             learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
@@ -427,10 +448,12 @@ def train_step(
                 builder_valid,
             )
 
-            builder_entropy = average(learner_action_head.entropy, builder_valid)
-
-            # Entropy loss: minimizing -entropy maximizes entropy, encouraging exploration
-            loss_builder_entropy = -builder_entropy
+            loss_builder_entropy = -average(learner_action_head.entropy, builder_valid)
+            loss_builder_conditional_entropy = mse_value_loss(
+                pred=learner_conditional_entropy_head.logits,
+                target=ent_returns,
+                valid=builder_valid,
+            )
 
             loss_forward_kl = forward_kl_loss(
                 policy_ratio=learner_actor_ratio,
@@ -466,6 +489,8 @@ def train_step(
                 + config.builder_value_loss_coef * loss_v
                 + config.builder_kl_loss_coef * loss_backward_kl
                 + config.builder_human_loss_coef * loss_human
+                + config.builder_conditional_entropy_loss_coef
+                * loss_builder_conditional_entropy
                 + config.builder_entropy_coef * loss_builder_entropy
             )
 
@@ -475,8 +500,6 @@ def train_step(
                 builder_loss_kl_rl=loss_backward_kl,
                 builder_loss_entropy=loss_builder_entropy,
                 builder_loss_human=loss_human,
-                # Head entropies
-                builder_entropy=builder_entropy,
                 # Ratios
                 builder_ratio_clip_fraction=clip_fraction(
                     policy_ratios=learner_actor_ratio,
@@ -506,8 +529,11 @@ def train_step(
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
-                builder_scalar_delta_magnitude=average(
-                    jnp.abs(builder_scalar_delta), builder_valid
+                builder_entropy_advantage_magnitude=average(
+                    jnp.abs(
+                        builder_entropy_temp * builder_ent_delta / builder_scalar_delta
+                    ),
+                    builder_valid,
                 ),
             )
         )
