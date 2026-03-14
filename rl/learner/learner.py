@@ -502,6 +502,7 @@ def train_step(
                 builder_loss_v=loss_v,
                 builder_loss_kl_rl=loss_backward_kl,
                 builder_loss_entropy=loss_builder_entropy,
+                builder_loss_conditional_entropy=loss_builder_conditional_entropy,
                 builder_loss_human=loss_human,
                 # Ratios
                 builder_ratio_clip_fraction=clip_fraction(
