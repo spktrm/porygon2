@@ -330,6 +330,9 @@ class Encoder(nn.Module):
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
         )
+        self.history_decoder = TransformerDecoder(
+            **self.cfg.history_decoder.to_dict(),
+        )
         self.latent_state_encoder = TransformerEncoder(
             **self.cfg.state_encoder.to_dict()
         )
@@ -1079,7 +1082,6 @@ class Encoder(nn.Module):
         current_position: jax.Array,
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
-        timestep_arange: jax.Array,
         private_embeddings: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
@@ -1091,15 +1093,6 @@ class Encoder(nn.Module):
 
         private_mask = jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool)
 
-        latest_timestep_embeddings, latest_timestep_mask, latest_timestep_positions = (
-            self._get_latest_timestep_embeddings(
-                timestep_embeddings,
-                timestep_mask,
-                timestep_positions,
-                timestep_arange,
-                self.cfg.num_history_timesteps,
-            )
-        )
         switch_order_indices = np.array(
             [
                 InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
@@ -1154,11 +1147,6 @@ class Encoder(nn.Module):
         prev_action_tgt_embedding = (
             prev_action_tgt + self.prev_action_tgt_embedding.astype(self.cfg.dtype)
         )
-        history_embeddings = (
-            latest_timestep_embeddings
-            + self.timestep_embedding.astype(self.cfg.dtype)
-            + self.timestep_positional_embeddings.astype(self.cfg.dtype)
-        )
 
         input_state_sequence = jnp.concatenate(
             (
@@ -1167,7 +1155,6 @@ class Encoder(nn.Module):
                 public_embeddings,
                 prev_action_src_embedding,
                 prev_action_tgt_embedding,
-                history_embeddings,
             ),
             axis=0,
         )
@@ -1178,7 +1165,6 @@ class Encoder(nn.Module):
                 private_mask,
                 entity_mask,
                 jnp.ones_like(move_mask[:2], dtype=jnp.bool),
-                latest_timestep_mask,
             )
         )
         latent_mask = jnp.ones_like(self.latent_embeddings[..., 0], dtype=jnp.bool)
@@ -1189,6 +1175,13 @@ class Encoder(nn.Module):
                 q=latent_state_embeddings,
                 kv=input_state_sequence,
                 attn_mask=create_attention_mask(latent_mask, state_mask),
+            )
+            latent_state_embeddings = self.history_decoder(
+                q=latent_state_embeddings,
+                kv=timestep_embeddings,
+                attn_mask=create_attention_mask(latent_mask, timestep_mask),
+                q_positions=jnp.expand_dims(current_position, axis=-1),
+                kv_positions=timestep_positions,
             )
 
             for _ in range(self.cfg.num_thinking_steps):
@@ -1228,19 +1221,17 @@ class Encoder(nn.Module):
             history_request_count,
             jnp.iinfo(request_count.dtype).max,
         )
-        timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
         switch_embeddings = self._embed_private_entities(env_step.private_team[0])
 
         state_embedding, action_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
             timestep_embeddings,
             timestep_positions,
-            timestep_arange,
             switch_embeddings,
         )
 

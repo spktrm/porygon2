@@ -97,7 +97,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 0.001
+    builder_entropy_coef: float = 1e-2
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
     builder_human_loss_coef: float = 0.0
@@ -107,8 +107,8 @@ class Porygon2LearnerConfig:
     player_entropy_temp_ceil: float = 0.5
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.1
-    builder_entropy_temp_decay: float = 1.0
+    builder_temp_coef: float = 0.2
+    builder_entropy_temp_decay: float = 0.25
     builder_entropy_temp_ceil: float = 1.0
     builder_entropy_temp_floor: float = 1e-3
 
