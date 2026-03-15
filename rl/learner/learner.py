@@ -387,8 +387,11 @@ def train_step(
         builder_ent_scaled = (
             builder_ent_pred * config.builder_entropy_prediction_normalising_constant
         )
-        next_builder_ent_scaled = jnp.concatenate(
-            [builder_ent_scaled[1:], jnp.zeros_like(builder_ent_scaled[:1])], axis=0
+        next_builder_ent_scaled = (
+            jnp.concatenate(
+                [builder_ent_scaled[1:], jnp.zeros_like(builder_ent_scaled[:1])], axis=0
+            )
+            * builder_valid
         )
         # Entropy delta uses raw NLL (not divided by norm), against scaled-up predictions
         builder_ent_delta = builder_nll + next_builder_ent_scaled - builder_ent_scaled
