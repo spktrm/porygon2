@@ -96,6 +96,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.encoder.timestep_encoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
+    cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.state_encoder = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
@@ -107,12 +108,14 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     for decoder in [
         cfg.encoder.input_decoder,
+        cfg.encoder.history_decoder,
         cfg.encoder.output_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     cfg.encoder.timestep_encoder.need_pos = True
     cfg.encoder.input_decoder.need_pos = False
+    cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.state_encoder.num_layers = 4
     cfg.encoder.state_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
