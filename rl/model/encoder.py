@@ -327,8 +327,13 @@ class Encoder(nn.Module):
             embedding_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
+        self.null_history = self.param("null_history", embedding_init, (1, entity_size))
+
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
+        )
+        self.history_decoder = TransformerDecoder(
+            **self.cfg.history_decoder.to_dict(),
         )
         self.latent_state_encoder = TransformerEncoder(
             **self.cfg.state_encoder.to_dict()
@@ -587,46 +592,43 @@ class Encoder(nn.Module):
             [
                 _encode_one_hot_private_entity(
                     private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__NATURE,
-                ),
-                _encode_one_hot_private_entity(
-                    private,
                     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE,
                 ),
             ],
             dtype=self.cfg.dtype,
         )
 
-        ev_features = private[
+        stat_features = private[
             np.array(
                 [
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_HP,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_ATK,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_DEF,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPA,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPD,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__EV_SPE,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT,
                 ]
             )
-        ]
-        iv_features = private[
-            np.array(
-                [
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_HP,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_ATK,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_DEF,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPA,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPD,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__IV_SPE,
-                ]
-            )
-        ]
+        ].astype(self.cfg.dtype)
+        stat_norm = jnp.linalg.norm(stat_features) + 1e-6
+        stat_mean = jnp.mean(stat_features)
+        stat_std = jnp.std(stat_features)
+        hp, atk, def_, spa, spd, spe = jnp.split(stat_features, 6)
 
         private_encoding = jnp.concatenate(
             [
                 boolean_code,
-                (ev_features / 255).astype(self.cfg.dtype),
-                (iv_features / 31).astype(self.cfg.dtype),
+                stat_features / stat_norm,
+                (stat_features - stat_mean) / (stat_std + 1e-6),
+                # log1p(200) is approximately 5.3, which scales the log features to a reasonable range given the max stats in Pokemon.
+                jnp.log1p(stat_features[1:]) - 5.3,
+                atk / (atk + spa + 1e-6),
+                spa / (atk + spa + 1e-6),
+                (hp * def_) / (hp * (def_ + spd) + 1e-6),
+                (hp * spd) / (hp * (def_ + spd) + 1e-6),
+                spe / (hp + def_ + spe + 1e-6),
+                # log1p(364) is approximately 5.9, which scales the log features to a reasonable range given the max stats in Pokemon.
+                jnp.log1p(stat_features[:1]) - 5.9,
             ],
             axis=-1,
         )
@@ -985,18 +987,18 @@ class Encoder(nn.Module):
             valid_timestep_mask[..., None], local_timestep_embedding, 0
         )
 
+        local_timestep_embedding = jnp.concatenate(
+            (self.null_history.astype(self.cfg.dtype), local_timestep_embedding), axis=0
+        )
         seq_len = local_timestep_embedding.shape[0]
         timestep_positions = jnp.arange(seq_len)
-
-        # causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
-        # attn_mask = create_attention_mask(valid_timestep_mask)
-        # attn_mask = attn_mask & jnp.expand_dims(causal_mask, axis=0)
-
-        # global_timestep_embedding = self.global_timestep_encoder(
-        #     local_timestep_embedding,
-        #     attn_mask=attn_mask,
-        #     qkv_positions=timestep_positions,
-        # )
+        valid_timestep_mask = jnp.concatenate(
+            (jnp.ones(1, dtype=jnp.bool), valid_timestep_mask), axis=0
+        )
+        history_request_count = jnp.concatenate(
+            (jnp.zeros(1, dtype=history_request_count.dtype), history_request_count),
+            axis=0,
+        )
 
         return (
             local_timestep_embedding,
@@ -1082,7 +1084,6 @@ class Encoder(nn.Module):
         current_position: jax.Array,
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
-        timestep_arange: jax.Array,
         private_embeddings: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
@@ -1094,15 +1095,6 @@ class Encoder(nn.Module):
 
         private_mask = jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool)
 
-        latest_timestep_embeddings, latest_timestep_mask, latest_timestep_positions = (
-            self._get_latest_timestep_embeddings(
-                timestep_embeddings,
-                timestep_mask,
-                timestep_positions,
-                timestep_arange,
-                self.cfg.num_history_timesteps,
-            )
-        )
         switch_order_indices = np.array(
             [
                 InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
@@ -1157,11 +1149,6 @@ class Encoder(nn.Module):
         prev_action_tgt_embedding = (
             prev_action_tgt + self.prev_action_tgt_embedding.astype(self.cfg.dtype)
         )
-        history_embeddings = (
-            latest_timestep_embeddings
-            + self.timestep_embedding.astype(self.cfg.dtype)
-            + self.timestep_positional_embeddings.astype(self.cfg.dtype)
-        )
 
         input_state_sequence = jnp.concatenate(
             (
@@ -1170,7 +1157,6 @@ class Encoder(nn.Module):
                 public_embeddings,
                 prev_action_src_embedding,
                 prev_action_tgt_embedding,
-                history_embeddings,
             ),
             axis=0,
         )
@@ -1181,7 +1167,6 @@ class Encoder(nn.Module):
                 private_mask,
                 entity_mask,
                 jnp.ones_like(move_mask[:2], dtype=jnp.bool),
-                latest_timestep_mask,
             )
         )
         latent_mask = jnp.ones_like(self.latent_embeddings[..., 0], dtype=jnp.bool)
@@ -1192,6 +1177,13 @@ class Encoder(nn.Module):
                 q=latent_state_embeddings,
                 kv=input_state_sequence,
                 attn_mask=create_attention_mask(latent_mask, state_mask),
+            )
+            latent_state_embeddings = self.history_decoder(
+                q=latent_state_embeddings,
+                kv=timestep_embeddings,
+                attn_mask=create_attention_mask(latent_mask, timestep_mask),
+                q_positions=jnp.expand_dims(current_position, axis=-1),
+                kv_positions=timestep_positions,
             )
 
             for _ in range(self.cfg.num_thinking_steps):
@@ -1231,19 +1223,17 @@ class Encoder(nn.Module):
             history_request_count,
             jnp.iinfo(request_count.dtype).max,
         )
-        timestep_arange = jnp.arange(timestep_mask.shape[-1])
 
         switch_embeddings = self._embed_private_entities(env_step.private_team[0])
 
         state_embedding, action_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
             timestep_embeddings,
             timestep_positions,
-            timestep_arange,
             switch_embeddings,
         )
 

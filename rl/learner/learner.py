@@ -170,10 +170,6 @@ def train_step(
         packed_history=player_packed_history,
         history=player_history,
     )
-    builder_actor_input = BuilderActorInput(
-        env=builder_transitions.env_output,
-        history=builder_history,
-    )
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
     player_actor_value_head = player_transitions.agent_output.actor_output.value_head
@@ -181,69 +177,33 @@ def train_step(
 
     float_dtype = player_actor_log_prob.dtype
 
-    builder_actor_conditional_entropy_head = (
-        builder_transitions.agent_output.actor_output.conditional_entropy_head
-    )
-    builder_actor_action_head = (
-        builder_transitions.agent_output.actor_output.action_head
-    )
-    builder_actor_value_head = builder_transitions.agent_output.actor_output.value_head
-    builder_actor_log_prob = builder_actor_action_head.log_prob
-
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
-    valid = jnp.concatenate((jnp.ones_like(builder_valid), player_valid), axis=0)
-
-    value_probs = jnp.exp(
-        jnp.concatenate(
-            (builder_actor_value_head.log_probs, player_actor_value_head.log_probs),
-            axis=0,
-        )
-    )
 
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
+    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
+
+    # --- Player ---
     player_reward = player_transitions.env_output.win_reward.astype(float_dtype)
-    final_reward = player_reward[-1]
-    builder_reward = (
-        jax.nn.one_hot(
-            builder_valid.sum(axis=0), builder_valid.shape[0], axis=0, dtype=float_dtype
-        )[..., None]
-        * final_reward
+    player_value_probs = jnp.exp(player_actor_value_head.log_probs)
+
+    player_next_value_probs = jnp.concatenate(
+        (player_value_probs[1:], player_value_probs[-1:]), axis=0
     )
-    cat_reward = jnp.concatenate((builder_reward, player_reward))
-    value_target = (
-        cat_reward
-        + jnp.concatenate((value_probs[1:], value_probs[-1:])) * valid[..., None]
+    player_value_target = (
+        player_reward + player_next_value_probs * player_valid[..., None]
     )
 
-    cat_value_delta = value_target - value_probs
-    scalar_value_delta = cat_value_delta @ cat_vf_support
+    player_value_delta = player_value_target - player_value_probs
+    player_scalar_delta = player_value_delta @ cat_vf_support
 
-    builder_td_lambdas = (config.builder_td_lambda * builder_valid).astype(float_dtype)
     player_td_lambdas = (config.player_td_lambda * player_valid).astype(float_dtype)
-    td_lambdas = jnp.concatenate((builder_td_lambdas, player_td_lambdas))
-
-    builder_gae_lambdas = (config.builder_gae_lambda * builder_valid).astype(
-        float_dtype
-    )
     player_gae_lambdas = (config.player_gae_lambda * player_valid).astype(float_dtype)
-    gae_lambdas = jnp.concatenate((builder_gae_lambdas, player_gae_lambdas))
 
-    num_builder = builder_valid.shape[0]
-    builder_scalar_delta = scalar_value_delta[:num_builder]
-    player_scalar_delta = scalar_value_delta[num_builder:]
-
-    builder_nll = -builder_actor_log_prob
-    builder_ent_pred = builder_actor_conditional_entropy_head.logits
-
-    next_builder_ent_pred = jnp.concatenate(
-        [builder_ent_pred[1:], jnp.zeros_like(builder_ent_pred[:1])], axis=0
+    player_returns = (
+        segmented_cumsum(player_value_delta, player_td_lambdas[..., None])
+        + player_value_probs
     )
-    builder_ent_delta = (
-        (builder_nll / config.normalising_constant)
-        + next_builder_ent_pred
-        - builder_ent_pred
-    )
+    player_advantages = segmented_cumsum(player_scalar_delta, player_gae_lambdas)
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -252,39 +212,12 @@ def train_step(
         config.player_entropy_temp_floor,
         config.player_entropy_temp_ceil,
     )
-    builder_entropy_temp = power_schedule(
-        config.builder_temp_coef,
-        jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
-        config.builder_entropy_temp_decay,
-        config.builder_entropy_temp_floor,
-        config.builder_entropy_temp_ceil,
-    )
-
-    combined_builder_delta = (
-        builder_scalar_delta + builder_entropy_temp * builder_ent_delta
-    )
-    combined_scalar_delta = jnp.concatenate(
-        [combined_builder_delta, player_scalar_delta], axis=0
-    )
-
-    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
-    # Need to expand td_lambdas to match the shape of cat_value_delta for proper broadcasting
-    returns = segmented_cumsum(cat_value_delta, td_lambdas[..., None]) + value_probs
-    advantages = segmented_cumsum(combined_scalar_delta, gae_lambdas)
-
-    ent_returns = (
-        segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_pred
-    )
-
-    builder_returns = returns[: builder_valid.shape[0]]
-    builder_advantages = advantages[: builder_valid.shape[0]]
-
-    player_returns = returns[builder_valid.shape[0] :]
-    player_advantages = advantages[builder_valid.shape[0] :]
 
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
+
+    training_logs = {}
 
     def player_loss_fn(params: Params):
 
@@ -375,122 +308,8 @@ def train_step(
             ),
         )
 
-    def builder_loss_fn(params: Params):
-
-        pred = promote_map(
-            builder_state.apply_fn(
-                params,
-                builder_actor_input,
-                builder_transitions.agent_output.actor_output,
-                HeadParams(),
-            )
-        )
-
-        conditional_entropy_head = pred.conditional_entropy_head
-        learner_value_head = pred.value_head
-        learner_action_head = pred.action_head
-
-        learner_log_prob = learner_action_head.log_prob
-
-        learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
-        learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
-
-        # Calculate the losses.
-        loss_pg = policy_gradient_loss(
-            policy_ratios=learner_actor_ratio,
-            advantages=builder_advantages,
-            valid=builder_valid,
-            clip_ppo=config.clip_ppo,
-        )
-
-        loss_v = average(
-            optax.softmax_cross_entropy(
-                logits=learner_value_head.logits,
-                labels=builder_returns,
-            ),
-            jnp.ones_like(builder_valid),
-        )
-
-        builder_entropy = average(learner_action_head.entropy, builder_valid)
-
-        # Estimator for entropy
-        loss_entropy = mse_value_loss(
-            pred=conditional_entropy_head.logits,
-            target=ent_returns,
-            valid=builder_valid,
-        )
-
-        loss_forward_kl = forward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
-            valid=builder_valid,
-        )
-        loss_backward_kl = backward_kl_loss(
-            policy_ratio=learner_actor_ratio,
-            log_policy_ratio=learner_actor_log_ratio,
-            valid=builder_valid,
-        )
-
-        # 1. Shift the logic (Your temporal alignment is still correct!)
-        human_prob_raw = builder_transitions.env_output.human_prob
-        human_prob = jnp.concatenate(
-            [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
-        )
-
-        human_valid_mask = (
-            builder_transitions.env_output.curr_attribute
-            != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
-        ) & (
-            builder_transitions.env_output.curr_attribute
-            != PackedSetFeature.PACKED_SET_FEATURE__GENDER
-        )
-
-        loss_human = -average(
-            human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
-        )
-
-        loss = (
-            config.builder_policy_loss_coef * loss_pg
-            + config.builder_value_loss_coef * loss_v
-            + config.builder_kl_loss_coef * loss_backward_kl
-            + config.builder_entropy_pred_coef * loss_entropy
-            + config.builder_human_loss_coef * builder_entropy_temp * loss_human
-        )
-
-        return loss, dict(
-            builder_loss_pg=loss_pg,
-            builder_loss_v=loss_v,
-            builder_loss_kl_rl=loss_backward_kl,
-            builder_loss_entropy=loss_entropy,
-            builder_loss_human=loss_human,
-            # Head entropies
-            builder_entropy=builder_entropy,
-            # Ratios
-            builder_ratio_clip_fraction=clip_fraction(
-                policy_ratios=learner_actor_ratio,
-                valid=builder_valid,
-                clip_ppo=config.clip_ppo,
-            ),
-            builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
-            # Approx KL values
-            builder_learner_actor_approx_kl=loss_forward_kl,
-            # Extra stats
-            builder_value_function_r2=calculate_r2(
-                value_prediction=learner_value_head.expectation,
-                value_target=builder_returns @ cat_vf_support,
-                mask=builder_valid,
-            ),
-        )
-
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
-
-    builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
-    (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
-        builder_state.params
-    )
-
-    training_logs = {}
     training_logs.update(player_logs)
     training_logs.update(
         dict(
@@ -501,19 +320,6 @@ def train_step(
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )
     )
-    training_logs.update(builder_logs)
-    training_logs.update(
-        dict(
-            builder_loss=builder_loss_val,
-            builder_inital_entropy=jnp.mean(ent_returns[0])
-            * config.normalising_constant,
-            builder_param_norm=optax.global_norm(builder_state.params),
-            builder_gradient_norm=optax.global_norm(builder_grads),
-            builder_norm_adv_mean=average(builder_advantages, builder_valid),
-            builder_norm_adv_std=builder_advantages.std(where=builder_valid),
-        )
-    )
-
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         # Update target params and adv mean/std.
@@ -524,15 +330,231 @@ def train_step(
         frame_count=player_state.frame_count + player_valid.sum(),
     )
 
-    builder_state = builder_state.apply_gradients(grads=builder_grads)
-    builder_state = builder_state.replace(
-        # Update target params.
-        target_params=optax.incremental_update(
-            builder_state.params, builder_state.target_params, config.builder_ema_decay
-        ),
-        step_count=builder_state.step_count + 1,
-        frame_count=builder_state.frame_count + builder_valid.sum(),
-    )
+    # --- Builder ---
+    builder_entropy_temp = 0.0
+    if config.smogon_format != "randombattle":
+        builder_actor_input = BuilderActorInput(
+            env=builder_transitions.env_output,
+            history=builder_history,
+        )
+        builder_actor_conditional_entropy_head = (
+            builder_transitions.agent_output.actor_output.conditional_entropy_head
+        )
+        builder_actor_action_head = (
+            builder_transitions.agent_output.actor_output.action_head
+        )
+        builder_actor_value_head = (
+            builder_transitions.agent_output.actor_output.value_head
+        )
+        builder_actor_log_prob = builder_actor_action_head.log_prob
+        builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+        final_reward = player_reward[-1]
+        builder_reward = (
+            jax.nn.one_hot(
+                builder_valid.sum(axis=0),
+                builder_valid.shape[0],
+                axis=0,
+                dtype=float_dtype,
+            )[..., None]
+            * final_reward
+        )
+        builder_value_probs = jnp.exp(builder_actor_value_head.log_probs)
+        builder_next_value_probs = jnp.concatenate(
+            (builder_value_probs[1:], builder_value_probs[-1:]), axis=0
+        )
+        # Using builder_valid ensures we don't bootstrap from next episode/state if done
+        builder_value_target = (
+            builder_reward + builder_next_value_probs * builder_valid[..., None]
+        )
+        builder_value_delta = builder_value_target - builder_value_probs
+        builder_td_lambdas = (config.builder_td_lambda * builder_valid).astype(
+            float_dtype
+        )
+        builder_gae_lambdas = (config.builder_gae_lambda * builder_valid).astype(
+            float_dtype
+        )
+        builder_entropy_temp = power_schedule(
+            config.builder_temp_coef,
+            jnp.floor(builder_state.step_count / config.gradient_accumulation_steps),
+            config.builder_entropy_temp_decay,
+            config.builder_entropy_temp_floor,
+            config.builder_entropy_temp_ceil,
+        )
+
+        # Entropy prediction — scale predictions up to true entropy scale (matches torch: ents = reg_norm * self.ents)
+        builder_nll = -builder_actor_log_prob
+        builder_ent_pred = builder_actor_conditional_entropy_head.logits
+        builder_ent_scaled = (
+            builder_ent_pred * config.builder_entropy_prediction_normalising_constant
+        )
+        next_builder_ent_scaled = (
+            jnp.concatenate(
+                [builder_ent_scaled[1:], jnp.zeros_like(builder_ent_scaled[:1])], axis=0
+            )
+            * builder_valid
+        )
+        # Entropy delta uses raw NLL (not divided by norm), against scaled-up predictions
+        builder_ent_delta = builder_nll + next_builder_ent_scaled - builder_ent_scaled
+
+        # Value returns: TD(lambda) in categorical space
+        builder_returns = (
+            segmented_cumsum(builder_value_delta, builder_td_lambdas[..., None])
+            + builder_value_probs
+        )
+
+        # Value advantages: GAE in categorical space, then project to scalar
+        builder_advantages = (
+            segmented_cumsum(builder_value_delta, builder_gae_lambdas[..., None])
+            @ cat_vf_support
+        )
+
+        # Entropy returns: TD(lambda), then renormalize back to network prediction scale
+        ent_returns = (
+            segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_scaled
+        ) / config.builder_entropy_prediction_normalising_constant
+
+        # Entropy advantages: separate GAE pass, added to value advantages
+        builder_advantages = (
+            builder_advantages
+            + builder_entropy_temp
+            * segmented_cumsum(builder_ent_delta, builder_gae_lambdas)
+        )
+
+        def builder_loss_fn(params: Params):
+
+            pred = promote_map(
+                builder_state.apply_fn(
+                    params,
+                    builder_actor_input,
+                    builder_transitions.agent_output.actor_output,
+                    HeadParams(),
+                )
+            )
+
+            learner_value_head = pred.value_head
+            learner_action_head = pred.action_head
+            learner_conditional_entropy_head = pred.conditional_entropy_head
+            learner_log_prob = learner_action_head.log_prob
+
+            learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
+            learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
+
+            # Calculate the losses.
+            loss_pg = policy_gradient_loss(
+                policy_ratios=learner_actor_ratio,
+                advantages=builder_advantages,
+                valid=builder_valid,
+                clip_ppo=config.clip_ppo,
+            )
+
+            loss_v = average(
+                optax.softmax_cross_entropy(
+                    logits=learner_value_head.logits, labels=builder_returns
+                ),
+                builder_valid,
+            )
+
+            loss_builder_entropy = -average(learner_action_head.entropy, builder_valid)
+            loss_builder_conditional_entropy = mse_value_loss(
+                pred=learner_conditional_entropy_head.logits,
+                target=ent_returns,
+                valid=builder_valid,
+            )
+
+            loss_forward_kl = forward_kl_loss(
+                policy_ratio=learner_actor_ratio,
+                log_policy_ratio=learner_actor_log_ratio,
+                valid=builder_valid,
+            )
+            loss_backward_kl = backward_kl_loss(
+                policy_ratio=learner_actor_ratio,
+                log_policy_ratio=learner_actor_log_ratio,
+                valid=builder_valid,
+            )
+
+            # 1. Shift the logic (Your temporal alignment is still correct!)
+            human_prob_raw = builder_transitions.env_output.human_prob
+            human_prob = jnp.concatenate(
+                [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
+            )
+
+            human_valid_mask = (
+                builder_transitions.env_output.curr_attribute
+                != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
+            ) & (
+                builder_transitions.env_output.curr_attribute
+                != PackedSetFeature.PACKED_SET_FEATURE__GENDER
+            )
+
+            loss_human = -average(
+                human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
+            )
+
+            loss = (
+                config.builder_policy_loss_coef * loss_pg
+                + config.builder_value_loss_coef * loss_v
+                + config.builder_kl_loss_coef * loss_backward_kl
+                + config.builder_human_loss_coef * loss_human
+                + config.builder_conditional_entropy_loss_coef
+                * loss_builder_conditional_entropy
+                + config.builder_entropy_coef * loss_builder_entropy
+            )
+
+            return loss, dict(
+                builder_loss_pg=loss_pg,
+                builder_loss_v=loss_v,
+                builder_loss_kl_rl=loss_backward_kl,
+                builder_loss_entropy=loss_builder_entropy,
+                builder_loss_conditional_entropy=loss_builder_conditional_entropy,
+                builder_loss_human=loss_human,
+                # Ratios
+                builder_ratio_clip_fraction=clip_fraction(
+                    policy_ratios=learner_actor_ratio,
+                    valid=builder_valid,
+                    clip_ppo=config.clip_ppo,
+                ),
+                builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
+                # Approx KL values
+                builder_learner_actor_approx_kl=loss_forward_kl,
+                builder_learner_condtional_entropy_head_mean=average(
+                    learner_conditional_entropy_head.logits, builder_valid
+                ),
+                builder_learner_condtional_entropy_head_std=jnp.std(
+                    learner_conditional_entropy_head.logits, where=builder_valid
+                ),
+                # Extra stats
+                builder_value_function_r2=calculate_r2(
+                    value_prediction=learner_value_head.expectation,
+                    value_target=builder_returns @ cat_vf_support,
+                    mask=builder_valid,
+                ),
+            )
+
+        builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
+        (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
+            builder_state.params
+        )
+        training_logs.update(builder_logs)
+        training_logs.update(
+            dict(
+                builder_loss=builder_loss_val,
+                builder_param_norm=optax.global_norm(builder_state.params),
+                builder_gradient_norm=optax.global_norm(builder_grads),
+                builder_norm_adv_mean=average(builder_advantages, builder_valid),
+                builder_norm_adv_std=builder_advantages.std(where=builder_valid),
+            )
+        )
+        builder_state = builder_state.apply_gradients(grads=builder_grads)
+        builder_state = builder_state.replace(
+            # Update target params.
+            target_params=optax.incremental_update(
+                builder_state.params,
+                builder_state.target_params,
+                config.builder_ema_decay,
+            ),
+            step_count=builder_state.step_count + 1,
+            frame_count=builder_state.frame_count + builder_valid.sum(),
+        )
 
     training_logs.update(collect_batch_telemetry_data(batch, config))
     training_logs.update(
@@ -607,6 +629,7 @@ class Learner:
         self.player_replay = PlayerTrajectoryStore(
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
+            need_tracking=self.config.smogon_format != "randombattle",
         )
 
         # Threading
@@ -755,7 +778,9 @@ class Learner:
         # 2. Validate Numerical Stability
         # Convert JAX arrays to python scalars for cheap comparison
         p_loss_valid = jnp.isfinite(logs["player_loss"]).item()
-        b_loss_valid = jnp.isfinite(logs["builder_loss"]).item()
+        b_loss_valid = True
+        if self.config.smogon_format != "randombattle":
+            b_loss_valid = jnp.isfinite(logs["builder_loss"]).item()
 
         if not p_loss_valid or not b_loss_valid:
             step = logs["training_step"]
@@ -775,7 +800,10 @@ class Learner:
         # Console Progress
         self.train_progress.update(1)
 
-        if step % self.config.save_interval_steps == 0:
+        if (
+            self.config.smogon_format != "randombattle"
+            and step % self.config.save_interval_steps == 0
+        ):
             logs.update(self._get_usage_counts())
 
         if step % self.config.league_winrate_log_steps == 0:

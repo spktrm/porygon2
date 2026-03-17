@@ -22,9 +22,6 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 def collect_batch_telemetry_data(
     batch: Trajectory, config: Porygon2LearnerConfig
 ) -> Dict[str, Any]:
-    builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
-    builder_lengths = builder_valid.sum(0)
-
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     player_lengths = player_valid.sum(0)
 
@@ -85,13 +82,10 @@ def collect_batch_telemetry_data(
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
 
-    return dict(
+    telemetry = dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
-        builder_trajectory_length_mean=builder_lengths.mean(),
-        builder_trajectory_length_min=builder_lengths.min(),
-        builder_trajectory_length_max=builder_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
@@ -101,6 +95,19 @@ def collect_batch_telemetry_data(
         .astype(jnp.float32)
         .mean(),
     )
+
+    if config.smogon_format != "randombattle":
+        builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
+        builder_lengths = builder_valid.sum(0)
+        telemetry.update(
+            dict(
+                builder_trajectory_length_mean=builder_lengths.mean(),
+                builder_trajectory_length_min=builder_lengths.min(),
+                builder_trajectory_length_max=builder_lengths.max(),
+            )
+        )
+
+    return telemetry
 
 
 def calculate_r2(

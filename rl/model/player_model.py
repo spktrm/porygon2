@@ -52,7 +52,6 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
-        min_p: float,
     ):
         log_policy = legal_log_policy(logits, valid_mask)
         policy = legal_policy(logits, valid_mask)
@@ -67,9 +66,8 @@ class Porygon2PlayerModel(nn.Module):
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min),
+                jnp.where(valid_mask, logits, jnp.finfo(logits.dtype).min),
                 self.make_rng("sampling"),
-                min_p=min_p,
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
@@ -111,7 +109,6 @@ class Porygon2PlayerModel(nn.Module):
             env_step.action_mask.reshape(-1),
             actor_output.action_head,
             train=self.cfg.train,
-            min_p=head_params.min_p,
         )
 
         value_head = self._forward_value_head(state_embedding)
@@ -172,7 +169,7 @@ def main(generation: int = 9):
         params,
         ex_actor_input,
         PlayerActorOutput(),
-        HeadParams(temp=0.8, min_p=0.1),
+        HeadParams(temp=0.8),
         rngs={"sampling": key},
     )
     pprint(actor_output)

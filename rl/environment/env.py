@@ -59,7 +59,7 @@ class SinglePlayerSyncEnvironment:
         self.last_state = process_state(environment_response.state)
         return self.last_state
 
-    def reset(self, packed_team: list[int]):
+    def reset(self, packed_team: list[int] = None):
         self.rqid = None
         reset_message = ClientRequest(
             reset=ResetRequest(
@@ -152,6 +152,7 @@ class TeamBuilderEnvironment:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def _reset(self, key: jax.Array) -> BuilderActorInput:
+
         order = generate_order(key, self._num_team_members, NUM_PACKED_SET_FEATURES)
         member_position = order // NUM_PACKED_SET_FEATURES
         member_attribute = order % NUM_PACKED_SET_FEATURES

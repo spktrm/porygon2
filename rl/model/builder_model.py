@@ -260,9 +260,11 @@ class Porygon2BuilderModel(nn.Module):
             ).reshape(-1, self.cfg.entity_size)
         )
 
+        sos_token = self.sos_embedding.astype(self.cfg.dtype)
         packed_set_embeddings = jnp.concatenate(
-            (self.sos_embedding.astype(self.cfg.dtype), packed_set_embeddings), axis=0
+            (sos_token, packed_set_embeddings), axis=0
         )
+
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
         packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
@@ -277,6 +279,7 @@ class Porygon2BuilderModel(nn.Module):
         ability_keys: jax.Array,
         item_keys: jax.Array,
         move_keys: jax.Array,
+        *,
         head_params: HeadParams,
     ) -> BuilderActorOutput:
 
@@ -620,7 +623,8 @@ def main(generation: int = 9):
         team_tokens = builder_actor_input.history.packed_team_member_tokens.reshape(
             -1, NUM_PACKED_SET_FEATURES
         )
-        print("\n".join(get_packed_team_string(team_tokens).split("]")))
+        team_list = get_packed_team_string(team_tokens).split("]")
+        print("\n".join(team_list))
 
         assert np.all(
             team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__SPECIES]
@@ -641,6 +645,6 @@ def main(generation: int = 9):
 
 
 if __name__ == "__main__":
-    debug = True
+    debug = False
     with jax.disable_jit(debug):
         main()

@@ -37,7 +37,7 @@ class AdamWConfig:
 
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
-SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers"]
+SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
 
 
 @chex.dataclass(frozen=True)
@@ -61,7 +61,7 @@ class Porygon2LearnerConfig:
     league_winrate_log_steps: int = 1_000
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = 100_000
+    minimum_historical_player_steps: int = 1_000_000
     league_size: int = 16
 
     # Batch iteration params
@@ -82,8 +82,8 @@ class Porygon2LearnerConfig:
     # Advantage estimation params
     player_td_lambda: float = 0.8
     player_gae_lambda: float = 0.5
-    builder_td_lambda: float = 1.0
-    builder_gae_lambda: float = 1.0
+    builder_td_lambda: float = 0.8
+    builder_gae_lambda: float = 0.5
     clip_ppo: float = 0.3
 
     # Loss coefficients
@@ -96,17 +96,18 @@ class Porygon2LearnerConfig:
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_entropy_pred_coef: float = 1.0
-    builder_human_loss_coef: float = 0.1
-    ## Entropy
-    normalising_constant: int = 100
+    builder_conditional_entropy_loss_coef: float = 1.0
+    builder_entropy_coef: float = 1e-2
+    builder_entropy_prediction_normalising_constant: float = 100
+    # Human
+    builder_human_loss_coef: float = 0.0
 
     player_temp_coef: float = 0.5
     player_entropy_temp_decay: float = 0.3
     player_entropy_temp_ceil: float = 0.5
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.1
+    builder_temp_coef: float = 0.2
     builder_entropy_temp_decay: float = 0.25
     builder_entropy_temp_ceil: float = 1.0
     builder_entropy_temp_floor: float = 1e-3
@@ -114,6 +115,9 @@ class Porygon2LearnerConfig:
     # Smogon Generation
     generation: GenT = 9
     smogon_format: SmogonFormatT = "ou"
+
+    # Logging params
+    log_artifacts_online: bool = False
 
 
 def get_learner_config():
@@ -238,7 +242,9 @@ def save_train_state(
     save_path = save_train_state_locally(
         learner_config, player_state, builder_state, league
     )
-    if player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0:
+    if learner_config.log_artifacts_online and (
+        player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
+    ):
         wandb_run.log_artifact(
             artifact_or_path=save_path,
             name=f"latest-gen{learner_config.generation}",
