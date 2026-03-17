@@ -4,10 +4,9 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.actor.player_actor import PackedSetFeature
 from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
 
