@@ -403,7 +403,7 @@ def train_step(
         )
 
         # Value advantages: GAE in categorical space, then project to scalar
-        builder_advantages = (
+        builder_win_advantages = (
             segmented_cumsum(builder_value_delta, builder_gae_lambdas[..., None])
             @ cat_vf_support
         )
@@ -414,11 +414,10 @@ def train_step(
         ) / config.builder_entropy_prediction_normalising_constant
 
         # Entropy advantages: separate GAE pass, added to value advantages
-        builder_advantages = (
-            builder_advantages
-            + builder_entropy_temp
-            * segmented_cumsum(builder_ent_delta, builder_gae_lambdas)
+        builder_ent_advantages = builder_entropy_temp * segmented_cumsum(
+            builder_ent_delta, builder_gae_lambdas
         )
+        builder_advantages = builder_win_advantages + builder_ent_advantages
 
         def builder_loss_fn(params: Params):
 
@@ -542,6 +541,12 @@ def train_step(
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
+                builder_ent_win_adv_ratio=average(
+                    jnp.abs(builder_ent_advantages), builder_valid
+                )
+                / (
+                    average(jnp.abs(builder_win_advantages), builder_valid) + 1e-8
+                ),
             )
         )
         builder_state = builder_state.apply_gradients(grads=builder_grads)
