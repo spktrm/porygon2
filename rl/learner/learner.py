@@ -544,9 +544,7 @@ def train_step(
                 builder_ent_win_adv_ratio=average(
                     jnp.abs(builder_ent_advantages), builder_valid
                 )
-                / (
-                    average(jnp.abs(builder_win_advantages), builder_valid) + 1e-8
-                ),
+                / (average(jnp.abs(builder_win_advantages), builder_valid) + 1e-8),
             )
         )
         builder_state = builder_state.apply_gradients(grads=builder_grads)
