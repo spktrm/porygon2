@@ -327,6 +327,8 @@ class Encoder(nn.Module):
             embedding_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
+        self.null_history = self.param("null_history", embedding_init, (1, entity_size))
+
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
         )
@@ -985,18 +987,18 @@ class Encoder(nn.Module):
             valid_timestep_mask[..., None], local_timestep_embedding, 0
         )
 
+        local_timestep_embedding = jnp.concatenate(
+            (self.null_history.astype(self.cfg.dtype), local_timestep_embedding), axis=0
+        )
         seq_len = local_timestep_embedding.shape[0]
         timestep_positions = jnp.arange(seq_len)
-
-        # causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool))
-        # attn_mask = create_attention_mask(valid_timestep_mask)
-        # attn_mask = attn_mask & jnp.expand_dims(causal_mask, axis=0)
-
-        # global_timestep_embedding = self.global_timestep_encoder(
-        #     local_timestep_embedding,
-        #     attn_mask=attn_mask,
-        #     qkv_positions=timestep_positions,
-        # )
+        valid_timestep_mask = jnp.concatenate(
+            (jnp.ones(1, dtype=jnp.bool), valid_timestep_mask), axis=0
+        )
+        history_request_count = jnp.concatenate(
+            (jnp.zeros(1, dtype=history_request_count.dtype), history_request_count),
+            axis=0,
+        )
 
         return (
             local_timestep_embedding,
