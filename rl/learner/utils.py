@@ -4,9 +4,9 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import CAT_VF_SUPPORT
+from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
 
@@ -99,11 +99,29 @@ def collect_batch_telemetry_data(
     if config.smogon_format != "randombattle":
         builder_valid = jnp.bitwise_not(batch.builder_transitions.env_output.done)
         builder_lengths = builder_valid.sum(0)
+
+        team_tokens = batch.builder_history.packed_team_member_tokens.reshape(
+            *batch.builder_history.packed_team_member_tokens.shape[:-1],
+            -1,
+            NUM_PACKED_SET_FEATURES
+        )
+        team_evs = team_tokens[
+            ...,
+            PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+            + 1,
+        ]
+        ev_prob = team_evs / 128
+        ev_entropy = -jnp.sum(ev_prob * jnp.log(ev_prob + 1e-8), axis=-1).mean()
+
+        ev_reward = batch.builder_transitions.env_output.ev_reward[-1].mean()
+
         telemetry.update(
             dict(
                 builder_trajectory_length_mean=builder_lengths.mean(),
                 builder_trajectory_length_min=builder_lengths.min(),
                 builder_trajectory_length_max=builder_lengths.max(),
+                builder_ev_entropy=ev_entropy,
+                builder_ev_reward=ev_reward,
             )
         )
 
