@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
-import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
@@ -173,6 +173,9 @@ def train_step(
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
     player_actor_value_head = player_transitions.agent_output.actor_output.value_head
+    player_actor_conditional_entropy_head = (
+        player_transitions.agent_output.actor_output.conditional_entropy_head
+    )
     player_actor_log_prob = player_actor_action_head.log_prob
 
     float_dtype = player_actor_log_prob.dtype
@@ -213,6 +216,30 @@ def train_step(
         config.player_entropy_temp_ceil,
     )
 
+    # Entropy prediction — scale predictions up to true entropy scale
+    player_nll = -player_actor_log_prob
+    player_ent_pred = player_actor_conditional_entropy_head.logits
+    player_ent_scaled = (
+        player_ent_pred * config.player_entropy_prediction_normalising_constant
+    )
+    next_player_ent_scaled = (
+        jnp.concatenate(
+            [player_ent_scaled[1:], jnp.zeros_like(player_ent_scaled[:1])], axis=0
+        )
+        * player_valid
+    )
+    player_ent_delta = player_nll + next_player_ent_scaled - player_ent_scaled
+
+    # Entropy returns: TD(lambda), then renormalize back to network prediction scale
+    player_ent_returns = (
+        segmented_cumsum(player_ent_delta, player_td_lambdas) + player_ent_scaled
+    ) / config.player_entropy_prediction_normalising_constant
+
+    # Entropy advantages: separate GAE pass, added to value advantages
+    player_advantages = player_advantages + player_entropy_temp * segmented_cumsum(
+        player_ent_delta, player_gae_lambdas
+    )
+
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
     ).sum(axis=-1)
@@ -232,6 +259,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
+        learner_conditional_entropy_head = player_pred.conditional_entropy_head
         learner_log_prob = learner_action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -278,11 +306,19 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_player_conditional_entropy = mse_value_loss(
+            pred=learner_conditional_entropy_head.logits,
+            target=player_ent_returns,
+            valid=player_valid,
+        )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_coef * player_entropy_temp * loss_entropy
+            + config.player_conditional_entropy_loss_coef
+            * loss_player_conditional_entropy
         )
 
         return loss, dict(
@@ -291,6 +327,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_conditional_entropy=loss_player_conditional_entropy,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -300,6 +337,12 @@ def train_step(
             player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
             # Approx KL values
             player_learner_actor_approx_kl=loss_forward_kl,
+            player_learner_conditional_entropy_head_mean=average(
+                learner_conditional_entropy_head.logits, player_valid
+            ),
+            player_learner_conditional_entropy_head_std=jnp.std(
+                learner_conditional_entropy_head.logits, where=player_valid
+            ),
             # Extra stats
             player_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,

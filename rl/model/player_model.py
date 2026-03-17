@@ -22,6 +22,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
+    RegressionValueLogitHead,
     sample_categorical,
 )
 from rl.model.modules import MLP
@@ -45,6 +46,9 @@ class Porygon2PlayerModel(nn.Module):
 
         self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
+
+        self.conditional_entropy_head_mlp = MLP()
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def post_head(
         self,
@@ -92,6 +96,10 @@ class Porygon2PlayerModel(nn.Module):
         x = self.value_head_mlp(x)
         return self.value_head(x)
 
+    def _forward_conditional_entropy_head(self, x: jax.Array) -> jax.Array:
+        x = self.conditional_entropy_head_mlp(x)
+        return self.conditional_entropy_head(x)
+
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
@@ -112,8 +120,15 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         value_head = self._forward_value_head(state_embedding)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            state_embedding
+        )
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            conditional_entropy_head=conditional_entropy_head,
+        )
 
     def __call__(
         self,
