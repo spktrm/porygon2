@@ -1,0 +1,162 @@
+name: Change Summary
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (inclusive) in YYYY-MM-DD format"
+        required: true
+        type: string
+      end_date:
+        description: "End date (inclusive) in YYYY-MM-DD format"
+        required: true
+        type: string
+
+jobs:
+  summarize:
+    name: Summarize changes between ${{ inputs.start_date }} and ${{ inputs.end_date }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate change summary
+        env:
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+        run: |
+          # Validate date format
+          if ! date -d "$START_DATE" &>/dev/null; then
+            echo "::error::Invalid start_date format: '$START_DATE'. Expected YYYY-MM-DD."
+            exit 1
+          fi
+          if ! date -d "$END_DATE" &>/dev/null; then
+            echo "::error::Invalid end_date format: '$END_DATE'. Expected YYYY-MM-DD."
+            exit 1
+          fi
+
+          # The end date is treated as inclusive, so advance it by one day for git's
+          # --before filter (which is exclusive on the upper bound).
+          AFTER="${START_DATE}T00:00:00"
+          BEFORE=$(date -d "$END_DATE + 1 day" '+%Y-%m-%dT00:00:00')
+
+          echo "Collecting commits after $AFTER and before $BEFORE …"
+
+          # Collect commits: hash | author name | author date (ISO) | subject
+          COMMITS=$(git log \
+            --after="$AFTER" \
+            --before="$BEFORE" \
+            --format="%H|%an|%as|%s" \
+            --no-merges \
+            | sort -t'|' -k3 -r)   # newest first by author date
+
+          TOTAL=$(echo "$COMMITS" | grep -c '.' || true)
+          if [ -z "$COMMITS" ]; then
+            TOTAL=0
+          fi
+
+          # Strip conventional-commit prefixes from a subject line and capitalise.
+          # e.g. "feat(api): add endpoint" → "Add endpoint"
+          clean_subject() {
+            echo "$1" \
+              | sed -E 's/^(feat|feature|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?!?:[[:space:]]*//' \
+              | awk '{$1=toupper(substr($1,1,1))substr($1,2); print}'
+          }
+
+          # Helper: extract commits whose subject matches a prefix pattern
+          filter_type() {
+            local pattern="$1"
+            echo "$COMMITS" | grep -iE "^\S+\|\S+\|\S+\|${pattern}" || true
+          }
+
+          # Print a section as a readable bullet list (no raw hashes shown)
+          print_section() {
+            local title="$1"
+            local rows="$2"
+            if [ -n "$rows" ]; then
+              echo "### $title"
+              echo ""
+              while IFS='|' read -r hash author date subject; do
+                [ -z "$hash" ] && continue
+                desc=$(clean_subject "$subject")
+                echo "- **$desc** — $date, by $author"
+              done <<< "$rows"
+              echo ""
+            fi
+          }
+
+          # ── build the Markdown report ────────────────────────────────────────────
+          {
+            echo "# 📋 Update Summary: $START_DATE to $END_DATE"
+            echo ""
+            echo "> **Project:** ${{ github.repository }}  "
+            echo "> **Report generated:** $(date -u '+%B %-d, %Y at %H:%M UTC')"
+            echo ""
+            echo "---"
+            echo ""
+
+            if [ "$TOTAL" -eq 0 ]; then
+              echo "> ℹ️ No updates were made during this period."
+            else
+
+              # Human-friendly intro
+              echo "This report summarises the **$TOTAL update(s)** made to the project"
+              echo "between **$START_DATE** and **$END_DATE**."
+              echo ""
+
+              # ── Grouped sections ─────────────────────────────────────────────────
+              FEAT=$(filter_type     "(feat|feature)(\(.+\))?[!]?:")
+              FIX=$(filter_type      "fix(\(.+\))?[!]?:")
+              PERF=$(filter_type     "perf(\(.+\))?[!]?:")
+              DOCS=$(filter_type     "docs(\(.+\))?[!]?:")
+              UNDER_HOOD=$(filter_type "(style|refactor|test|build|ci|chore|revert)(\(.+\))?[!]?:")
+
+              # Collect commits not matching any known prefix
+              MATCHED_HASHES=$(echo -e "$FEAT\n$FIX\n$PERF\n$DOCS\n$UNDER_HOOD" \
+                | grep -o '^[0-9a-f]\{40\}' || true)
+
+              OTHER=""
+              while IFS='|' read -r hash author date subject; do
+                [ -z "$hash" ] && continue
+                if ! echo "$MATCHED_HASHES" | grep -q "^${hash}$"; then
+                  OTHER="${OTHER}${hash}|${author}|${date}|${subject}"$'\n'
+                fi
+              done <<< "$COMMITS"
+              OTHER="${OTHER%$'\n'}"
+
+              echo "## What's New"
+              echo ""
+
+              print_section "🚀 New Features & Improvements" "$FEAT"
+              print_section "🐛 Problems Fixed"             "$FIX"
+              print_section "⚡ Performance Improvements"   "$PERF"
+              print_section "📚 Documentation Updates"      "$DOCS"
+              print_section "📝 Other Updates"              "$OTHER"
+              print_section "🔧 Under the Hood"             "$UNDER_HOOD"
+
+              # ── Contributors ─────────────────────────────────────────────────────
+              echo "## 👥 Team Members Who Contributed"
+              echo ""
+              echo "$COMMITS" \
+                | awk -F'|' 'NF>=2 {print $2}' \
+                | sort | uniq -c | sort -rn \
+                | awk '{
+                    count = $1
+                    $1 = ""
+                    name = substr($0, 2)
+                    plural = (count == 1) ? "update" : "updates"
+                    printf "- **%s** — %d %s\n", name, count, plural
+                  }' \
+                || true
+              echo ""
+
+            fi
+
+            echo "---"
+            echo "_Generated by the [Change Summary workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/change-summary.yml)._"
+
+          } | tee "$GITHUB_STEP_SUMMARY"
