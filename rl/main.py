@@ -170,7 +170,7 @@ def main(args: argparse.Namespace):
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
         player_head_params=HeadParams(temp=0.8),
-        builder_head_params=HeadParams(temp=0.8),
+        builder_head_params=HeadParams(temp=1.0),
     )
 
     logger.info("Loading train state...")
