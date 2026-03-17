@@ -89,12 +89,18 @@ class BuilderTrajectoryStore:
     def sample_trajectory(
         self, increment: bool = True
     ) -> tuple[BuilderTransition, BuilderHistoryOutput]:
-        """samples a trajectory uniformly from those with less than max_reuses, and increments its reuse count"""
+        """Samples a trajectory prioritising those with the lowest reuse count.
+
+        Among elements sharing the minimum reuse count, one is chosen uniformly
+        at random.  The chosen trajectory's reuse counter is incremented.
+        """
 
         valid_indices = (self._reuses < self._max_reuses) & self._valid
         available_indices = np.where(valid_indices)[0]
 
-        sample_index = np.random.choice(available_indices).item()
+        min_reuses = self._reuses[available_indices].min()
+        min_indices = available_indices[self._reuses[available_indices] == min_reuses]
+        sample_index = np.random.choice(min_indices).item()
         if increment:
             self._reuses[sample_index] += 1
         return self._trajectories[sample_index]
@@ -220,11 +226,19 @@ class PlayerTrajectoryStore:
         self._progress.update(1)
 
     def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
-        """Samples n trajectories uniformly from those with fewer than max_reuses."""
+        """Samples n trajectories prioritising those with the lowest reuse counts.
+
+        Available trajectories are sorted by reuse count (ascending).  The first
+        ``n`` entries of that sorted list are returned, so elements that have been
+        reused the least number of times are always chosen before those with
+        higher reuse counts.
+        """
         valid_indices = (self._reuses < self._max_reuses) & self._valid
         available_indices = np.where(valid_indices)[0]
 
-        sample_indices = np.random.choice(available_indices, size=n, replace=False)
+        sorted_order = np.argsort(self._reuses[available_indices], kind="stable")
+        sample_indices = available_indices[sorted_order][:n]
+
         if increment:
             unique_indices, counts = np.unique(sample_indices, return_counts=True)
             for idx, count in zip(unique_indices, counts):
