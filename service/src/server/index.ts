@@ -4,7 +4,6 @@ import path from "path";
 import http from "http";
 import {
     ClientRequest,
-    EnvironmentResponse,
     ResetRequest,
     StepRequest,
     WorkerRequest,
