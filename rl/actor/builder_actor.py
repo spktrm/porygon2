@@ -1,4 +1,5 @@
 import jax
+import numpy as np
 
 from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
