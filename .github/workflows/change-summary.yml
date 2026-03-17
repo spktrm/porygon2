@@ -54,21 +54,18 @@ jobs:
             --no-merges \
             | sort -t'|' -k3 -r)   # newest first by author date
 
-          MERGE_COMMITS=$(git log \
-            --after="$AFTER" \
-            --before="$BEFORE" \
-            --format="%H|%an|%as|%s" \
-            --merges \
-            | sort -t'|' -k3 -r)
-
           TOTAL=$(echo "$COMMITS" | grep -c '.' || true)
-          TOTAL_MERGES=$(echo "$MERGE_COMMITS" | grep -c '.' || true)
           if [ -z "$COMMITS" ]; then
             TOTAL=0
           fi
-          if [ -z "$MERGE_COMMITS" ]; then
-            TOTAL_MERGES=0
-          fi
+
+          # Strip conventional-commit prefixes from a subject line and capitalise.
+          # e.g. "feat(api): add endpoint" → "Add endpoint"
+          clean_subject() {
+            echo "$1" \
+              | sed -E 's/^(feat|feature|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?!?:[[:space:]]*//' \
+              | awk '{$1=toupper(substr($1,1,1))substr($1,2); print}'
+          }
 
           # Helper: extract commits whose subject matches a prefix pattern
           filter_type() {
@@ -76,62 +73,50 @@ jobs:
             echo "$COMMITS" | grep -iE "^\S+\|\S+\|\S+\|${pattern}" || true
           }
 
-          format_rows() {
-            while IFS='|' read -r hash author date subject; do
-              [ -z "$hash" ] && continue
-              short="${hash:0:7}"
-              echo "| \`$short\` | $date | $author | $subject |"
-            done
+          # Print a section as a readable bullet list (no raw hashes shown)
+          print_section() {
+            local title="$1"
+            local rows="$2"
+            if [ -n "$rows" ]; then
+              echo "### $title"
+              echo ""
+              while IFS='|' read -r hash author date subject; do
+                [ -z "$hash" ] && continue
+                desc=$(clean_subject "$subject")
+                echo "- **$desc** — $date, by $author"
+              done <<< "$rows"
+              echo ""
+            fi
           }
 
           # ── build the Markdown report ────────────────────────────────────────────
           {
-            echo "# 📋 Change Summary: $START_DATE → $END_DATE"
+            echo "# 📋 Update Summary: $START_DATE to $END_DATE"
             echo ""
-            echo "> **Repository:** \`${{ github.repository }}\`  "
-            echo "> **Branch / ref:** \`${{ github.ref_name }}\`  "
-            echo "> **Generated:** $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "> **Project:** ${{ github.repository }}  "
+            echo "> **Report generated:** $(date -u '+%B %-d, %Y at %H:%M UTC')"
             echo ""
             echo "---"
             echo ""
-            echo "## 📊 Overview"
-            echo ""
-            echo "| Metric | Count |"
-            echo "| --- | --- |"
-            echo "| Non-merge commits | $TOTAL |"
-            echo "| Merge commits | $TOTAL_MERGES |"
-            echo ""
 
-            if [ "$TOTAL" -eq 0 ] && [ "$TOTAL_MERGES" -eq 0 ]; then
-              echo "> ℹ️ No commits found in the specified date range."
+            if [ "$TOTAL" -eq 0 ]; then
+              echo "> ℹ️ No updates were made during this period."
             else
 
-              # ── Grouped sections (conventional commits) ─────────────────────────
-              print_section() {
-                local title="$1"
-                local rows="$2"
-                if [ -n "$rows" ]; then
-                  echo "## $title"
-                  echo ""
-                  echo "| Commit | Date | Author | Description |"
-                  echo "| --- | --- | --- | --- |"
-                  echo "$rows" | format_rows
-                  echo ""
-                fi
-              }
+              # Human-friendly intro
+              echo "This report summarises the **$TOTAL update(s)** made to the project"
+              echo "between **$START_DATE** and **$END_DATE**."
+              echo ""
 
-              FEAT=$(filter_type   "(feat|feature)(\(.+\))?[!]?:")
-              FIX=$(filter_type    "fix(\(.+\))?[!]?:")
-              DOCS=$(filter_type   "docs(\(.+\))?[!]?:")
-              STYLE=$(filter_type  "style(\(.+\))?[!]?:")
-              REFACTOR=$(filter_type "refactor(\(.+\))?[!]?:")
-              PERF=$(filter_type   "perf(\(.+\))?[!]?:")
-              TEST=$(filter_type   "test(\(.+\))?[!]?:")
-              BUILD=$(filter_type  "(build|ci|chore)(\(.+\))?[!]?:")
-              REVERT=$(filter_type "revert(\(.+\))?[!]?:")
+              # ── Grouped sections ─────────────────────────────────────────────────
+              FEAT=$(filter_type     "(feat|feature)(\(.+\))?[!]?:")
+              FIX=$(filter_type      "fix(\(.+\))?[!]?:")
+              PERF=$(filter_type     "perf(\(.+\))?[!]?:")
+              DOCS=$(filter_type     "docs(\(.+\))?[!]?:")
+              UNDER_HOOD=$(filter_type "(style|refactor|test|build|ci|chore|revert)(\(.+\))?[!]?:")
 
-              # Collect commits that didn't match any conventional prefix
-              MATCHED_HASHES=$(echo -e "$FEAT\n$FIX\n$DOCS\n$STYLE\n$REFACTOR\n$PERF\n$TEST\n$BUILD\n$REVERT" \
+              # Collect commits not matching any known prefix
+              MATCHED_HASHES=$(echo -e "$FEAT\n$FIX\n$PERF\n$DOCS\n$UNDER_HOOD" \
                 | grep -o '^[0-9a-f]\{40\}' || true)
 
               OTHER=""
@@ -143,34 +128,29 @@ jobs:
               done <<< "$COMMITS"
               OTHER="${OTHER%$'\n'}"
 
-              print_section "✨ Features"           "$FEAT"
-              print_section "🐛 Bug Fixes"          "$FIX"
-              print_section "⚡ Performance"        "$PERF"
-              print_section "♻️ Refactoring"         "$REFACTOR"
-              print_section "📚 Documentation"      "$DOCS"
-              print_section "🎨 Style / Formatting" "$STYLE"
-              print_section "🧪 Tests"              "$TEST"
-              print_section "🔧 Build / CI / Chore" "$BUILD"
-              print_section "⏪ Reverts"            "$REVERT"
-              print_section "📝 Other Changes"      "$OTHER"
+              echo "## What's New"
+              echo ""
 
-              # ── Merge commits ────────────────────────────────────────────────────
-              if [ "$TOTAL_MERGES" -gt 0 ]; then
-                echo "## 🔀 Merge Commits"
-                echo ""
-                echo "| Commit | Date | Author | Description |"
-                echo "| --- | --- | --- | --- |"
-                echo "$MERGE_COMMITS" | format_rows
-                echo ""
-              fi
+              print_section "🚀 New Features & Improvements" "$FEAT"
+              print_section "🐛 Problems Fixed"             "$FIX"
+              print_section "⚡ Performance Improvements"   "$PERF"
+              print_section "📚 Documentation Updates"      "$DOCS"
+              print_section "📝 Other Updates"              "$OTHER"
+              print_section "🔧 Under the Hood"             "$UNDER_HOOD"
 
               # ── Contributors ─────────────────────────────────────────────────────
-              echo "## 👥 Contributors"
+              echo "## 👥 Team Members Who Contributed"
               echo ""
-              { echo "$COMMITS"; echo "$MERGE_COMMITS"; } \
+              echo "$COMMITS" \
                 | awk -F'|' 'NF>=2 {print $2}' \
                 | sort | uniq -c | sort -rn \
-                | awk '{printf "- **%s** — %d commit(s)\n", $2, $1}' \
+                | awk '{
+                    count = $1
+                    $1 = ""
+                    name = substr($0, 2)
+                    plural = (count == 1) ? "update" : "updates"
+                    printf "- **%s** — %d %s\n", name, count, plural
+                  }' \
                 || true
               echo ""
 
