@@ -162,4 +162,3 @@ class Trajectory:
 @dataclass
 class SamplingConfig:
     temp: float = 1.0
-    min_p: float = 0.0

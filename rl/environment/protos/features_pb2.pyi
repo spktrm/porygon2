@@ -72,19 +72,12 @@ class EntityPrivateNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper
     ENTITY_PRIVATE_NODE_FEATURE__MOVEID1: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__MOVEID2: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__MOVEID3: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_HP: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_ATK: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_DEF: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_SPA: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_SPD: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__EV_SPE: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_HP: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_ATK: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_DEF: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_SPA: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_SPD: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: _ClassVar[EntityPrivateNodeFeature]
-    ENTITY_PRIVATE_NODE_FEATURE__NATURE: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__HP_STAT: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: _ClassVar[EntityPrivateNodeFeature]
 
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -305,19 +298,12 @@ ENTITY_PRIVATE_NODE_FEATURE__MOVEID0: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__MOVEID1: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__MOVEID2: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__MOVEID3: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_HP: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_ATK: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_DEF: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_SPA: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_SPD: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__EV_SPE: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_HP: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_ATK: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_DEF: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_SPA: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_SPD: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__IV_SPE: EntityPrivateNodeFeature
-ENTITY_PRIVATE_NODE_FEATURE__NATURE: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__HP_STAT: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: EntityPrivateNodeFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP

@@ -59,28 +59,36 @@ class PlayerActor:
         """Run unroll_length agent/environment steps, returning the trajectory."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
-
-        sample_cond = self._learner.builder_replay._sample_cv
-        with sample_cond:
-            sample_cond.wait_for(self._learner.builder_replay.ready_to_sample)
-            builder_trajectory, builder_history = (
-                self._learner.builder_replay.sample_trajectory()
-            )
-
-        add_cond = self._learner.builder_replay._add_cv
-        with add_cond:
-            add_cond.notify_all()
-
         player_traj = []
 
-        # Reset the player environment.
-        team_tokens = builder_history.packed_team_member_tokens
-        if np.any(team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0):
-            raise ValueError(
-                get_packed_team_string(team_tokens.reshape(-1, NUM_PACKED_SET_FEATURES))
-            )
+        team_tokens = None
+        builder_trajectory = ()
+        builder_history = ()
+        if self._learner.config.smogon_format != "randombattle":
+            sample_cond = self._learner.builder_replay._sample_cv
+            with sample_cond:
+                sample_cond.wait_for(self._learner.builder_replay.ready_to_sample)
+                builder_trajectory, builder_history = (
+                    self._learner.builder_replay.sample_trajectory()
+                )
 
-        player_actor_input = self._env.reset(team_tokens.reshape(-1).tolist())
+            add_cond = self._learner.builder_replay._add_cv
+            with add_cond:
+                add_cond.notify_all()
+
+            # Reset the player environment.
+            team_tokens = builder_history.packed_team_member_tokens
+            if np.any(
+                team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0
+            ):
+                raise ValueError(
+                    get_packed_team_string(
+                        team_tokens.reshape(-1, NUM_PACKED_SET_FEATURES)
+                    )
+                )
+            team_tokens = team_tokens.reshape(-1).tolist()
+
+        player_actor_input = self._env.reset(team_tokens)
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):

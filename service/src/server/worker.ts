@@ -11,10 +11,15 @@ import { createBattle, TrainablePlayerAI } from "./runner";
 import { isEvalUser } from "./utils";
 import { generateTeamFromArray, randomSampleTeam } from "./state";
 
+import { Teams } from "@pkmn/sim";
+import { TeamGenerators } from "@pkmn/randoms";
+
+Teams.setGeneratorFactory(TeamGenerators);
+
 interface PlayerDetails {
     userName: string;
     smogonFormat: string;
-    packedTeam: number[];
+    packedTeam: number[] | undefined;
 }
 
 interface WaitingPlayerResolveArgs {
@@ -58,12 +63,28 @@ export class WorkerHandler {
         return player;
     }
 
-    private async resetPlayerFromTrainingUserName(
-        userName: string,
-        gameId: string, // Added gameId param
-        smogonFormat: string,
-        packedTeam: number[],
-    ): Promise<WaitingPlayerResolveArgs> {
+    private generateTeam(args: {
+        packedTeam: number[] | undefined;
+        smogonFormat: string;
+    }): string {
+        const { packedTeam, smogonFormat } = args;
+        if (smogonFormat.includes("randombattle")) {
+            return Teams.pack(Teams.generate(smogonFormat));
+        }
+        if (packedTeam !== undefined) {
+            return generateTeamFromArray(packedTeam);
+        } else {
+            return randomSampleTeam(smogonFormat);
+        }
+    }
+
+    private async resetPlayerFromTrainingUserName(args: {
+        userName: string;
+        gameId: string; // Added gameId param
+        smogonFormat: string;
+        packedTeam: number[] | undefined;
+    }): Promise<WaitingPlayerResolveArgs> {
+        const { userName, gameId, smogonFormat, packedTeam } = args;
         // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
@@ -104,10 +125,11 @@ export class WorkerHandler {
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
-                p1team: generateTeamFromArray(
-                    opponent.playerDetails.packedTeam,
-                ),
-                p2team: generateTeamFromArray(packedTeam),
+                p1team: this.generateTeam({
+                    packedTeam: opponent.playerDetails.packedTeam,
+                    smogonFormat: opponent.playerDetails.smogonFormat,
+                }),
+                p2team: this.generateTeam({ packedTeam, smogonFormat }),
                 smogonFormat,
             });
 
@@ -145,12 +167,13 @@ export class WorkerHandler {
         }
     }
 
-    private resetPlayerFromEvalUserName(
-        userName: string,
-        smogonFormat: string,
-        packedTeam: number[],
-    ) {
-        const teamString = generateTeamFromArray(packedTeam);
+    private resetPlayerFromEvalUserName(args: {
+        userName: string;
+        smogonFormat: string;
+        packedTeam: number[] | undefined;
+    }) {
+        const { userName, smogonFormat, packedTeam } = args;
+        const teamString = this.generateTeam({ packedTeam, smogonFormat });
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -159,7 +182,7 @@ export class WorkerHandler {
             p1Name: userName,
             p1team: teamString,
             p2Name: `baseline-${userName}`,
-            p2team: randomSampleTeam(smogonFormat),
+            p2team: this.generateTeam({ packedTeam: undefined, smogonFormat }),
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
@@ -239,24 +262,24 @@ export class WorkerHandler {
         userName: string,
         gameId: string, // Added param
         smogonFormat: string,
-        packedTeam: number[],
+        packedTeam: number[] | undefined,
         // We no longer need ckpt params for matchmaking logic
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(
-                this.resetPlayerFromEvalUserName(
+                this.resetPlayerFromEvalUserName({
                     userName,
                     smogonFormat,
                     packedTeam,
-                ),
+                }),
             );
         } else {
-            return this.resetPlayerFromTrainingUserName(
+            return this.resetPlayerFromTrainingUserName({
                 userName,
                 gameId,
                 smogonFormat,
                 packedTeam,
-            );
+            });
         }
     }
 
