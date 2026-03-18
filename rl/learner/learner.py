@@ -239,7 +239,9 @@ def train_step(
     player_ent_advantages = player_entropy_temp * segmented_cumsum(
         player_ent_delta, player_gae_lambdas
     )
-    player_advantages = player_win_advantages + player_ent_advantages
+    player_advantages = player_win_advantages + player_ent_advantages * (
+        30 / player_valid.sum(axis=0, keepdims=True)
+    )
 
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
