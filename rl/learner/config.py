@@ -104,12 +104,12 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 0.0
 
-    player_temp_coef: float = 0.5
-    player_entropy_temp_decay: float = 0.3
-    player_entropy_temp_ceil: float = 0.5
+    player_temp_coef: float = 1.0
+    player_entropy_temp_decay: float = 0.25
+    player_entropy_temp_ceil: float = 1.0
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.2
+    builder_temp_coef: float = 1.0
     builder_entropy_temp_decay: float = 0.25
     builder_entropy_temp_ceil: float = 1.0
     builder_entropy_temp_floor: float = 1e-3
