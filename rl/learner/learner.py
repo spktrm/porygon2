@@ -206,7 +206,7 @@ def train_step(
         segmented_cumsum(player_value_delta, player_td_lambdas[..., None])
         + player_value_probs
     )
-    player_advantages = segmented_cumsum(player_scalar_delta, player_gae_lambdas)
+    player_win_advantages = segmented_cumsum(player_scalar_delta, player_gae_lambdas)
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -236,9 +236,10 @@ def train_step(
     ) / config.player_entropy_prediction_normalising_constant
 
     # Entropy advantages: separate GAE pass, added to value advantages
-    player_advantages = player_advantages + player_entropy_temp * segmented_cumsum(
+    player_ent_advantages = player_entropy_temp * segmented_cumsum(
         player_ent_delta, player_gae_lambdas
     )
+    player_advantages = player_win_advantages + player_ent_advantages
 
     action_mask_sum = player_transitions.env_output.action_mask.reshape(
         player_valid.shape + (-1,)
@@ -361,6 +362,10 @@ def train_step(
             player_gradient_norm=optax.global_norm(player_grads),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
+            player_ent_win_adv_ratio=average(
+                jnp.abs(player_ent_advantages), player_valid
+            )
+            / (average(jnp.abs(player_win_advantages), player_valid) + 1e-8),
         )
     )
     player_state = player_state.apply_gradients(grads=player_grads)
