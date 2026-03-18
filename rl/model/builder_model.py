@@ -413,17 +413,14 @@ class Porygon2BuilderModel(nn.Module):
             )
         )
 
+        def _fold(indices: jax.Array, dtype: jnp.dtype = self.cfg.dtype):
+            return (indices @ mask).astype(dtype).reshape(-1).squeeze()
+
         action_head = PolicyHeadOutput(
-            action_index=(action_indices @ mask)
-            .astype(jnp.int32)
-            .reshape(-1)
-            .squeeze(),
-            log_prob=(log_probs @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
-            entropy=(entropies @ mask).astype(self.cfg.dtype).reshape(-1).squeeze(),
-            normalized_entropy=(normalized_entropies @ mask)
-            .astype(self.cfg.dtype)
-            .reshape(-1)
-            .squeeze(),
+            action_index=_fold(action_indices, jnp.int32),
+            log_prob=_fold(log_probs),
+            entropy=_fold(entropies),
+            normalized_entropy=_fold(normalized_entropies),
         )
 
         return BuilderActorOutput(
