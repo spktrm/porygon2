@@ -9,13 +9,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
-import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
-from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
+from rl.environment.utils import clip_history, clip_packed_history
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -172,7 +172,6 @@ def train_step(
     )
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
-    player_actor_value_head = player_transitions.agent_output.actor_output.value_head
     player_actor_log_prob = player_actor_action_head.log_prob
 
     float_dtype = player_actor_log_prob.dtype
@@ -180,30 +179,11 @@ def train_step(
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
-    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
 
     # --- Player ---
-    player_reward = player_transitions.env_output.win_reward.astype(float_dtype)
-    player_value_probs = jnp.exp(player_actor_value_head.log_probs)
-
-    player_next_value_probs = jnp.concatenate(
-        (player_value_probs[1:], player_value_probs[-1:]), axis=0
-    )
-    player_value_target = (
-        player_reward + player_next_value_probs * player_valid[..., None]
-    )
-
-    player_value_delta = player_value_target - player_value_probs
-    player_scalar_delta = player_value_delta @ cat_vf_support
-
-    player_td_lambdas = (config.player_td_lambda * player_valid).astype(float_dtype)
-    player_gae_lambdas = (config.player_gae_lambda * player_valid).astype(float_dtype)
-
-    player_returns = (
-        segmented_cumsum(player_value_delta, player_td_lambdas[..., None])
-        + player_value_probs
-    )
-    player_advantages = segmented_cumsum(player_scalar_delta, player_gae_lambdas)
+    # Targets are pre-computed at buffer add time; cast to the model's float dtype.
+    player_returns = batch.player_targets.returns.astype(float_dtype)
+    player_advantages = batch.player_targets.advantages.astype(float_dtype)
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -337,42 +317,12 @@ def train_step(
             env=builder_transitions.env_output,
             history=builder_history,
         )
-        builder_actor_conditional_entropy_head = (
-            builder_transitions.agent_output.actor_output.conditional_entropy_head
-        )
         builder_actor_action_head = (
             builder_transitions.agent_output.actor_output.action_head
         )
-        builder_actor_value_head = (
-            builder_transitions.agent_output.actor_output.value_head
-        )
         builder_actor_log_prob = builder_actor_action_head.log_prob
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
-        final_reward = player_reward[-1]
-        builder_reward = (
-            jax.nn.one_hot(
-                builder_valid.sum(axis=0),
-                builder_valid.shape[0],
-                axis=0,
-                dtype=float_dtype,
-            )[..., None]
-            * final_reward
-        )
-        builder_value_probs = jnp.exp(builder_actor_value_head.log_probs)
-        builder_next_value_probs = jnp.concatenate(
-            (builder_value_probs[1:], builder_value_probs[-1:]), axis=0
-        )
-        # Using builder_valid ensures we don't bootstrap from next episode/state if done
-        builder_value_target = (
-            builder_reward + builder_next_value_probs * builder_valid[..., None]
-        )
-        builder_value_delta = builder_value_target - builder_value_probs
-        builder_td_lambdas = (config.builder_td_lambda * builder_valid).astype(
-            float_dtype
-        )
-        builder_gae_lambdas = (config.builder_gae_lambda * builder_valid).astype(
-            float_dtype
-        )
+
         builder_entropy_temp = power_schedule(
             config.builder_temp_coef,
             jnp.floor(builder_state.step_count / config.gradient_accumulation_steps),
@@ -381,41 +331,17 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
-        # Entropy prediction — scale predictions up to true entropy scale (matches torch: ents = reg_norm * self.ents)
-        builder_nll = -builder_actor_log_prob
-        builder_ent_pred = builder_actor_conditional_entropy_head.logits
-        builder_ent_scaled = (
-            builder_ent_pred * config.builder_entropy_prediction_normalising_constant
+        # Targets are pre-computed at buffer add time; cast to the model's float dtype.
+        # The entropy temperature changes with the step count, so the raw (unscaled)
+        # entropy advantages are cached and the scalar multiplication is applied here.
+        builder_returns = batch.builder_targets.returns.astype(float_dtype)
+        ent_returns = batch.builder_targets.ent_returns.astype(float_dtype)
+        builder_win_advantages = batch.builder_targets.win_advantages.astype(
+            float_dtype
         )
-        next_builder_ent_scaled = (
-            jnp.concatenate(
-                [builder_ent_scaled[1:], jnp.zeros_like(builder_ent_scaled[:1])], axis=0
-            )
-            * builder_valid
-        )
-        # Entropy delta uses raw NLL (not divided by norm), against scaled-up predictions
-        builder_ent_delta = builder_nll + next_builder_ent_scaled - builder_ent_scaled
-
-        # Value returns: TD(lambda) in categorical space
-        builder_returns = (
-            segmented_cumsum(builder_value_delta, builder_td_lambdas[..., None])
-            + builder_value_probs
-        )
-
-        # Value advantages: GAE in categorical space, then project to scalar
-        builder_win_advantages = (
-            segmented_cumsum(builder_value_delta, builder_gae_lambdas[..., None])
-            @ cat_vf_support
-        )
-
-        # Entropy returns: TD(lambda), then renormalize back to network prediction scale
-        ent_returns = (
-            segmented_cumsum(builder_ent_delta, builder_td_lambdas) + builder_ent_scaled
-        ) / config.builder_entropy_prediction_normalising_constant
-
-        # Entropy advantages: separate GAE pass, added to value advantages
-        builder_ent_advantages = builder_entropy_temp * segmented_cumsum(
-            builder_ent_delta, builder_gae_lambdas
+        builder_ent_advantages = (
+            builder_entropy_temp
+            * batch.builder_targets.raw_ent_advantages.astype(float_dtype)
         )
         builder_advantages = builder_win_advantages + builder_ent_advantages
 
@@ -603,6 +529,10 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
+        player_targets=jax.tree.map(
+            lambda x: x[:num_valid], stacked_trajectory.player_targets
+        ),
+        builder_targets=stacked_trajectory.builder_targets,
     )
 
 
@@ -633,6 +563,12 @@ class Learner:
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
             need_tracking=self.config.smogon_format != "randombattle",
+            player_td_lambda=self.config.player_td_lambda,
+            player_gae_lambda=self.config.player_gae_lambda,
+            builder_td_lambda=self.config.builder_td_lambda,
+            builder_gae_lambda=self.config.builder_gae_lambda,
+            builder_entropy_normalising_constant=self.config.builder_entropy_prediction_normalising_constant,
+            compute_builder=self.config.smogon_format != "randombattle",
         )
 
         # Threading
