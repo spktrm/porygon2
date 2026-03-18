@@ -14,9 +14,14 @@ import { generateTeamFromArray } from "../server/state";
 
 const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
 
-const server = "ws://localhost:8000/showdown/websocket";
-// const server = "wss://sim3.psim.us/showdown/websocket";
-// const server = "wss://pokeagentshowdown.com/showdown/websocket";
+const secure = "wss";
+// const secure = "ws";
+
+// const server = "localhost:8000";
+// const server = "sim3.psim.us";
+// const server = "pokeagentshowdown.com";
+const server = "battling.pokeagentchallenge.com";
+
 const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
 const smogonFormat = "gen9ou";
 // const smogonFormat = "gen9randombattle";
@@ -93,7 +98,7 @@ class Connection {
     private ws!: WebSocket;
 
     open(callback: (data: string) => void): void {
-        this.ws = new WebSocket(server);
+        this.ws = new WebSocket(`${secure}://${server}/showdown/websocket`);
 
         this.ws.onmessage = ({ data }) => callback(data.toString());
         this.ws.onopen = () => {
@@ -305,7 +310,7 @@ class User {
     async login(details: LoginDetails): Promise<void> {
         const action = {
             method: "POST",
-            url: "https://play.pokemonshowdown.com/action.php",
+            url: `https://${server}/action.php`,
             data: new URLSearchParams({
                 act: "login",
                 name: details.username,
