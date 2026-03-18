@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
+import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history, jax_segmented_cumsum
