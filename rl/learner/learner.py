@@ -316,7 +316,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_coef * player_entropy_temp * loss_entropy
+            + config.player_entropy_loss_coef * player_entropy_temp * loss_entropy
             + config.player_conditional_entropy_loss_coef
             * loss_player_conditional_entropy
         )
@@ -540,7 +540,9 @@ def train_step(
                 + config.builder_human_loss_coef * loss_human
                 + config.builder_conditional_entropy_loss_coef
                 * loss_builder_conditional_entropy
-                + config.builder_entropy_coef * loss_builder_entropy
+                + config.builder_entropy_loss_coef
+                * builder_entropy_temp
+                * loss_builder_entropy
             )
 
             return loss, dict(

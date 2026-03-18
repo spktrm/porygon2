@@ -81,9 +81,9 @@ class Porygon2LearnerConfig:
 
     # Advantage estimation params
     player_td_lambda: float = 1.0
-    player_gae_lambda: float = 0.75
+    player_gae_lambda: float = 1.0
     builder_td_lambda: float = 1.0
-    builder_gae_lambda: float = 0.75
+    builder_gae_lambda: float = 1.0
     clip_ppo: float = 0.3
 
     # Loss coefficients
@@ -91,7 +91,7 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
-    player_entropy_coef: float = 1.0
+    player_entropy_loss_coef: float = 1e-3
     player_conditional_entropy_loss_coef: float = 1.0
     player_entropy_prediction_normalising_constant: float = 100
     ## Builder
@@ -99,7 +99,7 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 1e-2
+    builder_entropy_loss_coef: float = 1e-3
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
     builder_human_loss_coef: float = 0.0
