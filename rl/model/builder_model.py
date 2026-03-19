@@ -292,6 +292,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.species_mask,
             head_params=head_params,
+            prior=env_step.species_usage,
         )
         item_head = self.item_head(
             self.item_head_mlp(hidden_state),
@@ -299,6 +300,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.item_mask,
             head_params=head_params,
+            prior=env_step.item_usage,
         )
         ability_head = self.ability_head(
             self.ability_head_mlp(hidden_state),
@@ -306,6 +308,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.ability_mask,
             head_params=head_params,
+            prior=env_step.ability_usage,
         )
         move_head = self.move_head(
             self.move_head_mlp(hidden_state),
@@ -313,6 +316,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.move_mask,
             head_params=head_params,
+            prior=env_step.move_usage,
         )
         ev_head = self.ev_head(
             self.ev_head_mlp(hidden_state),
@@ -320,6 +324,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.ev_mask,
             head_params=head_params,
+            prior=env_step.ev_usage,
         )
         nature_head = self.nature_head(
             self.nature_head_mlp(hidden_state),
@@ -327,6 +332,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.nature_mask,
             head_params=head_params,
+            prior=env_step.nature_usage,
         )
         gender_head = self.gender_head(
             self.gender_head_mlp(hidden_state),
@@ -334,6 +340,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.gender_mask,
             head_params=head_params,
+            prior=env_step.gender_usage,
         )
         teratype_head = self.teratype_head(
             self.teratype_head_mlp(hidden_state),
@@ -341,6 +348,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.teratype_mask,
             head_params=head_params,
+            prior=env_step.teratype_usage,
         )
 
         action_indices = jnp.stack(
@@ -391,6 +399,18 @@ class Porygon2BuilderModel(nn.Module):
                 teratype_head.normalized_entropy,
             )
         )
+        kl_prior = jnp.stack(
+            (
+                species_head.kl_prior,
+                item_head.kl_prior,
+                ability_head.kl_prior,
+                move_head.kl_prior,
+                ev_head.kl_prior,
+                nature_head.kl_prior,
+                gender_head.kl_prior,
+                teratype_head.kl_prior,
+            )
+        )
         mask = jnp.stack(
             (
                 env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPECIES,
@@ -421,6 +441,7 @@ class Porygon2BuilderModel(nn.Module):
             log_prob=_fold(log_probs),
             entropy=_fold(entropies),
             normalized_entropy=_fold(normalized_entropies),
+            kl_prior=_fold(kl_prior),
         )
 
         return BuilderActorOutput(

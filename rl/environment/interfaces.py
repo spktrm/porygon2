@@ -63,6 +63,7 @@ class PolicyHeadOutput:
     entropy: ArrayLike = ()
     normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
+    kl_prior: ArrayLike = ()
 
 
 @dataclass
@@ -101,10 +102,18 @@ class BuilderEnvOutput:
     nature_mask: ArrayLike = ()
     gender_mask: ArrayLike = ()
 
+    species_usage: ArrayLike = ()
+    item_usage: ArrayLike = ()
+    ability_usage: ArrayLike = ()
+    move_usage: ArrayLike = ()
+    ev_usage: ArrayLike = ()
+    teratype_usage: ArrayLike = ()
+    nature_usage: ArrayLike = ()
+    gender_usage: ArrayLike = ()
+
     done: ArrayLike = ()
     ts: ArrayLike = ()
     ev_reward: ArrayLike = ()
-    human_prob: ArrayLike = ()
     curr_order: ArrayLike = ()
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()

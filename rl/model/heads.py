@@ -4,6 +4,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
+import optax
 
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
@@ -33,6 +34,7 @@ class PolicyQKHead(nn.Module):
         head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
+        prior: jax.Array = None,
     ):
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
@@ -61,12 +63,20 @@ class PolicyQKHead(nn.Module):
         log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
 
+        if prior is None:
+            prior = jnp.ones_like(logits) / logits.shape[-1]
+
+        prior = prior.astype(logits.dtype)
+        kl_prior = prior * (jnp.where(prior == 0, 0, jnp.log(prior)) - log_policy)
+        kl_prior = kl_prior.sum(axis=-1)
+
         return PolicyHeadOutput(
             action_index=action_index.reshape(entropy.shape),
             log_prob=log_prob.reshape(entropy.shape),
             entropy=entropy,
             normalized_entropy=entropy * entropy_scale,
             log_policy=log_policy,
+            kl_prior=kl_prior,
         )
 
 

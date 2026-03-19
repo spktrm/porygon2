@@ -397,12 +397,6 @@ def train_step(
                 valid=builder_valid,
             )
 
-            # 1. Shift the logic (Your temporal alignment is still correct!)
-            human_prob_raw = builder_transitions.env_output.human_prob
-            human_prob = jnp.concatenate(
-                [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
-            )
-
             human_valid_mask = (
                 builder_transitions.env_output.curr_attribute
                 != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
@@ -411,8 +405,8 @@ def train_step(
                 != PackedSetFeature.PACKED_SET_FEATURE__GENDER
             )
 
-            loss_human = -average(
-                human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
+            loss_human = average(
+                learner_action_head.kl_prior, valid=builder_valid & human_valid_mask
             )
 
             loss = (

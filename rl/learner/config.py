@@ -50,9 +50,9 @@ class Porygon2LearnerConfig:
     unroll_length: int = 128
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 6
+    player_replay_buffer_capacity: int = 1024 * 4
     player_replay_ratio: int = 2
-    builder_replay_buffer_capacity: int = 1024
+    builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 5
 
     # Self-play evaluation params
@@ -80,10 +80,10 @@ class Porygon2LearnerConfig:
     builder_ema_decay: float = 1e-3
 
     # Advantage estimation params
-    player_td_lambda: float = 1.0
-    player_gae_lambda: float = 1.0
-    builder_td_lambda: float = 1.0
-    builder_gae_lambda: float = 1.0
+    player_td_lambda: float = 0.95
+    player_gae_lambda: float = 0.95
+    builder_td_lambda: float = 0.95
+    builder_gae_lambda: float = 0.95
     clip_ppo: float = 0.3
 
     # Loss coefficients
@@ -100,10 +100,10 @@ class Porygon2LearnerConfig:
     builder_entropy_coef: float = 1e-2
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
-    builder_human_loss_coef: float = 0.025
+    builder_human_loss_coef: float = 1e-2
 
     player_temp_coef: float = 0.5
-    player_entropy_temp_decay: float = 0.5
+    player_entropy_temp_decay: float = 0.35
     player_entropy_temp_ceil: float = 0.5
     player_entropy_temp_floor: float = 1e-3
 
