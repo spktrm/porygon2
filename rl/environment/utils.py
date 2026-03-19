@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import (
-    CAT_VF_SUPPORT,
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
     NUM_ABILITIES,
@@ -45,7 +44,6 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
-from rl.learner.targets import jax_segmented_cumsum
 from rl.model.heads import CategoricalValueHeadOutput
 
 T = TypeVar("T")
@@ -345,57 +343,3 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
             ),
         ),
     )
-
-
-def main():
-    """Main function for testing the utilities."""
-    ex_player_input, ex_player_output = get_ex_player_step()
-    ex_builder_input, ex_builder_output = get_ex_builder_step()
-
-    valid = jnp.concatenate(
-        (
-            np.ones_like(ex_builder_input.env.done),
-            np.bitwise_not(ex_player_input.env.done),
-        )
-    )
-
-    value_probs = jnp.exp(
-        jnp.concatenate(
-            (
-                ex_builder_output.value_head.log_probs,
-                ex_player_output.value_head.log_probs,
-            ),
-            axis=0,
-        )
-    )
-    value_probs = value_probs / value_probs.sum(axis=-1, keepdims=True)
-
-    cat_reward = jnp.concatenate(
-        (
-            jnp.zeros_like(ex_builder_output.value_head.log_probs),
-            ex_player_input.env.win_reward,
-        )
-    )
-    value_target = (
-        cat_reward
-        + jnp.concatenate((value_probs[1:], jnp.zeros_like(value_probs[0:1])))
-        * valid[..., None]
-    )
-
-    cat_value_delta = value_target - value_probs
-    scalar_value_delta = cat_value_delta @ CAT_VF_SUPPORT
-
-    td_lambda = 0.8
-    gae_lambda = 0.5
-
-    td_lambdas = td_lambda * valid.astype(cat_value_delta.dtype)[..., None]
-    gae_lambdas = gae_lambda * valid.astype(cat_value_delta.dtype)
-
-    segmented_cumsum = jax.vmap(jax_segmented_cumsum, in_axes=(1, 1), out_axes=1)
-    returns = segmented_cumsum(cat_value_delta, td_lambdas) + value_probs
-    advantages = segmented_cumsum(scalar_value_delta, gae_lambdas)
-    print(returns, advantages)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,52 +1,23 @@
-import jax
+import numpy as np
 
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.interfaces import BuilderTargets, PlayerTargets, Trajectory
 
 
-def jax_segmented_cumsum(x: nph.ndarray, discount: nph.ndarray) -> nph.ndarray:
-    """
-    Parallel implementation of your @torch.jit.script loop.
-    Replaces O(T) sequential loop with O(log T) associative scan.
-    """
-
-    def binary_op(right, left):
-        # The scan operator for: y[t] = x[t] + discount[t] * y[t+1]
-        val_l, disc_l = left
-        val_r, disc_r = right
-        return val_l + disc_l * val_r, disc_l * disc_r
-
-    # Flip to treat the 'future' as the prefix for the scan
-    vals, _ = jax.lax.associative_scan(binary_op, (x[::-1], discount[::-1]))
-    return vals[::-1]
-
-
-def np_segmented_cumsum(x: nph.ndarray, discount: nph.ndarray) -> nph.ndarray:
+def segmented_cumsum(x: np.ndarray, discount: np.ndarray) -> np.ndarray:
     """Backward cumulative sum: result[t] = x[t] + discount[t] * result[t+1].
 
     Equivalent to jax_segmented_cumsum but runs in NumPy on CPU.
     The discount array encodes episode boundaries: setting discount[t]=0 at a
     terminal step prevents bootstrapping across episodes.
     """
-    result = nph.empty_like(x)
+    result = np.empty_like(x)
     result[-1] = x[-1]
     for t in range(x.shape[0] - 2, -1, -1):
         result[t] = x[t] + discount[t] * result[t + 1]
     return result
 
 
-use_numpy = True
-if use_numpy:
-    import numpy as nph
-
-    cumsum = np_segmented_cumsum
-else:
-    import jax.numpy as nph
-
-    cumsum = jax_segmented_cumsum
-
-
-@jax.jit(static_argnames=["td_lambda", "gae_lambda"])
 def compute_player_targets(
     traj: Trajectory,
     td_lambda: float,
@@ -59,17 +30,17 @@ def compute_player_targets(
     """
     cat_vf_support = CAT_VF_SUPPORT
 
-    player_valid = nph.logical_not(traj.player_transitions.env_output.done)  # (T,)
+    player_valid = np.logical_not(traj.player_transitions.env_output.done)  # (T,)
     player_reward = traj.player_transitions.env_output.win_reward.astype(
-        nph.float32
+        np.float32
     )  # (T, 3)
-    player_value_probs = nph.exp(
+    player_value_probs = np.exp(
         traj.player_transitions.agent_output.actor_output.value_head.log_probs.astype(
-            nph.float32
+            np.float32
         )
     )  # (T, 3)
 
-    player_next_value_probs = nph.concatenate(
+    player_next_value_probs = np.concatenate(
         [player_value_probs[1:], player_value_probs[-1:]], axis=0
     )
     player_value_target = (
@@ -78,21 +49,20 @@ def compute_player_targets(
     player_value_delta = player_value_target - player_value_probs  # (T, 3)
     player_scalar_delta = player_value_delta @ cat_vf_support  # (T,)
 
-    td_lambdas = (td_lambda * player_valid).astype(nph.float32)  # (T,)
-    gae_lambdas = (gae_lambda * player_valid).astype(nph.float32)  # (T,)
+    td_lambdas = (td_lambda * player_valid).astype(np.float32)  # (T,)
+    gae_lambdas = (gae_lambda * player_valid).astype(np.float32)  # (T,)
 
     returns = (
-        cumsum(player_value_delta, td_lambdas[..., None]) + player_value_probs
+        segmented_cumsum(player_value_delta, td_lambdas[..., None]) + player_value_probs
     )  # (T, 3)
-    advantages = cumsum(player_scalar_delta, gae_lambdas)  # (T,)
+    advantages = segmented_cumsum(player_scalar_delta, gae_lambdas)  # (T,)
 
     return PlayerTargets(
-        returns=returns.astype(nph.float32),
-        advantages=advantages.astype(nph.float32),
+        returns=returns.astype(np.float32),
+        advantages=advantages.astype(np.float32),
     )
 
 
-@jax.jit(static_argnames=["td_lambda", "gae_lambda", "entropy_normalising_constant"])
 def compute_builder_targets(
     traj: Trajectory,
     td_lambda: float,
@@ -109,40 +79,38 @@ def compute_builder_targets(
     cat_vf_support = CAT_VF_SUPPORT
     builder_transitions = traj.builder_transitions
 
-    builder_valid = nph.logical_not(builder_transitions.env_output.done)  # (T_b,)
-    builder_valid.shape[0]
+    builder_valid = np.logical_not(builder_transitions.env_output.done)  # (T_b,)
+    T_b = builder_valid.shape[0]
 
-    builder_value_probs = nph.exp(
+    builder_value_probs = np.exp(
         builder_transitions.agent_output.actor_output.value_head.log_probs.astype(
-            nph.float32
+            np.float32
         )
     )  # (T_b, 3)
     builder_log_prob = (
         builder_transitions.agent_output.actor_output.action_head.log_prob.astype(
-            nph.float32
+            np.float32
         )
     )  # (T_b,)
     builder_ent_pred = builder_transitions.agent_output.actor_output.conditional_entropy_head.logits.astype(
-        nph.float32
+        np.float32
     )  # (T_b,)
 
     # Place the final player reward at the first terminal position of the builder.
     final_reward = traj.player_transitions.env_output.win_reward[-1].astype(
-        nph.float32
+        np.float32
     )  # (3,)
 
-    builder_reward = (
-        jax.nn.one_hot(builder_valid.sum(axis=0), builder_valid.shape[0], axis=0)[
-            ..., None
-        ]
-        * final_reward
-    )
+    num_valid_steps = int(builder_valid.sum())
+    builder_reward = np.zeros((T_b, 3), dtype=np.float32)
+    if num_valid_steps < T_b:
+        builder_reward[num_valid_steps] = final_reward
 
     # Entropy delta: NLL + discounted future entropy - current entropy prediction.
     builder_ent_scaled = builder_ent_pred * entropy_normalising_constant  # (T_b,)
     next_builder_ent_scaled = (
-        nph.concatenate(
-            [builder_ent_scaled[1:], nph.zeros_like(builder_ent_scaled[:1])], axis=0
+        np.concatenate(
+            [builder_ent_scaled[1:], np.zeros_like(builder_ent_scaled[:1])], axis=0
         )
         * builder_valid
     )
@@ -150,7 +118,7 @@ def compute_builder_targets(
     builder_ent_delta = builder_nll + next_builder_ent_scaled - builder_ent_scaled
 
     # Value computation.
-    builder_next_value_probs = nph.concatenate(
+    builder_next_value_probs = np.concatenate(
         [builder_value_probs[1:], builder_value_probs[-1:]], axis=0
     )
     builder_value_target = (
@@ -158,23 +126,24 @@ def compute_builder_targets(
     )
     builder_value_delta = builder_value_target - builder_value_probs  # (T_b, 3)
 
-    td_lambdas = (td_lambda * builder_valid).astype(nph.float32)  # (T_b,)
-    gae_lambdas = (gae_lambda * builder_valid).astype(nph.float32)  # (T_b,)
+    td_lambdas = (td_lambda * builder_valid).astype(np.float32)  # (T_b,)
+    gae_lambdas = (gae_lambda * builder_valid).astype(np.float32)  # (T_b,)
 
     returns = (
-        cumsum(builder_value_delta, td_lambdas[..., None]) + builder_value_probs
+        segmented_cumsum(builder_value_delta, td_lambdas[..., None])
+        + builder_value_probs
     )  # (T_b, 3)
     win_advantages = (
-        cumsum(builder_value_delta, gae_lambdas[..., None]) @ cat_vf_support
+        segmented_cumsum(builder_value_delta, gae_lambdas[..., None]) @ cat_vf_support
     )  # (T_b,)
     ent_returns = (
-        cumsum(builder_ent_delta, td_lambdas) + builder_ent_scaled
+        segmented_cumsum(builder_ent_delta, td_lambdas) + builder_ent_scaled
     ) / entropy_normalising_constant  # (T_b,)
-    raw_ent_advantages = cumsum(builder_ent_delta, gae_lambdas)  # (T_b,)
+    raw_ent_advantages = segmented_cumsum(builder_ent_delta, gae_lambdas)  # (T_b,)
 
     return BuilderTargets(
-        returns=returns.astype(nph.float32),
-        win_advantages=win_advantages.astype(nph.float32),
-        raw_ent_advantages=raw_ent_advantages.astype(nph.float32),
-        ent_returns=ent_returns.astype(nph.float32),
+        returns=returns.astype(np.float32),
+        win_advantages=win_advantages.astype(np.float32),
+        raw_ent_advantages=raw_ent_advantages.astype(np.float32),
+        ent_returns=ent_returns.astype(np.float32),
     )
