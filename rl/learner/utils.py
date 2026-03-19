@@ -101,12 +101,12 @@ def collect_batch_telemetry_data(
         builder_lengths = builder_valid.sum(0)
 
         team_tokens = batch.builder_history.packed_team_member_tokens.reshape(
-            *batch.builder_history.packed_team_member_tokens.shape[:-1],
             -1,
-            NUM_PACKED_SET_FEATURES
+            NUM_PACKED_SET_FEATURES,
+            batch.builder_history.packed_team_member_tokens.shape[1],
         )
         team_evs = team_tokens[
-            ...,
+            :,
             PackedSetFeature.PACKED_SET_FEATURE__HP_EV : PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
             + 1,
         ]

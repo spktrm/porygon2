@@ -148,6 +148,20 @@ class BuilderTransition:
 
 
 @dataclass
+class PlayerTargets:
+    returns: ArrayLike = ()
+    advantages: ArrayLike = ()
+
+
+@dataclass
+class BuilderTargets:
+    returns: ArrayLike = ()
+    win_advantages: ArrayLike = ()
+    raw_ent_advantages: ArrayLike = ()
+    ent_returns: ArrayLike = ()
+
+
+@dataclass
 class Trajectory:
     builder_transitions: BuilderTransition = field(default_factory=BuilderTransition)
     builder_history: BuilderHistoryOutput = field(default_factory=BuilderHistoryOutput)
@@ -157,6 +171,9 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+
+    player_targets: PlayerTargets = field(default_factory=PlayerTargets)
+    builder_targets: BuilderTargets = field(default_factory=BuilderTargets)
 
 
 @dataclass
