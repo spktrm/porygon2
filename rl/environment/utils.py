@@ -45,6 +45,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.learner.targets import jax_segmented_cumsum
 from rl.model.heads import CategoricalValueHeadOutput
 
 T = TypeVar("T")
@@ -109,23 +110,6 @@ def clip_packed_history(
     )
 
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
-
-
-def jax_segmented_cumsum(x: jnp.ndarray, discount: jnp.ndarray) -> jnp.ndarray:
-    """
-    Parallel implementation of your @torch.jit.script loop.
-    Replaces O(T) sequential loop with O(log T) associative scan.
-    """
-
-    def binary_op(right, left):
-        # The scan operator for: y[t] = x[t] + discount[t] * y[t+1]
-        val_l, disc_l = left
-        val_r, disc_r = right
-        return val_l + disc_l * val_r, disc_l * disc_r
-
-    # Flip to treat the 'future' as the prefix for the scan
-    vals, _ = jax.lax.associative_scan(binary_op, (x[::-1], discount[::-1]))
-    return vals[::-1]
 
 
 def get_action_mask(state: EnvironmentState):
