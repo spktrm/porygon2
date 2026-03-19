@@ -12,9 +12,9 @@ import time
 
 import jax
 import numpy as np
-import wandb
 import wandb.wandb_run
 
+import wandb
 from rl.actor.agent import Agent
 from rl.actor.builder_actor import BuilderActor
 from rl.actor.player_actor import PlayerActor
