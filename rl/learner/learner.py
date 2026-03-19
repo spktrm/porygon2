@@ -559,16 +559,14 @@ class Learner:
             max_size=self.config.builder_replay_buffer_capacity,
             max_reuses=self.config.builder_replay_ratio,
         )
+
+        is_not_randoms = self.config.smogon_format != "randombattle"
         self.player_replay = PlayerTrajectoryStore(
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
-            need_tracking=self.config.smogon_format != "randombattle",
-            player_td_lambda=self.config.player_td_lambda,
-            player_gae_lambda=self.config.player_gae_lambda,
-            builder_td_lambda=self.config.builder_td_lambda,
-            builder_gae_lambda=self.config.builder_gae_lambda,
-            builder_entropy_normalising_constant=self.config.builder_entropy_prediction_normalising_constant,
-            compute_builder=self.config.smogon_format != "randombattle",
+            need_tracking=is_not_randoms,
+            learner_config=self.config,
+            compute_builder=is_not_randoms,
         )
 
         # Threading
