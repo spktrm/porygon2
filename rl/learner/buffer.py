@@ -1,6 +1,5 @@
 import threading
 
-import jax
 import numpy as np
 from tqdm import tqdm
 
@@ -13,11 +12,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.learner.config import Porygon2LearnerConfig
-from rl.learner.targets import (
-    PlayerTargets,
-    compute_builder_targets,
-    compute_player_targets,
-)
+from rl.learner.targets import compute_builder_targets, compute_player_targets
 
 
 class BuilderTrajectoryStore:
@@ -216,11 +211,6 @@ class PlayerTrajectoryStore:
             NUM_MOVES,
         )
 
-    def _to_cpu(
-        self, interface_output: PlayerTargets | BuilderTargets
-    ) -> PlayerTargets | BuilderTargets:
-        return jax.tree.map(lambda x: np.asarray(jax.device_get(x)), interface_output)
-
     def _compute_targets(self, traj: Trajectory) -> Trajectory:
         """Compute and attach TD(λ) returns and GAE advantages to *traj*."""
         player_targets = compute_player_targets(
@@ -239,8 +229,8 @@ class PlayerTrajectoryStore:
             builder_targets = BuilderTargets()
 
         return traj.replace(
-            player_targets=self._to_cpu(player_targets),
-            builder_targets=self._to_cpu(builder_targets),
+            player_targets=player_targets,
+            builder_targets=builder_targets,
         )
 
     def add(self, traj: Trajectory):
