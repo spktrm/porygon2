@@ -503,11 +503,19 @@ def _stack_and_pad_batch(
     batch: list[Trajectory],
     player_transition_resolution: int = 50,
     player_history_resolution: int = 128,
+    shuffle_batch: bool = True,
 ) -> Trajectory:
     """Stacks a list of trajectories and pads them to a fixed resolution."""
+    batch_size = len(batch)
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
+    if shuffle_batch and batch_size > 1:
+        permutation = np.random.permutation(batch_size)
+        stacked_trajectory = jax.tree.map(
+            lambda x: x[:, permutation] if x.ndim >= 2 and x.shape[1] == batch_size else x,
+            stacked_trajectory,
+        )
 
     valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
     valid_sum = valid.sum(0).max().item()
