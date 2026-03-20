@@ -990,8 +990,6 @@ class Encoder(nn.Module):
         local_timestep_embedding = jnp.concatenate(
             (self.null_history.astype(self.cfg.dtype), local_timestep_embedding), axis=0
         )
-        seq_len = local_timestep_embedding.shape[0]
-        timestep_positions = jnp.arange(seq_len)
         valid_timestep_mask = jnp.concatenate(
             (jnp.ones(1, dtype=jnp.bool), valid_timestep_mask), axis=0
         )
@@ -999,6 +997,7 @@ class Encoder(nn.Module):
             (jnp.zeros(1, dtype=history_request_count.dtype), history_request_count),
             axis=0,
         )
+        timestep_positions = history_request_count
 
         return (
             local_timestep_embedding,
