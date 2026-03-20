@@ -504,18 +504,20 @@ def _stack_and_pad_batch(
     player_transition_resolution: int = 50,
     player_history_resolution: int = 128,
     shuffle_batch: bool = True,
+    permutation: np.ndarray | None = None,
 ) -> Trajectory:
     """Stacks a list of trajectories and pads them to a fixed resolution."""
-    batch_size = len(batch)
+    # Single-trajectory batches are already IID by construction and do not need shuffling.
+    if shuffle_batch and len(batch) > 1:
+        if permutation is None:
+            raise ValueError(
+                "permutation must be provided when shuffle_batch=True and batch has multiple trajectories."
+            )
+        batch = [batch[i] for i in permutation]
+
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
-    if shuffle_batch and batch_size > 1:
-        permutation = np.random.permutation(batch_size)
-        stacked_trajectory = jax.tree.map(
-            lambda x: x[:, permutation] if x.ndim >= 2 and x.shape[1] == batch_size else x,
-            stacked_trajectory,
-        )
 
     valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
     valid_sum = valid.sum(0).max().item()
@@ -561,6 +563,7 @@ class Learner:
         self.wandb_run = wandb_run
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
+        self.shuffle_rng = np.random.default_rng(self.config.batch_shuffle_seed)
 
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
@@ -632,7 +635,12 @@ class Learner:
                 self.consumer_progress.update(minibatch_size)
 
                 # Process pure data outside lock
-                stacked = _stack_and_pad_batch(batch)
+                permutation = self.shuffle_rng.permutation(len(batch))
+                stacked = _stack_and_pad_batch(
+                    batch,
+                    shuffle_batch=True,
+                    permutation=permutation,
+                )
                 self.device_q.put(stacked)
 
         logger.info("host_to_device_worker exiting.")

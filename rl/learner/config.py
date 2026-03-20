@@ -66,6 +66,7 @@ class Porygon2LearnerConfig:
 
     # Batch iteration params
     batch_size: int = 4
+    batch_shuffle_seed: int = 0
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
