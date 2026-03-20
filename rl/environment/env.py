@@ -2,6 +2,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from websockets.sync.client import connect
 
 from rl.environment.data import (
@@ -112,7 +113,15 @@ class TeamBuilderEnvironment:
         self.item_usage = load_usage("items")
         self.ability_usage = load_usage("abilities")
         self.move_usage = load_usage("moves")
-        self.ev_usage = load_usage("ev")
+        ev_usage = load_usage("ev")
+        (
+            self.hp_ev_usage,
+            self.atk_ev_usage,
+            self.def_ev_usage,
+            self.spa_ev_usage,
+            self.spd_ev_usage,
+            self.spe_ev_usage,
+        ) = [arr.squeeze(axis=1) for arr in np.split(ev_usage, 6, axis=1)]
         self.nature_usage = load_usage("nature")
         self.gender_usage = load_usage("gender")
         self.teratype_usage = load_usage("teratypes")
@@ -122,7 +131,15 @@ class TeamBuilderEnvironment:
         self.item_masks = load_mask("items")
         self.ability_masks = load_mask("abilities")
         self.move_masks = load_mask("moves")
-        self.ev_masks = load_mask("ev")
+        ev_masks = load_mask("ev")
+        (
+            self.hp_ev_masks,
+            self.atk_ev_masks,
+            self.def_ev_masks,
+            self.spa_ev_masks,
+            self.spd_ev_masks,
+            self.spe_ev_masks,
+        ) = [arr.squeeze(axis=1) for arr in np.split(ev_masks, 6, axis=1)]
         self.nature_masks = load_mask("nature")
         self.gender_masks = load_mask("gender")
         self.teratype_masks = load_mask("teratypes")
@@ -132,7 +149,12 @@ class TeamBuilderEnvironment:
         self.initial_item_mask = self.item_masks.any(axis=0)
         self.initial_ability_mask = self.ability_masks.any(axis=0)
         self.initial_move_mask = self.move_masks.any(axis=0)
-        self.initial_ev_mask = self.ev_masks.any(axis=0).any(axis=0)
+        self.initial_hp_ev_mask = self.hp_ev_masks.any(axis=0)
+        self.initial_atk_ev_mask = self.atk_ev_masks.any(axis=0)
+        self.initial_def_ev_mask = self.def_ev_masks.any(axis=0)
+        self.initial_spa_ev_mask = self.spa_ev_masks.any(axis=0)
+        self.initial_spd_ev_mask = self.spd_ev_masks.any(axis=0)
+        self.initial_spe_ev_mask = self.spe_ev_masks.any(axis=0)
         self.initial_nature_mask = self.nature_masks.any(axis=0)
         self.initial_gender_mask = self.gender_masks.any(axis=0)
         self.initial_teratype_mask = self.teratype_masks.any(axis=0)
@@ -163,7 +185,12 @@ class TeamBuilderEnvironment:
                 item_mask=self.initial_item_mask,
                 ability_mask=self.initial_ability_mask,
                 move_mask=self.initial_move_mask,
-                ev_mask=self.initial_ev_mask,
+                hp_ev_mask=self.initial_hp_ev_mask,
+                atk_ev_mask=self.initial_atk_ev_mask,
+                def_ev_mask=self.initial_def_ev_mask,
+                spa_ev_mask=self.initial_spa_ev_mask,
+                spd_ev_mask=self.initial_spd_ev_mask,
+                spe_ev_mask=self.initial_spe_ev_mask,
                 teratype_mask=self.initial_teratype_mask,
                 nature_mask=self.initial_nature_mask,
                 gender_mask=self.initial_gender_mask,
@@ -173,7 +200,12 @@ class TeamBuilderEnvironment:
                 item_usage=self.initial_item_mask.astype(jnp.float32),
                 ability_usage=self.initial_ability_mask.astype(jnp.float32),
                 move_usage=self.initial_move_mask.astype(jnp.float32),
-                ev_usage=self.initial_ev_mask.astype(jnp.float32),
+                hp_ev_usage=self.initial_hp_ev_mask.astype(jnp.float32),
+                atk_ev_usage=self.initial_atk_ev_mask.astype(jnp.float32),
+                def_ev_usage=self.initial_def_ev_mask.astype(jnp.float32),
+                spa_ev_usage=self.initial_spa_ev_mask.astype(jnp.float32),
+                spd_ev_usage=self.initial_spd_ev_mask.astype(jnp.float32),
+                spe_ev_usage=self.initial_spe_ev_mask.astype(jnp.float32),
                 teratype_usage=self.initial_teratype_mask.astype(jnp.float32),
                 nature_usage=self.initial_nature_mask.astype(jnp.float32),
                 gender_usage=self.initial_gender_mask.astype(jnp.float32),
@@ -409,38 +441,74 @@ class TeamBuilderEnvironment:
                 self.move_usage, m_species, axis=0, mode="fill", fill_value=0
             )
 
-            # --- Accurate EV Budget Logic (512 Total / 252 Stat) ---
-            ev_col = (next_attribute - PackedSetFeature.PACKED_SET_FEATURE__HP_EV).clip(
-                0, 5
-            )
-            is_ev_attr = (
-                next_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV
-            ) & (next_attribute <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
-
-            # 2. Budget Calculation
-            current_slot_val = m_evs[ev_col]
-            evs_sum_others = m_evs.sum() - current_slot_val
-
             # Max total tokens = 127 (510 EVs / 4 = 127.5 -> 127 integer tokens)
+            evs_sum_others = m_evs.sum()
             evs_remaining_total = 127 - evs_sum_others
-
-            # 3. Mask Generation
-            valid_evs_flat = next_species_mask @ self.ev_masks.reshape(
-                self.ev_masks.shape[0], -1
-            )
-            species_allowed_evs = valid_evs_flat.reshape(6, 64)[ev_col]
-
-            # Max single stat tokens = 63 (252 EVs / 4 = 63)
-            # Upper bound is min(63, Remaining Total Budget)
             stat_upper_bound = jnp.minimum(63, evs_remaining_total)
             budget_mask = jnp.arange(64) <= stat_upper_bound
 
-            final_ev_mask = jnp.where(
-                is_ev_attr, species_allowed_evs & budget_mask, self.initial_ev_mask
-            )
-            final_ev_mask = final_ev_mask.at[0].set(True)  # Ensure '0' is always legal
+            next_hp_ev_mask = next_species_mask @ self.hp_ev_masks
+            next_atk_ev_mask = next_species_mask @ self.atk_ev_masks
+            next_def_ev_mask = next_species_mask @ self.def_ev_masks
+            next_spa_ev_mask = next_species_mask @ self.spa_ev_masks
+            next_spd_ev_mask = next_species_mask @ self.spd_ev_masks
+            next_spe_ev_mask = next_species_mask @ self.spe_ev_masks
 
-            final_ev_usage = _mask_prob(self.ev_usage[m_species, ev_col], final_ev_mask)
+            next_hp_ev_mask = jnp.where(
+                next_hp_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_hp_ev_mask & budget_mask,
+            )
+            next_atk_ev_mask = jnp.where(
+                next_atk_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_atk_ev_mask & budget_mask,
+            )
+            next_def_ev_mask = jnp.where(
+                next_def_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_def_ev_mask & budget_mask,
+            )
+            next_spa_ev_mask = jnp.where(
+                next_spa_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_spa_ev_mask & budget_mask,
+            )
+            next_spd_ev_mask = jnp.where(
+                next_spd_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_spd_ev_mask & budget_mask,
+            )
+            next_spe_ev_mask = jnp.where(
+                next_spe_ev_mask.argmax(axis=-1, keepdims=True) < stat_upper_bound,
+                budget_mask,
+                next_spe_ev_mask & budget_mask,
+            )
+
+            # Ensure '0' is always legal
+            next_hp_ev_mask = next_hp_ev_mask.at[0].set(True)
+            next_atk_ev_mask = next_atk_ev_mask.at[0].set(True)
+            next_def_ev_mask = next_def_ev_mask.at[0].set(True)
+            next_spa_ev_mask = next_spa_ev_mask.at[0].set(True)
+            next_spd_ev_mask = next_spd_ev_mask.at[0].set(True)
+            next_spe_ev_mask = next_spe_ev_mask.at[0].set(True)
+
+            next_hp_ev_usage = _mask_prob(self.hp_ev_usage[m_species], next_hp_ev_mask)
+            next_atk_ev_usage = _mask_prob(
+                self.atk_ev_usage[m_species], next_atk_ev_mask
+            )
+            next_def_ev_usage = _mask_prob(
+                self.def_ev_usage[m_species], next_def_ev_mask
+            )
+            next_spa_ev_usage = _mask_prob(
+                self.spa_ev_usage[m_species], next_spa_ev_mask
+            )
+            next_spd_ev_usage = _mask_prob(
+                self.spd_ev_usage[m_species], next_spd_ev_mask
+            )
+            next_spe_ev_usage = _mask_prob(
+                self.spe_ev_usage[m_species], next_spe_ev_mask
+            )
 
             next_species_usage = (
                 team_species_one_hot @ self.teammate_usage / (other_species != 0).sum()
@@ -452,7 +520,12 @@ class TeamBuilderEnvironment:
                     item_mask=next_item_mask,
                     ability_mask=next_ability_mask,
                     move_mask=next_move_mask,
-                    ev_mask=final_ev_mask,
+                    hp_ev_mask=next_hp_ev_mask,
+                    atk_ev_mask=next_atk_ev_mask,
+                    def_ev_mask=next_def_ev_mask,
+                    spa_ev_mask=next_spa_ev_mask,
+                    spd_ev_mask=next_spd_ev_mask,
+                    spe_ev_mask=next_spe_ev_mask,
                     teratype_mask=next_teratype_mask,
                     nature_mask=next_nature_mask,
                     gender_mask=next_gender_mask,
@@ -460,7 +533,12 @@ class TeamBuilderEnvironment:
                     item_usage=_mask_prob(next_item_usage, next_item_mask),
                     ability_usage=_mask_prob(next_ability_usage, next_ability_mask),
                     move_usage=_mask_prob(next_move_usage, next_move_mask),
-                    ev_usage=final_ev_usage,
+                    hp_ev_usage=next_hp_ev_usage,
+                    atk_ev_usage=next_atk_ev_usage,
+                    def_ev_usage=next_def_ev_usage,
+                    spa_ev_usage=next_spa_ev_usage,
+                    spd_ev_usage=next_spd_ev_usage,
+                    spe_ev_usage=next_spe_ev_usage,
                     teratype_usage=_mask_prob(next_teratype_usage, next_teratype_mask),
                     nature_usage=_mask_prob(next_nature_usage, next_nature_mask),
                     gender_usage=_mask_prob(next_gender_usage, next_gender_mask),
@@ -497,9 +575,14 @@ class TeamBuilderEnvironment:
             lambda: check_mask(env.move_mask),  # 3
             lambda: check_mask(env.nature_mask),  # 4
             lambda: check_mask(env.gender_mask),  # 5
-            lambda: check_mask(env.ev_mask),  # 6
-            lambda: check_mask(env.teratype_mask),  # 7
-            ignore_attribute,  # 8: Fallback/Ignored
+            lambda: check_mask(env.hp_ev_mask),  # 6
+            lambda: check_mask(env.atk_ev_mask),  # 7
+            lambda: check_mask(env.def_ev_mask),  # 8
+            lambda: check_mask(env.spa_ev_mask),  # 9
+            lambda: check_mask(env.spd_ev_mask),  # 10
+            lambda: check_mask(env.spe_ev_mask),  # 11
+            lambda: check_mask(env.teratype_mask),  # 12
+            ignore_attribute,  # 13: Fallback/Ignored
         ]
 
         predicates = [
@@ -510,12 +593,16 @@ class TeamBuilderEnvironment:
             & (curr <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4),
             curr == PackedSetFeature.PACKED_SET_FEATURE__NATURE,
             curr == PackedSetFeature.PACKED_SET_FEATURE__GENDER,
-            (curr >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
-            & (curr <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV),
+            curr == PackedSetFeature.PACKED_SET_FEATURE__HP_EV,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__ATK_EV,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__DEF_EV,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__SPA_EV,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__SPD_EV,
+            curr == PackedSetFeature.PACKED_SET_FEATURE__SPE_EV,
             curr == PackedSetFeature.PACKED_SET_FEATURE__TERATYPE,
         ]
 
-        # If no predicate matches, use index 8 (ignore_attribute)
-        branch_idx = jnp.select(predicates, jnp.arange(8), default=8)
+        # If no predicate matches, use index 13 (ignore_attribute)
+        branch_idx = jnp.select(predicates, jnp.arange(13), default=13)
 
         return jax.lax.switch(branch_idx, branches)

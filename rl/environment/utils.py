@@ -306,7 +306,12 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                     (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
                 ),
                 move_mask=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
-                ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                hp_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                atk_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                def_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spa_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spd_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spe_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
                 nature_mask=np.ones((trajectory_length, 1, NUM_NATURES), dtype=np.bool),
                 gender_mask=np.ones((trajectory_length, 1, NUM_GENDERS), dtype=np.bool),
                 teratype_mask=np.ones(
@@ -320,7 +325,12 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                     (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
                 ),
                 move_usage=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
-                ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                hp_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                atk_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                def_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spa_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spd_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spe_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
                 nature_usage=np.ones(
                     (trajectory_length, 1, NUM_NATURES), dtype=np.bool
                 ),
