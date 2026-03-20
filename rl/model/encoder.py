@@ -1086,27 +1086,8 @@ class Encoder(nn.Module):
         current_position: jax.Array,
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
-        timestep_arange: jax.Array,
         private_embeddings: jax.Array,
     ):
-        # Select the N most recent history timesteps visible to this trajectory step,
-        # then add learned relative-recency (positional) embeddings.
-        (
-            timestep_embeddings,
-            timestep_mask,
-            timestep_positions,
-        ) = self._get_latest_timestep_embeddings(
-            timestep_embeddings,
-            timestep_mask,
-            timestep_positions,
-            timestep_arange,
-            num_timesteps=self.cfg.num_history_timesteps,
-        )
-        timestep_embeddings = (
-            timestep_embeddings
-            + self.timestep_positional_embeddings.astype(self.cfg.dtype)
-        )
-
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
         move_embeddings, move_mask = self._embed_moves(env_step.moveset)
@@ -1245,21 +1226,16 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        # Slot indices used by _get_latest_timestep_embeddings to find the most recent
-        # valid history entries within each trajectory step's allowed window.
-        timestep_arange = jnp.arange(timestep_embeddings.shape[0])
-
         switch_embeddings = self._embed_private_entities(env_step.private_team[0])
 
         state_embedding, action_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None, None)
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
             timestep_embeddings,
             timestep_positions,
-            timestep_arange,
             switch_embeddings,
         )
 
