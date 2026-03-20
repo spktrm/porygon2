@@ -1210,6 +1210,8 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
     ):
         # Keep only the most recent history window to match configured model capacity.
+        # NOTE: when the actual history is shorter than num_history_timesteps, Python
+        # slicing naturally returns the full available prefix.
         history_step = jax.tree.map(
             lambda x: (
                 x[-self.cfg.num_history_timesteps :]
