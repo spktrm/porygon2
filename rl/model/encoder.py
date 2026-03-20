@@ -1209,6 +1209,11 @@ class Encoder(nn.Module):
         packed_history_step: PlayerHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
+        # Keep only the most recent history window to match configured model capacity.
+        history_step = jax.tree.map(
+            lambda x: x[-self.cfg.num_history_timesteps :], history_step
+        )
+
         (
             timestep_embeddings,
             history_valid_mask,
