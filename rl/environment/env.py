@@ -259,8 +259,8 @@ class TeamBuilderEnvironment:
     ) -> BuilderActorInput:
         ts = state.env.ts
         curr_order = state.env.curr_order
-        curr_attribute = state.env.curr_attribute
-        curr_position = state.env.curr_position
+        state.env.curr_attribute
+        state.env.curr_position
         action_index = action_index.squeeze()
 
         new_packed_team_member_tokens = state.history.packed_team_member_tokens.at[
