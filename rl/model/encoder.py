@@ -1213,7 +1213,7 @@ class Encoder(nn.Module):
         history_step = jax.tree.map(
             lambda x: (
                 x[-self.cfg.num_history_timesteps :]
-                if getattr(x, "ndim", 0) > 0
+                if isinstance(x, (jax.Array, np.ndarray)) and x.ndim > 0
                 else x
             ),
             history_step,
