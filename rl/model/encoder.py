@@ -1180,19 +1180,20 @@ class Encoder(nn.Module):
                 kv=input_state_sequence,
                 attn_mask=create_attention_mask(latent_mask, state_mask),
             )
-            latent_state_embeddings = self.history_decoder(
-                q=latent_state_embeddings,
-                kv=timestep_embeddings,
-                attn_mask=create_attention_mask(latent_mask, timestep_mask),
-                q_positions=jnp.expand_dims(current_position, axis=-1),
-                kv_positions=timestep_positions,
-            )
 
             for _ in range(self.cfg.num_thinking_steps):
                 latent_state_embeddings = self.latent_state_encoder(
                     qkv=latent_state_embeddings,
                     attn_mask=create_attention_mask(latent_mask),
                 )
+
+        latent_state_embeddings = self.history_decoder(
+            q=latent_state_embeddings,
+            kv=timestep_embeddings,
+            attn_mask=create_attention_mask(latent_mask, timestep_mask),
+            q_positions=jnp.expand_dims(current_position, axis=-1),
+            kv_positions=timestep_positions,
+        )
 
         output_state_embeddings = self.output_decoder(
             output_state_sequence, latent_state_embeddings
