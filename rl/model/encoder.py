@@ -1211,7 +1211,12 @@ class Encoder(nn.Module):
     ):
         # Keep only the most recent history window to match configured model capacity.
         history_step = jax.tree.map(
-            lambda x: x[-self.cfg.num_history_timesteps :], history_step
+            lambda x: (
+                x[-self.cfg.num_history_timesteps :]
+                if getattr(x, "ndim", 0) > 0
+                else x
+            ),
+            history_step,
         )
 
         (
