@@ -4,7 +4,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
-import optax
 
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
