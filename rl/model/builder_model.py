@@ -125,6 +125,7 @@ class Porygon2BuilderModel(nn.Module):
             NUM_PACKED_SET_FEATURES, entity_size, self.cfg.dtype
         )
 
+        self.norm_in = nn.RMSNorm(dtype=self.cfg.dtype)
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
         self.norm_out = nn.RMSNorm(dtype=self.cfg.dtype)
 
@@ -267,6 +268,7 @@ class Porygon2BuilderModel(nn.Module):
 
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
+        packed_set_embeddings = self.norm_in(packed_set_embeddings)
         packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
         return self.norm_out(packed_set_embeddings)
 
