@@ -3654,11 +3654,55 @@ export class StateHandler {
         return this.player.eventHandler.edgeBuffer.getHistory(numHistory);
     }
 
-    getWinReward() {
+    getWinReward(): {
+        winReward?: number;
+        lossReward?: number;
+        tieReward?: number;
+    } {
         if (this.player.done) {
             if (this.player.finishedEarly) {
-                // Incentivize finishing the battle
-                return RewardFeature.REWARD_FEATURE__LOSS;
+                const playerIndex = this.player.getPlayerIndex();
+
+                let myRemainingCount = 0,
+                    myHpPercentage = 0;
+                for (const member of this.player.privateBattle.sides[
+                    playerIndex
+                ].team) {
+                    myRemainingCount += member.fainted ? 0 : 1;
+                    myHpPercentage += this.getHpRatio(member);
+                }
+                let oppRemainingCount = 0,
+                    oppHpPercentage = 0;
+                for (const member of this.player.privateBattle.sides[
+                    1 - playerIndex
+                ].team) {
+                    oppRemainingCount += member.fainted ? 0 : 1;
+                    oppHpPercentage += this.getHpRatio(member);
+                }
+
+                if (myRemainingCount > oppRemainingCount) {
+                    const winReward = (6 - oppRemainingCount) / 6;
+                    return {
+                        winReward,
+                        lossReward: 1 - winReward,
+                    };
+                } else if (myRemainingCount < oppRemainingCount) {
+                    const lossReward = (6 - oppRemainingCount) / 6;
+                    return {
+                        lossReward,
+                        winReward: 1 - lossReward,
+                    };
+                }
+
+                if (myHpPercentage > oppHpPercentage) {
+                    const winReward = (6 - oppHpPercentage) / 6;
+                    return { winReward, lossReward: 1 - winReward };
+                } else if (myHpPercentage < oppHpPercentage) {
+                    const lossReward = (6 - oppHpPercentage) / 6;
+                    return { lossReward, winReward: 1 - lossReward };
+                }
+
+                return { tieReward: 1 };
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {
                 const line = this.player.log.at(i) ?? "";
@@ -3666,14 +3710,14 @@ export class StateHandler {
                 const [_, cmd, winner] = line.split("|");
                 if (cmd === "win") {
                     return this.player.userName === winner
-                        ? RewardFeature.REWARD_FEATURE__WIN
-                        : RewardFeature.REWARD_FEATURE__LOSS;
+                        ? { winReward: 1 }
+                        : { lossReward: 1 };
                 } else if (cmd === "tie") {
-                    return RewardFeature.REWARD_FEATURE__TIE;
+                    return { tieReward: 1 };
                 }
             }
         }
-        return RewardFeature.REWARD_FEATURE___UNSPECIFIED;
+        return {};
     }
 
     getFibReward() {
@@ -3683,6 +3727,13 @@ export class StateHandler {
                     this.player.getPlayerIndex()!,
                 ),
         );
+    }
+
+    getHpRatio(member: Pokemon) {
+        const isHpBug = !member.fainted && member.hp === 0;
+        const hp = isHpBug ? 100 : member.hp;
+        const maxHp = isHpBug ? 100 : member.maxhp;
+        return hp / maxHp;
     }
 
     getInfo() {
@@ -3700,58 +3751,15 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_COUNT] =
             this.player.requestCount;
 
-        const winReward = this.getWinReward();
-        if (winReward === RewardFeature.REWARD_FEATURE__WIN) {
-            infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = 1;
-        } else if (winReward === RewardFeature.REWARD_FEATURE__LOSS) {
-            infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] = 1;
-        } else if (winReward === RewardFeature.REWARD_FEATURE__TIE) {
-            infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] = 1;
-        }
-        infoBuffer[InfoFeature.INFO_FEATURE__FIB_REWARD] = this.getFibReward();
+        const { winReward, lossReward, tieReward } = this.getWinReward();
+        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] =
+            MAX_RATIO_TOKEN * (winReward ?? 0);
+        infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] =
+            MAX_RATIO_TOKEN * (lossReward ?? 0);
+        infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] =
+            MAX_RATIO_TOKEN * (tieReward ?? 0);
 
-        const getHpRatio = (member: Pokemon) => {
-            const isHpBug = !member.fainted && member.hp === 0;
-            const hp = isHpBug ? 100 : member.hp;
-            const maxHp = isHpBug ? 100 : member.maxhp;
-            return hp / maxHp;
-        };
-
-        let [myFaintedCount, myHpCount] = [0, 0];
         const mySide = this.player.privateBattle.sides[playerIndex];
-        for (const member of mySide.team) {
-            if (member.fainted) {
-                myFaintedCount += 1;
-            } else {
-                myHpCount += getHpRatio(member);
-            }
-        }
-        myHpCount += mySide.totalPokemon - mySide.team.length;
-
-        let [oppFaintedCount, oppHpCount] = [0, 0];
-        const oppSide = this.player.privateBattle.sides[1 - playerIndex];
-        for (const member of oppSide.team) {
-            if (member.fainted) {
-                oppFaintedCount += 1;
-            } else {
-                oppHpCount += getHpRatio(member);
-            }
-        }
-        oppHpCount += oppSide.totalPokemon - oppSide.team.length;
-
-        infoBuffer[InfoFeature.INFO_FEATURE__MY_FAINTED_COUNT] = Math.floor(
-            (MAX_RATIO_TOKEN * myFaintedCount) / mySide.totalPokemon,
-        );
-        infoBuffer[InfoFeature.INFO_FEATURE__OPP_FAINTED_COUNT] = Math.floor(
-            (MAX_RATIO_TOKEN * oppFaintedCount) / oppSide.totalPokemon,
-        );
-        infoBuffer[InfoFeature.INFO_FEATURE__MY_HP_COUNT] = Math.floor(
-            (MAX_RATIO_TOKEN * myHpCount) / mySide.totalPokemon,
-        );
-        infoBuffer[InfoFeature.INFO_FEATURE__OPP_HP_COUNT] = Math.floor(
-            (MAX_RATIO_TOKEN * oppHpCount) / oppSide.totalPokemon,
-        );
-
         infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
 
         const request = this.player.getRequest();

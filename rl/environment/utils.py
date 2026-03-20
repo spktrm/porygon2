@@ -180,23 +180,21 @@ def process_state(
     is_done = info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_)
 
     # Rewards are stored as int16 in the info array, so we need to convert them back to float32
-    win_reward = np.array(
-        [
-            info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
-            info[InfoFeature.INFO_FEATURE__TIE_REWARD],
-            info[InfoFeature.INFO_FEATURE__WIN_REWARD],
-        ]
+    win_reward = (
+        np.array(
+            [
+                info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
+                info[InfoFeature.INFO_FEATURE__TIE_REWARD],
+                info[InfoFeature.INFO_FEATURE__WIN_REWARD],
+            ]
+        )
+        / MAX_RATIO_TOKEN
     )
-
-    fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
-    # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
-    fib_reward = fib_reward_token / MAX_RATIO_TOKEN
 
     env_step = PlayerEnvOutput(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
-        fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         revealed_team=revealed_team,

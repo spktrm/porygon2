@@ -259,16 +259,14 @@ class Encoder(nn.Module):
         self.prev_action_tgt_embedding = self.param(
             "prev_action_tgt_embedding", embedding_init, (1, entity_size)
         )
-        self.timestep_embedding = self.param(
-            "timestep_embedding", embedding_init, (1, entity_size)
-        )
         self.switch_positional_embeddings = self.param(
             "switch_positional_embeddings", embedding_init, (6, entity_size)
         )
-        self.timestep_positional_embeddings = self.param(
-            "timestep_positional_embeddings",
-            embedding_init,
-            (self.cfg.num_history_timesteps, entity_size),
+        self.latent_state_embedding = self.param(
+            "latent_state_embedding", embedding_init, (1, entity_size)
+        )
+        self.latent_history_embedding = self.param(
+            "latent_history_embedding", embedding_init, (1, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -324,8 +322,8 @@ class Encoder(nn.Module):
         self.extra_embeddings = self.param(
             "extra_embeddings", embedding_init, (3, entity_size)
         )
-        self.latent_embeddings = self.param(
-            "latent_embeddings",
+        self.latent_state_embeddings = self.param(
+            "latent_state_embeddings",
             embedding_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
@@ -1000,8 +998,7 @@ class Encoder(nn.Module):
         local_timestep_embedding = jnp.concatenate(
             (self.null_history.astype(self.cfg.dtype), local_timestep_embedding), axis=0
         )
-        seq_len = local_timestep_embedding.shape[0]
-        timestep_positions = jnp.arange(seq_len)
+
         valid_timestep_mask = jnp.concatenate(
             (jnp.ones(1, dtype=jnp.bool), valid_timestep_mask), axis=0
         )
@@ -1010,12 +1007,7 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        return (
-            local_timestep_embedding,
-            valid_timestep_mask,
-            history_request_count,
-            timestep_positions,
-        )
+        return local_timestep_embedding, valid_timestep_mask, history_request_count
 
     # Encode actions for the current environment step.
     def _embed_action(self, action: jax.Array) -> jax.Array:
@@ -1188,31 +1180,43 @@ class Encoder(nn.Module):
         state_mask = jnp.concatenate(
             (move_mask, private_mask, entity_mask, prev_action_doubles_mask)
         )
-        latent_mask = jnp.ones_like(self.latent_embeddings[..., 0], dtype=jnp.bool)
+        latent_state_mask = jnp.ones_like(
+            self.latent_state_embeddings[..., 0], dtype=jnp.bool
+        )
+        latent_state_embeddings = self.latent_state_embeddings.astype(self.cfg.dtype)
 
-        latent_state_embeddings = self.latent_embeddings.astype(self.cfg.dtype)
-        for _ in range(self.cfg.num_perceiver_steps):
-            latent_state_embeddings = self.input_decoder(
-                q=latent_state_embeddings,
-                kv=input_state_sequence,
-                attn_mask=create_attention_mask(latent_mask, state_mask),
-            )
-            latent_state_embeddings = self.history_decoder(
-                q=latent_state_embeddings,
-                kv=timestep_embeddings,
-                attn_mask=create_attention_mask(latent_mask, timestep_mask),
-                q_positions=jnp.expand_dims(current_position, axis=-1),
-                kv_positions=timestep_positions,
-            )
+        latent_state_embeddings = self.input_decoder(
+            q=latent_state_embeddings,
+            kv=input_state_sequence,
+            attn_mask=create_attention_mask(latent_state_mask, state_mask),
+        )
+        latent_history_embeddings = self.history_decoder(
+            q=latent_state_embeddings,
+            kv=timestep_embeddings,
+            attn_mask=create_attention_mask(latent_state_mask, timestep_mask),
+            q_positions=jnp.expand_dims(current_position, axis=-1),
+            kv_positions=timestep_positions,
+        )
 
-            for _ in range(self.cfg.num_thinking_steps):
-                latent_state_embeddings = self.latent_state_encoder(
-                    qkv=latent_state_embeddings,
-                    attn_mask=create_attention_mask(latent_mask),
-                )
+        latent_embeddings = jnp.concatenate(
+            (
+                latent_state_embeddings
+                + self.latent_state_embedding.astype(self.cfg.dtype),
+                latent_history_embeddings
+                + self.latent_history_embedding.astype(self.cfg.dtype),
+            ),
+            axis=0,
+        )
+        latent_mask = jnp.ones_like(latent_embeddings[..., 0], dtype=jnp.bool)
+
+        for _ in range(self.cfg.num_thinking_steps):
+            latent_embeddings = self.latent_state_encoder(
+                qkv=latent_embeddings,
+                attn_mask=create_attention_mask(latent_mask),
+            )
 
         output_state_embeddings = self.output_decoder(
-            output_state_sequence, latent_state_embeddings
+            output_state_sequence, latent_embeddings
         )
 
         state_embeddings = output_state_embeddings[:2]
@@ -1228,12 +1232,9 @@ class Encoder(nn.Module):
         packed_history_step: PlayerHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        (
-            timestep_embeddings,
-            history_valid_mask,
-            history_request_count,
-            timestep_positions,
-        ) = self._embed_global_timestep(history_step, packed_history_step)
+        timestep_embeddings, history_valid_mask, history_request_count = (
+            self._embed_global_timestep(history_step, packed_history_step)
+        )
 
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         # For padded timesteps, request count is 0, so we use a large bias value.
@@ -1252,7 +1253,7 @@ class Encoder(nn.Module):
             timestep_mask,
             jnp.expand_dims(request_count, -1),
             timestep_embeddings,
-            timestep_positions,
+            history_request_count,
             switch_embeddings,
         )
 

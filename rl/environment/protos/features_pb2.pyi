@@ -188,11 +188,6 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__LOSS_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__TIE_REWARD: _ClassVar[InfoFeature]
     INFO_FEATURE__WIN_REWARD: _ClassVar[InfoFeature]
-    INFO_FEATURE__FIB_REWARD: _ClassVar[InfoFeature]
-    INFO_FEATURE__MY_FAINTED_COUNT: _ClassVar[InfoFeature]
-    INFO_FEATURE__OPP_FAINTED_COUNT: _ClassVar[InfoFeature]
-    INFO_FEATURE__MY_HP_COUNT: _ClassVar[InfoFeature]
-    INFO_FEATURE__OPP_HP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__NUM_ACTIVE: _ClassVar[InfoFeature]
     INFO_FEATURE__SWITCH_ORDER_VALUE0: _ClassVar[InfoFeature]
     INFO_FEATURE__SWITCH_ORDER_VALUE1: _ClassVar[InfoFeature]
@@ -396,11 +391,6 @@ INFO_FEATURE__REQUEST_COUNT: InfoFeature
 INFO_FEATURE__LOSS_REWARD: InfoFeature
 INFO_FEATURE__TIE_REWARD: InfoFeature
 INFO_FEATURE__WIN_REWARD: InfoFeature
-INFO_FEATURE__FIB_REWARD: InfoFeature
-INFO_FEATURE__MY_FAINTED_COUNT: InfoFeature
-INFO_FEATURE__OPP_FAINTED_COUNT: InfoFeature
-INFO_FEATURE__MY_HP_COUNT: InfoFeature
-INFO_FEATURE__OPP_HP_COUNT: InfoFeature
 INFO_FEATURE__NUM_ACTIVE: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE0: InfoFeature
 INFO_FEATURE__SWITCH_ORDER_VALUE1: InfoFeature
