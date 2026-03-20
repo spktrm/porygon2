@@ -1209,6 +1209,9 @@ class Encoder(nn.Module):
         packed_history_step: PlayerHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
+        if self.cfg.num_history_timesteps <= 0:
+            raise ValueError("num_history_timesteps must be positive")
+
         # Keep only the most recent history window to match configured model capacity.
         # NOTE: when the actual history is shorter than num_history_timesteps, Python
         # slicing naturally returns the full available prefix.
