@@ -85,7 +85,11 @@ class CategoricalValueLogitHead(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array):
         x = activation_fn(layer_norm(x))
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = nn.Dense(
+            **self.cfg.logits.to_dict(),
+            dtype=x.dtype,
+            kernel_init=nn.initializers.normal(),
+        )(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
@@ -105,5 +109,9 @@ class RegressionValueLogitHead(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array):
         x = activation_fn(layer_norm(x))
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = nn.Dense(
+            **self.cfg.logits.to_dict(),
+            dtype=x.dtype,
+            kernel_init=nn.initializers.normal(),
+        )(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

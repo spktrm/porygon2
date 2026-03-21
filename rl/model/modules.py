@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import flax.linen as nn
@@ -119,6 +120,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
+    kernel_init: callable = nn.initializers.normal()
     use_softcap: bool = True
 
     @nn.compact
@@ -141,18 +143,21 @@ class MultiHeadAttention(nn.Module):
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
+            kernel_init=self.kernel_init,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
         key_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
+            kernel_init=self.kernel_init,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
         value_heads = nn.Dense(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
+            kernel_init=self.kernel_init,
             name="v_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, v_size))
 
@@ -211,7 +216,11 @@ class MultiHeadAttention(nn.Module):
 
         # Apply another projection to get the final embeddings.
         final_projection = nn.Dense(
-            model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
+            model_size,
+            use_bias=self.use_bias,
+            dtype=self.dtype,
+            kernel_init=self.kernel_init,
+            name="out_proj",
         )
         return final_projection(attn)  # [T', D']
 
@@ -419,8 +428,7 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int] = None
     use_layer_norm: bool = True
-    input_activation: bool = True
-    final_kernel_init: Optional[nn.initializers.Initializer] = None
+    kernel_init: nn.initializers.Initializer = nn.initializers.normal()
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -445,13 +453,8 @@ class MLP(nn.Module):
         for i, size in enumerate(layer_sizes):
             if self.use_layer_norm:
                 x = layer_norm(x)
-            if (i > 0) or (i == 0 and self.input_activation):
-                x = activation_fn(x)
-            dense_kwargs = dict()
-            if i == len(layer_sizes) - 1:
-                if self.final_kernel_init is not None:
-                    dense_kwargs["kernel_init"] = self.final_kernel_init
-            x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
+            x = activation_fn(x)
+            x = nn.Dense(size, dtype=x.dtype, kernel_init=self.kernel_init)(x)
         return x
 
 
@@ -460,6 +463,7 @@ class FFWMLP(nn.Module):
 
     hidden_size: int
     output_size: int = None
+    kernel_init: nn.initializers.Initializer = nn.initializers.normal()
     activation: callable = activation_fn
 
     @nn.compact
@@ -474,9 +478,20 @@ class FFWMLP(nn.Module):
             jax.Array: Output array.
         """
         inp_size = x.shape[-1]
-        gate = self.activation(nn.Dense(self.hidden_size, dtype=x.dtype)(x))
-        x = gate * nn.Dense(self.hidden_size, dtype=x.dtype)(x)
-        return nn.Dense(self.output_size or inp_size, dtype=x.dtype)(x)
+
+        gate_layer = nn.Dense(
+            self.hidden_size, dtype=x.dtype, kernel_init=self.kernel_init
+        )
+        hidden_layer = nn.Dense(
+            self.hidden_size, dtype=x.dtype, kernel_init=self.kernel_init
+        )
+        output_layer = nn.Dense(
+            self.output_size or inp_size, dtype=x.dtype, kernel_init=self.kernel_init
+        )
+
+        gate = self.activation(gate_layer(x))
+        x = gate * hidden_layer(x)
+        return output_layer(x)
 
 
 class PretrainedEmbedding:
@@ -521,10 +536,30 @@ class ZeroEmbedding:
         return jnp.take(self.embeddings, indices, axis=0)
 
 
+def simple_sum_embeddings(
+    *embeddings: list[jax.Array], divisor: Optional[int] = None
+) -> jax.Array:
+    """
+    Get the sum of the embeddings.
+
+    Args:
+        embeddings (list[jax.Array]): List of embedding arrays.
+
+    Returns:
+        jax.Array: Sum of the embeddings.
+    """
+    if len(embeddings) == 0:
+        raise ValueError("No embeddings provided")
+    if divisor is None:
+        divisor = math.sqrt(len(embeddings))
+    return sum(embeddings) / divisor
+
+
 class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
+    kernel_init: callable = nn.initializers.normal()
     param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -534,22 +569,36 @@ class SumEmbeddings(nn.Module):
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
 
-        aggregated = sum(
+        # Calculate the dense projections
+        dense_projections = [
             nn.Dense(
-                self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
+                self.hidden_size or self.output_size,
+                use_bias=False,
+                dtype=self.dtype,
+                kernel_init=self.kernel_init,
             )(embedding)
             for embedding in embeddings
-        ) + self.param(
+        ]
+
+        # Sum and scale the variance by dividing by sqrt(N)
+        aggregated = simple_sum_embeddings(
+            *dense_projections, divisor=math.sqrt(num_embeddings)
+        )
+
+        # Add the bias after scaling
+        aggregated += self.param(
             "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
         )
-        return layer_norm(aggregated.astype(self.dtype))
+
+        return aggregated.astype(self.dtype)
 
 
 class PointerLogits(nn.Module):
     qk_size: int = None
-    num_heads: int = 4
+    num_heads: int = 1
     use_bias: bool = True
     qk_layer_norm: bool = False
+    kernel_init: callable = nn.initializers.normal()
     inverse_sqrt_normalisation: bool = True
 
     @nn.compact
@@ -560,11 +609,17 @@ class PointerLogits(nn.Module):
         qk_size = self.qk_size or k.shape[-1] // self.num_heads
 
         query_heads = nn.Dense(
-            self.num_heads * qk_size, use_bias=self.use_bias, dtype=q.dtype
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=q.dtype,
+            kernel_init=self.kernel_init,
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
 
         key_heads = nn.Dense(
-            self.num_heads * qk_size, use_bias=self.use_bias, dtype=k.dtype
+            self.num_heads * qk_size,
+            use_bias=self.use_bias,
+            dtype=k.dtype,
+            kernel_init=self.kernel_init,
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 
         if self.qk_layer_norm:
