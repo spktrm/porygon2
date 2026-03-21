@@ -73,7 +73,7 @@ class Porygon2LearnerConfig:
     builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 1
 
     # EMA params
     player_ema_decay: float = 1e-3
@@ -100,7 +100,7 @@ class Porygon2LearnerConfig:
     builder_entropy_coef: float = 0
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
-    builder_human_loss_coef: float = 5e-2
+    builder_human_loss_coef: float = 1e-2
 
     player_temp_coef: float = 0.5
     player_entropy_temp_decay: float = 0.35
