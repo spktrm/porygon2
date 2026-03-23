@@ -50,8 +50,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
-    encoder_qk_layer_norm = True
     encoder_use_bias = True
+    encoder_qk_layer_norm = False
     encoder_use_post_attn_norm = False
     encoder_use_post_ffw_norm = False
 
@@ -61,8 +61,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_qk_layer_norm = True
     decoder_use_bias = True
+    decoder_qk_layer_norm = False
     decoder_use_post_attn_norm = False
     decoder_use_post_ffw_norm = False
 
@@ -157,8 +157,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)
-    qk_layer_norm = True
     use_bias = True
+    qk_layer_norm = False
     use_post_attn_norm = False
     use_post_ffw_norm = False
 
