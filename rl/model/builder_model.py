@@ -46,7 +46,7 @@ from rl.model.heads import (
     PolicyQKHead,
     RegressionValueLogitHead,
 )
-from rl.model.modules import MLP, TransformerEncoder, simple_sum_embeddings
+from rl.model.modules import MLP, RMSNorm, TransformerEncoder, simple_sum_embeddings
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
@@ -71,13 +71,8 @@ class Porygon2BuilderModel(nn.Module):
         entity_size = self.cfg.entity_size
         self.cfg.dtype
 
-        embedding_init = nn.initializers.normal()
-        dense_kwargs = dict(
-            features=entity_size, dtype=self.cfg.dtype, kernel_init=embedding_init
-        )
-        embedding_kwargs = dict(
-            features=entity_size, dtype=self.cfg.dtype, embedding_init=embedding_init
-        )
+        dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
+        embedding_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         self.species_linear = nn.Dense(
             name="species_linear", use_bias=False, **dense_kwargs
@@ -92,6 +87,9 @@ class Porygon2BuilderModel(nn.Module):
             name="moves_linear", use_bias=False, **dense_kwargs
         )
 
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
         self.sos_embedding = self.param(
             "sos_embedding", embedding_init, (1, entity_size)
         )
@@ -127,6 +125,7 @@ class Porygon2BuilderModel(nn.Module):
         self.attribute_embedding = nn.Embed(NUM_PACKED_SET_FEATURES, **embedding_kwargs)
 
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
+        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
 
         self.species_head_mlp = MLP()
         self.item_head_mlp = MLP()
@@ -281,22 +280,20 @@ class Porygon2BuilderModel(nn.Module):
         packed_set_embeddings = simple_sum_embeddings(
             position_embedding,
             attribute_embedding,
-            simple_sum_embeddings(
-                species_embeddings,
-                ability_embeddings,
-                item_embeddings,
-                move_embeddings,
-                nature_embeddings,
-                gender_embeddings,
-                hp_ev_embeddings,
-                atk_ev_embeddings,
-                def_ev_embeddings,
-                spa_ev_embeddings,
-                spd_ev_embeddings,
-                spe_ev_embeddings,
-                hiddenpower_embeddings,
-                teratype_embedding,
-            ).reshape(-1, self.cfg.entity_size),
+            species_embeddings,
+            ability_embeddings,
+            item_embeddings,
+            move_embeddings,
+            nature_embeddings,
+            gender_embeddings,
+            hp_ev_embeddings,
+            atk_ev_embeddings,
+            def_ev_embeddings,
+            spa_ev_embeddings,
+            spd_ev_embeddings,
+            spe_ev_embeddings,
+            hiddenpower_embeddings,
+            teratype_embedding,
         )
 
         sos_token = self.sos_embedding.astype(self.cfg.dtype)
@@ -307,7 +304,8 @@ class Porygon2BuilderModel(nn.Module):
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
 
-        return self.encoder(packed_set_embeddings, causal_mask)
+        packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
+        return self.final_norm(packed_set_embeddings)
 
     def _forward(
         self,

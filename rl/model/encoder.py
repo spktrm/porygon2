@@ -44,6 +44,7 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.model.modules import (
+    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
@@ -228,13 +229,8 @@ class Encoder(nn.Module):
         # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
 
-        embedding_init = nn.initializers.normal()
-        embed_kwargs = dict(
-            features=entity_size, dtype=self.cfg.dtype, embedding_init=embedding_init
-        )
-        dense_kwargs = dict(
-            features=entity_size, dtype=self.cfg.dtype, kernel_init=embedding_init
-        )
+        embed_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
+        dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         # Initialize embeddings for various entities and features.
         self.effect_from_source_embedding = nn.Embed(
@@ -247,6 +243,9 @@ class Encoder(nn.Module):
         )
 
         # Positional / Modality Embeddings
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
         self.move_embedding = self.param(
             "move_embedding", embedding_init, (1, entity_size)
         )
@@ -343,6 +342,8 @@ class Encoder(nn.Module):
         self.output_decoder = TransformerDecoder(
             **self.cfg.output_decoder.to_dict(),
         )
+
+        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -558,7 +559,7 @@ class Encoder(nn.Module):
             self._embed_species(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
-            move_embeddings.mean(0),
+            move_embeddings.sum(0) / math.sqrt(move_embeddings.shape[0]),
             public_encoding,
         )
 
@@ -955,7 +956,7 @@ class Encoder(nn.Module):
         sequence_mask = jnp.insert(node_edge_mask, 0, True)
 
         local_sequence = self.local_timestep_encoder(
-            local_sequence,
+            qkv=local_sequence,
             attn_mask=create_attention_mask(sequence_mask),
             qkv_positions=jnp.arange(local_sequence.shape[0]),
         )
@@ -1213,8 +1214,9 @@ class Encoder(nn.Module):
             )
 
         output_state_embeddings = self.output_decoder(
-            output_state_sequence, latent_embeddings
+            q=output_state_sequence, kv=latent_embeddings
         )
+        output_state_embeddings = self.final_norm(output_state_embeddings)
 
         state_embeddings = output_state_embeddings[:2]
         state_embedding = state_embeddings.reshape(-1)

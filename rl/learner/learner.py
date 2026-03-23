@@ -296,6 +296,24 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            player_action_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["action_head"]
+            ),
+            player_local_timestep_encoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["local_timestep_encoder"]
+            ),
+            player_input_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["input_decoder"]
+            ),
+            player_history_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["history_decoder"]
+            ),
+            player_latent_state_encoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["latent_state_encoder"]
+            ),
+            player_output_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["output_decoder"]
+            ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )

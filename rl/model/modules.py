@@ -120,8 +120,6 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
-    kernel_init: callable = nn.initializers.normal()
-    use_softcap: bool = True
 
     @nn.compact
     def __call__(
@@ -143,21 +141,18 @@ class MultiHeadAttention(nn.Module):
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
-            kernel_init=self.kernel_init,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
         key_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
-            kernel_init=self.kernel_init,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
         value_heads = nn.Dense(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
-            kernel_init=self.kernel_init,
             name="v_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, v_size))
 
@@ -196,31 +191,17 @@ class MultiHeadAttention(nn.Module):
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        if self.use_softcap:
-            attn_logits = softcap(attn_logits, max_value=50.0)
-
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
         attn_weights = nn.softmax(attn_logits)
         attn_weights = jnp.where(mask, attn_weights, 0)
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        head_scale = self.param(
-            "head_scale",
-            nn.initializers.zeros_init(),
-            (1, self.num_heads, 1),
-            self.param_dtype,
-        )
-        attn = attn * jnp.asarray(1 + head_scale, dtype=self.dtype)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
         final_projection = nn.Dense(
-            model_size,
-            use_bias=self.use_bias,
-            dtype=self.dtype,
-            kernel_init=self.kernel_init,
-            name="out_proj",
+            model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
 
@@ -246,6 +227,65 @@ def create_attention_mask(
 
     mask = jnp.einsum("...s,...t->...st", mask1, mask2)
     return jnp.expand_dims(mask, axis=-3)
+
+
+def norm_ratio(x: jax.Array, y: jax.Array, axis: int = -1) -> jax.Array:
+    """
+    Compute the ratio of the norms of two arrays.
+
+    Args:
+        x (jax.Array): First array.
+        y (jax.Array): Second array.
+        axis (int, optional): Axis along which to compute the norms. Defaults to -1.
+
+    Returns:
+        jax.Array: Ratio of the norms of the two arrays.
+    """
+    x_norm = jnp.linalg.norm(x, axis=axis)
+    y_norm = jnp.linalg.norm(y, axis=axis)
+    return jnp.where(x_norm == 0, 0, x_norm / y_norm)
+
+
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+
+
+class DeepDeltaResidual(nn.Module):
+
+    @nn.compact
+    def __call__(self, x: jax.Array, k_in: jax.Array, context: jax.Array):
+        """
+        Implements the vector-form DDL update:
+        x_{l+1} = x_l + beta * k_hat * (v - k_hat^T x_l)
+        """
+        d = x.shape[-1]
+
+        # 1. Direction Normalization (Unit L2 Norm)
+        # Implementation uses a fixed scaling factor for numerical precision
+        k_rms = jnp.sqrt(jnp.sum(jnp.square(k_in), axis=-1, keepdims=True) + 1e-5)
+        k_hat = k_in / k_rms
+        k_scale = 1.0 / jnp.sqrt(d)
+
+        # 2. Gating Scalar beta in [0, 2]
+        # Derived from the normalized context
+        beta_logit = nn.Dense(1)(context)
+        beta = 2.0 * jax.nn.sigmoid(beta_logit)
+
+        # 3. Content Value v
+        # Derived via linear projection of the residual stream
+        v = nn.Dense(1)(x)
+        v = jax.nn.sigmoid(v) * 4.0  # Content scaling
+
+        # 4. Projected Dynamics
+        # Compute projection of current state onto k
+        projection = jnp.sum(k_hat * x, axis=-1, keepdims=True) * k_scale
+
+        # Delta update: Synchronized erasure and injection
+        delta = beta * (v - projection)
+        update = delta * k_hat * k_scale
+
+        return x + update
 
 
 class TransformerEncoder(nn.Module):
@@ -289,12 +329,12 @@ class TransformerEncoder(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        qkv = qkv + mha
+        qkv = DeepDeltaResidual()(qkv, mha, qkv_ln)
         qkv_ln = layer_norm(qkv)
         ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
-        qkv = qkv + ffn
+        qkv = DeepDeltaResidual()(qkv, ffn, qkv_ln)
         return jnp.where(positionwise_mask, qkv, 0)
 
     @nn.compact
@@ -374,12 +414,12 @@ class TransformerDecoder(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        q = q + mha
+        q = DeepDeltaResidual()(q, mha, q_ln)
         q_ln = layer_norm(q)
         ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
-        q = q + ffn
+        q = DeepDeltaResidual()(q, ffn, q_ln)
         return jnp.where(positionwise_mask, q, 0)
 
     @nn.compact
@@ -428,7 +468,6 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int] = None
     use_layer_norm: bool = True
-    kernel_init: nn.initializers.Initializer = nn.initializers.normal()
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -454,7 +493,7 @@ class MLP(nn.Module):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = nn.Dense(size, dtype=x.dtype, kernel_init=self.kernel_init)(x)
+            x = nn.Dense(size, dtype=x.dtype)(x)
         return x
 
 
@@ -463,7 +502,6 @@ class FFWMLP(nn.Module):
 
     hidden_size: int
     output_size: int = None
-    kernel_init: nn.initializers.Initializer = nn.initializers.normal()
     activation: callable = activation_fn
 
     @nn.compact
@@ -479,18 +517,10 @@ class FFWMLP(nn.Module):
         """
         inp_size = x.shape[-1]
 
-        gate_layer = nn.Dense(
-            self.hidden_size, dtype=x.dtype, kernel_init=self.kernel_init
-        )
-        hidden_layer = nn.Dense(
-            self.hidden_size, dtype=x.dtype, kernel_init=self.kernel_init
-        )
-        output_layer = nn.Dense(
-            self.output_size or inp_size, dtype=x.dtype, kernel_init=self.kernel_init
-        )
+        hidden_layer = nn.Dense(self.hidden_size, dtype=x.dtype)
+        output_layer = nn.Dense(self.output_size or inp_size, dtype=x.dtype)
 
-        gate = self.activation(gate_layer(x))
-        x = gate * hidden_layer(x)
+        x = self.activation(hidden_layer(x))
         return output_layer(x)
 
 
@@ -559,7 +589,6 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
-    kernel_init: callable = nn.initializers.normal()
     param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -572,10 +601,7 @@ class SumEmbeddings(nn.Module):
         # Calculate the dense projections
         dense_projections = [
             nn.Dense(
-                self.hidden_size or self.output_size,
-                use_bias=False,
-                dtype=self.dtype,
-                kernel_init=self.kernel_init,
+                self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
             )(embedding)
             for embedding in embeddings
         ]
@@ -598,7 +624,6 @@ class PointerLogits(nn.Module):
     num_heads: int = 1
     use_bias: bool = True
     qk_layer_norm: bool = False
-    kernel_init: callable = nn.initializers.normal()
     inverse_sqrt_normalisation: bool = True
 
     @nn.compact
@@ -609,17 +634,11 @@ class PointerLogits(nn.Module):
         qk_size = self.qk_size or k.shape[-1] // self.num_heads
 
         query_heads = nn.Dense(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=q.dtype,
-            kernel_init=self.kernel_init,
+            self.num_heads * qk_size, use_bias=self.use_bias, dtype=q.dtype
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
 
         key_heads = nn.Dense(
-            self.num_heads * qk_size,
-            use_bias=self.use_bias,
-            dtype=k.dtype,
-            kernel_init=self.kernel_init,
+            self.num_heads * qk_size, use_bias=self.use_bias, dtype=k.dtype
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 
         if self.qk_layer_norm:
