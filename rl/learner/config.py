@@ -114,7 +114,7 @@ class Porygon2LearnerConfig:
 
     # Smogon Generation
     generation: GenT = 9
-    smogon_format: SmogonFormatT = "ou"
+    smogon_format: SmogonFormatT = "randombattle"
 
     # Logging params
     log_artifacts_online: bool = False

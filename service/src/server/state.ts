@@ -1500,7 +1500,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3718,15 +3718,6 @@ export class StateHandler {
             }
         }
         return {};
-    }
-
-    getFibReward() {
-        return Math.floor(
-            MAX_RATIO_TOKEN *
-                this.player.rewardTracker.getFibReward(
-                    this.player.getPlayerIndex()!,
-                ),
-        );
     }
 
     getHpRatio(member: Pokemon) {
