@@ -324,6 +324,7 @@ class Encoder(nn.Module):
         self.public_embedding_norm = RMSNorm()
         self.prev_action_src_embedding_norm = RMSNorm()
         self.prev_action_tgt_embedding_norm = RMSNorm()
+        self.latent_state_embedding_norm = RMSNorm()
 
         # Transformer Decoders
         self.state_embeddings = self.param(
@@ -1195,6 +1196,9 @@ class Encoder(nn.Module):
             self.latent_state_embeddings[..., 0], dtype=jnp.bool
         )
         latent_state_embeddings = self.latent_state_embeddings.astype(self.cfg.dtype)
+        latent_state_embeddings = self.latent_state_embedding_norm(
+            latent_state_embeddings
+        )
 
         latent_state_embeddings = self.input_decoder(
             q=latent_state_embeddings,

@@ -1,7 +1,6 @@
 import functools
 from pprint import pprint
 
-import chex
 import cloudpickle as pickle
 import flax.linen as nn
 import jax
@@ -48,17 +47,6 @@ from rl.model.heads import (
 )
 from rl.model.modules import MLP, RMSNorm, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
-
-
-def _encode_one_hot(
-    entity: jax.Array,
-    feature_idx: int,
-    max_values: dict[int, int],
-    value_offset: int = 0,
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
 
 
 class Porygon2BuilderModel(nn.Module):
@@ -124,8 +112,9 @@ class Porygon2BuilderModel(nn.Module):
         self.positional_embedding = nn.Embed(6, **embedding_kwargs)
         self.attribute_embedding = nn.Embed(NUM_PACKED_SET_FEATURES, **embedding_kwargs)
 
+        self.input_norm = RMSNorm()
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
-        self.final_norm = RMSNorm()
+        self.output_norm = RMSNorm()
 
         self.species_head_mlp = MLP()
         self.item_head_mlp = MLP()
@@ -157,10 +146,7 @@ class Porygon2BuilderModel(nn.Module):
         self.hiddenpower_head = PolicyQKHead(self.cfg.hiddenpower_head)
         self.teratype_head = PolicyQKHead(self.cfg.teratype_head)
 
-        self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
-
-        self.conditional_entropy_head_mlp = MLP()
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _embed_species(self, token: jax.Array):
@@ -196,11 +182,9 @@ class Porygon2BuilderModel(nn.Module):
         return mask * self.moves_linear(_ohe_encoder(token))
 
     def _forward_value_head(self, embedding: jax.Array):
-        embedding = self.value_head_mlp(embedding)
         return self.value_head(embedding)
 
     def _forward_conditional_entropy_head(self, embedding: jax.Array):
-        embedding = self.conditional_entropy_head_mlp(embedding)
         return self.conditional_entropy_head(embedding)
 
     def _encode_team(
@@ -304,8 +288,9 @@ class Porygon2BuilderModel(nn.Module):
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
 
+        packed_set_embeddings = self.input_norm(packed_set_embeddings)
         packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
-        return self.final_norm(packed_set_embeddings)
+        return self.output_norm(packed_set_embeddings)
 
     def _forward(
         self,

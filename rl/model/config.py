@@ -52,8 +52,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_use_bias = True
     encoder_qk_layer_norm = False
-    encoder_use_post_attn_norm = False
-    encoder_use_post_ffw_norm = False
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -63,8 +61,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
     decoder_use_bias = True
     decoder_qk_layer_norm = False
-    decoder_use_post_attn_norm = False
-    decoder_use_post_ffw_norm = False
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -75,8 +71,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=encoder_use_bias,
         resblocks_hidden_size=encoder_hidden_size,
         qk_layer_norm=encoder_qk_layer_norm,
-        use_post_attn_norm=encoder_use_post_attn_norm,
-        use_post_ffw_norm=encoder_use_post_ffw_norm,
     )
 
     transformer_decoder_kwargs = dict(
@@ -88,8 +82,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=decoder_use_bias,
         resblocks_hidden_size=decoder_hidden_size,
         qk_layer_norm=decoder_qk_layer_norm,
-        use_post_attn_norm=decoder_use_post_attn_norm,
-        use_post_ffw_norm=decoder_use_post_ffw_norm,
     )
 
     cfg.encoder.timestep_encoder = ConfigDict()
@@ -159,8 +151,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     qkv_size = int(qkv_scale * entity_size)
     use_bias = True
     qk_layer_norm = False
-    use_post_attn_norm = False
-    use_post_ffw_norm = False
 
     transformer_kwargs = dict(
         num_layers=num_layers,
@@ -171,8 +161,6 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         use_bias=use_bias,
         resblocks_hidden_size=hidden_size,
         qk_layer_norm=qk_layer_norm,
-        use_post_attn_norm=use_post_attn_norm,
-        use_post_ffw_norm=use_post_ffw_norm,
     )
 
     cfg.encoder = ConfigDict()

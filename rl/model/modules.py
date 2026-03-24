@@ -241,48 +241,6 @@ def norm_ratio(x: jax.Array, y: jax.Array, axis: int = -1) -> jax.Array:
     return jnp.where(x_norm == 0, 0, x_norm / y_norm)
 
 
-import jax
-import jax.numpy as jnp
-from flax import linen as nn
-
-
-class DeepDeltaResidual(nn.Module):
-
-    @nn.compact
-    def __call__(self, x: jax.Array, k_in: jax.Array, context: jax.Array):
-        """
-        Implements the vector-form DDL update:
-        x_{l+1} = x_l + beta * k_hat * (v - k_hat^T x_l)
-        """
-        d = x.shape[-1]
-
-        # 1. Direction Normalization (Unit L2 Norm)
-        # Implementation uses a fixed scaling factor for numerical precision
-        k_rms = jnp.sqrt(jnp.sum(jnp.square(k_in), axis=-1, keepdims=True) + 1e-5)
-        k_hat = k_in / k_rms
-        k_scale = 1.0 / math.sqrt(d)
-
-        # 2. Gating Scalar beta in [0, 2]
-        # Derived from the normalized context
-        beta_logit = nn.Dense(1, dtype=x.dtype)(context)
-        beta = 2.0 * jax.nn.sigmoid(beta_logit)
-
-        # 3. Content Value v
-        # Derived via linear projection of the residual stream
-        v = nn.Dense(1, dtype=x.dtype)(x)
-        v = jax.nn.sigmoid(v) * 4.0  # Content scaling
-
-        # 4. Projected Dynamics
-        # Compute projection of current state onto k
-        projection = jnp.sum(k_hat * x, axis=-1, keepdims=True) * k_scale
-
-        # Delta update: Synchronized erasure and injection
-        delta = beta * (v - projection)
-        update = delta * k_hat * k_scale
-
-        return x + update
-
-
 class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
@@ -295,11 +253,10 @@ class TransformerEncoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = False
-    use_post_ffw_norm: bool = False
 
     def layer(
         self,
+        layer_idx: int,
         qkv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
@@ -322,14 +279,12 @@ class TransformerEncoder(nn.Module):
             q_positions=qkv_positions,
             kv_positions=qkv_positions,
         )
-        if self.use_post_attn_norm:
-            mha = layer_norm(mha)
-        qkv = qkv + mha
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        qkv = qkv + mha_a * mha
         qkv_ln = layer_norm(qkv)
         ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        qkv = qkv + ffn
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        qkv = qkv + ffn_a * ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
     @nn.compact
@@ -356,13 +311,13 @@ class TransformerEncoder(nn.Module):
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
-        qkv = layer_norm(qkv)
-
         if self.need_pos and qkv_positions is None:
             qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
 
-        for _ in range(self.num_layers):
-            qkv = self.layer(qkv, attn_mask, positionwise_mask, qkv_positions)
+        for layer_idx in range(self.num_layers):
+            qkv = self.layer(
+                layer_idx, qkv, attn_mask, positionwise_mask, qkv_positions
+            )
 
         return qkv
 
@@ -379,11 +334,10 @@ class TransformerDecoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = False
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = False
-    use_post_ffw_norm: bool = False
 
     def layer(
         self,
+        layer_idx: int,
         q: jax.Array,
         kv: jax.Array,
         attn_mask: jax.Array,
@@ -409,14 +363,12 @@ class TransformerDecoder(nn.Module):
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
-        if self.use_post_attn_norm:
-            mha = layer_norm(mha)
-        q = q + mha
-        q_ln = layer_norm(q)
-        ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        q = q + ffn
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        q = q + mha_a * mha
+        qkv_ln = layer_norm(q)
+        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        q = q + ffn_a * ffn
         return jnp.where(positionwise_mask, q, 0)
 
     @nn.compact
@@ -454,9 +406,15 @@ class TransformerDecoder(nn.Module):
 
         q = layer_norm(q)
 
-        for _ in range(self.num_layers):
+        for layer_idx in range(self.num_layers):
             q = self.layer(
-                q, kv, attn_mask, positionwise_mask, q_positions, kv_positions
+                layer_idx,
+                q,
+                kv,
+                attn_mask,
+                positionwise_mask,
+                q_positions,
+                kv_positions,
             )
 
         return q
@@ -588,7 +546,6 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
-    param_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
@@ -610,7 +567,7 @@ class SumEmbeddings(nn.Module):
 
         # Add the bias after scaling
         aggregated += self.param(
-            "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
+            "bias", nn.initializers.zeros_init(), (self.output_size,)
         )
 
         return aggregated.astype(self.dtype)
