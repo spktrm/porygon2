@@ -24,7 +24,6 @@ from rl.model.heads import (
     PointerLogits,
     sample_categorical,
 )
-from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -42,8 +41,6 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-
-        self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -89,7 +86,6 @@ class Porygon2PlayerModel(nn.Module):
         )
 
     def _forward_value_head(self, x: jax.Array) -> jax.Array:
-        x = self.value_head_mlp(x)
         return self.value_head(x)
 
     def get_head_outputs(
