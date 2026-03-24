@@ -1500,7 +1500,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3117,27 +3117,9 @@ export class RewardTracker {
     prevFaintedCount: [number, number];
     currFaintedCount: [number, number];
 
-    funcCache: Map<number, number>;
-
     constructor() {
         this.prevFaintedCount = [0, 0];
         this.currFaintedCount = [0, 0];
-
-        const B = (x: number) => {
-            return x ** 2;
-        };
-        const B_int = (x: number) => {
-            return (1 / 3) * x ** 3;
-        };
-        // Integrate B from 0 - 6
-        const A = B_int(6);
-        const func = (x: number) => {
-            return (2 / A) * B(x);
-        };
-        this.funcCache = new Map();
-        [0, 1, 2, 3, 4, 5, 6].forEach((x) => {
-            this.funcCache.set(x, func(x));
-        });
     }
 
     updateFaintedCount(battle: Battle) {
@@ -3145,18 +3127,6 @@ export class RewardTracker {
         this.currFaintedCount = battle.sides.map(
             (side) => side.team.filter((poke) => poke.fainted).length,
         ) as [number, number];
-    }
-
-    getFibReward(playerIndex: number) {
-        const [prevp1, prevp2] = this.prevFaintedCount.map(
-            (x) => this.funcCache.get(x)!,
-        );
-        const [currp1, currp2] = this.currFaintedCount.map(
-            (x) => this.funcCache.get(x)!,
-        );
-        const reward = currp2 - prevp2 - (currp1 - prevp1);
-        const sign = playerIndex === 0 ? 1 : -1;
-        return sign * reward;
     }
 }
 
@@ -3661,47 +3631,6 @@ export class StateHandler {
     } {
         if (this.player.done) {
             if (this.player.finishedEarly) {
-                const playerIndex = this.player.getPlayerIndex();
-
-                let myRemainingCount = 0,
-                    myHpPercentage = 0;
-                for (const member of this.player.privateBattle.sides[
-                    playerIndex
-                ].team) {
-                    myRemainingCount += member.fainted ? 0 : 1;
-                    myHpPercentage += this.getHpRatio(member);
-                }
-                let oppRemainingCount = 0,
-                    oppHpPercentage = 0;
-                for (const member of this.player.privateBattle.sides[
-                    1 - playerIndex
-                ].team) {
-                    oppRemainingCount += member.fainted ? 0 : 1;
-                    oppHpPercentage += this.getHpRatio(member);
-                }
-
-                if (myRemainingCount > oppRemainingCount) {
-                    const winReward = (6 - oppRemainingCount) / 6;
-                    return {
-                        winReward,
-                        lossReward: 1 - winReward,
-                    };
-                } else if (myRemainingCount < oppRemainingCount) {
-                    const lossReward = (6 - oppRemainingCount) / 6;
-                    return {
-                        lossReward,
-                        winReward: 1 - lossReward,
-                    };
-                }
-
-                if (myHpPercentage > oppHpPercentage) {
-                    const winReward = (6 - oppHpPercentage) / 6;
-                    return { winReward, lossReward: 1 - winReward };
-                } else if (myHpPercentage < oppHpPercentage) {
-                    const lossReward = (6 - oppHpPercentage) / 6;
-                    return { lossReward, winReward: 1 - lossReward };
-                }
-
                 return { tieReward: 1 };
             }
             for (let i = this.player.log.length - 1; i >= 0; i--) {

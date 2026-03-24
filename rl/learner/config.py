@@ -87,7 +87,7 @@ class Porygon2LearnerConfig:
     player_gae_lambda: float = 0.95
     builder_td_lambda: float = 0.95
     builder_gae_lambda: float = 0.95
-    clip_ppo: float = 0.3
+    clip_ppo: float = 0.15
 
     # Loss coefficients
     ## Player
@@ -95,6 +95,7 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_entropy_coef: float = 1.0
+    player_wm_loss_coef: float = 1.0
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

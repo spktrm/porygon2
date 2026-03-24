@@ -280,11 +280,11 @@ class TransformerEncoder(nn.Module):
             kv_positions=qkv_positions,
         )
         mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
-        qkv = qkv + mha_a * mha
+        qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
         ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
         ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
-        qkv = qkv + ffn_a * ffn
+        qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
     @nn.compact
@@ -364,11 +364,11 @@ class TransformerDecoder(nn.Module):
             kv_positions=kv_positions,
         )
         mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
-        q = q + mha_a * mha
+        q = q + mha_a.astype(q.dtype) * mha
         qkv_ln = layer_norm(q)
         ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
         ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
-        q = q + ffn_a * ffn
+        q = q + ffn_a.astype(q.dtype) * ffn
         return jnp.where(positionwise_mask, q, 0)
 
     @nn.compact
