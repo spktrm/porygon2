@@ -157,9 +157,15 @@ class PlayerTrajectoryStore:
             limit = self._max_size
         return len(self._trajectories) >= limit
 
-    def is_half_full(self) -> bool:
-        """Returns True if the store is at least 50% full."""
-        return len(self._trajectories) >= self._max_size // 2
+    def is_min_fill_fraction_reached(self, fraction: float = 0.5) -> bool:
+        """Returns True if the store is at least ``fraction`` full.
+
+        Args:
+            fraction: Required fill level in [0.0, 1.0].
+        """
+        if not 0.0 <= fraction <= 1.0:
+            raise ValueError(f"fraction must be in [0.0, 1.0], got {fraction}")
+        return len(self._trajectories) >= int(self._max_size * fraction)
 
     def ready_to_sample(self, n: int = None) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
