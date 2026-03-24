@@ -613,6 +613,13 @@ class Learner:
         minibatch_size = self.config.batch_size
         batch_size = minibatch_size * self.config.gradient_accumulation_steps
 
+        # Wait until replay buffer is at least 50% full before starting training
+        sample_cond = self.player_replay._sample_cv
+        with sample_cond:
+            sample_cond.wait_for(
+                lambda: self.done or self.player_replay.is_half_full()
+            )
+
         while not self.done:
             # Burst processing to minimize lock contention overhead
             for _ in range(max_burst):
