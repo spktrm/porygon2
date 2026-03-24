@@ -14,6 +14,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
+    RegressionValueHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
@@ -24,6 +25,7 @@ from rl.model.heads import (
     PointerLogits,
     sample_categorical,
 )
+from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -41,6 +43,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+        self.wm_head = MLP((self.cfg.entity_size // 2, 2 * self.cfg.entity_size))
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
 
     def post_head(
@@ -85,13 +88,31 @@ class Porygon2PlayerModel(nn.Module):
             tgt_index=tgt_index,
         )
 
-    def _forward_value_head(self, x: jax.Array) -> jax.Array:
+    def _forward_value_head(self, x: jax.Array):
         return self.value_head(x)
+
+    def _forward_wm_head(self, x: jax.Array, z: jax.Array):
+        """
+        x: state-action embedding
+        z: next state embedding
+        """
+        p = self.wm_head(x)
+
+        z = jax.lax.stop_gradient(z)
+
+        # 2. L2-Normalize both to the unit hypersphere
+        p = p / jnp.clip(jnp.linalg.norm(p, axis=-1, keepdims=True), a_min=1e-8)
+        z = z / jnp.clip(jnp.linalg.norm(z, axis=-1, keepdims=True), a_min=1e-8)
+
+        # 3. Negative Cosine Similarity
+        # Since they are normalized, the dot product is the cosine similarity
+        return RegressionValueHeadOutput(logits=jnp.sum(p * z, axis=-1))
 
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
         action_embeddings: jax.Array,
+        next_state_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -107,9 +128,22 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
         )
 
+        src_embedding = jnp.take(
+            action_embeddings, action_head.src_index, axis=0, mode="clip"
+        )
+        tgt_embedding = jnp.take(
+            action_embeddings, action_head.tgt_index, axis=0, mode="clip"
+        )
+        state_action_embedding = jnp.concatenate(
+            (state_embedding, src_embedding, tgt_embedding), axis=-1
+        )
+        wm_head = self._forward_wm_head(state_action_embedding, next_state_embedding)
+
         value_head = self._forward_value_head(state_embedding)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head, value_head=value_head, wm_head=wm_head
+        )
 
     def __call__(
         self,
@@ -121,7 +155,7 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, action_embeddings = self.encoder(
+        state_embedding, action_embeddings, next_state_embedding = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
@@ -130,6 +164,7 @@ class Porygon2PlayerModel(nn.Module):
         )(
             state_embedding,
             action_embeddings,
+            next_state_embedding,
             actor_input.env,
             actor_output,
         )

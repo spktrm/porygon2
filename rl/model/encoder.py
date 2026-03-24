@@ -1273,4 +1273,9 @@ class Encoder(nn.Module):
             switch_embeddings,
         )
 
-        return state_embedding, action_embeddings
+        next_request_count = request_count + 1
+        next_state_embedding = jnp.take(
+            state_embedding, next_request_count, axis=0, mode="clip", fill_value=0
+        )
+
+        return state_embedding, action_embeddings, next_state_embedding

@@ -258,11 +258,14 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_wm = -average(player_pred.wm_head.logits, player_valid)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_coef * player_entropy_temp * loss_entropy
+            + config.player_wm_loss_coef * loss_wm
         )
 
         return loss, dict(
@@ -271,6 +274,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_wm=loss_wm,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
