@@ -46,7 +46,7 @@ from rl.model.heads import (
     PolicyQKHead,
     RegressionValueLogitHead,
 )
-from rl.model.modules import MLP, RMSNorm, TransformerEncoder, simple_sum_embeddings
+from rl.model.modules import MLP, RMSNorm, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
@@ -125,7 +125,7 @@ class Porygon2BuilderModel(nn.Module):
         self.attribute_embedding = nn.Embed(NUM_PACKED_SET_FEATURES, **embedding_kwargs)
 
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
-        self.final_norm = RMSNorm(dtype=self.cfg.dtype)
+        self.final_norm = RMSNorm()
 
         self.species_head_mlp = MLP()
         self.item_head_mlp = MLP()
@@ -277,23 +277,23 @@ class Porygon2BuilderModel(nn.Module):
         position_embedding = self.positional_embedding(position_id)
         attribute_embedding = self.attribute_embedding(attribute_id)
 
-        packed_set_embeddings = simple_sum_embeddings(
-            position_embedding,
-            attribute_embedding,
-            species_embeddings,
-            ability_embeddings,
-            item_embeddings,
-            move_embeddings,
-            nature_embeddings,
-            gender_embeddings,
-            hp_ev_embeddings,
-            atk_ev_embeddings,
-            def_ev_embeddings,
-            spa_ev_embeddings,
-            spd_ev_embeddings,
-            spe_ev_embeddings,
-            hiddenpower_embeddings,
-            teratype_embedding,
+        packed_set_embeddings = (
+            position_embedding
+            + attribute_embedding
+            + species_embeddings
+            + ability_embeddings
+            + item_embeddings
+            + move_embeddings
+            + nature_embeddings
+            + gender_embeddings
+            + hp_ev_embeddings
+            + atk_ev_embeddings
+            + def_ev_embeddings
+            + spa_ev_embeddings
+            + spd_ev_embeddings
+            + spe_ev_embeddings
+            + hiddenpower_embeddings
+            + teratype_embedding
         )
 
         sos_token = self.sos_embedding.astype(self.cfg.dtype)

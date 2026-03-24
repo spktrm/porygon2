@@ -13,14 +13,9 @@ jnp.set_printoptions(precision=2, suppress=True)
 class RMSNorm(nn.Module):
     """RMSNorm layer."""
 
-    dtype: jnp.dtype = jnp.float32
-    param_dtype: jnp.dtype = jnp.float32
-
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        scale = self.param(
-            "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.param_dtype
-        )
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],))
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
@@ -30,8 +25,8 @@ class RMSNorm(nn.Module):
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        return (normed_inputs * (1 + scale)).astype(self.dtype)
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1)).astype(x.dtype)
+        return normed_inputs * (1 + scale)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -45,7 +40,7 @@ def layer_norm(array: jax.Array) -> jax.Array:
     """
     Apply layer normalization with RMS Norm.
     """
-    return RMSNorm(dtype=array.dtype)(array)
+    return RMSNorm()(array)
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
@@ -265,16 +260,16 @@ class DeepDeltaResidual(nn.Module):
         # Implementation uses a fixed scaling factor for numerical precision
         k_rms = jnp.sqrt(jnp.sum(jnp.square(k_in), axis=-1, keepdims=True) + 1e-5)
         k_hat = k_in / k_rms
-        k_scale = 1.0 / jnp.sqrt(d)
+        k_scale = 1.0 / math.sqrt(d)
 
         # 2. Gating Scalar beta in [0, 2]
         # Derived from the normalized context
-        beta_logit = nn.Dense(1)(context)
+        beta_logit = nn.Dense(1, dtype=x.dtype)(context)
         beta = 2.0 * jax.nn.sigmoid(beta_logit)
 
         # 3. Content Value v
         # Derived via linear projection of the residual stream
-        v = nn.Dense(1)(x)
+        v = nn.Dense(1, dtype=x.dtype)(x)
         v = jax.nn.sigmoid(v) * 4.0  # Content scaling
 
         # 4. Projected Dynamics
@@ -329,12 +324,12 @@ class TransformerEncoder(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        qkv = DeepDeltaResidual()(qkv, mha, qkv_ln)
+        qkv = qkv + mha
         qkv_ln = layer_norm(qkv)
         ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
-        qkv = DeepDeltaResidual()(qkv, ffn, qkv_ln)
+        qkv = qkv + ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
     @nn.compact
@@ -360,6 +355,8 @@ class TransformerEncoder(nn.Module):
             attn_mask = create_attention_mask(qkv_mask, qkv_mask)
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
+
+        qkv = layer_norm(qkv)
 
         if self.need_pos and qkv_positions is None:
             qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
@@ -414,12 +411,12 @@ class TransformerDecoder(nn.Module):
         )
         if self.use_post_attn_norm:
             mha = layer_norm(mha)
-        q = DeepDeltaResidual()(q, mha, q_ln)
+        q = q + mha
         q_ln = layer_norm(q)
         ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
         if self.use_post_ffw_norm:
             ffn = layer_norm(ffn)
-        q = DeepDeltaResidual()(q, ffn, q_ln)
+        q = q + ffn
         return jnp.where(positionwise_mask, q, 0)
 
     @nn.compact
@@ -454,6 +451,8 @@ class TransformerDecoder(nn.Module):
                 q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
             if kv_positions is None:
                 kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
+
+        q = layer_norm(q)
 
         for _ in range(self.num_layers):
             q = self.layer(
@@ -607,9 +606,7 @@ class SumEmbeddings(nn.Module):
         ]
 
         # Sum and scale the variance by dividing by sqrt(N)
-        aggregated = simple_sum_embeddings(
-            *dense_projections, divisor=math.sqrt(num_embeddings)
-        )
+        aggregated = simple_sum_embeddings(*dense_projections, divisor=1)
 
         # Add the bias after scaling
         aggregated += self.param(
@@ -650,7 +647,7 @@ class PointerLogits(nn.Module):
         attn_logits = attn_logits.mean(axis=0)  # Average over heads
 
         if self.inverse_sqrt_normalisation:
-            attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+            attn_logits = attn_logits / math.sqrt(qk_size)
 
         return attn_logits
 
