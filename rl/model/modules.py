@@ -601,7 +601,8 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits.mean(axis=0)  # Average over heads
+        if self.num_heads <= 1:
+            attn_logits = attn_logits.squeeze(-3)
 
         if self.inverse_sqrt_normalisation:
             attn_logits = attn_logits / math.sqrt(qk_size)
