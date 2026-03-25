@@ -110,14 +110,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.state_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
-    # Policy Head Configuration
-    cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
-
     cfg.value_head = ConfigDict()
-    cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 3
+    cfg.value_head.qk_logits = ConfigDict()
+    cfg.value_head.qk_logits.num_heads = 3
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.train = train

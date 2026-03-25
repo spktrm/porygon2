@@ -258,7 +258,7 @@ def train_step(
             valid=player_valid,
         )
 
-        loss_wm = -average(player_pred.wm_head.logits, player_valid)
+        loss_wm = average(player_pred.wm_head.logits, player_valid)
 
         loss = (
             config.player_policy_loss_coef * loss_pg
