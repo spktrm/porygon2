@@ -110,7 +110,11 @@ class Porygon2PlayerModel(nn.Module):
         )
 
     def _forward_value_head(
-        self, action_logits: jax.Array, value_logits: jax.Array, valid_mask: jax.Array
+        self,
+        state_embedding: jax.Array,
+        action_logits: jax.Array,
+        value_logits: jax.Array,
+        valid_mask: jax.Array,
     ):
 
         flat_valid_mask = valid_mask.reshape(-1)
@@ -157,7 +161,7 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         value_head = self._forward_value_head(
-            action_logits, value_logits, env_step.action_mask
+            state_embedding, action_logits, value_logits, env_step.action_mask
         )
 
         src_embedding = jnp.take(
