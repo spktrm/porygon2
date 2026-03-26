@@ -563,6 +563,7 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
+    use_bias: bool = False
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
@@ -583,9 +584,10 @@ class SumEmbeddings(nn.Module):
         aggregated = simple_sum_embeddings(*dense_projections, divisor=1)
 
         # Add the bias after scaling
-        aggregated += self.param(
-            "bias", nn.initializers.zeros_init(), (self.output_size,)
-        )
+        if self.use_bias:
+            aggregated += self.param(
+                "bias", nn.initializers.zeros_init(), (self.output_size,)
+            )
 
         return aggregated.astype(self.dtype)
 

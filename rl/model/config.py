@@ -130,7 +130,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     scale = 1
 
