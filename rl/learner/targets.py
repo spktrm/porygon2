@@ -57,9 +57,27 @@ def compute_player_targets(
     )  # (T, 3)
     advantages = segmented_cumsum(player_scalar_delta, gae_lambdas)  # (T,)
 
+    # --- ICM potential-based intrinsic advantage ---
+    # Use the wm_head prediction error as a potential function Φ(s).
+    # Potential-based shaping reward: F(t) = γ * Φ(s_{t+1}) - Φ(s_t)
+    # At terminal steps the next-state potential is zero (player_valid == 0).
+    potential = traj.player_transitions.agent_output.actor_output.wm_head.logits.astype(
+        np.float32
+    )  # (T,)
+    # Per-trajectory normalisation so the intrinsic signal is scale-invariant.
+    pot_std = potential.std()
+    if pot_std > 1e-8:
+        potential = potential / pot_std
+    next_potential = np.concatenate(
+        [potential[1:], np.zeros_like(potential[:1])], axis=0
+    )
+    icm_reward = next_potential * player_valid - potential  # (T,)
+    intrinsic_advantage = segmented_cumsum(icm_reward, gae_lambdas)  # (T,)
+
     return PlayerTargets(
         returns=returns.astype(np.float32),
         advantages=advantages.astype(np.float32),
+        intrinsic_advantage=intrinsic_advantage.astype(np.float32),
     )
 
 

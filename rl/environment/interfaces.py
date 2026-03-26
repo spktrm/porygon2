@@ -172,6 +172,7 @@ class BuilderTransition:
 class PlayerTargets:
     returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    intrinsic_advantage: ArrayLike = ()
 
 
 @dataclass
