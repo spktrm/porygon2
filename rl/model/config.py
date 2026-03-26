@@ -50,8 +50,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
-    encoder_use_bias = True
-    encoder_qk_layer_norm = False
+    encoder_use_bias = False
+    encoder_qk_layer_norm = True
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -59,8 +59,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_use_bias = True
-    decoder_qk_layer_norm = False
+    decoder_use_bias = False
+    decoder_qk_layer_norm = True
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -113,11 +113,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.value_head = ConfigDict()
     cfg.value_head.qk_logits = ConfigDict()
     cfg.value_head.qk_logits.num_heads = 3
+    cfg.value_head.qk_logits.use_bias = False
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
+    cfg.action_head.qk_logits.use_bias = False
 
     for head in [cfg.action_head]:
         head.train = train
@@ -144,8 +146,8 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)
-    use_bias = True
-    qk_layer_norm = False
+    use_bias = False
+    qk_layer_norm = True
 
     transformer_kwargs = dict(
         num_layers=num_layers,

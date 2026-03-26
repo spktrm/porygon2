@@ -187,11 +187,16 @@ class MultiHeadAttention(nn.Module):
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
-        attn_weights = nn.softmax(attn_logits)
-        attn_weights = jnp.where(mask, attn_weights, 0)
+        attn_log_probs = nn.log_softmax(attn_logits, axis=-1)
+        attn_probs = jnp.exp(attn_log_probs)
+        attn_probs = jnp.where(mask, attn_probs, 0)
+
+        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / math.log(
+            attn_probs.shape[-1]
+        )
 
         # Weight the values by the attention and flatten the head vectors.
-        attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
+        attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
@@ -249,7 +254,7 @@ class TransformerEncoder(nn.Module):
     model_size: int
     num_layers: int
     num_heads: int
-    use_bias: bool = True
+    use_bias: bool = False
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
@@ -279,11 +284,14 @@ class TransformerEncoder(nn.Module):
             q_positions=qkv_positions,
             kv_positions=qkv_positions,
         )
-        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
         qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
-        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
-        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
         qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
@@ -330,9 +338,9 @@ class TransformerDecoder(nn.Module):
     model_size: int
     num_layers: int
     num_heads: int
-    use_bias: bool = True
+    use_bias: bool = False
     need_pos: bool = False
-    qk_layer_norm: bool = False
+    qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
 
     def layer(
@@ -363,11 +371,14 @@ class TransformerDecoder(nn.Module):
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
-        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
         q = q + mha_a.astype(q.dtype) * mha
         qkv_ln = layer_norm(q)
-        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
-        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.zeros_init(), (1,))
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
         q = q + ffn_a.astype(q.dtype) * ffn
         return jnp.where(positionwise_mask, q, 0)
 
@@ -459,7 +470,7 @@ class FFWMLP(nn.Module):
 
     hidden_size: int
     output_size: int = None
-    activation: callable = activation_fn
+    use_bias: bool = False
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -474,11 +485,17 @@ class FFWMLP(nn.Module):
         """
         inp_size = x.shape[-1]
 
-        hidden_layer = nn.Dense(self.hidden_size, dtype=x.dtype)
-        output_layer = nn.Dense(self.output_size or inp_size, dtype=x.dtype)
+        gating_layer = nn.Dense(
+            2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias
+        )
+        output_layer = nn.Dense(
+            self.output_size or inp_size, dtype=x.dtype, use_bias=self.use_bias
+        )
 
-        x = self.activation(hidden_layer(x))
-        return output_layer(x)
+        gate = gating_layer(x)
+        gate_a, gate_b = jnp.split(gate, 2, axis=-1)
+        hidden = activation_fn(gate_a) * gate_b
+        return output_layer(hidden)
 
 
 class PretrainedEmbedding:
@@ -576,7 +593,7 @@ class SumEmbeddings(nn.Module):
 class PointerLogits(nn.Module):
     qk_size: int = None
     num_heads: int = 1
-    use_bias: bool = True
+    use_bias: bool = False
     qk_layer_norm: bool = False
     inverse_sqrt_normalisation: bool = True
 

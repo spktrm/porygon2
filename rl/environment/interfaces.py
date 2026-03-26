@@ -76,9 +76,6 @@ class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
-    wm_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
 
