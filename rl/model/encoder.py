@@ -1262,7 +1262,7 @@ class Encoder(nn.Module):
 
         switch_embeddings = self._embed_private_entities(env_step.private_team[0])
 
-        state_embedding, action_embeddings = jax.vmap(
+        _, action_embeddings = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1273,9 +1273,4 @@ class Encoder(nn.Module):
             switch_embeddings,
         )
 
-        next_request_count = request_count + 1
-        next_state_embedding = jnp.take(
-            state_embedding, next_request_count, axis=0, mode="clip", fill_value=0
-        )
-
-        return state_embedding, action_embeddings, next_state_embedding
+        return action_embeddings

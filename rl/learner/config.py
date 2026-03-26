@@ -56,7 +56,7 @@ class Porygon2LearnerConfig:
     builder_replay_ratio: int = 5
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
-    replay_buffer_min_fill_fraction: float = 0.5
+    replay_buffer_min_fill_fraction: float = 1 / 8
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -95,7 +95,6 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_entropy_coef: float = 1.0
-    player_wm_loss_coef: float = 1.0
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

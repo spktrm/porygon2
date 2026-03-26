@@ -5,7 +5,6 @@ import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import optax
 from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_ACTION_FEATURES
@@ -16,13 +15,11 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
-    RegressionValueHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams, PointerLogits, sample_categorical
-from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -41,7 +38,6 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.value_head = PointerLogits(**self.cfg.value_head.qk_logits.to_dict())
-        self.wm_head = MLP((self.cfg.entity_size // 2, 2 * self.cfg.entity_size))
 
     def _forward_action_head(
         self,
@@ -110,35 +106,9 @@ class Porygon2PlayerModel(nn.Module):
             expectation=expectation,
         )
 
-    def _forward_wm_head(self, x: jax.Array, z: jax.Array):
-        """
-        x: state-action embedding
-        z: next state embedding
-        """
-        num_classes = 32
-
-        # 1. Reshape predictions and targets into (..., categories, classes)
-        pred_logits = self.wm_head(x).reshape(*x.shape[:-1], -1, num_classes)
-        z_logits = z.reshape(*z.shape[:-1], -1, num_classes)
-
-        # 2. Force the continuous target into a sharp, discrete one-hot vector
-        # This completely eliminates the "uniform smear" effect
-        z_hard = jax.nn.one_hot(jnp.argmax(z_logits, axis=-1), num_classes)
-        z_target = jax.lax.stop_gradient(z_hard)
-
-        # 3. Standard Categorical Cross-Entropy
-        # optax automatically applies log_softmax to pred_logits internally
-        loss = optax.softmax_cross_entropy(logits=pred_logits, labels=z_target)
-
-        # Average the loss across the categories (the -1 axis after cross-entropy)
-        # This returns a shape of (Batch,) which your learner can safely average over valid steps
-        return RegressionValueHeadOutput(logits=loss.mean(axis=-1))
-
     def get_head_outputs(
         self,
-        state_embedding: jax.Array,
         action_embeddings: jax.Array,
-        next_state_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -156,24 +126,11 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
         )
 
-        src_embedding = jnp.take(
-            action_embeddings, action_head.src_index, axis=0, mode="clip"
-        )
-        tgt_embedding = jnp.take(
-            action_embeddings, action_head.tgt_index, axis=0, mode="clip"
-        )
-        state_action_embedding = jnp.concatenate(
-            (state_embedding, src_embedding, tgt_embedding), axis=-1
-        )
-        wm_head = self._forward_wm_head(state_action_embedding, next_state_embedding)
-
         value_head = self._forward_value_head(
             action_logits, value_logits, env_step.action_mask
         )
 
-        return PlayerActorOutput(
-            action_head=action_head, value_head=value_head, wm_head=wm_head
-        )
+        return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
     def __call__(
         self,
@@ -185,19 +142,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, action_embeddings, next_state_embedding = self.encoder(
+        action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(
-            state_embedding,
-            action_embeddings,
-            next_state_embedding,
-            actor_input.env,
-            actor_output,
-        )
+        )(action_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
