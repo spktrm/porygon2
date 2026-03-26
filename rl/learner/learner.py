@@ -184,6 +184,15 @@ def train_step(
     # Targets are pre-computed at buffer add time; cast to the model's float dtype.
     player_returns = batch.player_targets.returns.astype(float_dtype)
     player_advantages = batch.player_targets.advantages.astype(float_dtype)
+    player_intrinsic_advantage = batch.player_targets.intrinsic_advantage.astype(
+        float_dtype
+    )
+
+    # Blend potential-based ICM intrinsic advantage into the policy advantages.
+    player_advantages = (
+        player_advantages
+        + config.player_intrinsic_advantage_coef * player_intrinsic_advantage
+    )
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -212,6 +221,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
+        learner_wm_head = player_pred.wm_head
         learner_log_prob = learner_action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -258,11 +268,15 @@ def train_step(
             valid=player_valid,
         )
 
+        # World model head loss (ICM prediction loss)
+        loss_wm = average(learner_wm_head.logits, player_valid)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_coef * player_entropy_temp * loss_entropy
+            + config.player_wm_loss_coef * loss_wm
         )
 
         return loss, dict(
@@ -271,6 +285,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_wm=loss_wm,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
