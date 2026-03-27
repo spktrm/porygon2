@@ -37,17 +37,24 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-        self.winloss_value_head = PointerLogits(
+        self.winloss_pointer_head = PointerLogits(
             **self.cfg.value_head.qk_logits.to_dict()
         )
+        self.winloss_value_head = nn.Dense(3, use_bias=False, dtype=self.cfg.dtype)
 
     def _forward_action_head(
         self,
-        logits: jax.Array,
+        action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
+        temp: float,
     ):
+        logits = (
+            self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
+        )
+        valid_mask = valid_mask.reshape(-1)
+
         log_policy = legal_log_policy(logits, valid_mask)
         policy = legal_policy(logits, valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
@@ -86,19 +93,19 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_value_head(
         self,
         state_embedding: jax.Array,
-        action_logits: jax.Array,
-        value_logits: jax.Array,
+        action_embeddings: jax.Array,
         valid_mask: jax.Array,
     ):
+        action_logits = self.winloss_pointer_head(action_embeddings, action_embeddings)
+        action_logits = action_logits.reshape(action_logits.shape[0], -1)
+        valid_mask = valid_mask.reshape(-1)
 
-        flat_valid_mask = valid_mask.reshape(-1)
-        flat_action_logits = action_logits.reshape(-1)
+        action_gate = legal_policy(action_logits[0], valid_mask)
+        action_value = action_logits[1:]
 
-        action_policy = legal_policy(flat_action_logits, flat_valid_mask)
-        flat_value_logits = value_logits.reshape(value_logits.shape[0], -1)
-        aggregate_value_logits = (
-            flat_value_logits * jax.lax.stop_gradient(action_policy[None])
-        ).sum(axis=-1)
+        state_value = self.winloss_value_head(state_embedding)
+
+        aggregate_value_logits = state_value + action_gate @ action_value.T
 
         log_probs = jax.nn.log_softmax(aggregate_value_logits)
         probs = jnp.exp(log_probs)
@@ -116,26 +123,21 @@ class Porygon2PlayerModel(nn.Module):
         self,
         state_embedding: jax.Array,
         action_embeddings: jax.Array,
-        next_state_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
 
-        action_logits = (
-            self.action_head(action_embeddings, action_embeddings) / head_params.temp
-        )
-        value_logits = self.winloss_value_head(action_embeddings, action_embeddings)
-
         action_head = self._forward_action_head(
-            action_logits.reshape(-1),
-            env_step.action_mask.reshape(-1),
+            action_embeddings,
+            env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
+            temp=head_params.temp,
         )
 
         value_head = self._forward_value_head(
-            state_embedding, action_logits, value_logits, env_step.action_mask
+            state_embedding, action_embeddings, env_step.action_mask
         )
 
         return PlayerActorOutput(action_head=action_head, value_head=value_head)
@@ -150,19 +152,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, action_embeddings, next_state_embedding = self.encoder(
+        state_embedding, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(
-            state_embedding,
-            action_embeddings,
-            next_state_embedding,
-            actor_input.env,
-            actor_output,
-        )
+        )(state_embedding, action_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
