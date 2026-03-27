@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import flax.linen as nn
@@ -12,14 +13,9 @@ jnp.set_printoptions(precision=2, suppress=True)
 class RMSNorm(nn.Module):
     """RMSNorm layer."""
 
-    dtype: jnp.dtype = jnp.float32
-    param_dtype: jnp.dtype = jnp.float32
-
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        scale = self.param(
-            "scale", nn.initializers.zeros_init(), (x.shape[-1],), self.param_dtype
-        )
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],))
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
@@ -29,8 +25,8 @@ class RMSNorm(nn.Module):
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        return (normed_inputs * (1 + scale)).astype(self.dtype)
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1)).astype(x.dtype)
+        return normed_inputs * (1 + scale)
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -44,7 +40,7 @@ def layer_norm(array: jax.Array) -> jax.Array:
     """
     Apply layer normalization with RMS Norm.
     """
-    return RMSNorm(dtype=array.dtype)(array)
+    return RMSNorm()(array)
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
@@ -119,7 +115,6 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
-    use_softcap: bool = True
 
     @nn.compact
     def __call__(
@@ -191,22 +186,17 @@ class MultiHeadAttention(nn.Module):
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
-        if self.use_softcap:
-            attn_logits = softcap(attn_logits, max_value=50.0)
-
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
-        attn_weights = nn.softmax(attn_logits)
-        attn_weights = jnp.where(mask, attn_weights, 0)
+        attn_log_probs = nn.log_softmax(attn_logits, axis=-1)
+        attn_probs = jnp.exp(attn_log_probs)
+        attn_probs = jnp.where(mask, attn_probs, 0)
+
+        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / math.log(
+            attn_probs.shape[-1]
+        )
 
         # Weight the values by the attention and flatten the head vectors.
-        attn = jnp.einsum("...htT,...Thd->...thd", attn_weights, value_heads)
-        head_scale = self.param(
-            "head_scale",
-            nn.initializers.zeros_init(),
-            (1, self.num_heads, 1),
-            self.param_dtype,
-        )
-        attn = attn * jnp.asarray(1 + head_scale, dtype=self.dtype)
+        attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
@@ -239,6 +229,23 @@ def create_attention_mask(
     return jnp.expand_dims(mask, axis=-3)
 
 
+def norm_ratio(x: jax.Array, y: jax.Array, axis: int = -1) -> jax.Array:
+    """
+    Compute the ratio of the norms of two arrays.
+
+    Args:
+        x (jax.Array): First array.
+        y (jax.Array): Second array.
+        axis (int, optional): Axis along which to compute the norms. Defaults to -1.
+
+    Returns:
+        jax.Array: Ratio of the norms of the two arrays.
+    """
+    x_norm = jnp.linalg.norm(x, axis=axis)
+    y_norm = jnp.linalg.norm(y, axis=axis)
+    return jnp.where(x_norm == 0, 0, x_norm / y_norm)
+
+
 class TransformerEncoder(nn.Module):
     """Apply unit-wise resblocks, and transformer layers, to the units."""
 
@@ -247,15 +254,14 @@ class TransformerEncoder(nn.Module):
     model_size: int
     num_layers: int
     num_heads: int
-    use_bias: bool = True
+    use_bias: bool = False
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = False
-    use_post_ffw_norm: bool = False
 
     def layer(
         self,
+        layer_idx: int,
         qkv: jax.Array,
         attn_mask: jax.Array,
         positionwise_mask: jax.Array,
@@ -278,14 +284,15 @@ class TransformerEncoder(nn.Module):
             q_positions=qkv_positions,
             kv_positions=qkv_positions,
         )
-        if self.use_post_attn_norm:
-            mha = layer_norm(mha)
-        qkv = qkv + mha
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
-        ffn = FFWMLP(self.resblocks_hidden_size)(qkv_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        qkv = qkv + ffn
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
     @nn.compact
@@ -315,8 +322,10 @@ class TransformerEncoder(nn.Module):
         if self.need_pos and qkv_positions is None:
             qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
 
-        for _ in range(self.num_layers):
-            qkv = self.layer(qkv, attn_mask, positionwise_mask, qkv_positions)
+        for layer_idx in range(self.num_layers):
+            qkv = self.layer(
+                layer_idx, qkv, attn_mask, positionwise_mask, qkv_positions
+            )
 
         return qkv
 
@@ -329,15 +338,14 @@ class TransformerDecoder(nn.Module):
     model_size: int
     num_layers: int
     num_heads: int
-    use_bias: bool = True
+    use_bias: bool = False
     need_pos: bool = False
-    qk_layer_norm: bool = False
+    qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
-    use_post_attn_norm: bool = False
-    use_post_ffw_norm: bool = False
 
     def layer(
         self,
+        layer_idx: int,
         q: jax.Array,
         kv: jax.Array,
         attn_mask: jax.Array,
@@ -363,14 +371,15 @@ class TransformerDecoder(nn.Module):
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
-        if self.use_post_attn_norm:
-            mha = layer_norm(mha)
-        q = q + mha
-        q_ln = layer_norm(q)
-        ffn = FFWMLP(self.resblocks_hidden_size)(q_ln)
-        if self.use_post_ffw_norm:
-            ffn = layer_norm(ffn)
-        q = q + ffn
+        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        q = q + mha_a.astype(q.dtype) * mha
+        qkv_ln = layer_norm(q)
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        q = q + ffn_a.astype(q.dtype) * ffn
         return jnp.where(positionwise_mask, q, 0)
 
     @nn.compact
@@ -406,9 +415,17 @@ class TransformerDecoder(nn.Module):
             if kv_positions is None:
                 kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
 
-        for _ in range(self.num_layers):
+        q = layer_norm(q)
+
+        for layer_idx in range(self.num_layers):
             q = self.layer(
-                q, kv, attn_mask, positionwise_mask, q_positions, kv_positions
+                layer_idx,
+                q,
+                kv,
+                attn_mask,
+                positionwise_mask,
+                q_positions,
+                kv_positions,
             )
 
         return q
@@ -419,8 +436,7 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int] = None
     use_layer_norm: bool = True
-    input_activation: bool = True
-    final_kernel_init: Optional[nn.initializers.Initializer] = None
+    use_bias: bool = True
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -442,16 +458,11 @@ class MLP(nn.Module):
         else:
             layer_sizes = self.layer_sizes
 
-        for i, size in enumerate(layer_sizes):
+        for _, size in enumerate(layer_sizes):
             if self.use_layer_norm:
                 x = layer_norm(x)
-            if (i > 0) or (i == 0 and self.input_activation):
-                x = activation_fn(x)
-            dense_kwargs = dict()
-            if i == len(layer_sizes) - 1:
-                if self.final_kernel_init is not None:
-                    dense_kwargs["kernel_init"] = self.final_kernel_init
-            x = nn.Dense(size, dtype=x.dtype, **dense_kwargs)(x)
+            x = activation_fn(x)
+            x = nn.Dense(size, dtype=x.dtype, use_bias=self.use_bias)(x)
         return x
 
 
@@ -460,7 +471,7 @@ class FFWMLP(nn.Module):
 
     hidden_size: int
     output_size: int = None
-    activation: callable = activation_fn
+    use_bias: bool = False
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -474,9 +485,18 @@ class FFWMLP(nn.Module):
             jax.Array: Output array.
         """
         inp_size = x.shape[-1]
-        gate = self.activation(nn.Dense(self.hidden_size, dtype=x.dtype)(x))
-        x = gate * nn.Dense(self.hidden_size, dtype=x.dtype)(x)
-        return nn.Dense(self.output_size or inp_size, dtype=x.dtype)(x)
+
+        gating_layer = nn.Dense(
+            2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias
+        )
+        output_layer = nn.Dense(
+            self.output_size or inp_size, dtype=x.dtype, use_bias=self.use_bias
+        )
+
+        gate = gating_layer(x)
+        gate_a, gate_b = jnp.split(gate, 2, axis=-1)
+        hidden = activation_fn(gate_a) * gate_b
+        return output_layer(hidden)
 
 
 class PretrainedEmbedding:
@@ -521,11 +541,30 @@ class ZeroEmbedding:
         return jnp.take(self.embeddings, indices, axis=0)
 
 
+def simple_sum_embeddings(
+    *embeddings: list[jax.Array], divisor: Optional[int] = None
+) -> jax.Array:
+    """
+    Get the sum of the embeddings.
+
+    Args:
+        embeddings (list[jax.Array]): List of embedding arrays.
+
+    Returns:
+        jax.Array: Sum of the embeddings.
+    """
+    if len(embeddings) == 0:
+        raise ValueError("No embeddings provided")
+    if divisor is None:
+        divisor = math.sqrt(len(embeddings))
+    return sum(embeddings) / divisor
+
+
 class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
-    param_dtype: jnp.dtype = jnp.float32
+    use_bias: bool = False
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
@@ -534,21 +573,30 @@ class SumEmbeddings(nn.Module):
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
 
-        aggregated = sum(
+        # Calculate the dense projections
+        dense_projections = [
             nn.Dense(
                 self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
             )(embedding)
             for embedding in embeddings
-        ) + self.param(
-            "bias", nn.initializers.zeros_init(), (self.output_size,), self.param_dtype
-        )
-        return layer_norm(aggregated.astype(self.dtype))
+        ]
+
+        # Sum and scale the variance by dividing by sqrt(N)
+        aggregated = simple_sum_embeddings(*dense_projections, divisor=1)
+
+        # Add the bias after scaling
+        if self.use_bias:
+            aggregated += self.param(
+                "bias", nn.initializers.zeros_init(), (self.output_size,)
+            )
+
+        return aggregated.astype(self.dtype)
 
 
 class PointerLogits(nn.Module):
     qk_size: int = None
-    num_heads: int = 4
-    use_bias: bool = True
+    num_heads: int = 1
+    use_bias: bool = False
     qk_layer_norm: bool = False
     inverse_sqrt_normalisation: bool = True
 
@@ -573,10 +621,11 @@ class PointerLogits(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits.mean(axis=0)  # Average over heads
+        if self.num_heads <= 1:
+            attn_logits = attn_logits.squeeze(-3)
 
         if self.inverse_sqrt_normalisation:
-            attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+            attn_logits = attn_logits / math.sqrt(qk_size)
 
         return attn_logits
 

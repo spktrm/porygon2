@@ -50,10 +50,13 @@ class Porygon2LearnerConfig:
     unroll_length: int = 128
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 6
+    player_replay_buffer_capacity: int = 1024 * 4
     player_replay_ratio: int = 2
-    builder_replay_buffer_capacity: int = 1024
+    builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 5
+    # Fraction of replay buffer capacity that must be filled before training
+    # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
+    replay_buffer_min_fill_fraction: float = 1 / 8
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -73,18 +76,20 @@ class Porygon2LearnerConfig:
     builder_learning_rate: float = 5e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 1
 
     # EMA params
     player_ema_decay: float = 1e-3
     builder_ema_decay: float = 1e-3
 
     # Advantage estimation params
-    player_td_lambda: float = 1.0
-    player_gae_lambda: float = 1.0
-    builder_td_lambda: float = 1.0
-    builder_gae_lambda: float = 1.0
-    clip_ppo: float = 0.3
+    player_td_lambda: float = 0.95
+    player_gae_lambda: float = 0.95
+    builder_td_lambda: float = 0.95
+    builder_gae_lambda: float = 0.95
+    clip_ppo: float = 0.15
+    player_adv_filter_quantile: float = 0.75
+    player_adv_filter_magnitude: float = 0.01
 
     # Loss coefficients
     ## Player
@@ -97,13 +102,13 @@ class Porygon2LearnerConfig:
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 1e-2
+    builder_entropy_coef: float = 0
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
-    builder_human_loss_coef: float = 0.025
+    builder_human_loss_coef: float = 1e-2
 
-    player_temp_coef: float = 0.5
-    player_entropy_temp_decay: float = 0.5
+    player_temp_coef: float = 0.025
+    player_entropy_temp_decay: float = 0.0
     player_entropy_temp_ceil: float = 0.5
     player_entropy_temp_floor: float = 1e-3
 
@@ -114,7 +119,7 @@ class Porygon2LearnerConfig:
 
     # Smogon Generation
     generation: GenT = 9
-    smogon_format: SmogonFormatT = "ou"
+    smogon_format: SmogonFormatT = "randombattle"
 
     # Logging params
     log_artifacts_online: bool = False
@@ -135,8 +140,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     step_count: int = 0
     frame_count: int = 0
 
-    target_adv_mean: float = 0
-    target_adv_std: float = 1
+    running_adv_mean: float = 0
+    running_adv_quartile: float = 1
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):

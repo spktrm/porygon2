@@ -9,6 +9,7 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_ACTION_FEATURES
 from rl.environment.interfaces import (
+    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
@@ -18,13 +19,7 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import (
-    CategoricalValueLogitHead,
-    HeadParams,
-    PointerLogits,
-    sample_categorical,
-)
-from rl.model.modules import MLP
+from rl.model.heads import HeadParams, PointerLogits, sample_categorical
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -42,17 +37,24 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+        self.winloss_pointer_head = PointerLogits(
+            **self.cfg.value_head.qk_logits.to_dict()
+        )
+        self.winloss_value_head = nn.Dense(3, use_bias=False, dtype=self.cfg.dtype)
 
-        self.value_head_mlp = MLP()
-        self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
-
-    def post_head(
+    def _forward_action_head(
         self,
-        logits: jax.Array,
+        action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
+        temp: float,
     ):
+        logits = (
+            self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
+        )
+        valid_mask = valid_mask.reshape(-1)
+
         log_policy = legal_log_policy(logits, valid_mask)
         policy = legal_policy(logits, valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
@@ -88,9 +90,34 @@ class Porygon2PlayerModel(nn.Module):
             tgt_index=tgt_index,
         )
 
-    def _forward_value_head(self, x: jax.Array) -> jax.Array:
-        x = self.value_head_mlp(x)
-        return self.value_head(x)
+    def _forward_value_head(
+        self,
+        state_embedding: jax.Array,
+        action_embeddings: jax.Array,
+        valid_mask: jax.Array,
+    ):
+        action_logits = self.winloss_pointer_head(action_embeddings, action_embeddings)
+        action_logits = action_logits.reshape(action_logits.shape[0], -1)
+        valid_mask = valid_mask.reshape(-1)
+
+        action_gate = legal_policy(action_logits[0], valid_mask)
+        action_value = action_logits[1:]
+
+        state_value = self.winloss_value_head(state_embedding)
+
+        aggregate_value_logits = state_value + action_gate @ action_value.T
+
+        log_probs = jax.nn.log_softmax(aggregate_value_logits)
+        probs = jnp.exp(log_probs)
+        entropy = -jnp.sum(probs * log_probs, axis=-1)
+        expectation = probs @ self.cfg.value_head.category_values.astype(probs.dtype)
+
+        return CategoricalValueHeadOutput(
+            logits=aggregate_value_logits,
+            log_probs=log_probs,
+            entropy=entropy,
+            expectation=expectation,
+        )
 
     def get_head_outputs(
         self,
@@ -101,17 +128,17 @@ class Porygon2PlayerModel(nn.Module):
         head_params: HeadParams,
     ):
 
-        action_logits = (
-            self.action_head(action_embeddings, action_embeddings) / head_params.temp
-        )
-        action_head = self.post_head(
-            action_logits.reshape(-1),
-            env_step.action_mask.reshape(-1),
+        action_head = self._forward_action_head(
+            action_embeddings,
+            env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
+            temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(state_embedding)
+        value_head = self._forward_value_head(
+            state_embedding, action_embeddings, env_step.action_mask
+        )
 
         return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
@@ -131,12 +158,7 @@ class Porygon2PlayerModel(nn.Module):
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(
-            state_embedding,
-            action_embeddings,
-            actor_input.env,
-            actor_output,
-        )
+        )(state_embedding, action_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

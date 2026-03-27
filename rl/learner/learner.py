@@ -26,7 +26,7 @@ from rl.learner.config import (
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
-from rl.model.utils import Params, ParamsContainer, promote_map
+from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -176,14 +176,24 @@ def train_step(
 
     float_dtype = player_actor_log_prob.dtype
 
-    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     # --- Player ---
     # Targets are pre-computed at buffer add time; cast to the model's float dtype.
     player_returns = batch.player_targets.returns.astype(float_dtype)
     player_advantages = batch.player_targets.advantages.astype(float_dtype)
+
+    threshold = jnp.maximum(
+        player_state.running_adv_quartile, config.player_adv_filter_magnitude
+    )
+    adv_mask = jnp.abs(player_advantages - player_state.running_adv_mean) >= threshold
+    player_valid_raw = jnp.bitwise_not(player_transitions.env_output.done)
+
+    player_valid_ratio = adv_mask.sum() / player_valid_raw.sum()
+    player_valid = player_valid_raw & adv_mask
+
+    no_valid = player_valid.sum() == 0
+    player_valid = player_valid + no_valid
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -201,19 +211,17 @@ def train_step(
 
     def player_loss_fn(params: Params):
 
-        player_pred = promote_map(
-            player_state.apply_fn(
-                params,
-                player_actor_input,
-                player_transitions.agent_output.actor_output,
-                HeadParams(),
-            )
+        player_pred = player_state.apply_fn(
+            params,
+            player_actor_input,
+            player_transitions.agent_output.actor_output,
+            HeadParams(),
         )
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-        learner_log_prob = learner_action_head.log_prob
 
+        learner_log_prob = learner_action_head.log_prob
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
@@ -258,7 +266,7 @@ def train_step(
             valid=player_valid,
         )
 
-        loss = (
+        loss = ~no_valid * (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
@@ -294,12 +302,41 @@ def train_step(
     training_logs.update(
         dict(
             player_loss=player_loss_val,
+            player_valid_ratio=player_valid_ratio,
+            player_running_adv_mean=player_state.running_adv_mean,
+            player_running_adv_quartile=player_state.running_adv_quartile,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            player_action_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["action_head"]
+            ),
+            player_winloss_pointer_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["winloss_pointer_head"]
+            ),
+            player_winloss_value_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["winloss_value_head"]
+            ),
+            player_local_timestep_encoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["local_timestep_encoder"]
+            ),
+            player_input_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["input_decoder"]
+            ),
+            player_history_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["history_decoder"]
+            ),
+            player_latent_state_encoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["latent_state_encoder"]
+            ),
+            player_output_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["output_decoder"]
+            ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )
     )
+
+    tau = config.player_ema_decay
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         # Update target params and adv mean/std.
@@ -308,6 +345,14 @@ def train_step(
         ),
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
+        running_adv_mean=(1 - tau) * player_state.running_adv_mean
+        + tau * jnp.mean(player_advantages, where=player_valid_raw),
+        running_adv_quartile=(1 - tau) * player_state.running_adv_quartile
+        + tau
+        * jnp.nanquantile(
+            jnp.where(player_valid_raw, player_advantages, jnp.nan),
+            config.player_adv_filter_quantile,
+        ),
     )
 
     # --- Builder ---
@@ -347,13 +392,11 @@ def train_step(
 
         def builder_loss_fn(params: Params):
 
-            pred = promote_map(
-                builder_state.apply_fn(
-                    params,
-                    builder_actor_input,
-                    builder_transitions.agent_output.actor_output,
-                    HeadParams(),
-                )
+            pred = builder_state.apply_fn(
+                params,
+                builder_actor_input,
+                builder_transitions.agent_output.actor_output,
+                HeadParams(),
             )
 
             learner_value_head = pred.value_head
@@ -397,12 +440,6 @@ def train_step(
                 valid=builder_valid,
             )
 
-            # 1. Shift the logic (Your temporal alignment is still correct!)
-            human_prob_raw = builder_transitions.env_output.human_prob
-            human_prob = jnp.concatenate(
-                [human_prob_raw[1:], jnp.zeros_like(human_prob_raw[:1])], axis=0
-            )
-
             human_valid_mask = (
                 builder_transitions.env_output.curr_attribute
                 != PackedSetFeature.PACKED_SET_FEATURE__HIDDENPOWERTYPE
@@ -411,8 +448,8 @@ def train_step(
                 != PackedSetFeature.PACKED_SET_FEATURE__GENDER
             )
 
-            loss_human = -average(
-                human_prob * learner_log_prob, valid=builder_valid & human_valid_mask
+            loss_human = average(
+                learner_action_head.kl_prior, valid=builder_valid & human_valid_mask
             )
 
             loss = (
@@ -600,6 +637,16 @@ class Learner:
         max_burst = 8
         minibatch_size = self.config.batch_size
         batch_size = minibatch_size * self.config.gradient_accumulation_steps
+
+        # Wait until replay buffer is at least replay_buffer_min_fill_fraction full before starting training
+        sample_cond = self.player_replay._sample_cv
+        with sample_cond:
+            sample_cond.wait_for(
+                lambda: self.done
+                or self.player_replay.is_min_fill_fraction_reached(
+                    self.config.replay_buffer_min_fill_fraction
+                )
+            )
 
         while not self.done:
             # Burst processing to minimize lock contention overhead
