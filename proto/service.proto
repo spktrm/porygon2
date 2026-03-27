@@ -71,13 +71,14 @@ message EnvironmentState {
   bytes history_entity_edges = 5;
   bytes history_field = 6;
   int32 history_length = 7;
-  bytes moveset = 8;
-  bytes public_team = 9;
-  bytes revealed_team = 10;
-  bytes private_team = 11;
-  bytes field = 12;
-  int32 rqid = 13;
-  int32 history_packed_length = 14;
+  bytes my_moveset = 8;
+  bytes opp_moveset = 9;
+  bytes public_team = 10;
+  bytes revealed_team = 11;
+  bytes private_team = 12;
+  bytes field = 13;
+  int32 rqid = 14;
+  int32 history_packed_length = 15;
 }
 
 message EnvironmentTrajectory {

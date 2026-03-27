@@ -5,7 +5,6 @@ import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import optax
 from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_ACTION_FEATURES
@@ -16,13 +15,11 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
-    RegressionValueHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams, PointerLogits, sample_categorical
-from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -40,32 +37,9 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-        self.value_head = PointerLogits(**self.cfg.value_head.qk_logits.to_dict())
-        self.wm_head = MLP((self.cfg.entity_size, 2 * self.cfg.entity_size))
-
-    def _forward_wm_head(self, x: jax.Array, z: jax.Array):
-        """
-        x: state-action embedding
-        z: next state embedding
-        """
-        num_classes = 32
-
-        # 1. Reshape predictions and targets into (..., categories, classes)
-        pred_logits = self.wm_head(x).reshape(*x.shape[:-1], -1, num_classes)
-        z_logits = z.reshape(*z.shape[:-1], -1, num_classes)
-
-        # 2. Force the continuous target into a sharp, discrete one-hot vector
-        # This completely eliminates the "uniform smear" effect
-        z_hard = jax.nn.one_hot(jnp.argmax(z_logits, axis=-1), num_classes)
-        z_target = jax.lax.stop_gradient(z_hard)
-
-        # 3. Standard Categorical Cross-Entropy
-        # optax automatically applies log_softmax to pred_logits internally
-        loss = optax.softmax_cross_entropy(logits=pred_logits, labels=z_target)
-
-        # Average the loss across the categories (the -1 axis after cross-entropy)
-        # This returns a shape of (Batch,) which your learner can safely average over valid steps
-        return RegressionValueHeadOutput(logits=loss.mean(axis=-1))
+        self.winloss_value_head = PointerLogits(
+            **self.cfg.value_head.qk_logits.to_dict()
+        )
 
     def _forward_action_head(
         self,
@@ -151,7 +125,7 @@ class Porygon2PlayerModel(nn.Module):
         action_logits = (
             self.action_head(action_embeddings, action_embeddings) / head_params.temp
         )
-        value_logits = self.value_head(action_embeddings, action_embeddings)
+        value_logits = self.winloss_value_head(action_embeddings, action_embeddings)
 
         action_head = self._forward_action_head(
             action_logits.reshape(-1),
@@ -164,20 +138,7 @@ class Porygon2PlayerModel(nn.Module):
             state_embedding, action_logits, value_logits, env_step.action_mask
         )
 
-        src_embedding = jnp.take(
-            action_embeddings, action_head.src_index, axis=0, mode="clip"
-        )
-        tgt_embedding = jnp.take(
-            action_embeddings, action_head.tgt_index, axis=0, mode="clip"
-        )
-        state_action_embedding = jnp.concatenate(
-            (state_embedding, src_embedding, tgt_embedding), axis=-1
-        )
-        wm_head = self._forward_wm_head(state_action_embedding, next_state_embedding)
-
-        return PlayerActorOutput(
-            action_head=action_head, value_head=value_head, wm_head=wm_head
-        )
+        return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
     def __call__(
         self,

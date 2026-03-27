@@ -26,7 +26,7 @@ from rl.learner.config import (
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
-from rl.model.utils import Params, ParamsContainer, promote_map
+from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -201,19 +201,17 @@ def train_step(
 
     def player_loss_fn(params: Params):
 
-        player_pred = promote_map(
-            player_state.apply_fn(
-                params,
-                player_actor_input,
-                player_transitions.agent_output.actor_output,
-                HeadParams(),
-            )
+        player_pred = player_state.apply_fn(
+            params,
+            player_actor_input,
+            player_transitions.agent_output.actor_output,
+            HeadParams(),
         )
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
-        learner_log_prob = learner_action_head.log_prob
 
+        learner_log_prob = learner_action_head.log_prob
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
@@ -365,13 +363,11 @@ def train_step(
 
         def builder_loss_fn(params: Params):
 
-            pred = promote_map(
-                builder_state.apply_fn(
-                    params,
-                    builder_actor_input,
-                    builder_transitions.agent_output.actor_output,
-                    HeadParams(),
-                )
+            pred = builder_state.apply_fn(
+                params,
+                builder_actor_input,
+                builder_transitions.agent_output.actor_output,
+                HeadParams(),
             )
 
             learner_value_head = pred.value_head

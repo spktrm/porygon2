@@ -113,7 +113,7 @@ class ResetRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., smogon_format: _Optional[str] = ..., game_id: _Optional[str] = ..., packed_teams: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
-    __slots__ = ("info", "action_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
+    __slots__ = ("info", "action_mask", "history_entity_public", "history_entity_revealed", "history_entity_edges", "history_field", "history_length", "my_moveset", "opp_moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
     INFO_FIELD_NUMBER: _ClassVar[int]
     ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_PUBLIC_FIELD_NUMBER: _ClassVar[int]
@@ -121,7 +121,8 @@ class EnvironmentState(_message.Message):
     HISTORY_ENTITY_EDGES_FIELD_NUMBER: _ClassVar[int]
     HISTORY_FIELD_FIELD_NUMBER: _ClassVar[int]
     HISTORY_LENGTH_FIELD_NUMBER: _ClassVar[int]
-    MOVESET_FIELD_NUMBER: _ClassVar[int]
+    MY_MOVESET_FIELD_NUMBER: _ClassVar[int]
+    OPP_MOVESET_FIELD_NUMBER: _ClassVar[int]
     PUBLIC_TEAM_FIELD_NUMBER: _ClassVar[int]
     REVEALED_TEAM_FIELD_NUMBER: _ClassVar[int]
     PRIVATE_TEAM_FIELD_NUMBER: _ClassVar[int]
@@ -135,14 +136,15 @@ class EnvironmentState(_message.Message):
     history_entity_edges: bytes
     history_field: bytes
     history_length: int
-    moveset: bytes
+    my_moveset: bytes
+    opp_moveset: bytes
     public_team: bytes
     revealed_team: bytes
     private_team: bytes
     field: bytes
     rqid: int
     history_packed_length: int
-    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
+    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_public: _Optional[bytes] = ..., history_entity_revealed: _Optional[bytes] = ..., history_entity_edges: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., my_moveset: _Optional[bytes] = ..., opp_moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
 
 class EnvironmentTrajectory(_message.Message):
     __slots__ = ("states",)

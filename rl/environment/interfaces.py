@@ -13,9 +13,10 @@ class PlayerEnvOutput:
     public_team: ArrayLike = ()
     revealed_team: ArrayLike = ()
     field: ArrayLike = ()
+    opp_moveset: ArrayLike = ()
 
     # Private Info
-    moveset: ArrayLike = ()
+    my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
@@ -75,9 +76,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
-    )
-    wm_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
