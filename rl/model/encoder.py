@@ -560,7 +560,9 @@ class Encoder(nn.Module):
                 self._embed_learnset(species_token),
                 encode_reg_boosts(reg_boost_features),
                 encode_spe_boosts(spe_boost_features),
-                jax.nn.one_hot(teratype_token, NUM_TYPECHART),
+                jax.nn.one_hot(
+                    teratype_token, NUM_TYPECHART, dtype=move_embeddings.dtype
+                ),
             ],
             axis=-1,
         )
@@ -1268,9 +1270,4 @@ class Encoder(nn.Module):
             switch_embeddings,
         )
 
-        next_request_count = request_count + 1
-        next_state_embedding = jnp.take(
-            state_embedding, next_request_count, axis=0, mode="clip", fill_value=0
-        )
-
-        return state_embedding, action_embeddings, next_state_embedding
+        return state_embedding, action_embeddings

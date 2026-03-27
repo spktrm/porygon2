@@ -176,14 +176,24 @@ def train_step(
 
     float_dtype = player_actor_log_prob.dtype
 
-    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     # --- Player ---
     # Targets are pre-computed at buffer add time; cast to the model's float dtype.
     player_returns = batch.player_targets.returns.astype(float_dtype)
     player_advantages = batch.player_targets.advantages.astype(float_dtype)
+
+    threshold = jnp.maximum(
+        player_state.running_adv_quartile, config.player_adv_filter_magnitude
+    )
+    adv_mask = jnp.abs(player_advantages - player_state.running_adv_mean) >= threshold
+    player_valid_raw = jnp.bitwise_not(player_transitions.env_output.done)
+
+    player_valid_ratio = adv_mask.sum() / player_valid_raw.sum()
+    player_valid = player_valid_raw & adv_mask
+
+    no_valid = player_valid.sum() == 0
+    player_valid = player_valid + no_valid
 
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
@@ -256,7 +266,7 @@ def train_step(
             valid=player_valid,
         )
 
-        loss = (
+        loss = ~no_valid * (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
@@ -292,10 +302,19 @@ def train_step(
     training_logs.update(
         dict(
             player_loss=player_loss_val,
+            player_valid_ratio=player_valid_ratio,
+            player_running_adv_mean=player_state.running_adv_mean,
+            player_running_adv_quartile=player_state.running_adv_quartile,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["action_head"]
+            ),
+            player_winloss_pointer_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["winloss_pointer_head"]
+            ),
+            player_winloss_value_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["winloss_value_head"]
             ),
             player_local_timestep_encoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_encoder"]
@@ -316,6 +335,8 @@ def train_step(
             player_norm_adv_std=player_advantages.std(where=player_valid),
         )
     )
+
+    tau = config.player_ema_decay
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         # Update target params and adv mean/std.
@@ -324,6 +345,14 @@ def train_step(
         ),
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
+        running_adv_mean=(1 - tau) * player_state.running_adv_mean
+        + tau * jnp.mean(player_advantages, where=player_valid_raw),
+        running_adv_quartile=(1 - tau) * player_state.running_adv_quartile
+        + tau
+        * jnp.nanquantile(
+            jnp.where(player_valid_raw, player_advantages, jnp.nan),
+            config.player_adv_filter_quantile,
+        ),
     )
 
     # --- Builder ---

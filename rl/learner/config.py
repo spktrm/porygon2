@@ -88,6 +88,8 @@ class Porygon2LearnerConfig:
     builder_td_lambda: float = 0.95
     builder_gae_lambda: float = 0.95
     clip_ppo: float = 0.15
+    player_adv_filter_quantile: float = 0.75
+    player_adv_filter_magnitude: float = 0.01
 
     # Loss coefficients
     ## Player
@@ -138,8 +140,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     step_count: int = 0
     frame_count: int = 0
 
-    target_adv_mean: float = 0
-    target_adv_std: float = 1
+    running_adv_mean: float = 0
+    running_adv_quartile: float = 1
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
