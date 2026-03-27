@@ -795,10 +795,12 @@ function getArrayFromPrivatePokemon(
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT] =
         stats.spe ?? 0;
 
+    const teraType = pokemonSet.teraType
+        ? IndexValueFromEnum(TypechartEnum, pokemonSet.teraType)
+        : TypechartEnum.TYPECHART_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE] =
-        pokemonSet.teraType
-            ? IndexValueFromEnum(TypechartEnum, pokemonSet.teraType)
-            : TypechartEnum.TYPECHART_ENUM___NULL;
+        teraType;
+
     return dataArr;
 }
 
@@ -829,11 +831,12 @@ function getArrayFromPublicPokemon(
     }
 
     // Terastallized
-    revealedData[
-        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
-    ] = pokemon.terastallized
+    const teraType = pokemon.terastallized
         ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
         : TypechartEnum.TYPECHART_ENUM___UNK;
+    revealedData[
+        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
+    ] = teraType;
 
     const ability = pokemon.ability;
 
@@ -3045,9 +3048,13 @@ class PrivateActionHandler {
     }
 
     build() {
-        const actives = (this.request?.active ?? [
-            null,
-        ]) as Protocol.MoveRequest["active"];
+        const actives = [
+            ...(this.request?.active ?? [null]),
+        ] as Protocol.MoveRequest["active"];
+        if (actives.length < 2) {
+            actives.push(null);
+        }
+
         const switches = (this.request?.side?.pokemon ??
             []) as Protocol.Request.SideInfo["pokemon"];
 
@@ -3106,6 +3113,182 @@ class PrivateActionHandler {
                 addPadRows(4 - wildcardMoves.length);
             } else {
                 addPadRows(8);
+            }
+        }
+
+        return new Uint8Array(this.actionBuffer.buffer);
+    }
+}
+
+class PublicActionHandler {
+    player: TrainablePlayerAI;
+    actionBuffer: Int16Array;
+
+    constructor(player: TrainablePlayerAI) {
+        this.player = player;
+        this.actionBuffer = new Int16Array(4 * 4 * numMoveFeatures);
+    }
+
+    assignActionBuffer(args: { offset: number; index: number; value: number }) {
+        const { offset, index, value } = args;
+        this.actionBuffer[offset + index] = value;
+    }
+
+    pushMoveAction(
+        actionOffset: number,
+        move:
+            | {
+                  name: Protocol.MoveName;
+                  id: ID;
+                  ppUsed: number;
+                  virtual?: boolean;
+              }
+            | {
+                  name: Protocol.MoveName;
+                  id: ID;
+                  ppUsed: number;
+                  pp: number;
+                  maxpp: number;
+                  target: MoveTarget;
+                  disabled?: boolean;
+                  virtual?: boolean;
+              },
+    ) {
+        const moveDexData = this.player.publicBattle.gens.dex.moves.get(
+            move.id,
+        );
+        const maxpp = Math.floor((moveDexData.pp * 8) / 5);
+
+        if ("ppUsed" in move) {
+            const pp = maxpp - move.ppUsed;
+
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPP.MOVESET_HAS_PP__YES,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP,
+                value: pp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__MAXPP,
+                value: maxpp,
+            });
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__PP_RATIO,
+                value: MAX_RATIO_TOKEN * (pp / maxpp),
+            });
+        } else {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__HAS_PP,
+                value: MovesetHasPP.MOVESET_HAS_PP__NO,
+            });
+        }
+        let moveId = move.id;
+        if (moveId.startsWith("return")) {
+            moveId = "return" as ID;
+        } else if (moveId.startsWith("frustration")) {
+            moveId = "frustration" as ID;
+        } else if (moveId.startsWith("hiddenpower")) {
+            const power = parseInt(moveId.slice(-2));
+            if (isNaN(power)) {
+                moveId = "hiddenpower" as ID;
+            } else {
+                moveId = moveId.slice(0, -2) as ID;
+            }
+        }
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+            value: IndexValueFromEnum(MovesEnum, moveId),
+        });
+        this.assignActionBuffer({
+            offset: actionOffset,
+            index: MovesetFeature.MOVESET_FEATURE__ACTION_TYPE,
+            value: ActionType.ACTION_TYPE__MOVE,
+        });
+        if ("disabled" in move) {
+            this.assignActionBuffer({
+                offset: actionOffset,
+                index: MovesetFeature.MOVESET_FEATURE__DISABLED,
+                value: move.disabled ? 1 : 0,
+            });
+        }
+    }
+
+    build(playerIndex: number) {
+        const side = this.player.publicBattle.sides[playerIndex];
+
+        const actives = [...side.active];
+        if (actives.length < 2) {
+            actives.push(null);
+        }
+
+        const switches = side.team;
+        const hasTera = switches.some((poke) => poke?.isTerastallized);
+
+        let actionOffset = 0;
+
+        const addTokenRows = (numRows: number, value: number) => {
+            for (let i = 0; i < numRows; i++) {
+                this.assignActionBuffer({
+                    offset: actionOffset,
+                    index: MovesetFeature.MOVESET_FEATURE__MOVE_ID,
+                    value,
+                });
+                actionOffset += numMoveFeatures;
+            }
+        };
+
+        for (const [activeIndex, activePokemon] of actives.entries()) {
+            const moves = (activePokemon?.moveSlots ?? []).slice(0, 4);
+            const wildcardMoves = hasTera ? [] : moves;
+
+            if (activePokemon !== null) {
+                const { pokemon, index: entityIndex } =
+                    this.player.eventHandler.getPokemon(
+                        activePokemon.ident,
+                        true,
+                    );
+                if (pokemon === null) {
+                    throw new Error(`Pokemon ${activePokemon.ident} not found`);
+                }
+                for (const action of moves) {
+                    this.pushMoveAction(actionOffset, action);
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__ENTITY_IDX,
+                        value: entityIndex,
+                    });
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__IS_WILDCARD,
+                        value: 0,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+                addTokenRows(4 - moves.length, MovesEnum.MOVES_ENUM___UNK);
+
+                for (const action of wildcardMoves) {
+                    this.pushMoveAction(actionOffset, action);
+                    this.assignActionBuffer({
+                        offset: actionOffset,
+                        index: MovesetFeature.MOVESET_FEATURE__IS_WILDCARD,
+                        value: 1,
+                    });
+                    actionOffset += numMoveFeatures;
+                }
+                addTokenRows(
+                    4 - wildcardMoves.length,
+                    MovesEnum.MOVES_ENUM___UNK,
+                );
+            } else {
+                addTokenRows(8, MovesEnum.MOVES_ENUM___PAD);
             }
         }
 
@@ -3457,9 +3640,18 @@ export class StateHandler {
         return { actionMask, isStruggling };
     }
 
-    getMoveset(): Uint8Array {
+    getMyMoveset(): Uint8Array {
         const actionHandler = new PrivateActionHandler(this.player);
         return actionHandler.build();
+    }
+
+    getOppMoveset(): Uint8Array {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error();
+        }
+        const actionHandler = new PublicActionHandler(this.player);
+        return actionHandler.build(1 - playerIndex);
     }
 
     getPublicTeamFromSide(playerIndex: number): {
@@ -3898,7 +4090,8 @@ export class StateHandler {
         state.setPublicTeam(new Uint8Array(publicData.buffer));
         state.setRevealedTeam(new Uint8Array(revealedData.buffer));
 
-        state.setMoveset(this.getMoveset());
+        state.setMyMoveset(this.getMyMoveset());
+        state.setOppMoveset(this.getOppMoveset());
 
         state.setField(this.getField());
 

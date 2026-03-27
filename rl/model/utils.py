@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Callable, NamedTuple, TypeVar, cast
+from typing import Callable, NamedTuple, TypeVar
 
 import chex
 import jax
@@ -117,13 +117,3 @@ def assert_no_nan_or_inf(gradients, path=""):
     else:
         if jnp.isnan(gradients).any() or jnp.isinf(gradients).any():
             raise ValueError(f"Gradient at {path} contains NaN or Inf values.")
-
-
-def promote_map(pred: PredT) -> PredT:
-    def maybe_promote(x):
-        if isinstance(x, jnp.ndarray) and x.dtype == jnp.bfloat16:
-            return x.astype(jnp.float32)
-        return x
-
-    out = jax.tree_util.tree_map(maybe_promote, pred)
-    return cast(PredT, out)

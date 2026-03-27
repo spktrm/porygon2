@@ -150,8 +150,13 @@ def process_state(
         max_history,
     ).astype(np.int32)
 
-    moveset = (
-        np.frombuffer(state.moveset, dtype=np.int16)
+    my_moveset = (
+        np.frombuffer(state.my_moveset, dtype=np.int16)
+        .reshape(16, NUM_MOVE_FEATURES)
+        .astype(np.int32)
+    )
+    opp_moveset = (
+        np.frombuffer(state.opp_moveset, dtype=np.int16)
         .reshape(16, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
@@ -199,7 +204,8 @@ def process_state(
         public_team=public_team,
         revealed_team=revealed_team,
         field=field,
-        moveset=moveset,
+        my_moveset=my_moveset,
+        opp_moveset=opp_moveset,
         action_mask=get_action_mask(state),
     )
     packed_history_step = PlayerPackedHistoryOutput(

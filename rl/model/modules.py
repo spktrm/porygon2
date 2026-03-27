@@ -436,6 +436,7 @@ class MLP(nn.Module):
 
     layer_sizes: int | tuple[int] | list[int] = None
     use_layer_norm: bool = True
+    use_bias: bool = True
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -457,11 +458,11 @@ class MLP(nn.Module):
         else:
             layer_sizes = self.layer_sizes
 
-        for i, size in enumerate(layer_sizes):
+        for _, size in enumerate(layer_sizes):
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
-            x = nn.Dense(size, dtype=x.dtype)(x)
+            x = nn.Dense(size, dtype=x.dtype, use_bias=self.use_bias)(x)
         return x
 
 

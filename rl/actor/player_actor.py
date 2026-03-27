@@ -21,7 +21,7 @@ from rl.environment.utils import (
 from rl.learner.league import MAIN_KEY, pfsp
 from rl.learner.learner import Learner
 from rl.model.builder_model import get_packed_team_string
-from rl.model.utils import Params, ParamsContainer, promote_map
+from rl.model.utils import Params, ParamsContainer
 
 
 class PlayerActor:
@@ -120,15 +120,13 @@ class PlayerActor:
             lambda *xs: np.stack(xs), *player_trajectory
         )
 
-        trajectory = Trajectory(
+        return Trajectory(
             builder_transitions=builder_trajectory,
             builder_history=builder_history,
             player_transitions=player_trajectory,
             player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
         )
-
-        return promote_map(trajectory)
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)
