@@ -201,10 +201,11 @@ def train_step(
         player_entropy_temp
         * batch.player_targets.raw_ent_advantages.astype(float_dtype)
     )
+    ent_clip = jnp.maximum(jnp.abs(player_win_advantages), 1e-4)
     player_ent_advantages = jnp.clip(
         player_ent_advantages,
-        -config.player_entropy_advantage_clip,
-        config.player_entropy_advantage_clip,
+        -ent_clip,
+        ent_clip,
     )
     player_advantages = player_win_advantages + player_ent_advantages
 
