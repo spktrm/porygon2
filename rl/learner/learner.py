@@ -183,6 +183,7 @@ def train_step(
     player_returns = batch.player_targets.returns.astype(float_dtype)
     player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
     player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
+    player_ent_advantages = batch.player_targets.raw_ent_advantages.astype(float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
@@ -197,12 +198,9 @@ def train_step(
         config.player_entropy_temp_ceil,
     )
 
-    player_ent_advantages = 0.1 * batch.player_targets.raw_ent_advantages.astype(
-        float_dtype
+    player_advantages = (
+        player_win_advantages + player_entropy_temp * player_ent_advantages
     )
-    ent_clip = jnp.abs(player_win_advantages)
-    player_ent_advantages = jnp.clip(player_ent_advantages, -ent_clip, ent_clip)
-    player_advantages = player_win_advantages + player_ent_advantages
 
     training_logs = {}
 
