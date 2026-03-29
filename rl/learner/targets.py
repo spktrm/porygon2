@@ -81,7 +81,10 @@ def compute_player_targets(
     ent_returns = (
         segmented_cumsum(player_ent_delta, td_lambdas) + player_ent_scaled
     ) / entropy_normalising_constant  # (T,)
-    raw_ent_advantages = segmented_cumsum(player_ent_delta, gae_lambdas)  # (T,)
+
+    raw_ent_advantages = (
+        segmented_cumsum(player_ent_delta, gae_lambdas) / entropy_normalising_constant
+    )  # (T,)
 
     return PlayerTargets(
         returns=returns.astype(np.float32),
