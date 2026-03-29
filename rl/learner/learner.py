@@ -181,7 +181,8 @@ def train_step(
     # --- Player ---
     # Targets are pre-computed at buffer add time; cast to the model's float dtype.
     player_returns = batch.player_targets.returns.astype(float_dtype)
-    player_advantages = batch.player_targets.advantages.astype(float_dtype)
+    player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
+    player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
@@ -196,9 +197,12 @@ def train_step(
         config.player_entropy_temp_ceil,
     )
 
-    action_mask_sum = player_transitions.env_output.action_mask.reshape(
-        player_valid.shape + (-1,)
-    ).sum(axis=-1)
+    player_ent_advantages = 0.1 * batch.player_targets.raw_ent_advantages.astype(
+        float_dtype
+    )
+    ent_clip = jnp.abs(player_win_advantages)
+    player_ent_advantages = jnp.clip(player_ent_advantages, -ent_clip, ent_clip)
+    player_advantages = player_win_advantages + player_ent_advantages
 
     training_logs = {}
 
@@ -213,6 +217,7 @@ def train_step(
 
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
+        learner_conditional_entropy_head = player_pred.conditional_entropy_head
 
         learner_log_prob = learner_action_head.log_prob
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -231,22 +236,12 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits,
-                labels=player_returns,
+                logits=learner_value_head.logits, labels=player_returns
             ),
             player_valid,
         )
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
-
-        # The log of the number of valid actions
-        log_num_valid_actions = jnp.log(action_mask_sum.clip(min=1))
-
-        # magnet_kl = -entropy + xe
-        exact_magnet_kl = log_num_valid_actions - learner_action_head.entropy
-
-        # Average over valid transitions
-        loss_entropy = average(exact_magnet_kl, player_valid)
 
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -259,19 +254,25 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_conditional_entropy = mse_value_loss(
+            pred=learner_conditional_entropy_head.logits,
+            target=player_ent_returns,
+            valid=player_valid,
+        )
+
         loss = ~no_valid * (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_coef * player_entropy_temp * loss_entropy
+            + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
         )
 
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
-            player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
+            player_loss_conditional_entropy=loss_conditional_entropy,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -286,6 +287,12 @@ def train_step(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_returns @ cat_vf_support,
                 mask=player_valid,
+            ),
+            player_conditional_entropy_head_mean=average(
+                learner_conditional_entropy_head.logits, player_valid
+            ),
+            player_conditional_entropy_head_std=jnp.std(
+                learner_conditional_entropy_head.logits, where=player_valid
             ),
         )
 
@@ -321,8 +328,15 @@ def train_step(
             player_output_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["output_decoder"]
             ),
+            player_conditional_entropy_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["conditional_entropy_head"]
+            ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
+            player_ent_win_adv_ratio=average(
+                jnp.abs(player_ent_advantages / player_win_advantages),
+                player_valid,
+            ),
         )
     )
 

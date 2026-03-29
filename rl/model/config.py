@@ -121,6 +121,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.action_head.qk_logits = ConfigDict()
     cfg.action_head.qk_logits.use_bias = False
 
+    cfg.entropy_head = ConfigDict()
+    cfg.entropy_head.logits = ConfigDict()
+    cfg.entropy_head.logits.features = 1
+
     for head in [cfg.action_head]:
         head.train = train
 
