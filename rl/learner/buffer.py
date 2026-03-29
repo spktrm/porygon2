@@ -227,6 +227,7 @@ class PlayerTrajectoryStore:
             traj,
             td_lambda=self._learner_config.player_td_lambda,
             gae_lambda=self._learner_config.player_gae_lambda,
+            entropy_normalising_constant=self._learner_config.player_entropy_prediction_normalising_constant,
         )
         if self._compute_builder:
             builder_targets = compute_builder_targets(

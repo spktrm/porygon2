@@ -19,7 +19,12 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
-from rl.model.heads import HeadParams, PointerLogits, sample_categorical
+from rl.model.heads import (
+    HeadParams,
+    PointerLogits,
+    RegressionValueLogitHead,
+    sample_categorical,
+)
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -41,6 +46,7 @@ class Porygon2PlayerModel(nn.Module):
             **self.cfg.value_head.qk_logits.to_dict()
         )
         self.winloss_value_head = nn.Dense(3, use_bias=False, dtype=self.cfg.dtype)
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _forward_action_head(
         self,
@@ -119,6 +125,9 @@ class Porygon2PlayerModel(nn.Module):
             expectation=expectation,
         )
 
+    def _forward_conditional_entropy_head(self, state_embedding: jax.Array):
+        return self.conditional_entropy_head(state_embedding)
+
     def get_head_outputs(
         self,
         state_embedding: jax.Array,
@@ -140,7 +149,15 @@ class Porygon2PlayerModel(nn.Module):
             state_embedding, action_embeddings, env_step.action_mask
         )
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            state_embedding
+        )
+
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            conditional_entropy_head=conditional_entropy_head,
+        )
 
     def __call__(
         self,
