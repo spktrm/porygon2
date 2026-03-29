@@ -22,6 +22,7 @@ def compute_player_targets(
     traj: Trajectory,
     td_lambda: float,
     gae_lambda: float,
+    entropy_normalising_constant: float,
 ) -> PlayerTargets:
     """Compute TD(λ) returns and GAE advantages for the player trajectory.
 
@@ -57,9 +58,39 @@ def compute_player_targets(
     )  # (T, 3)
     advantages = segmented_cumsum(player_scalar_delta, gae_lambdas)  # (T,)
 
+    # Entropy reward (SAC-style)
+    player_log_prob = (
+        traj.player_transitions.agent_output.actor_output.action_head.log_prob.astype(
+            np.float32
+        )
+    )  # (T,)
+    player_ent_pred = traj.player_transitions.agent_output.actor_output.conditional_entropy_head.logits.astype(
+        np.float32
+    )  # (T,)
+
+    player_ent_scaled = player_ent_pred * entropy_normalising_constant  # (T,)
+    next_player_ent_scaled = (
+        np.concatenate(
+            [player_ent_scaled[1:], np.zeros_like(player_ent_scaled[:1])], axis=0
+        )
+        * player_valid
+    )
+    player_nll = -player_log_prob  # (T,)
+    player_ent_delta = player_nll + next_player_ent_scaled - player_ent_scaled
+
+    ent_returns = (
+        segmented_cumsum(player_ent_delta, td_lambdas) + player_ent_scaled
+    ) / entropy_normalising_constant  # (T,)
+
+    raw_ent_advantages = (
+        segmented_cumsum(player_ent_delta, gae_lambdas) / entropy_normalising_constant
+    )  # (T,)
+
     return PlayerTargets(
         returns=returns.astype(np.float32),
         advantages=advantages.astype(np.float32),
+        raw_ent_advantages=raw_ent_advantages.astype(np.float32),
+        ent_returns=ent_returns.astype(np.float32),
     )
 
 

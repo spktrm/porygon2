@@ -78,6 +78,9 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
 
 
 @dataclass
@@ -170,6 +173,8 @@ class BuilderTransition:
 class PlayerTargets:
     returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    raw_ent_advantages: ArrayLike = ()
+    ent_returns: ArrayLike = ()
 
 
 @dataclass
