@@ -25,7 +25,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 64
+    base_size = 96
     num_heads = 4
     width_scale = 1
 
@@ -41,7 +41,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 16
+    cfg.encoder.num_latent_embeddings = 12
     cfg.encoder.num_thinking_steps = 1
 
     encoder_num_layers = 1
@@ -106,7 +106,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.timestep_encoder.need_pos = True
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_encoder.num_layers = 4
+    cfg.encoder.state_encoder.num_layers = 8
     cfg.encoder.state_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 

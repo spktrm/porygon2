@@ -183,14 +183,7 @@ def train_step(
     player_returns = batch.player_targets.returns.astype(float_dtype)
     player_advantages = batch.player_targets.advantages.astype(float_dtype)
 
-    threshold = jnp.maximum(
-        player_state.running_adv_quartile, config.player_adv_filter_magnitude
-    )
-    adv_mask = jnp.abs(player_advantages - player_state.running_adv_mean) >= threshold
-    player_valid_raw = jnp.bitwise_not(player_transitions.env_output.done)
-
-    player_valid_ratio = adv_mask.sum() / player_valid_raw.sum()
-    player_valid = player_valid_raw & adv_mask
+    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
     no_valid = player_valid.sum() == 0
     player_valid = player_valid + no_valid
@@ -302,9 +295,6 @@ def train_step(
     training_logs.update(
         dict(
             player_loss=player_loss_val,
-            player_valid_ratio=player_valid_ratio,
-            player_running_adv_mean=player_state.running_adv_mean,
-            player_running_adv_quartile=player_state.running_adv_quartile,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
@@ -336,23 +326,17 @@ def train_step(
         )
     )
 
-    tau = config.player_ema_decay
+    config.player_ema_decay
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         # Update target params and adv mean/std.
-        target_params=optax.incremental_update(
-            player_state.params, player_state.target_params, config.player_ema_decay
-        ),
+        # target_params=optax.incremental_update(
+        #     player_state.params,
+        #     player_state.target_params,
+        #     jnp.floor(config.player_ema_decay / config.gradient_accumulation_steps),
+        # ),
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
-        running_adv_mean=(1 - tau) * player_state.running_adv_mean
-        + tau * jnp.mean(player_advantages, where=player_valid_raw),
-        running_adv_quartile=(1 - tau) * player_state.running_adv_quartile
-        + tau
-        * jnp.nanquantile(
-            jnp.where(player_valid_raw, player_advantages, jnp.nan),
-            config.player_adv_filter_quantile,
-        ),
     )
 
     # --- Builder ---

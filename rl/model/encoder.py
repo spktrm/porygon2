@@ -1091,7 +1091,7 @@ class Encoder(nn.Module):
         current_position: jax.Array,
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
-        private_embeddings: jax.Array,
+        initial_private_team: jax.Array,
     ):
         entity_embeddings, entity_mask = self._embed_public_entities(env_step)
 
@@ -1102,20 +1102,23 @@ class Encoder(nn.Module):
             env_step.action_mask, MOVE_INDICES, axis=0
         ).any(axis=-1)
 
+        # TODO: attempt this effiency again
+        # switch_order_indices = np.array(
+        #     [
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE1,
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE2,
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE3,
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE4,
+        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE5,
+        #     ]
+        # )
+        # switch_order_values = env_step.info[switch_order_indices]
+        # initial_private_team = jnp.take(
+        #     initial_private_team, switch_order_values, axis=0
+        # )
+        private_embeddings = self._embed_private_entities(env_step.private_team)
         private_mask = jnp.ones_like(private_embeddings[..., 0], dtype=jnp.bool)
-
-        switch_order_indices = np.array(
-            [
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE1,
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE2,
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE3,
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE4,
-                InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE5,
-            ]
-        )
-        switch_order_values = env_step.info[switch_order_indices]
-        private_embeddings = jnp.take(private_embeddings, switch_order_values, axis=0)
 
         my_move_embeddings = my_move_embeddings + self.my_move_embedding.astype(
             self.cfg.dtype
@@ -1257,8 +1260,6 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        switch_embeddings = self._embed_private_entities(env_step.private_team[0])
-
         state_embedding, action_embeddings = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
@@ -1267,7 +1268,7 @@ class Encoder(nn.Module):
             jnp.expand_dims(request_count, -1),
             timestep_embeddings,
             history_request_count,
-            switch_embeddings,
+            env_step.private_team[0],
         )
 
         return state_embedding, action_embeddings
