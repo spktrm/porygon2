@@ -106,6 +106,9 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
+    # Max absolute value of scaled entropy advantages (prevents entropy reward hacking)
+    player_entropy_advantage_clip: float = 1.0
+
     player_temp_coef: float = 0.05
     player_entropy_temp_decay: float = 0.3
     player_entropy_temp_ceil: float = 0.1
