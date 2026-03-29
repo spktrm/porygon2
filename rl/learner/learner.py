@@ -203,10 +203,6 @@ def train_step(
     )
     player_advantages = player_win_advantages + player_ent_advantages
 
-    action_mask_sum = player_transitions.env_output.action_mask.reshape(
-        player_valid.shape + (-1,)
-    ).sum(axis=-1)
-
     training_logs = {}
 
     def player_loss_fn(params: Params):
@@ -247,15 +243,6 @@ def train_step(
 
         action_head_entropy = average(learner_action_head.entropy, player_valid)
 
-        # The log of the number of valid actions
-        log_num_valid_actions = jnp.log(action_mask_sum.clip(min=1))
-
-        # magnet_kl = -entropy + xe
-        exact_magnet_kl = log_num_valid_actions - learner_action_head.entropy
-
-        # Average over valid transitions
-        loss_entropy = average(exact_magnet_kl, player_valid)
-
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
@@ -277,7 +264,6 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_coef * player_entropy_temp * loss_entropy
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
         )
 
@@ -285,7 +271,6 @@ def train_step(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
-            player_loss_entropy=loss_entropy,
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
             # Per head entropies
