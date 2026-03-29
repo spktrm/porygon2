@@ -564,7 +564,7 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
-    use_bias: bool = False
+    use_bias: bool = True
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:

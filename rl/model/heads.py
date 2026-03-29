@@ -10,7 +10,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.modules import PointerLogits
+from rl.model.modules import MLP, PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -84,7 +84,7 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = MLP(**self.cfg.mlp.to_dict())(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
@@ -103,5 +103,7 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = MLP(**self.cfg.mlp.to_dict())(x)
+        if getattr(self.cfg, "output_activation", None) is not None:
+            x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

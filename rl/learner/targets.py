@@ -139,14 +139,11 @@ def compute_builder_targets(
 
     # Entropy delta: NLL + discounted future entropy - current entropy prediction.
     builder_ent_scaled = builder_ent_pred * entropy_normalising_constant  # (T_b,)
-    next_builder_ent_scaled = (
-        np.concatenate(
-            [builder_ent_scaled[1:], np.zeros_like(builder_ent_scaled[:1])], axis=0
-        )
-        * builder_valid
+    next_builder_ent_scaled = np.concatenate(
+        [builder_ent_scaled[1:], np.zeros_like(builder_ent_scaled[:1])], axis=0
     )
-    builder_nll = -builder_log_prob  # (T_b,)
-    builder_ent_delta = builder_nll + next_builder_ent_scaled - builder_ent_scaled
+    builder_ent_target = -builder_log_prob + next_builder_ent_scaled * builder_valid
+    builder_ent_delta = builder_ent_target - builder_ent_scaled
 
     # Value computation.
     builder_next_value_probs = np.concatenate(
