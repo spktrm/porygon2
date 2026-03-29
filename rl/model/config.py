@@ -1,5 +1,6 @@
 import pprint
 
+import flax.linen as nn
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
@@ -25,7 +26,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 96
+    base_size = 64
     num_heads = 4
     width_scale = 1
 
@@ -34,6 +35,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.generation = generation
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
+    cfg.train = train
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -50,7 +52,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
-    encoder_use_bias = False
+    encoder_use_bias = True
     encoder_qk_layer_norm = True
 
     decoder_num_layers = 1
@@ -59,7 +61,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_use_bias = False
+    decoder_use_bias = True
     decoder_qk_layer_norm = True
 
     transformer_encoder_kwargs = dict(
@@ -106,24 +108,25 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.timestep_encoder.need_pos = True
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_encoder.num_layers = 8
+    cfg.encoder.state_encoder.num_layers = 4
     cfg.encoder.state_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.value_head = ConfigDict()
-    cfg.value_head.qk_logits = ConfigDict()
-    cfg.value_head.qk_logits.num_heads = 4
-    cfg.value_head.qk_logits.use_bias = False
+    cfg.value_head.mlp = ConfigDict()
+    cfg.value_head.mlp.layer_sizes = (entity_size, 3)
+    cfg.value_head.mlp.use_bias = True
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
-    cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
-    cfg.action_head.qk_logits.use_bias = False
+    cfg.action_head.qk_logits.use_bias = True
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
+    cfg.entropy_head.mlp = ConfigDict()
+    cfg.entropy_head.mlp.layer_sizes = (entity_size, 1)
+    cfg.entropy_head.mlp.use_bias = True
+    cfg.entropy_head.output_activation = nn.softplus
 
     for head in [cfg.action_head]:
         head.train = train
@@ -134,7 +137,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 96
+    base_size = 64
     num_heads = 4
     scale = 1
 
@@ -187,11 +190,11 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
+    cfg.entropy_head.mlp = ConfigDict()
+    cfg.entropy_head.mlp.layer_sizes = (entity_size, 1)
 
-    cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 3
+    cfg.value_head.mlp = ConfigDict()
+    cfg.value_head.mlp.layer_sizes = (entity_size, 3)
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     for head in [

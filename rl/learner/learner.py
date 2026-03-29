@@ -294,22 +294,39 @@ def train_step(
             ),
         )
 
+    mean_abs_ent = average(jnp.abs(player_ent_advantages), player_valid)
+    mean_abs_win = average(jnp.abs(player_win_advantages), player_valid)
+    player_ent_win_adv_ratio = mean_abs_ent / (mean_abs_win + 1e-8)
+
+    # A cosine similarity near 0 means the entropy advantage is doing
+    # completely different work than the win advantage.
+    dot_product = jnp.sum(player_ent_advantages * player_win_advantages * player_valid)
+    norm_ent = jnp.sqrt(jnp.sum(jnp.square(player_ent_advantages) * player_valid))
+    norm_win = jnp.sqrt(jnp.sum(jnp.square(player_win_advantages) * player_valid))
+    player_ent_win_adv_cosine_sim = dot_product / (norm_ent * norm_win + 1e-8)
+
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
     training_logs.update(player_logs)
     training_logs.update(
         dict(
             player_loss=player_loss_val,
+            player_nll_sum=(
+                batch.player_transitions.agent_output.actor_output.action_head.log_prob
+                * player_valid
+            )
+            .sum(axis=0)
+            .mean(),
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["action_head"]
             ),
-            player_winloss_pointer_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["winloss_pointer_head"]
-            ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["winloss_value_head"]
+            ),
+            player_conditional_entropy_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["conditional_entropy_head"]
             ),
             player_local_timestep_encoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_encoder"]
@@ -326,27 +343,15 @@ def train_step(
             player_output_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["output_decoder"]
             ),
-            player_conditional_entropy_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["conditional_entropy_head"]
-            ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
-            player_ent_win_adv_ratio=average(
-                jnp.abs(player_ent_advantages / player_win_advantages),
-                player_valid,
-            ),
+            player_ent_win_adv_ratio=player_ent_win_adv_ratio,
+            player_ent_win_cosine_sim=player_ent_win_adv_cosine_sim,
         )
     )
 
-    config.player_ema_decay
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
-        # Update target params and adv mean/std.
-        # target_params=optax.incremental_update(
-        #     player_state.params,
-        #     player_state.target_params,
-        #     jnp.floor(config.player_ema_decay / config.gradient_accumulation_steps),
-        # ),
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
     )
@@ -508,12 +513,6 @@ def train_step(
         )
         builder_state = builder_state.apply_gradients(grads=builder_grads)
         builder_state = builder_state.replace(
-            # Update target params.
-            target_params=optax.incremental_update(
-                builder_state.params,
-                builder_state.target_params,
-                config.builder_ema_decay,
-            ),
             step_count=builder_state.step_count + 1,
             frame_count=builder_state.frame_count + builder_valid.sum(),
         )
