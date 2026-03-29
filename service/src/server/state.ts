@@ -1503,7 +1503,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3752,21 +3752,24 @@ export class StateHandler {
             throw new Error("Request pokemon is undefined");
         } else {
             let privateOrder;
+            privateOrder = [...requestPokemon];
 
-            if (request.teamPreview) {
-                privateOrder = [...requestPokemon];
-                for (const [toIdx, choice] of this.player.choices.entries()) {
-                    const fromIdx = parseInt(choice.split(" ")[1]) - 1;
-                    [privateOrder[toIdx], privateOrder[fromIdx]] = [
-                        privateOrder[fromIdx],
-                        privateOrder[toIdx],
-                    ];
-                }
-            } else {
-                privateOrder = [...requestPokemon].sort((a, b) => {
-                    return a.ident.localeCompare(b.ident);
-                });
-            }
+            // TODO: Fix the sorting here
+            // if (request.teamPreview) {
+            //     privateOrder = [...requestPokemon];
+            //     for (const [toIdx, choice] of this.player.choices.entries()) {
+            //         const fromIdx = parseInt(choice.split(" ")[1]) - 1;
+            //         [privateOrder[toIdx], privateOrder[fromIdx]] = [
+            //             privateOrder[fromIdx],
+            //             privateOrder[toIdx],
+            //         ];
+            //     }
+            // } else {
+            //     privateOrder = [...requestPokemon].sort((a, b) => {
+            //         return a.ident.localeCompare(b.ident);
+            //     });
+            // }
+
             for (const member of privateOrder) {
                 const name = toID(member.speciesForme);
 

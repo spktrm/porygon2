@@ -51,7 +51,7 @@ class Porygon2LearnerConfig:
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 4
-    player_replay_ratio: int = 2
+    player_replay_ratio: int = 1
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 5
     # Fraction of replay buffer capacity that must be filled before training
@@ -68,15 +68,15 @@ class Porygon2LearnerConfig:
     league_size: int = 16
 
     # Batch iteration params
-    batch_size: int = 4
+    batch_size: int = 2
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 5e-5
-    builder_learning_rate: float = 5e-5
+    player_learning_rate: float = 1e-4
+    builder_learning_rate: float = 1e-4
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    gradient_accumulation_steps: int = 1
+    gradient_accumulation_steps: int = 8
 
     # EMA params
     player_ema_decay: float = 1e-3
@@ -88,8 +88,6 @@ class Porygon2LearnerConfig:
     builder_td_lambda: float = 0.95
     builder_gae_lambda: float = 0.95
     clip_ppo: float = 0.15
-    player_adv_filter_quantile: float = 0.75
-    player_adv_filter_magnitude: float = 0.01
 
     # Loss coefficients
     ## Player
@@ -107,13 +105,13 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    player_temp_coef: float = 0.025
-    player_entropy_temp_decay: float = 0.0
-    player_entropy_temp_ceil: float = 0.5
+    player_temp_coef: float = 0.05
+    player_entropy_temp_decay: float = 0.3
+    player_entropy_temp_ceil: float = 0.1
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.2
-    builder_entropy_temp_decay: float = 0.25
+    builder_temp_coef: float = 0.1
+    builder_entropy_temp_decay: float = 0.3
     builder_entropy_temp_ceil: float = 1.0
     builder_entropy_temp_floor: float = 1e-3
 
@@ -139,9 +137,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     step_count: int = 0
     frame_count: int = 0
-
-    running_adv_mean: float = 0
-    running_adv_quartile: float = 1
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -285,8 +280,6 @@ def save_state(
         opt_state=player_state.opt_state,
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
-        target_adv_mean=player_state.target_adv_mean,
-        target_adv_std=player_state.target_adv_std,
     )
     data["builder_state"] = dict(
         params=builder_state.params,
@@ -389,8 +382,6 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
-        target_adv_mean=ckpt_player_state["target_adv_mean"],
-        target_adv_std=ckpt_player_state["target_adv_std"],
     )
 
     # Fully replace builder state
