@@ -9,10 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb
 import wandb.wandb_run
 from tqdm import tqdm
 
+import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
 from rl.environment.utils import clip_history, clip_packed_history
@@ -197,16 +197,11 @@ def train_step(
         config.player_entropy_temp_ceil,
     )
 
-    player_ent_advantages = (
-        player_entropy_temp
-        * batch.player_targets.raw_ent_advantages.astype(float_dtype)
+    player_ent_advantages = 0.1 * batch.player_targets.raw_ent_advantages.astype(
+        float_dtype
     )
-    ent_clip = jnp.maximum(jnp.abs(player_win_advantages), 1e-4)
-    player_ent_advantages = jnp.clip(
-        player_ent_advantages,
-        -ent_clip,
-        ent_clip,
-    )
+    ent_clip = jnp.abs(player_win_advantages)
+    player_ent_advantages = jnp.clip(player_ent_advantages, -ent_clip, ent_clip)
     player_advantages = player_win_advantages + player_ent_advantages
 
     training_logs = {}
@@ -241,8 +236,7 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits,
-                labels=player_returns,
+                logits=learner_value_head.logits, labels=player_returns
             ),
             player_valid,
         )
@@ -340,9 +334,9 @@ def train_step(
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
             player_ent_win_adv_ratio=average(
-                jnp.abs(player_ent_advantages), player_valid
-            )
-            / (average(jnp.abs(player_win_advantages), player_valid) + 1e-8),
+                jnp.abs(player_ent_advantages / player_win_advantages),
+                player_valid,
+            ),
         )
     )
 

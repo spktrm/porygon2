@@ -95,7 +95,7 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_conditional_entropy_loss_coef: float = 1.0
-    player_entropy_prediction_normalising_constant: float = 100
+    player_entropy_prediction_normalising_constant: float = 1000
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
