@@ -177,19 +177,6 @@ def train_step(
     float_dtype = player_actor_log_prob.dtype
 
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
-
-    # --- Player ---
-    # Targets are pre-computed at buffer add time; cast to the model's float dtype.
-    player_returns = batch.player_targets.returns.astype(float_dtype)
-    player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
-    player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
-    player_ent_advantages = batch.player_targets.raw_ent_advantages.astype(float_dtype)
-
-    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-
-    no_valid = player_valid.sum() == 0
-    player_valid = player_valid + no_valid
-
     player_entropy_temp = power_schedule(
         config.player_temp_coef,
         jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
@@ -198,9 +185,21 @@ def train_step(
         config.player_entropy_temp_ceil,
     )
 
-    player_advantages = (
-        player_win_advantages + player_entropy_temp * player_ent_advantages
+    # --- Player ---
+    # Targets are pre-computed at buffer add time; cast to the model's float dtype.
+    player_returns = batch.player_targets.returns.astype(float_dtype)
+    player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
+    player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
+    player_ent_advantages = (
+        player_entropy_temp
+        * batch.player_targets.raw_ent_advantages.astype(float_dtype)
     )
+
+    player_valid = jnp.bitwise_not(player_transitions.env_output.done)
+    no_valid = player_valid.sum() == 0
+    player_valid = player_valid + no_valid
+
+    player_advantages = player_win_advantages + player_ent_advantages
 
     training_logs = {}
 

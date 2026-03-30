@@ -29,23 +29,17 @@ def collect_batch_telemetry_data(
         ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
-    can_move = (
-        batch.player_transitions.env_output.action_mask[
-            ...,
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
-            :,
-        ]
-        .reshape(-1)
-        .any(-1)
-    )
-    can_switch = (
-        batch.player_transitions.env_output.action_mask[
-            ...,
-            ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6,
-        ]
-        .reshape(-1)
-        .any(-1)
-    )
+    can_move = batch.player_transitions.env_output.action_mask[
+        ...,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
+        + 1,
+        :,
+    ].any((-2, -1))
+    can_switch = batch.player_transitions.env_output.action_mask[
+        ...,
+        ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6 + 1,
+        :,
+    ].any((-2, -1))
     can_act = can_move & can_switch & player_valid
 
     src_action_index = (
@@ -60,15 +54,20 @@ def collect_batch_telemetry_data(
         & can_move
     )
     did_wildcard = (
-        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
-    ) | (
-        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+        (
+            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
+            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
+        )
+        | (
+            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
+            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+        )
     ) & can_move
     did_switch = (
-        (tgt_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
-        & (tgt_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
+        (src_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
+        & (src_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
+        & (tgt_action_index >= ActionEnum.ACTION_ENUM__ALLY_1)
+        & (tgt_action_index <= ActionEnum.ACTION_ENUM__ALLY_2)
         & can_switch
     )
     move_ratio = renormalize(did_move, can_act)
