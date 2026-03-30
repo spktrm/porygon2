@@ -321,10 +321,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 " terastallize"
             );
         } else if (
-            ActionEnum.ACTION_ENUM__RESERVE_1 <= tgtIndex &&
-            tgtIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
+            ActionEnum.ACTION_ENUM__RESERVE_1 <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
         ) {
-            const switchIndex = tgtIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
+            const switchIndex = srcIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
             return `switch ${switchIndex + 1}`;
         } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
@@ -540,6 +540,22 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 }
 
+function hpDiff(battle: Battle) {
+    const hpTotals = battle.sides.map((side) => {
+        const known = side.team.reduce((a, b) => {
+            if (!b.fainted) {
+                if (b.maxhp === 0) {
+                    return a + 1;
+                }
+            }
+            return a + b.hp / b.maxhp;
+        }, 0);
+        const unknown = side.totalPokemon - side.team.length;
+        return known + unknown;
+    });
+    return hpTotals[0] - hpTotals[1];
+}
+
 const MAX_REQUEST_COUNT = 32 * 3;
 
 export function createBattle(
@@ -592,10 +608,34 @@ export function createBattle(
 
     (async () => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const spectator = new Battle(new Generations(Dex), null);
+        const hpDiffs = [0];
+        const hpDiffChanges = [0];
+
+        const isStalling = (
+            windowSize: number = 10,
+            maxChange: number = 0.01,
+        ) => {
+            return (
+                hpDiffChanges.length >= windowSize &&
+                hpDiffChanges
+                    .slice(-windowSize)
+                    .every((val) => val <= maxChange)
+            );
+        };
+
         for await (const chunk of streams.omniscient) {
+            for (const line of chunk.split("\n")) {
+                spectator.add(line);
+                if (line.startsWith("|turn")) {
+                    hpDiffs.push(hpDiff(spectator));
+                    hpDiffChanges.push(hpDiffs.at(-2)! - hpDiffs.at(-1)!);
+                }
+            }
             if (
                 p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount
+                p2.requestCount >= maxRequestCount ||
+                isStalling()
             ) {
                 p1.finishEarly();
                 p2.finishEarly();

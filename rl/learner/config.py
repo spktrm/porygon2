@@ -1,7 +1,7 @@
 import functools
 import os
 from pprint import pprint
-from typing import Any, Callable, Literal
+from typing import Callable, Literal
 
 import chex
 import cloudpickle as pickle
@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb.wandb_run
-from flax import core, struct
+from flax import struct
 from flax.training import train_state
 
 from rl.environment.interfaces import (
@@ -50,10 +50,13 @@ class Porygon2LearnerConfig:
     unroll_length: int = 128
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 6
+    player_replay_buffer_capacity: int = 1024 * 4
     player_replay_ratio: int = 2
-    builder_replay_buffer_capacity: int = 1024
+    builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 5
+    # Fraction of replay buffer capacity that must be filled before training
+    # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
+    replay_buffer_min_fill_fraction: float = 1 / 8
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -69,52 +72,49 @@ class Porygon2LearnerConfig:
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 5e-5
-    builder_learning_rate: float = 5e-5
+    player_learning_rate: float = 1e-4
+    builder_learning_rate: float = 1e-4
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
-    gradient_accumulation_steps: int = 8
-
-    # EMA params
-    player_ema_decay: float = 1e-3
-    builder_ema_decay: float = 1e-3
+    gradient_accumulation_steps: int = 1
 
     # Advantage estimation params
-    player_td_lambda: float = 1.0
-    player_gae_lambda: float = 1.0
-    builder_td_lambda: float = 1.0
-    builder_gae_lambda: float = 1.0
-    clip_ppo: float = 0.3
+    player_td_lambda: float = 0.95
+    player_gae_lambda: float = 0.95
+    builder_td_lambda: float = 0.95
+    builder_gae_lambda: float = 0.95
+    clip_ppo: float = 0.15
 
     # Loss coefficients
     ## Player
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
-    player_entropy_coef: float = 1.0
+    player_conditional_entropy_loss_coef: float = 1.0
+    player_entropy_prediction_normalising_constant: float = 100
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 1e-2
+    builder_entropy_coef: float = 0
     builder_entropy_prediction_normalising_constant: float = 100
     # Human
-    builder_human_loss_coef: float = 0.025
+    builder_human_loss_coef: float = 1e-2
 
-    player_temp_coef: float = 0.5
-    player_entropy_temp_decay: float = 0.5
-    player_entropy_temp_ceil: float = 0.5
+    player_temp_coef: float = 0.3
+    player_entropy_temp_decay: float = 0.3
+    player_entropy_temp_ceil: float = 1.0
     player_entropy_temp_floor: float = 1e-3
 
-    builder_temp_coef: float = 0.2
-    builder_entropy_temp_decay: float = 0.25
+    builder_temp_coef: float = 0.3
+    builder_entropy_temp_decay: float = 0.3
     builder_entropy_temp_ceil: float = 1.0
     builder_entropy_temp_floor: float = 1e-3
 
     # Smogon Generation
     generation: GenT = 9
-    smogon_format: SmogonFormatT = "ou"
+    smogon_format: SmogonFormatT = "randombattle"
 
     # Logging params
     log_artifacts_online: bool = False
@@ -130,13 +130,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
-    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-
     step_count: int = 0
     frame_count: int = 0
-
-    target_adv_mean: float = 0
-    target_adv_std: float = 1
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -144,8 +139,6 @@ class Porygon2BuilderTrainState(train_state.TrainState):
         [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
-
-    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     step_count: int = 0
     frame_count: int = 0
@@ -193,7 +186,6 @@ def create_train_state(
         ),
         init_fn=player_params_init_fn,
         params=player_params_init_fn(rng),
-        target_params=player_params_init_fn(rng),
         tx=player_optimizer,
     )
 
@@ -225,7 +217,6 @@ def create_train_state(
         ),
         init_fn=builder_params_init_fn,
         params=builder_params_init_fn(rng),
-        target_params=builder_params_init_fn(rng),
         tx=builder_optimizer,
     )
 
@@ -276,16 +267,12 @@ def save_state(
     data = dict(learner_config=learner_config)
     data["player_state"] = dict(
         params=player_state.params,
-        target_params=player_state.target_params,
         opt_state=player_state.opt_state,
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
-        target_adv_mean=player_state.target_adv_mean,
-        target_adv_std=player_state.target_adv_std,
     )
     data["builder_state"] = dict(
         params=builder_state.params,
-        target_params=builder_state.target_params,
         opt_state=builder_state.opt_state,
         step_count=builder_state.step_count,
         frame_count=builder_state.frame_count,
@@ -343,7 +330,7 @@ def load_from_checkpoint(
     builder_state: Porygon2BuilderTrainState,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
     """
-    Full restoration: loads params, target_params, opt_state, step counts, and league.
+    Full restoration: loads params, opt_state, step counts, and league.
     """
     print(f"Loading checkpoint from {ckpt_path}")
     with open(ckpt_path, "rb") as f:
@@ -356,17 +343,13 @@ def load_from_checkpoint(
 
     # Debug prints (excluding heavy arrays)
     pprint(
-        {
-            k: v
-            for k, v in ckpt_player_state.items()
-            if k not in ["opt_state", "params", "target_params"]
-        }
+        {k: v for k, v in ckpt_player_state.items() if k not in ["opt_state", "params"]}
     )
     pprint(
         {
             k: v
             for k, v in ckpt_builder_state.items()
-            if k not in ["opt_state", "params", "target_params"]
+            if k not in ["opt_state", "params"]
         }
     )
 
@@ -380,18 +363,14 @@ def load_from_checkpoint(
     # Fully replace player state
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
-        target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
-        target_adv_mean=ckpt_player_state["target_adv_mean"],
-        target_adv_std=ckpt_player_state["target_adv_std"],
     )
 
     # Fully replace builder state
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],
-        target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
         step_count=ckpt_builder_state["step_count"],
         frame_count=ckpt_builder_state["frame_count"],
@@ -407,7 +386,7 @@ def load_from_params(
     builder_state: Porygon2BuilderTrainState,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
     """
-    Params only: Loads ckpt params into BOTH params and target_params.
+    Params only: Loads ckpt params into BOTH params.
     Resets opt_state and counts (by keeping the input state's version of those).
     """
     print(f"Loading params only from {ckpt_path}")
@@ -417,17 +396,10 @@ def load_from_params(
     ckpt_player_state = ckpt_data.get("player_state")
     ckpt_builder_state = ckpt_data.get("builder_state")
 
-    # Replace params AND target_params with the checkpoint's params
+    # Replace params with the checkpoint's params
     # We do NOT replace opt_state or frame_counts, effectively resetting training progress
-    player_state = player_state.replace(
-        params=ckpt_player_state["params"],
-        target_params=ckpt_player_state["params"],  # Init target with same params
-    )
-
-    builder_state = builder_state.replace(
-        params=ckpt_builder_state["params"],
-        target_params=ckpt_builder_state["params"],  # Init target with same params
-    )
+    player_state = player_state.replace(params=ckpt_player_state["params"])
+    builder_state = builder_state.replace(params=ckpt_builder_state["params"])
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)

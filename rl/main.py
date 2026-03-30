@@ -99,7 +99,13 @@ def run_eval_heuristic(
                     @ CAT_VF_SUPPORT
                 )
 
-                wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
+                wandb_run.log(
+                    {
+                        "training_step": step_count,
+                        f"payoff-{session_id}": payoff,
+                        f"wr-{session_id}": payoff > 0,
+                    }
+                )
 
         except Exception:
             logger.error("Error running eval heuristic", exc_info=True)
