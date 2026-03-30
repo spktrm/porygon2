@@ -613,14 +613,15 @@ export function createBattle(
         const hpDiffChanges = [0];
 
         const isStalling = (
-            windowSize: number = 10,
+            windowSize: number = 30, // Increased to allow for pivoting/setup phases
             maxChange: number = 0.01,
         ) => {
             return (
                 hpDiffChanges.length >= windowSize &&
                 hpDiffChanges
                     .slice(-windowSize)
-                    .every((val) => val <= maxChange)
+                    // Use Math.abs so we only catch stagnant HP, not large negative swings
+                    .every((val) => Math.abs(val) <= maxChange)
             );
         };
 
