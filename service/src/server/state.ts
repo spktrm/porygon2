@@ -1503,7 +1503,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3394,12 +3394,12 @@ export class StateHandler {
 
                     for (const [j, _] of canSwitch) {
                         actionMask.setRowCol(
-                            ActionEnum.ACTION_ENUM__ALLY_1 + i,
                             ActionEnum[
                                 `ACTION_ENUM__RESERVE_${
                                     j + 1
                                 }` as keyof typeof ActionEnum
                             ],
+                            ActionEnum.ACTION_ENUM__ALLY_1 + i,
                             true,
                         );
                     }
@@ -3597,11 +3597,11 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchFromIndex = ActionEnum.ACTION_ENUM__ALLY_1 + i;
+                    const switchToIndex = ActionEnum.ACTION_ENUM__ALLY_1 + i;
 
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            const switchToIndex =
+                            const switchFromIndex =
                                 ActionEnum.ACTION_ENUM__RESERVE_1 + j;
 
                             actionMask.setRowCol(

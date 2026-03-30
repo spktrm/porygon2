@@ -56,13 +56,13 @@ class Porygon2PlayerModel(nn.Module):
         logits = (
             self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
         )
-        valid_mask = valid_mask.reshape(-1)
+        flat_valid_mask = valid_mask.reshape(-1)
 
-        log_policy = legal_log_policy(logits, valid_mask)
-        policy = legal_policy(logits, valid_mask)
+        log_policy = legal_log_policy(logits, flat_valid_mask)
+        policy = legal_policy(logits, flat_valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        valid_sum = valid_mask.sum(axis=-1)
+        valid_sum = flat_valid_mask.sum(axis=-1)
         log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
         normalized_entropy = entropy * entropy_scale
@@ -71,18 +71,14 @@ class Porygon2PlayerModel(nn.Module):
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(valid_mask, logits, jnp.finfo(logits.dtype).min),
+                jnp.where(flat_valid_mask, logits, jnp.finfo(logits.dtype).min),
                 self.make_rng("sampling"),
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
 
-        src_index = (jnp.floor(action_index / NUM_ACTION_FEATURES)).astype(
-            action_index.dtype
-        )
-        tgt_index = (action_index - src_index * NUM_ACTION_FEATURES).astype(
-            action_index.dtype
-        )
+        src_index = action_index // NUM_ACTION_FEATURES
+        tgt_index = action_index % NUM_ACTION_FEATURES
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
