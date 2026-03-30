@@ -5,6 +5,7 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
+from constants import NUM_HISTORY
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -70,8 +71,6 @@ NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
-
-NUM_HISTORY = 128 * 4
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES

@@ -163,7 +163,9 @@ export const numMoveFeatures = Object.keys(MovesetFeature).length;
 export const numMovesetFeatures = 10 * numMoveFeatures;
 export const numPackedSetFeatures = Object.keys(PackedSetFeature).length;
 
-export const NUM_HISTORY = 512;
+const constantsContent = fs.readFileSync("../constants/data.json", "utf-8");
+const constantsData = JSON.parse(constantsContent);
+export const NUM_HISTORY: number = constantsData.NUM_HISTORY;
 
 export const WILDCARDS = ["dynamax", "mega", "zmove", "terastallize", "ultra"];
 
