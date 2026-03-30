@@ -65,7 +65,7 @@ def padnstack(arr: np.ndarray, padding: int = NUM_HISTORY) -> np.ndarray:
     output_shape = (padding, *arr.shape[1:])
     result = np.zeros(output_shape, dtype=arr.dtype)
     length_to_copy = min(padding, arr.shape[0])
-    result[:length_to_copy] = arr[:length_to_copy]
+    result[:length_to_copy] = arr[-length_to_copy:]
     return result
 
 
@@ -150,8 +150,13 @@ def process_state(
         max_history,
     ).astype(np.int32)
 
-    moveset = (
-        np.frombuffer(state.moveset, dtype=np.int16)
+    my_moveset = (
+        np.frombuffer(state.my_moveset, dtype=np.int16)
+        .reshape(16, NUM_MOVE_FEATURES)
+        .astype(np.int32)
+    )
+    opp_moveset = (
+        np.frombuffer(state.opp_moveset, dtype=np.int16)
         .reshape(16, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
@@ -180,28 +185,27 @@ def process_state(
     is_done = info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_)
 
     # Rewards are stored as int16 in the info array, so we need to convert them back to float32
-    win_reward = np.array(
-        [
-            info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
-            info[InfoFeature.INFO_FEATURE__TIE_REWARD],
-            info[InfoFeature.INFO_FEATURE__WIN_REWARD],
-        ]
+    win_reward = (
+        np.array(
+            [
+                info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
+                info[InfoFeature.INFO_FEATURE__TIE_REWARD],
+                info[InfoFeature.INFO_FEATURE__WIN_REWARD],
+            ]
+        )
+        / MAX_RATIO_TOKEN
     )
-
-    fib_reward_token = info[InfoFeature.INFO_FEATURE__FIB_REWARD]
-    # Divide by MAX_RATIO_TOKEN to normalize the fib reward to [-1, 1] since we store as int16
-    fib_reward = fib_reward_token / MAX_RATIO_TOKEN
 
     env_step = PlayerEnvOutput(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
-        fib_reward=fib_reward.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         revealed_team=revealed_team,
         field=field,
-        moveset=moveset,
+        my_moveset=my_moveset,
+        opp_moveset=opp_moveset,
         action_mask=get_action_mask(state),
     )
     packed_history_step = PlayerPackedHistoryOutput(
@@ -308,10 +312,38 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                     (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
                 ),
                 move_mask=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
-                ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                hp_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                atk_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                def_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spa_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spd_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spe_ev_mask=np.ones((trajectory_length, 1, 64), dtype=np.bool),
                 nature_mask=np.ones((trajectory_length, 1, NUM_NATURES), dtype=np.bool),
                 gender_mask=np.ones((trajectory_length, 1, NUM_GENDERS), dtype=np.bool),
                 teratype_mask=np.ones(
+                    (trajectory_length, 1, NUM_TYPECHART), dtype=np.bool
+                ),
+                species_usage=np.ones(
+                    (trajectory_length, 1, NUM_SPECIES), dtype=np.bool
+                ),
+                item_usage=np.ones((trajectory_length, 1, NUM_ITEMS), dtype=np.bool),
+                ability_usage=np.ones(
+                    (trajectory_length, 1, NUM_ABILITIES), dtype=np.bool
+                ),
+                move_usage=np.ones((trajectory_length, 1, NUM_MOVES), dtype=np.bool),
+                hp_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                atk_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                def_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spa_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spd_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                spe_ev_usage=np.ones((trajectory_length, 1, 64), dtype=np.bool),
+                nature_usage=np.ones(
+                    (trajectory_length, 1, NUM_NATURES), dtype=np.bool
+                ),
+                gender_usage=np.ones(
+                    (trajectory_length, 1, NUM_GENDERS), dtype=np.bool
+                ),
+                teratype_usage=np.ones(
                     (trajectory_length, 1, NUM_TYPECHART), dtype=np.bool
                 ),
                 ts=ts,
@@ -319,7 +351,6 @@ def get_ex_builder_step() -> tuple[BuilderActorInput, BuilderActorOutput]:
                 curr_attribute=member_attribute,
                 curr_position=member_position,
                 done=done,
-                human_prob=np.zeros_like(done, dtype=np.float32),
                 ev_reward=np.zeros_like(done, dtype=np.float32),
             ),
             history=BuilderHistoryOutput(

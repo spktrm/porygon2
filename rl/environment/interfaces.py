@@ -10,13 +10,13 @@ class PlayerEnvOutput:
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
-    fib_reward: ArrayLike = ()
     public_team: ArrayLike = ()
     revealed_team: ArrayLike = ()
     field: ArrayLike = ()
+    opp_moveset: ArrayLike = ()
 
     # Private Info
-    moveset: ArrayLike = ()
+    my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
@@ -63,6 +63,7 @@ class PolicyHeadOutput:
     entropy: ArrayLike = ()
     normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
+    kl_prior: ArrayLike = ()
 
 
 @dataclass
@@ -77,6 +78,9 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
 
 
 @dataclass
@@ -96,15 +100,33 @@ class BuilderEnvOutput:
     item_mask: ArrayLike = ()
     ability_mask: ArrayLike = ()
     move_mask: ArrayLike = ()
-    ev_mask: ArrayLike = ()
+    hp_ev_mask: ArrayLike = ()
+    atk_ev_mask: ArrayLike = ()
+    def_ev_mask: ArrayLike = ()
+    spa_ev_mask: ArrayLike = ()
+    spd_ev_mask: ArrayLike = ()
+    spe_ev_mask: ArrayLike = ()
     teratype_mask: ArrayLike = ()
     nature_mask: ArrayLike = ()
     gender_mask: ArrayLike = ()
 
+    species_usage: ArrayLike = ()
+    item_usage: ArrayLike = ()
+    ability_usage: ArrayLike = ()
+    move_usage: ArrayLike = ()
+    hp_ev_usage: ArrayLike = ()
+    atk_ev_usage: ArrayLike = ()
+    def_ev_usage: ArrayLike = ()
+    spa_ev_usage: ArrayLike = ()
+    spd_ev_usage: ArrayLike = ()
+    spe_ev_usage: ArrayLike = ()
+    teratype_usage: ArrayLike = ()
+    nature_usage: ArrayLike = ()
+    gender_usage: ArrayLike = ()
+
     done: ArrayLike = ()
     ts: ArrayLike = ()
     ev_reward: ArrayLike = ()
-    human_prob: ArrayLike = ()
     curr_order: ArrayLike = ()
     curr_attribute: ArrayLike = ()
     curr_position: ArrayLike = ()
@@ -151,6 +173,8 @@ class BuilderTransition:
 class PlayerTargets:
     returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    raw_ent_advantages: ArrayLike = ()
+    ent_returns: ArrayLike = ()
 
 
 @dataclass

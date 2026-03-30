@@ -22,9 +22,9 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
+    RegressionValueLogitHead,
     sample_categorical,
 )
-from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -42,22 +42,27 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+        self.winloss_value_head = CategoricalValueLogitHead(self.cfg.value_head)
+        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
-        self.value_head_mlp = MLP()
-        self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
-
-    def post_head(
+    def _forward_action_head(
         self,
-        logits: jax.Array,
+        action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
+        temp: float,
     ):
-        log_policy = legal_log_policy(logits, valid_mask)
-        policy = legal_policy(logits, valid_mask)
+        logits = (
+            self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
+        )
+        flat_valid_mask = valid_mask.reshape(-1)
+
+        log_policy = legal_log_policy(logits, flat_valid_mask)
+        policy = legal_policy(logits, flat_valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        valid_sum = valid_mask.sum(axis=-1)
+        valid_sum = flat_valid_mask.sum(axis=-1)
         log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
         normalized_entropy = entropy * entropy_scale
@@ -66,18 +71,14 @@ class Porygon2PlayerModel(nn.Module):
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(valid_mask, logits, jnp.finfo(logits.dtype).min),
+                jnp.where(flat_valid_mask, logits, jnp.finfo(logits.dtype).min),
                 self.make_rng("sampling"),
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
 
-        src_index = (jnp.floor(action_index / NUM_ACTION_FEATURES)).astype(
-            action_index.dtype
-        )
-        tgt_index = (action_index - src_index * NUM_ACTION_FEATURES).astype(
-            action_index.dtype
-        )
+        src_index = action_index // NUM_ACTION_FEATURES
+        tgt_index = action_index % NUM_ACTION_FEATURES
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
@@ -88,9 +89,11 @@ class Porygon2PlayerModel(nn.Module):
             tgt_index=tgt_index,
         )
 
-    def _forward_value_head(self, x: jax.Array) -> jax.Array:
-        x = self.value_head_mlp(x)
-        return self.value_head(x)
+    def _forward_value_head(self, state_embedding: jax.Array):
+        return self.winloss_value_head(state_embedding)
+
+    def _forward_conditional_entropy_head(self, state_embedding: jax.Array):
+        return self.conditional_entropy_head(state_embedding)
 
     def get_head_outputs(
         self,
@@ -101,19 +104,24 @@ class Porygon2PlayerModel(nn.Module):
         head_params: HeadParams,
     ):
 
-        action_logits = (
-            self.action_head(action_embeddings, action_embeddings) / head_params.temp
-        )
-        action_head = self.post_head(
-            action_logits.reshape(-1),
-            env_step.action_mask.reshape(-1),
+        action_head = self._forward_action_head(
+            action_embeddings,
+            env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
+            temp=head_params.temp,
         )
 
         value_head = self._forward_value_head(state_embedding)
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            state_embedding
+        )
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            conditional_entropy_head=conditional_entropy_head,
+        )
 
     def __call__(
         self,
@@ -131,12 +139,7 @@ class Porygon2PlayerModel(nn.Module):
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(
-            state_embedding,
-            action_embeddings,
-            actor_input.env,
-            actor_output,
-        )
+        )(state_embedding, action_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
