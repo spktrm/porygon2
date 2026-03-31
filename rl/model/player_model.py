@@ -67,6 +67,11 @@ class Porygon2PlayerModel(nn.Module):
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
         normalized_entropy = entropy * entropy_scale
 
+        # Cross-entropy with uniform distribution over valid actions (for KL)
+        uniform_policy = flat_valid_mask / valid_sum
+        uniform_log_policy = legal_log_policy(uniform_policy, flat_valid_mask)
+        cross_entropy = -jnp.sum(policy * uniform_log_policy, axis=-1)
+
         if train:
             action_index = head.action_index
         else:
@@ -87,6 +92,7 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
+            kl_prior=entropy - cross_entropy,
         )
 
     def _forward_value_head(self, state_embedding: jax.Array):

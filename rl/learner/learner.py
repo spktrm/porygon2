@@ -146,11 +146,14 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_magnet_kl = -average(learner_action_head.kl_prior, valid=player_valid)
+
         loss = ~no_valid * (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
+            + config.player_magnet_kl_loss_coef * loss_magnet_kl
         )
 
         return loss, dict(
@@ -159,6 +162,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
+            player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
