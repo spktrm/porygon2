@@ -153,7 +153,7 @@ def train_step(
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
-            + config.player_magnet_kl_loss_coef * loss_magnet_kl
+            + player_entropy_temp * loss_magnet_kl
         )
 
         return loss, dict(
