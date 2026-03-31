@@ -5,7 +5,6 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
-from constants import NUM_HISTORY
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
