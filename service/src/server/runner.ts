@@ -623,7 +623,7 @@ export function createBattle(
     (async () => {
         const spectator = new Battle(new Generations(Dex), null);
 
-        const windowSize = 30;
+        const windowSize = 20;
         const maxChange = 0.01;
 
         // Track strictly what we need. No arrays!
