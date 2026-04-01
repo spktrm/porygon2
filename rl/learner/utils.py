@@ -9,6 +9,7 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
+from rl.utils import average
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -35,6 +36,21 @@ def collect_batch_telemetry_data(
         + 1,
         :,
     ].any((-2, -1))
+    can_wildcard = (
+        batch.player_transitions.env_output.action_mask[
+            ...,
+            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
+            + 1,
+            :,
+        ].any((-2, -1))
+    ) | (
+        batch.player_transitions.env_output.action_mask[
+            ...,
+            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
+            + 1,
+            :,
+        ].any((-2, -1))
+    )
     can_switch = batch.player_transitions.env_output.action_mask[
         ...,
         ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6 + 1,
@@ -86,6 +102,16 @@ def collect_batch_telemetry_data(
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
+        player_proactive_switch_advantange=average(
+            batch.player_targets.advantages, player_valid & did_switch & can_move
+        ),
+        player_passive_switch_advantange=average(
+            batch.player_targets.advantages, player_valid & did_switch & ~can_move
+        ),
+        player_wildcard_hold_advantange=average(
+            batch.player_targets.advantages,
+            player_valid & did_move & ~did_wildcard & can_wildcard,
+        ),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
