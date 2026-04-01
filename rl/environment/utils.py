@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from constants import NUM_HISTORY
 from rl.environment.data import (
     EX_TRAJECTORY,
     MAX_RATIO_TOKEN,
@@ -15,7 +16,6 @@ from rl.environment.data import (
     NUM_ENTITY_REVEALED_FEATURES,
     NUM_FIELD_FEATURES,
     NUM_GENDERS,
-    NUM_HISTORY,
     NUM_ITEMS,
     NUM_MOVE_FEATURES,
     NUM_MOVES,
