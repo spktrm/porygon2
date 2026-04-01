@@ -1,6 +1,5 @@
 import pprint
 
-import flax.linen as nn
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
