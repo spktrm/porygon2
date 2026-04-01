@@ -112,9 +112,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.value_head = ConfigDict()
-    cfg.value_head.qk_logits = ConfigDict()
-    cfg.value_head.qk_logits.use_bias = True
-    cfg.value_head.qk_logits.num_heads = 4
+    cfg.value_head.dense = ConfigDict()
+    cfg.value_head.dense.features = 3
+    cfg.value_head.dense.use_bias = True
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.action_head = ConfigDict()
