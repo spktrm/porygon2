@@ -9,6 +9,7 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_ACTION_FEATURES
 from rl.environment.interfaces import (
+    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
@@ -19,7 +20,6 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
     RegressionValueLogitHead,
@@ -42,7 +42,9 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
-        self.winloss_value_head = CategoricalValueLogitHead(self.cfg.value_head)
+        self.winloss_value_pointer = PointerLogits(
+            **self.cfg.value_head.qk_logits.to_dict()
+        )
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _forward_action_head(
@@ -95,8 +97,40 @@ class Porygon2PlayerModel(nn.Module):
             kl_prior=entropy - cross_entropy,
         )
 
-    def _forward_value_head(self, state_embedding: jax.Array):
-        return self.winloss_value_head(state_embedding)
+    def _forward_value_head(self, action_embeddings: jax.Array, action_mask: jax.Array):
+        winloss_pointer_logits = self.winloss_value_pointer(
+            action_embeddings, action_embeddings
+        )
+        winloss_pointer_logits = winloss_pointer_logits.reshape(
+            self.cfg.value_head.qk_logits.num_heads, -1
+        )
+
+        flat_action_mask = action_mask.reshape(-1)
+        winloss_gate_logits = winloss_pointer_logits[:1].reshape(-1)
+        winloss_gate_probs = nn.softmax(
+            jnp.where(
+                flat_action_mask,
+                winloss_gate_logits,
+                jnp.finfo(winloss_gate_logits.dtype).min,
+            ),
+            axis=-1,
+        )
+        winloss_value_logits = winloss_pointer_logits[1:] @ winloss_gate_probs
+        winloss_value_log_prob = nn.log_softmax(winloss_value_logits, axis=-1)
+        winloss_value_prob = jnp.exp(winloss_value_log_prob)
+        winloss_value_entropy = -jnp.sum(
+            winloss_value_prob * winloss_value_log_prob, axis=-1
+        )
+        winloss_value_expectation = jnp.sum(
+            winloss_value_prob * self.cfg.value_head.category_values, axis=-1
+        )
+
+        return CategoricalValueHeadOutput(
+            log_probs=winloss_value_log_prob,
+            entropy=winloss_value_entropy,
+            expectation=winloss_value_expectation,
+            logits=winloss_value_logits,
+        )
 
     def _forward_conditional_entropy_head(self, state_embedding: jax.Array):
         return self.conditional_entropy_head(state_embedding)
@@ -118,7 +152,7 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(state_embedding)
+        value_head = self._forward_value_head(action_embeddings, env_step.action_mask)
         conditional_entropy_head = self._forward_conditional_entropy_head(
             state_embedding
         )

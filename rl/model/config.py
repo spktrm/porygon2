@@ -112,9 +112,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.value_head = ConfigDict()
-    cfg.value_head.mlp = ConfigDict()
-    cfg.value_head.mlp.layer_sizes = (entity_size, 3)
-    cfg.value_head.mlp.use_bias = True
+    cfg.value_head.qk_logits = ConfigDict()
+    cfg.value_head.qk_logits.use_bias = True
+    cfg.value_head.qk_logits.num_heads = 4
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.action_head = ConfigDict()
@@ -122,9 +122,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.action_head.qk_logits.use_bias = True
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.mlp = ConfigDict()
-    cfg.entropy_head.mlp.layer_sizes = (entity_size, 1)
-    cfg.entropy_head.mlp.use_bias = True
+    cfg.entropy_head.dense = ConfigDict()
+    cfg.entropy_head.dense.features = 1
+    cfg.entropy_head.dense.use_bias = True
 
     for head in [cfg.action_head]:
         head.train = train
@@ -188,11 +188,13 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.mlp = ConfigDict()
-    cfg.entropy_head.mlp.layer_sizes = (entity_size, 1)
+    cfg.entropy_head.dense = ConfigDict()
+    cfg.entropy_head.dense.features = 1
+    cfg.entropy_head.dense.use_bias = True
 
-    cfg.value_head.mlp = ConfigDict()
-    cfg.value_head.mlp.layer_sizes = (entity_size, 3)
+    cfg.value_head.dense = ConfigDict()
+    cfg.value_head.dense.features = 3
+    cfg.value_head.dense.use_bias = True
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     for head in [
