@@ -2,6 +2,7 @@ import numpy as np
 
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.interfaces import BuilderTargets, PlayerTargets, Trajectory
+from rl.learner.loss import approx_backward_kl
 
 
 def segmented_cumsum(x: np.ndarray, discount: np.ndarray) -> np.ndarray:
@@ -75,8 +76,16 @@ def compute_player_targets(
         )
         * player_valid
     )
-    player_nll = -player_log_prob  # (T,)
-    player_ent_delta = player_nll + next_player_ent_scaled - player_ent_scaled
+
+    num_valid_actions = traj.player_transitions.env_output.action_mask.sum((-2, -1))
+    uniform_log_prob = -np.log(num_valid_actions + 1e-8)
+    magnet_log_ratio = player_log_prob - uniform_log_prob  # (T,)
+    magnet_ratio = np.exp(magnet_log_ratio)
+    kl_reward = approx_backward_kl(
+        policy_ratio=magnet_ratio, log_policy_ratio=magnet_log_ratio
+    )  # (T,)
+
+    player_ent_delta = -kl_reward + next_player_ent_scaled - player_ent_scaled
 
     ent_returns = (
         segmented_cumsum(player_ent_delta, td_lambdas) + player_ent_scaled

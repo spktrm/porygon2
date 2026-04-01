@@ -5,7 +5,6 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
-from constants import NUM_HISTORY
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -160,7 +159,7 @@ NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 ONEHOT_DTYPE = jnp.bfloat16
 
 
-CAT_VF_SUPPORT = np.array([-1, 0, 1], dtype=np.float32)
+CAT_VF_SUPPORT = np.array([-1, -0.1, 1], dtype=np.float32)
 
 
 def add_pretrained_embedding(generation):

@@ -1,6 +1,5 @@
 import pprint
 
-import flax.linen as nn
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
@@ -126,7 +125,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entropy_head.mlp = ConfigDict()
     cfg.entropy_head.mlp.layer_sizes = (entity_size, 1)
     cfg.entropy_head.mlp.use_bias = True
-    cfg.entropy_head.output_activation = nn.softplus
 
     for head in [cfg.action_head]:
         head.train = train
