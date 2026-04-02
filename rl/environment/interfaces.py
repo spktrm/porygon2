@@ -10,6 +10,7 @@ class PlayerEnvOutput:
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
+    state_potential: ArrayLike = ()
     public_team: ArrayLike = ()
     revealed_team: ArrayLike = ()
     field: ArrayLike = ()
@@ -79,6 +80,9 @@ class PlayerActorOutput:
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
     conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    potential_value_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
 
@@ -175,6 +179,8 @@ class PlayerTargets:
     advantages: ArrayLike = ()
     raw_ent_advantages: ArrayLike = ()
     ent_returns: ArrayLike = ()
+    potential_returns: ArrayLike = ()
+    potential_advantages: ArrayLike = ()
 
 
 @dataclass

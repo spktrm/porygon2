@@ -30,6 +30,7 @@ import {
 import {
     EnumMappings,
     ITOS,
+    MAX_RATIO_TOKEN,
     MoveIndex,
     NUM_HISTORY,
     WILDCARDS,
@@ -76,8 +77,6 @@ type MajorArgNames =
     | RemovePipes<BattleProgressArgName>
     | RemovePipes<BattleInitArgName>;
 type MinorArgNames = RemovePipes<BattleMinorArgName>;
-
-const MAX_RATIO_TOKEN = 16384;
 
 export function getSampleTeam(format: string, include?: string): string {
     const internalFormat = format
@@ -3851,6 +3850,50 @@ export class StateHandler {
         return hp / maxHp;
     }
 
+    getStatePotential() {
+        let p1Total = 0;
+        let p2Total = 0;
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
+
+        for (const [i, side] of [
+            this.player.publicBattle.sides[playerIndex],
+            this.player.publicBattle.sides[1 - playerIndex],
+        ].entries()) {
+            let knownHp = 0;
+            let knownAlive = 0;
+
+            // Use a standard for-loop instead of .reduce
+            for (let j = 0; j < side.team.length; j++) {
+                const pkmn = side.team[j];
+                if (pkmn.fainted) {
+                    continue;
+                } else {
+                    knownAlive += 1;
+                }
+
+                if (pkmn.maxhp === 0) {
+                    knownHp += 1;
+                } else {
+                    knownHp += pkmn.hp / pkmn.maxhp;
+                }
+            }
+
+            const unknownHp = side.totalPokemon - side.team.length;
+            const total = knownAlive + unknownHp + (knownHp + unknownHp) / 10;
+
+            if (i === 0) {
+                p1Total = total;
+            } else {
+                p2Total = total;
+            }
+        }
+
+        return Math.floor(((p1Total - p2Total) / 6) * MAX_RATIO_TOKEN);
+    }
+
     getInfo() {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -3940,6 +3983,9 @@ export class StateHandler {
             infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] =
                 lastAction.getTgt();
         }
+
+        infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] =
+            this.getStatePotential();
 
         return new Uint8Array(infoBuffer.buffer);
     }
