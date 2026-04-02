@@ -9,13 +9,13 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
+from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     ACTION_MAX_VALUES,
     ENTITY_EDGE_MAX_VALUES,
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
     FIELD_MAX_VALUES,
-    MAX_RATIO_TOKEN,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,

@@ -72,17 +72,17 @@ class Porygon2LearnerConfig:
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 1e-4
-    builder_learning_rate: float = 1e-4
+    player_learning_rate: float = 3e-5
+    builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     gradient_accumulation_steps: int = 1
 
     # Advantage estimation params
-    player_td_lambda: float = 0.95
-    player_gae_lambda: float = 0.95
-    builder_td_lambda: float = 0.95
-    builder_gae_lambda: float = 0.95
+    player_td_lambda: float = 0.99
+    player_gae_lambda: float = 0.99
+    builder_td_lambda: float = 0.99
+    builder_gae_lambda: float = 0.99
     clip_ppo: float = 0.15
 
     # Loss coefficients
@@ -91,7 +91,8 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_conditional_entropy_loss_coef: float = 1.0
-    player_entropy_prediction_normalising_constant: float = 100
+    player_state_potential_loss_coef: float = 1.0
+    player_entropy_prediction_normalising_constant: float = 50
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -103,9 +104,9 @@ class Porygon2LearnerConfig:
     builder_human_loss_coef: float = 1e-2
 
     player_temp_coef: float = 0.3
-    player_entropy_temp_decay: float = 0.2
+    player_entropy_temp_decay: float = 0.25
     player_entropy_temp_ceil: float = 1.0
-    player_entropy_temp_floor: float = 0.01
+    player_entropy_temp_floor: float = 1e-3
 
     builder_temp_coef: float = 0.3
     builder_entropy_temp_decay: float = 0.3

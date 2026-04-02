@@ -83,12 +83,22 @@ def train_step(
         player_entropy_temp
         * batch.player_targets.raw_ent_advantages.astype(float_dtype)
     )
+    player_potential_value_returns = batch.player_targets.potential_returns.astype(
+        float_dtype
+    )
+    player_potential_value_advantages = (
+        batch.player_targets.potential_advantages.astype(float_dtype)
+    )
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
     no_valid = player_valid.sum() == 0
     player_valid = player_valid + no_valid
 
-    player_advantages = player_win_advantages + player_ent_advantages
+    player_advantages = (
+        player_win_advantages
+        + player_ent_advantages
+        + player_potential_value_advantages
+    )
 
     training_logs = {}
 
@@ -104,6 +114,7 @@ def train_step(
         learner_value_head = player_pred.value_head
         learner_action_head = player_pred.action_head
         learner_conditional_entropy_head = player_pred.conditional_entropy_head
+        learner_potential_value_head = player_pred.potential_value_head
 
         learner_log_prob = learner_action_head.log_prob
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -146,6 +157,12 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_potential_value = mse_value_loss(
+            pred=learner_potential_value_head.logits,
+            target=player_potential_value_returns,
+            valid=player_valid,
+        )
+
         loss_magnet_kl = -average(learner_action_head.kl_prior, valid=player_valid)
 
         loss = ~no_valid * (
@@ -153,6 +170,7 @@ def train_step(
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
+            + config.player_state_potential_loss_coef * loss_potential_value
             + player_entropy_temp * loss_magnet_kl
         )
 
@@ -162,6 +180,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
+            player_loss_potential_value=loss_potential_value,
             player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
@@ -188,7 +207,10 @@ def train_step(
 
     mean_abs_ent = average(jnp.abs(player_ent_advantages), player_valid)
     mean_abs_win = average(jnp.abs(player_win_advantages), player_valid)
+    mean_abs_pot = average(jnp.abs(player_potential_value_advantages), player_valid)
+
     player_ent_win_adv_ratio = mean_abs_ent / (mean_abs_win + 1e-8)
+    player_pot_win_adv_ratio = mean_abs_pot / (mean_abs_win + 1e-8)
 
     # A cosine similarity near 0 means the entropy advantage is doing
     # completely different work than the win advantage.
@@ -215,10 +237,13 @@ def train_step(
                 player_grads["params"]["action_head"]
             ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["winloss_value_head"]
+                player_grads["params"]["winloss_head"]
             ),
             player_conditional_entropy_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["conditional_entropy_head"]
+            ),
+            player_potential_value_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["potential_value_head"]
             ),
             player_local_timestep_encoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_encoder"]
@@ -238,6 +263,7 @@ def train_step(
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
             player_ent_win_adv_ratio=player_ent_win_adv_ratio,
+            player_pot_win_adv_ratio=player_pot_win_adv_ratio,
             player_ent_win_cosine_sim=player_ent_win_adv_cosine_sim,
         )
     )

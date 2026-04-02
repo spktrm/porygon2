@@ -5,6 +5,7 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
+from constants import MAX_RATIO_TOKEN
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -73,9 +74,6 @@ NUM_ACTION_FEATURES = len(ActionEnum.keys())
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
-
-
-MAX_RATIO_TOKEN = 16384
 
 
 ENTITY_PUBLIC_MAX_VALUES = {

@@ -93,11 +93,41 @@ def compute_player_targets(
 
     raw_ent_advantages = segmented_cumsum(player_ent_delta, gae_lambdas)  # (T,)
 
+    # Safe to use np.insert since trajectories are full episodes starting at Turn 1
+    player_state_potential = np.insert(
+        traj.player_transitions.env_output.state_potential, 0, 0
+    ).astype(np.float32)
+
+    player_potential_value = traj.player_transitions.agent_output.actor_output.potential_value_head.logits.astype(
+        np.float32
+    )
+
+    # Calculates Phi(s_{t+1}) - Phi(s_t) perfectly
+    potential_reward = player_state_potential[1:] - player_state_potential[:-1]
+
+    player_next_potential_value = (
+        np.concatenate(
+            [player_potential_value[1:], player_potential_value[-1:]], axis=0
+        )
+        * player_valid
+    )
+
+    player_potential_delta = (
+        potential_reward + player_next_potential_value - player_potential_value
+    )
+
+    potential_returns = (
+        segmented_cumsum(player_potential_delta, td_lambdas) + player_potential_value
+    )
+    potential_advantages = segmented_cumsum(player_potential_delta, gae_lambdas)
+
     return PlayerTargets(
         returns=returns.astype(np.float32),
         advantages=advantages.astype(np.float32),
         raw_ent_advantages=raw_ent_advantages.astype(np.float32),
         ent_returns=ent_returns.astype(np.float32),
+        potential_returns=potential_returns.astype(np.float32),
+        potential_advantages=potential_advantages.astype(np.float32),
     )
 
 

@@ -111,20 +111,25 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.state_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
-    cfg.value_head = ConfigDict()
-    cfg.value_head.qk_logits = ConfigDict()
-    cfg.value_head.qk_logits.use_bias = True
-    cfg.value_head.qk_logits.num_heads = 4
-    cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
     cfg.action_head.qk_logits.use_bias = True
+
+    cfg.winloss_head = ConfigDict()
+    cfg.winloss_head.dense = ConfigDict()
+    cfg.winloss_head.dense.features = 3
+    cfg.winloss_head.dense.use_bias = True
+    cfg.winloss_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     cfg.entropy_head = ConfigDict()
     cfg.entropy_head.dense = ConfigDict()
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
+
+    cfg.potential_value_head = ConfigDict()
+    cfg.potential_value_head.dense = ConfigDict()
+    cfg.potential_value_head.dense.features = 1
+    cfg.potential_value_head.dense.use_bias = True
 
     for head in [cfg.action_head]:
         head.train = train
