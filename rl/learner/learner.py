@@ -254,11 +254,8 @@ def train_step(
             player_history_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["history_decoder"]
             ),
-            player_latent_state_encoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["latent_state_encoder"]
-            ),
-            player_output_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["output_decoder"]
+            player_state_transformer_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["state_transformer"]
             ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),

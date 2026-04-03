@@ -42,7 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 12
+    cfg.encoder.num_latent_embeddings = 32
     cfg.encoder.num_thinking_steps = 1
 
     encoder_num_layers = 1
@@ -88,13 +88,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.timestep_encoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
-    cfg.encoder.state_encoder = ConfigDict()
+    cfg.encoder.state_transformer = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [
-        cfg.encoder.timestep_encoder,
-        cfg.encoder.state_encoder,
-    ]:
+    for encoder in [cfg.encoder.timestep_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
@@ -104,11 +101,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
+    set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
+
     cfg.encoder.timestep_encoder.need_pos = True
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_encoder.num_layers = 4
-    cfg.encoder.state_encoder.need_pos = False
+    cfg.encoder.state_transformer.num_layers = 4
+    cfg.encoder.state_transformer.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.action_head = ConfigDict()

@@ -431,6 +431,136 @@ class TransformerDecoder(nn.Module):
         return q
 
 
+class Transformer(nn.Module):
+
+    qk_size: int
+    v_size: int
+    model_size: int
+    num_layers: int
+    num_heads: int
+    use_bias: bool = False
+    need_pos: bool = False
+    qk_layer_norm: bool = True
+    resblocks_hidden_size: int | None = None
+
+    def decoder_layer(
+        self,
+        layer_idx: int,
+        q: jax.Array,
+        kv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+        q_positions: jax.Array | None = None,
+        kv_positions: jax.Array | None = None,
+    ):
+        q_ln = layer_norm(q)
+        kv_ln = layer_norm(kv)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            use_bias=self.use_bias,
+            qk_layer_norm=self.qk_layer_norm,
+            need_pos=self.need_pos,
+            dtype=q.dtype,
+        )(
+            q=q_ln,
+            kv=kv_ln,
+            mask=attn_mask,
+            q_positions=q_positions,
+            kv_positions=kv_positions,
+        )
+        mha_a = self.param(
+            f"decoder_mha_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+        )
+        q = q + mha_a.astype(q.dtype) * mha
+        qkv_ln = layer_norm(q)
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(
+            f"decoder_ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+        )
+        q = q + ffn_a.astype(q.dtype) * ffn
+        return jnp.where(positionwise_mask, q, 0)
+
+    def encoder_layer(
+        self,
+        layer_idx: int,
+        qkv: jax.Array,
+        attn_mask: jax.Array,
+        positionwise_mask: jax.Array,
+        qkv_positions: jax.Array | None = None,
+    ):
+        qkv_ln = layer_norm(qkv)
+        mha = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            qk_layer_norm=self.qk_layer_norm,
+            use_bias=self.use_bias,
+            need_pos=self.need_pos,
+            dtype=qkv.dtype,
+        )(
+            q=qkv_ln,
+            kv=qkv_ln,
+            mask=attn_mask,
+            q_positions=qkv_positions,
+            kv_positions=qkv_positions,
+        )
+        mha_a = self.param(
+            f"encoder_mha_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+        )
+        qkv = qkv + mha_a.astype(qkv.dtype) * mha
+        qkv_ln = layer_norm(qkv)
+        ffn = FFWMLP(
+            hidden_size=self.resblocks_hidden_size,
+            use_bias=self.use_bias,
+        )(qkv_ln)
+        ffn_a = self.param(
+            f"encoder_ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+        )
+        qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
+        return jnp.where(positionwise_mask, qkv, 0)
+
+    @nn.compact
+    def __call__(
+        self,
+        q: jax.Array,
+        kv: jax.Array,
+        self_attn_mask: jax.Array | None = None,
+        cross_attn_mask: jax.Array | None = None,
+    ) -> jax.Array:
+
+        if self_attn_mask is None:
+            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+            self_attn_mask = create_attention_mask(q_mask, q_mask)
+
+        if cross_attn_mask is None:
+            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+            cross_attn_mask = create_attention_mask(q_mask, kv_mask)
+
+        for layer_idx in range(self.num_layers):
+            q = self.encoder_layer(
+                layer_idx,
+                q,
+                self_attn_mask,
+                self_attn_mask.any(axis=-1, keepdims=True).squeeze(0),
+            )
+            q = self.decoder_layer(
+                layer_idx,
+                q,
+                kv,
+                cross_attn_mask,
+                cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0),
+            )
+
+        return q
+
+
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 

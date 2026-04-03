@@ -110,7 +110,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        state_embedding: jax.Array,
+        state_embeddings: jax.Array,
         action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -125,11 +125,17 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(state_embedding)
-        conditional_entropy_head = self._forward_conditional_entropy_head(
-            state_embedding
+        value_hidden, entropy_hidden, potential_hidden = jnp.split(
+            state_embeddings, 3, axis=0
         )
-        potential_value_head = self._forward_potential_value_head(state_embedding)
+
+        value_head = self._forward_value_head(value_hidden.squeeze(0))
+        conditional_entropy_head = self._forward_conditional_entropy_head(
+            entropy_hidden.squeeze(0)
+        )
+        potential_value_head = self._forward_potential_value_head(
+            potential_hidden.squeeze(0)
+        )
 
         return PlayerActorOutput(
             action_head=action_head,
@@ -148,13 +154,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embedding, action_embeddings = self.encoder(
+        state_embeddings, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(state_embedding, action_embeddings, actor_input.env, actor_output)
+        )(state_embeddings, action_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
