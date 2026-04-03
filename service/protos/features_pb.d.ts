@@ -47,6 +47,7 @@ export interface EntityPublicNodeFeatureMap {
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: 40;
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: 41;
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: 42;
+  ENTITY_PUBLIC_NODE_FEATURE__POSITION: 43;
 }
 
 export const EntityPublicNodeFeature: EntityPublicNodeFeatureMap;
