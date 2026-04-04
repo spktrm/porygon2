@@ -347,6 +347,11 @@ def train_step(
             + builder_entropy_temp * builder_targets.ent_advantages
         )
 
+        builder_win_return_correction = builder_targets.win_returns.sum(
+            axis=-1, keepdims=True
+        )
+        builder_returns = builder_targets.win_returns / builder_win_return_correction
+
         def builder_loss_fn(params: Params):
 
             pred = builder_state.apply_fn(
@@ -477,6 +482,15 @@ def train_step(
         training_logs.update(
             dict(
                 builder_loss=builder_loss_val,
+                builder_win_return_correction=average(
+                    builder_win_return_correction, builder_valid
+                ),
+                builder_nll_sum=(
+                    batch.builder_transitions.agent_output.actor_output.action_head.log_prob
+                    * builder_valid
+                )
+                .sum(axis=0)
+                .mean(),
                 builder_param_norm=optax.global_norm(builder_state.params),
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
