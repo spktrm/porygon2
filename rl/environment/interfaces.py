@@ -202,8 +202,7 @@ class Trajectory:
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
-    player_targets: PlayerTargets = field(default_factory=PlayerTargets)
-    builder_targets: BuilderTargets = field(default_factory=BuilderTargets)
+    player_final_reward: ArrayLike = ()
 
 
 @dataclass
