@@ -1,7 +1,7 @@
 import functools
 import os
 from pprint import pprint
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import chex
 import cloudpickle as pickle
@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb.wandb_run
-from flax import struct
+from flax import core, struct
 from flax.training import train_state
 
 from rl.environment.interfaces import (
@@ -51,9 +51,9 @@ class Porygon2LearnerConfig:
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 4
-    player_replay_ratio: int = 2
+    player_replay_ratio: int = 4
     builder_replay_buffer_capacity: int = 512
-    builder_replay_ratio: int = 5
+    builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
     replay_buffer_min_fill_fraction: float = 1 / 8
@@ -71,19 +71,21 @@ class Porygon2LearnerConfig:
     batch_size: int = 4
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 1e-4
-    builder_learning_rate: float = 1e-4
+    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
+    player_learning_rate: float = 3e-5
+    builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     gradient_accumulation_steps: int = 1
+    player_ema_update_rate: float = 1e-3
+    builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
     player_td_lambda: float = 0.95
     player_gae_lambda: float = 0.95
     builder_td_lambda: float = 0.95
     builder_gae_lambda: float = 0.95
-    clip_ppo: float = 0.15
+    clip_ppo: float = 0.3
 
     # Loss coefficients
     ## Player
@@ -91,7 +93,8 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
     player_conditional_entropy_loss_coef: float = 1.0
-    player_entropy_prediction_normalising_constant: float = 100
+    player_state_potential_loss_coef: float = 1.0
+    player_entropy_prediction_normalising_constant: float = 50
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -102,10 +105,10 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    player_temp_coef: float = 0.3
-    player_entropy_temp_decay: float = 0.2
+    player_temp_coef: float = 0.01
+    player_entropy_temp_decay: float = 0.0
     player_entropy_temp_ceil: float = 1.0
-    player_entropy_temp_floor: float = 0.01
+    player_entropy_temp_floor: float = 1e-3
 
     builder_temp_coef: float = 0.3
     builder_entropy_temp_decay: float = 0.3
@@ -130,6 +133,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+
     step_count: int = 0
     frame_count: int = 0
 
@@ -139,6 +144,8 @@ class Porygon2BuilderTrainState(train_state.TrainState):
         [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
+
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     step_count: int = 0
     frame_count: int = 0
@@ -178,14 +185,12 @@ def create_train_state(
         player_optimizer = optax.MultiSteps(
             player_optimizer, config.gradient_accumulation_steps
         )
+    initial_player_params = player_params_init_fn(rng)
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(
-            player_network.apply,
-            in_axes=(None, 1, 1, None),
-            out_axes=1,
-        ),
+        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
-        params=player_params_init_fn(rng),
+        params=initial_player_params,
+        target_params=initial_player_params,
         tx=player_optimizer,
     )
 
@@ -209,6 +214,7 @@ def create_train_state(
         builder_optimizer = optax.MultiSteps(
             builder_optimizer, config.gradient_accumulation_steps
         )
+    inital_builder_params = builder_params_init_fn(rng)
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
             builder_network.apply,
@@ -216,7 +222,8 @@ def create_train_state(
             out_axes=1,
         ),
         init_fn=builder_params_init_fn,
-        params=builder_params_init_fn(rng),
+        params=inital_builder_params,
+        target_params=inital_builder_params,
         tx=builder_optimizer,
     )
 

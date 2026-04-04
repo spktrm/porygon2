@@ -49,6 +49,7 @@ class EntityPublicNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper)
     ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: _ClassVar[EntityPublicNodeFeature]
     ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: _ClassVar[EntityPublicNodeFeature]
     ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: _ClassVar[EntityPublicNodeFeature]
+    ENTITY_PUBLIC_NODE_FEATURE__POSITION: _ClassVar[EntityPublicNodeFeature]
 
 class EntityRevealedNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -199,6 +200,7 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__HAS_PREV_ACTION: _ClassVar[InfoFeature]
     INFO_FEATURE__PREV_ACTION_SRC: _ClassVar[InfoFeature]
     INFO_FEATURE__PREV_ACTION_TGT: _ClassVar[InfoFeature]
+    INFO_FEATURE__STATE_POTENTIAL: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -276,6 +278,7 @@ ENTITY_PUBLIC_NODE_FEATURE__MOVEPP0: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: EntityPublicNodeFeature
 ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: EntityPublicNodeFeature
+ENTITY_PUBLIC_NODE_FEATURE__POSITION: EntityPublicNodeFeature
 ENTITY_REVEALED_NODE_FEATURE___UNSPECIFIED: EntityRevealedNodeFeature
 ENTITY_REVEALED_NODE_FEATURE__SPECIES: EntityRevealedNodeFeature
 ENTITY_REVEALED_NODE_FEATURE__ITEM: EntityRevealedNodeFeature
@@ -402,6 +405,7 @@ INFO_FEATURE__REQUEST_TYPE: InfoFeature
 INFO_FEATURE__HAS_PREV_ACTION: InfoFeature
 INFO_FEATURE__PREV_ACTION_SRC: InfoFeature
 INFO_FEATURE__PREV_ACTION_TGT: InfoFeature
+INFO_FEATURE__STATE_POTENTIAL: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType

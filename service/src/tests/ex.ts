@@ -20,7 +20,7 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
-            if (done) {
+            if (done || info[InfoFeature.INFO_FEATURE__TURN] > 10) {
                 console.log(
                     `${playerName}: Received 'done' state. Exiting loop.`,
                 );
@@ -53,8 +53,8 @@ async function runBattle() {
 
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou", "Zoroark"),
-        smogonFormat: "gen9ou",
-        // smogonFormat: "gen9randomdoublesbattle",
+        // smogonFormat: "gen9ou",
+        smogonFormat: "gen9randomdoublesbattle",
         // smogonFormat: "gen9vgc2025regibo3",
     });
 
