@@ -175,9 +175,9 @@ class BuilderTransition:
 
 @dataclass
 class PlayerTargets:
-    returns: ArrayLike = ()
-    advantages: ArrayLike = ()
-    raw_ent_advantages: ArrayLike = ()
+    win_returns: ArrayLike = ()
+    win_advantages: ArrayLike = ()
+    ent_advantages: ArrayLike = ()
     ent_returns: ArrayLike = ()
     potential_returns: ArrayLike = ()
     potential_advantages: ArrayLike = ()
@@ -185,9 +185,9 @@ class PlayerTargets:
 
 @dataclass
 class BuilderTargets:
-    returns: ArrayLike = ()
+    win_returns: ArrayLike = ()
     win_advantages: ArrayLike = ()
-    raw_ent_advantages: ArrayLike = ()
+    ent_advantages: ArrayLike = ()
     ent_returns: ArrayLike = ()
 
 

@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, TypeVar
 
 import chex
 import jax
@@ -9,7 +9,14 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
+from rl.learner.targets import PlayerTargets
 from rl.utils import average
+
+T = TypeVar("T")
+
+
+def promote_map(tree: T, dtype) -> T:
+    return jax.tree.map(lambda x: x.astype(dtype), tree)
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -21,9 +28,7 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(
-    batch: Trajectory,
-    config: Porygon2LearnerConfig,
-    player_win_advantages: jax.Array = None,
+    batch: Trajectory, config: Porygon2LearnerConfig, player_targets: PlayerTargets
 ) -> Dict[str, Any]:
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     player_lengths = player_valid.sum(0)
@@ -105,13 +110,13 @@ def collect_batch_telemetry_data(
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
         player_proactive_switch_advantange=average(
-            player_win_advantages, player_valid & did_switch & can_move
+            player_targets.win_advantages, player_valid & did_switch & can_move
         ),
         player_passive_switch_advantange=average(
-            player_win_advantages, player_valid & did_switch & ~can_move
+            player_targets.win_advantages, player_valid & did_switch & ~can_move
         ),
         player_wildcard_hold_advantange=average(
-            player_win_advantages,
+            player_targets.win_advantages,
             player_valid & did_move & ~did_wildcard & can_wildcard,
         ),
         move_ratio=move_ratio,
