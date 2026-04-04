@@ -1502,7 +1502,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3984,8 +3984,8 @@ export class StateHandler {
                 lastAction.getTgt();
         }
 
-        infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] =
-            this.getStatePotential();
+        const statePotential = this.getStatePotential();
+        infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = statePotential;
 
         return new Uint8Array(infoBuffer.buffer);
     }

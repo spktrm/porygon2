@@ -51,9 +51,9 @@ class Porygon2LearnerConfig:
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 4
-    player_replay_ratio: int = 2
+    player_replay_ratio: int = 4
     builder_replay_buffer_capacity: int = 512
-    builder_replay_ratio: int = 5
+    builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
     replay_buffer_min_fill_fraction: float = 1 / 8
@@ -71,7 +71,7 @@ class Porygon2LearnerConfig:
     batch_size: int = 4
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 1.0
@@ -79,11 +79,11 @@ class Porygon2LearnerConfig:
     gradient_accumulation_steps: int = 1
 
     # Advantage estimation params
-    player_td_lambda: float = 0.99
-    player_gae_lambda: float = 0.99
-    builder_td_lambda: float = 0.99
-    builder_gae_lambda: float = 0.99
-    clip_ppo: float = 0.15
+    player_td_lambda: float = 0.95
+    player_gae_lambda: float = 0.95
+    builder_td_lambda: float = 0.95
+    builder_gae_lambda: float = 0.95
+    clip_ppo: float = 0.3
 
     # Loss coefficients
     ## Player
@@ -103,8 +103,8 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    player_temp_coef: float = 0.3
-    player_entropy_temp_decay: float = 0.25
+    player_temp_coef: float = 0.01
+    player_entropy_temp_decay: float = 0.0
     player_entropy_temp_ceil: float = 1.0
     player_entropy_temp_floor: float = 1e-3
 
