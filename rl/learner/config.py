@@ -13,7 +13,6 @@ import optax
 import wandb.wandb_run
 from flax import struct
 from flax.training import train_state
-from jaxtyping import PyTree
 
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -128,8 +127,7 @@ def get_learner_config():
 
 class Porygon2PlayerTrainState(train_state.TrainState):
     apply_fn: Callable[
-        [Params, PlayerActorInput, PlayerActorOutput, HeadParams],
-        tuple[PlayerActorOutput, PyTree],
+        [Params, PlayerActorInput, PlayerActorOutput, HeadParams], PlayerActorOutput
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
