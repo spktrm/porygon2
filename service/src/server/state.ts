@@ -1502,7 +1502,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << (index % precision));
+        const newValue = currentValue | (1 << index % precision);
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,

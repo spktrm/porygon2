@@ -7,25 +7,37 @@ from rl.learner.loss import approx_backward_kl
 
 
 def segmented_cumsum(x: jax.Array, discount: jax.Array) -> jax.Array:
-    """Backward cumulative sum: result[t] = x[t] + discount[t] * result[t+1].
-
-    Uses jax.lax.scan for JIT compatibility.  Scans along axis 0 (time)
-    and naturally handles any trailing batch/feature dimensions.
+    """
+    Backward cumulative sum using parallel associative scan.
+    Best for very long sequence lengths on GPU/TPU.
     """
 
-    def body(carry, inputs):
-        x_t, d_t = inputs
-        carry = x_t + d_t * carry
-        return carry, carry
+    def combine(acc, new_elem):
+        # acc: values from the "future" (because we reverse the array)
+        # new_elem: the current step's values
+        v_acc, g_acc = acc
+        v_new, g_new = new_elem
 
-    _, result = jax.lax.scan(
-        body, jnp.zeros_like(x[0]), (x[::-1], discount[::-1])
-    )
-    return result[::-1]
+        # Combine the values and the cumulative discounts
+        v_combined = v_new + g_new * v_acc
+        g_combined = g_acc * g_new
+        return v_combined, g_combined
+
+    # 1. Reverse the arrays to compute backward
+    rev_x = jnp.flip(x, axis=0)
+    rev_discount = jnp.flip(discount, axis=0)
+
+    # 2. Perform the parallel associative scan
+    # associative_scan returns a tuple matching the inputs; we only need the values (idx 0)
+    rev_result, _ = jax.lax.associative_scan(combine, (rev_x, rev_discount))
+
+    # 3. Flip back to original temporal order
+    return jnp.flip(rev_result, axis=0)
 
 
 def compute_player_targets(
     traj: Trajectory,
+    off_policy_correction: jax.Array,
     td_lambda: float,
     gae_lambda: float,
     entropy_normalising_constant: float,
@@ -36,9 +48,7 @@ def compute_player_targets(
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
 
-    player_valid = jnp.logical_not(
-        traj.player_transitions.env_output.done
-    )  # (T, B)
+    player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
     player_reward = traj.player_transitions.env_output.win_reward.astype(
         jnp.float32
     )  # (T, B, 3)
@@ -54,27 +64,29 @@ def compute_player_targets(
     player_value_target = (
         player_reward + player_next_value_probs * player_valid[..., None]
     )
-    player_value_delta = player_value_target - player_value_probs  # (T, B, 3)
-    player_scalar_delta = player_value_delta @ cat_vf_support  # (T, B)
+    player_value_delta = (player_value_target - player_value_probs).astype(jnp.float32)
+    player_scalar_delta = player_value_delta @ cat_vf_support
 
-    td_lambdas = (td_lambda * player_valid).astype(jnp.float32)  # (T, B)
-    gae_lambdas = (gae_lambda * player_valid).astype(jnp.float32)  # (T, B)
+    returns_discounts = (off_policy_correction * td_lambda * player_valid).astype(
+        jnp.float32
+    )  # (T, B)
+    policy_discounts = (off_policy_correction * gae_lambda * player_valid).astype(
+        jnp.float32
+    )  # (T, B)
 
     returns = (
-        segmented_cumsum(player_value_delta, td_lambdas[..., None])
+        segmented_cumsum(player_value_delta, returns_discounts[..., None])
         + player_value_probs
     )  # (T, B, 3)
-    advantages = segmented_cumsum(player_scalar_delta, gae_lambdas)  # (T, B)
+    advantages = segmented_cumsum(player_scalar_delta, policy_discounts)  # (T, B)
 
     # Entropy reward (SAC-style)
     player_log_prob = (
-        traj.player_transitions.agent_output.actor_output.action_head.log_prob.astype(
-            jnp.float32
-        )
-    )  # (T, B)
-    player_ent_pred = traj.player_transitions.agent_output.actor_output.conditional_entropy_head.logits.astype(
-        jnp.float32
-    )  # (T, B)
+        traj.player_transitions.agent_output.actor_output.action_head.log_prob
+    )
+    player_ent_pred = (
+        traj.player_transitions.agent_output.actor_output.conditional_entropy_head.logits
+    )
 
     player_ent_scaled = player_ent_pred * entropy_normalising_constant  # (T, B)
     next_player_ent_scaled = (
@@ -92,13 +104,15 @@ def compute_player_targets(
         policy_ratio=magnet_ratio, log_policy_ratio=magnet_log_ratio
     )  # (T, B)
 
-    player_ent_delta = -kl_reward + next_player_ent_scaled - player_ent_scaled
+    player_ent_delta = (-kl_reward + next_player_ent_scaled - player_ent_scaled).astype(
+        jnp.float32
+    )
 
     ent_returns = (
-        segmented_cumsum(player_ent_delta, td_lambdas) + player_ent_scaled
+        segmented_cumsum(player_ent_delta, returns_discounts) + player_ent_scaled
     ) / entropy_normalising_constant  # (T, B)
 
-    raw_ent_advantages = segmented_cumsum(player_ent_delta, gae_lambdas)  # (T, B)
+    raw_ent_advantages = segmented_cumsum(player_ent_delta, policy_discounts)  # (T, B)
 
     # Potential-based shaping
     state_pot = traj.player_transitions.env_output.state_potential.astype(jnp.float32)
@@ -123,17 +137,18 @@ def compute_player_targets(
 
     player_potential_delta = (
         potential_reward + player_next_potential_value - player_potential_value
-    )
+    ).astype(jnp.float32)
 
     potential_returns = (
-        segmented_cumsum(player_potential_delta, td_lambdas) + player_potential_value
+        segmented_cumsum(player_potential_delta, returns_discounts)
+        + player_potential_value
     )
-    potential_advantages = segmented_cumsum(player_potential_delta, gae_lambdas)
+    potential_advantages = segmented_cumsum(player_potential_delta, policy_discounts)
 
     return PlayerTargets(
-        returns=returns,
-        advantages=advantages,
-        raw_ent_advantages=raw_ent_advantages,
+        win_returns=returns,
+        win_advantages=advantages,
+        ent_advantages=raw_ent_advantages,
         ent_returns=ent_returns,
         potential_returns=potential_returns,
         potential_advantages=potential_advantages,
@@ -142,6 +157,7 @@ def compute_player_targets(
 
 def compute_builder_targets(
     traj: Trajectory,
+    off_policy_correction: jax.Array,
     td_lambda: float,
     gae_lambda: float,
     entropy_normalising_constant: float,
@@ -155,25 +171,19 @@ def compute_builder_targets(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
     builder_transitions = traj.builder_transitions
 
-    builder_valid = jnp.logical_not(
-        builder_transitions.env_output.done
-    )  # (T_b, B)
+    builder_valid = jnp.logical_not(builder_transitions.env_output.done)  # (T_b, B)
     T_b = builder_valid.shape[0]
     B = builder_valid.shape[1]
 
     builder_value_probs = jnp.exp(
-        builder_transitions.agent_output.actor_output.value_head.log_probs.astype(
-            jnp.float32
-        )
-    )  # (T_b, B, 3)
+        builder_transitions.agent_output.actor_output.value_head.log_probs
+    )
     builder_log_prob = (
-        builder_transitions.agent_output.actor_output.action_head.log_prob.astype(
-            jnp.float32
-        )
-    )  # (T_b, B)
-    builder_ent_pred = builder_transitions.agent_output.actor_output.conditional_entropy_head.logits.astype(
-        jnp.float32
-    )  # (T_b, B)
+        builder_transitions.agent_output.actor_output.action_head.log_prob
+    )
+    builder_ent_pred = (
+        builder_transitions.agent_output.actor_output.conditional_entropy_head.logits
+    )
 
     # Terminal reward from the player trajectory.
     final_reward = traj.player_final_reward.astype(jnp.float32)  # (B, 3)
@@ -189,14 +199,12 @@ def compute_builder_targets(
     )
 
     # Entropy delta
-    builder_ent_scaled = (
-        builder_ent_pred * entropy_normalising_constant
-    )  # (T_b, B)
+    builder_ent_scaled = builder_ent_pred * entropy_normalising_constant  # (T_b, B)
     next_builder_ent_scaled = jnp.concatenate(
         [builder_ent_scaled[1:], jnp.zeros_like(builder_ent_scaled[:1])], axis=0
     )
     builder_ent_target = -builder_log_prob + next_builder_ent_scaled * builder_valid
-    builder_ent_delta = builder_ent_target - builder_ent_scaled
+    builder_ent_delta = (builder_ent_target - builder_ent_scaled).astype(jnp.float32)
 
     # Value computation
     builder_next_value_probs = jnp.concatenate(
@@ -205,10 +213,16 @@ def compute_builder_targets(
     builder_value_target = (
         builder_reward + builder_next_value_probs * builder_valid[..., None]
     )
-    builder_value_delta = builder_value_target - builder_value_probs  # (T_b, B, 3)
+    builder_value_delta = (builder_value_target - builder_value_probs).astype(
+        jnp.float32
+    )
 
-    td_lambdas = (td_lambda * builder_valid).astype(jnp.float32)  # (T_b, B)
-    gae_lambdas = (gae_lambda * builder_valid).astype(jnp.float32)  # (T_b, B)
+    td_lambdas = (off_policy_correction * td_lambda * builder_valid).astype(
+        jnp.float32
+    )  # (T_b, B)
+    gae_lambdas = (off_policy_correction * gae_lambda * builder_valid).astype(
+        jnp.float32
+    )  # (T_b, B)
 
     returns = (
         segmented_cumsum(builder_value_delta, td_lambdas[..., None])
@@ -220,13 +234,11 @@ def compute_builder_targets(
     ent_returns = (
         segmented_cumsum(builder_ent_delta, td_lambdas) + builder_ent_scaled
     ) / entropy_normalising_constant  # (T_b, B)
-    raw_ent_advantages = segmented_cumsum(
-        builder_ent_delta, gae_lambdas
-    )  # (T_b, B)
+    raw_ent_advantages = segmented_cumsum(builder_ent_delta, gae_lambdas)  # (T_b, B)
 
     return BuilderTargets(
-        returns=returns,
+        win_returns=returns,
         win_advantages=win_advantages,
-        raw_ent_advantages=raw_ent_advantages,
+        ent_advantages=raw_ent_advantages,
         ent_returns=ent_returns,
     )

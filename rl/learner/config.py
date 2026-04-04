@@ -1,7 +1,7 @@
 import functools
 import os
 from pprint import pprint
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import chex
 import cloudpickle as pickle
@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb.wandb_run
-from flax import struct
+from flax import core, struct
 from flax.training import train_state
 
 from rl.environment.interfaces import (
@@ -77,6 +77,8 @@ class Porygon2LearnerConfig:
     player_clip_gradient: float = 1.0
     builder_clip_gradient: float = 1.0
     gradient_accumulation_steps: int = 1
+    player_ema_update_rate: float = 1e-3
+    builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
     player_td_lambda: float = 0.95
@@ -131,6 +133,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+
     step_count: int = 0
     frame_count: int = 0
 
@@ -140,6 +144,8 @@ class Porygon2BuilderTrainState(train_state.TrainState):
         [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
+
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     step_count: int = 0
     frame_count: int = 0
@@ -179,10 +185,12 @@ def create_train_state(
         player_optimizer = optax.MultiSteps(
             player_optimizer, config.gradient_accumulation_steps
         )
+    initial_player_params = player_params_init_fn(rng)
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
-        params=player_params_init_fn(rng),
+        params=initial_player_params,
+        target_params=initial_player_params,
         tx=player_optimizer,
     )
 
@@ -206,6 +214,7 @@ def create_train_state(
         builder_optimizer = optax.MultiSteps(
             builder_optimizer, config.gradient_accumulation_steps
         )
+    inital_builder_params = builder_params_init_fn(rng)
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
             builder_network.apply,
@@ -213,7 +222,8 @@ def create_train_state(
             out_axes=1,
         ),
         init_fn=builder_params_init_fn,
-        params=builder_params_init_fn(rng),
+        params=inital_builder_params,
+        target_params=inital_builder_params,
         tx=builder_optimizer,
     )
 
