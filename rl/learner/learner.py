@@ -32,6 +32,7 @@ from rl.learner.loss import (
     policy_gradient_loss,
     power_schedule,
 )
+from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
@@ -75,19 +76,25 @@ def train_step(
     )
 
     # --- Player ---
-    # Targets are pre-computed at buffer add time; cast to the model's float dtype.
-    player_returns = batch.player_targets.returns.astype(float_dtype)
-    player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
-    player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
+    # Compute targets inside train_step (JAX/JIT compatible).
+    player_targets = compute_player_targets(
+        batch,
+        td_lambda=config.player_td_lambda,
+        gae_lambda=config.player_gae_lambda,
+        entropy_normalising_constant=config.player_entropy_prediction_normalising_constant,
+    )
+    player_returns = player_targets.returns.astype(float_dtype)
+    player_win_advantages = player_targets.advantages.astype(float_dtype)
+    player_ent_returns = player_targets.ent_returns.astype(float_dtype)
     player_ent_advantages = (
         player_entropy_temp
-        * batch.player_targets.raw_ent_advantages.astype(float_dtype)
+        * player_targets.raw_ent_advantages.astype(float_dtype)
     )
-    player_potential_value_returns = batch.player_targets.potential_returns.astype(
+    player_potential_value_returns = player_targets.potential_returns.astype(
         float_dtype
     )
     player_potential_value_advantages = (
-        batch.player_targets.potential_advantages.astype(float_dtype)
+        player_targets.potential_advantages.astype(float_dtype)
     )
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
@@ -292,17 +299,21 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
-        # Targets are pre-computed at buffer add time; cast to the model's float dtype.
-        # The entropy temperature changes with the step count, so the raw (unscaled)
-        # entropy advantages are cached and the scalar multiplication is applied here.
-        builder_returns = batch.builder_targets.returns.astype(float_dtype)
-        ent_returns = batch.builder_targets.ent_returns.astype(float_dtype)
-        builder_win_advantages = batch.builder_targets.win_advantages.astype(
+        # Compute builder targets inside train_step (JAX/JIT compatible).
+        builder_targets = compute_builder_targets(
+            batch,
+            td_lambda=config.builder_td_lambda,
+            gae_lambda=config.builder_gae_lambda,
+            entropy_normalising_constant=config.builder_entropy_prediction_normalising_constant,
+        )
+        builder_returns = builder_targets.returns.astype(float_dtype)
+        ent_returns = builder_targets.ent_returns.astype(float_dtype)
+        builder_win_advantages = builder_targets.win_advantages.astype(
             float_dtype
         )
         builder_ent_advantages = (
             builder_entropy_temp
-            * batch.builder_targets.raw_ent_advantages.astype(float_dtype)
+            * builder_targets.raw_ent_advantages.astype(float_dtype)
         )
         builder_advantages = builder_win_advantages + builder_ent_advantages
 
@@ -432,7 +443,9 @@ def train_step(
             frame_count=builder_state.frame_count + builder_valid.sum(),
         )
 
-    training_logs.update(collect_batch_telemetry_data(batch, config))
+    training_logs.update(
+        collect_batch_telemetry_data(batch, config, player_win_advantages)
+    )
     training_logs.update(
         dict(
             player_frame_count=player_state.frame_count,
@@ -463,6 +476,11 @@ def _stack_and_pad_batch(
         np.ceil(valid_sum / player_transition_resolution) * player_transition_resolution
     )
 
+    # Extract player final reward from unclipped data for builder targets.
+    player_final_reward = (
+        stacked_trajectory.player_transitions.env_output.win_reward[-1]
+    )
+
     return Trajectory(
         builder_transitions=stacked_trajectory.builder_transitions,
         builder_history=stacked_trajectory.builder_history,
@@ -476,10 +494,7 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
-        player_targets=jax.tree.map(
-            lambda x: x[:num_valid], stacked_trajectory.player_targets
-        ),
-        builder_targets=stacked_trajectory.builder_targets,
+        player_final_reward=player_final_reward,
     )
 
 
@@ -512,8 +527,6 @@ class Learner:
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
             need_tracking=is_not_randoms,
-            learner_config=self.config,
-            compute_builder=is_not_randoms,
         )
 
         # Threading

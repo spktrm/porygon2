@@ -21,7 +21,9 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig
+    batch: Trajectory,
+    config: Porygon2LearnerConfig,
+    player_win_advantages: jax.Array = None,
 ) -> Dict[str, Any]:
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     player_lengths = player_valid.sum(0)
@@ -103,13 +105,13 @@ def collect_batch_telemetry_data(
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
         player_proactive_switch_advantange=average(
-            batch.player_targets.advantages, player_valid & did_switch & can_move
+            player_win_advantages, player_valid & did_switch & can_move
         ),
         player_passive_switch_advantange=average(
-            batch.player_targets.advantages, player_valid & did_switch & ~can_move
+            player_win_advantages, player_valid & did_switch & ~can_move
         ),
         player_wildcard_hold_advantange=average(
-            batch.player_targets.advantages,
+            player_win_advantages,
             player_valid & did_move & ~did_wildcard & can_wildcard,
         ),
         move_ratio=move_ratio,
