@@ -202,8 +202,6 @@ class Trajectory:
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
-    player_final_reward: ArrayLike = ()
-
 
 @dataclass
 class SamplingConfig:

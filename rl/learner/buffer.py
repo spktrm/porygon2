@@ -214,11 +214,6 @@ class PlayerTrajectoryStore:
         if self.need_tracking:
             self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 
-        # Extract player final reward for builder target computation at train time.
-        traj = traj.replace(
-            player_final_reward=traj.player_transitions.env_output.win_reward[-1]
-        )
-
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)
             self._trajectories[current_index] = traj

@@ -108,6 +108,9 @@ def train_step(
         player_targets.ent_advantages + player_targets.potential_advantages
     )
 
+    win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
+    player_returns = player_targets.win_returns / win_return_correction
+
     training_logs = {}
 
     def player_loss_fn(params: Params):
@@ -219,9 +222,13 @@ def train_step(
             ),
         )
 
-    mean_abs_ent = average(jnp.abs(player_targets.ent_advantages), player_valid)
     mean_abs_win = average(jnp.abs(player_targets.win_advantages), player_valid)
-    mean_abs_pot = average(jnp.abs(player_targets.potential_advantages), player_valid)
+    mean_abs_ent = average(
+        jnp.abs(player_entropy_temp * player_targets.ent_advantages), player_valid
+    )
+    mean_abs_pot = average(
+        jnp.abs(player_entropy_temp * player_targets.potential_advantages), player_valid
+    )
     total_signal_denom = mean_abs_win + mean_abs_ent + mean_abs_pot + 1e-8
 
     player_ent_win_adv_ratio = mean_abs_ent / total_signal_denom
@@ -239,6 +246,7 @@ def train_step(
             )
             .sum(axis=0)
             .mean(),
+            player_win_return_correction=average(win_return_correction, player_valid),
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
@@ -518,11 +526,6 @@ def _stack_and_pad_batch(
         np.ceil(valid_sum / player_transition_resolution) * player_transition_resolution
     )
 
-    # Extract player final reward from unclipped data for builder targets.
-    player_final_reward = stacked_trajectory.player_transitions.env_output.win_reward[
-        -1
-    ]
-
     return Trajectory(
         builder_transitions=stacked_trajectory.builder_transitions,
         builder_history=stacked_trajectory.builder_history,
@@ -536,7 +539,6 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
-        player_final_reward=player_final_reward,
     )
 
 

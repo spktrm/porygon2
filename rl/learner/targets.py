@@ -49,14 +49,10 @@ def compute_player_targets(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
 
     player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
-    player_reward = traj.player_transitions.env_output.win_reward.astype(
-        jnp.float32
-    )  # (T, B, 3)
+    player_reward = traj.player_transitions.env_output.win_reward
     player_value_probs = jnp.exp(
-        traj.player_transitions.agent_output.actor_output.value_head.log_probs.astype(
-            jnp.float32
-        )
-    )  # (T, B, 3)
+        traj.player_transitions.agent_output.actor_output.value_head.log_probs
+    )
 
     player_next_value_probs = jnp.concatenate(
         [player_value_probs[1:], player_value_probs[-1:]], axis=0
@@ -115,13 +111,13 @@ def compute_player_targets(
     raw_ent_advantages = segmented_cumsum(player_ent_delta, policy_discounts)  # (T, B)
 
     # Potential-based shaping
-    state_pot = traj.player_transitions.env_output.state_potential.astype(jnp.float32)
+    state_pot = traj.player_transitions.env_output.state_potential
     player_state_potential = jnp.concatenate(
         [jnp.zeros_like(state_pot[:1]), state_pot], axis=0
     )  # (T+1, B)
 
-    player_potential_value = traj.player_transitions.agent_output.actor_output.potential_value_head.logits.astype(
-        jnp.float32
+    player_potential_value = (
+        traj.player_transitions.agent_output.actor_output.potential_value_head.logits
     )
 
     potential_reward = (
@@ -166,7 +162,6 @@ def compute_builder_targets(
 
     JAX/JIT compatible.  Operates on batched data with shape (T_b, B, ...).
     The builder reward is derived from the player's final win/loss/tie reward
-    stored in ``traj.player_final_reward``.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
     builder_transitions = traj.builder_transitions
@@ -186,7 +181,7 @@ def compute_builder_targets(
     )
 
     # Terminal reward from the player trajectory.
-    final_reward = traj.player_final_reward.astype(jnp.float32)  # (B, 3)
+    final_reward = traj.player_transitions.env_output.win_reward[-1]  # (B, 3)
 
     # Place the final reward at the first terminal position per batch element.
     num_valid_steps = builder_valid.astype(jnp.int32).sum(axis=0)  # (B,)
