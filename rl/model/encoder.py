@@ -892,10 +892,9 @@ class Encoder(nn.Module):
         field_embedding = self.field_linear(field_encoding)
         my_field_embedding = self.side_condition_linear(my_side_condition_encoding)
         opp_field_embedding = self.side_condition_linear(opp_side_condition_encoding)
-        field_embeddings = (
-            jnp.stack((field_embedding, my_field_embedding, opp_field_embedding))
-            + self.field_bias_embeddings
-        )
+        field_embeddings = jnp.stack(
+            (field_embedding, my_field_embedding, opp_field_embedding)
+        ) + self.field_bias_embeddings.astype(field_embedding.dtype)
 
         return field_embeddings, mask, request_count
 
