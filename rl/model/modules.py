@@ -258,6 +258,7 @@ class TransformerEncoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
+    init_residual_scale: float = 1.0
 
     def layer(
         self,
@@ -284,14 +285,22 @@ class TransformerEncoder(nn.Module):
             q_positions=qkv_positions,
             kv_positions=qkv_positions,
         )
-        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        mha_a = self.param(
+            f"mha_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
+        )
         qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
         ffn = FFWMLP(
             hidden_size=self.resblocks_hidden_size,
             use_bias=self.use_bias,
         )(qkv_ln)
-        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        ffn_a = self.param(
+            f"ffn_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
+        )
         qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
         return jnp.where(positionwise_mask, qkv, 0)
 
@@ -342,6 +351,7 @@ class TransformerDecoder(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
+    init_residual_scale: float = 1.0
 
     def layer(
         self,
@@ -371,14 +381,22 @@ class TransformerDecoder(nn.Module):
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
-        mha_a = self.param(f"mha_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        mha_a = self.param(
+            f"mha_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
+        )
         q = q + mha_a.astype(q.dtype) * mha
         qkv_ln = layer_norm(q)
         ffn = FFWMLP(
             hidden_size=self.resblocks_hidden_size,
             use_bias=self.use_bias,
         )(qkv_ln)
-        ffn_a = self.param(f"ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,))
+        ffn_a = self.param(
+            f"ffn_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
+        )
         q = q + ffn_a.astype(q.dtype) * ffn
         return jnp.where(positionwise_mask, q, 0)
 
@@ -442,6 +460,7 @@ class Transformer(nn.Module):
     need_pos: bool = False
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
+    init_residual_scale: float = 1.0
 
     def decoder_layer(
         self,
@@ -472,7 +491,9 @@ class Transformer(nn.Module):
             kv_positions=kv_positions,
         )
         mha_a = self.param(
-            f"decoder_mha_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+            f"decoder_mha_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
         )
         q = q + mha_a.astype(q.dtype) * mha
         qkv_ln = layer_norm(q)
@@ -481,7 +502,9 @@ class Transformer(nn.Module):
             use_bias=self.use_bias,
         )(qkv_ln)
         ffn_a = self.param(
-            f"decoder_ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+            f"decoder_ffn_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
         )
         q = q + ffn_a.astype(q.dtype) * ffn
         return jnp.where(positionwise_mask, q, 0)
@@ -512,7 +535,9 @@ class Transformer(nn.Module):
             kv_positions=qkv_positions,
         )
         mha_a = self.param(
-            f"encoder_mha_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+            f"encoder_mha_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
         )
         qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
@@ -521,7 +546,9 @@ class Transformer(nn.Module):
             use_bias=self.use_bias,
         )(qkv_ln)
         ffn_a = self.param(
-            f"encoder_ffn_a_{layer_idx}", nn.initializers.ones_init(), (1,)
+            f"encoder_ffn_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
         )
         qkv = qkv + ffn_a.astype(qkv.dtype) * ffn
         return jnp.where(positionwise_mask, qkv, 0)

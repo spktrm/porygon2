@@ -95,7 +95,8 @@ def train_step(
     # Compute targets inside train_step (JAX/JIT compatible).
     player_targets = compute_player_targets(
         batch,
-        player_target_actor_ratio,
+        player_target_pred,
+        importance_sampling_ratios=player_target_actor_ratio,
         td_lambda=config.player_td_lambda,
         gae_lambda=config.player_gae_lambda,
         entropy_normalising_constant=config.player_entropy_prediction_normalising_constant,
@@ -109,7 +110,7 @@ def train_step(
     )
 
     win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
-    player_returns = player_targets.win_returns / win_return_correction
+    player_win_returns = player_targets.win_returns / win_return_correction
 
     training_logs = {}
 
@@ -147,7 +148,7 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits, labels=player_returns.win_returns
+                logits=learner_value_head.logits, labels=player_win_returns
             ),
             player_valid,
         )
@@ -246,7 +247,9 @@ def train_step(
             )
             .sum(axis=0)
             .mean(),
-            player_win_return_correction=average(win_return_correction, player_valid),
+            player_win_return_correction=average(
+                win_return_correction.reshape(player_valid.shape), player_valid
+            ),
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
@@ -256,7 +259,9 @@ def train_step(
                 player_grads["params"]["winloss_head"]
             ),
             player_conditional_entropy_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["conditional_entropy_head"]
+                player_grads["params"][
+                    "coimportance_sampling_ratiosnditional_entropy_head"
+                ]
             ),
             player_potential_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["potential_value_head"]
@@ -335,6 +340,7 @@ def train_step(
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
             batch,
+            builder_target_pred,
             builder_target_actor_ratio,
             td_lambda=config.builder_td_lambda,
             gae_lambda=config.builder_gae_lambda,
@@ -350,7 +356,9 @@ def train_step(
         builder_win_return_correction = builder_targets.win_returns.sum(
             axis=-1, keepdims=True
         )
-        builder_returns = builder_targets.win_returns / builder_win_return_correction
+        builder_win_returns = (
+            builder_targets.win_returns / builder_win_return_correction
+        )
 
         def builder_loss_fn(params: Params):
 
@@ -386,7 +394,7 @@ def train_step(
 
             loss_v = average(
                 optax.softmax_cross_entropy(
-                    logits=learner_value_head.logits, labels=builder_returns.win_returns
+                    logits=learner_value_head.logits, labels=builder_win_returns
                 ),
                 builder_valid,
             )
@@ -483,7 +491,8 @@ def train_step(
             dict(
                 builder_loss=builder_loss_val,
                 builder_win_return_correction=average(
-                    builder_win_return_correction, builder_valid
+                    builder_win_return_correction.reshape(builder_valid.shape),
+                    builder_valid,
                 ),
                 builder_nll_sum=(
                     batch.builder_transitions.agent_output.actor_output.action_head.log_prob
