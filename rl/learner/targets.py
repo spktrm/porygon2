@@ -58,7 +58,7 @@ def compute_player_targets(
 
     # --- 1. Extract and Scale Base Values & Rewards ---
     # Value
-    player_reward = traj.player_transitions.env_output.win_reward
+    player_reward = traj.player_transitions.env_output.win_reward  # (T, B, 3)
     player_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = player_value_probs.shape[-1]
 
@@ -80,12 +80,7 @@ def compute_player_targets(
     # --- 2. Concatenate Rewards, Values, and Next Values ---
     # Shape: (T, B, n_bins + 2)
     combined_rewards = jnp.concatenate(
-        [
-            jnp.broadcast_to(player_reward[..., None], player_value_probs.shape),
-            kl_reward[..., None],
-            potential_reward[..., None],
-        ],
-        axis=-1,
+        [player_reward, kl_reward[..., None], potential_reward[..., None]], axis=-1
     )
 
     combined_values = jnp.concatenate(
@@ -101,7 +96,7 @@ def compute_player_targets(
     last_values = jnp.concatenate(
         [
             player_value_probs[-1:],
-            jnp.zeros_like(player_ent_scaled[:1])[..., None],
+            player_ent_scaled[-1:][..., None],
             player_potential_value[-1:][..., None],
         ],
         axis=-1,
@@ -141,7 +136,7 @@ def compute_player_targets(
     )
 
     # --- 6. Split Outputs ---
-    returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
+    win_returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
 
     ent_returns = (
         combined_ret_cumsum[..., n_bins] + combined_values[..., n_bins]
@@ -152,10 +147,10 @@ def compute_player_targets(
     )
 
     return PlayerTargets(
-        win_returns=returns,
+        win_returns=win_returns,
         win_advantages=combined_adv_cumsum[..., 0],
-        ent_advantages=combined_adv_cumsum[..., 1],
         ent_returns=ent_returns,
+        ent_advantages=combined_adv_cumsum[..., 1],
         potential_returns=potential_returns,
         potential_advantages=combined_adv_cumsum[..., 2],
     )
@@ -252,15 +247,15 @@ def compute_builder_targets(
     combined_adv_cumsum = segmented_cumsum(combined_adv_deltas, gae_lambdas[..., None])
 
     # --- 6. Split Outputs ---
-    returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
+    win_returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
 
     ent_returns = (
         combined_ret_cumsum[..., n_bins] + combined_values[..., n_bins]
     ) / entropy_normalising_constant
 
     return BuilderTargets(
-        win_returns=returns,
+        win_returns=win_returns,
         win_advantages=combined_adv_cumsum[..., 0],
-        ent_advantages=combined_adv_cumsum[..., 1],
         ent_returns=ent_returns,
+        ent_advantages=combined_adv_cumsum[..., 1],
     )
