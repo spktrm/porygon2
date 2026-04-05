@@ -105,8 +105,10 @@ def train_step(
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
-    player_advantages = player_targets.win_advantages + player_entropy_temp * (
-        player_targets.ent_advantages + player_targets.potential_advantages
+    player_advantages = (
+        player_targets.win_advantages
+        + player_entropy_temp * player_targets.ent_advantages
+        + config.player_potential_advantage_scale * player_targets.potential_advantages
     )
 
     win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
@@ -259,9 +261,7 @@ def train_step(
                 player_grads["params"]["winloss_head"]
             ),
             player_conditional_entropy_head_gradient_norm=optax.global_norm(
-                player_grads["params"][
-                    "coimportance_sampling_ratiosnditional_entropy_head"
-                ]
+                player_grads["params"]["conditional_entropy_head"]
             ),
             player_potential_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["potential_value_head"]
