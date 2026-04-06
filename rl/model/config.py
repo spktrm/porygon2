@@ -25,7 +25,7 @@ DEFAULT_DTYPE = jnp.bfloat16
 def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 96
+    base_size = 64
     num_heads = 4
     width_scale = 1
 
@@ -34,16 +34,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.generation = generation
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
+    cfg.train = train
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
-    cfg.encoder.num_history_timesteps = 32
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 24
-    cfg.encoder.num_perceiver_steps = 1
+    cfg.encoder.num_latent_embeddings = 32
     cfg.encoder.num_thinking_steps = 1
 
     encoder_num_layers = 1
@@ -52,10 +51,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
-    encoder_qk_layer_norm = True
     encoder_use_bias = True
-    encoder_use_post_attn_norm = False
-    encoder_use_post_ffw_norm = False
+    encoder_qk_layer_norm = True
+    encoder_init_residual_scale = 0.0
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -63,10 +61,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_qk_layer_norm = True
     decoder_use_bias = True
-    decoder_use_post_attn_norm = False
-    decoder_use_post_ffw_norm = False
+    decoder_qk_layer_norm = True
+    decoder_init_residual_scale = 0.0
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -77,8 +74,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=encoder_use_bias,
         resblocks_hidden_size=encoder_hidden_size,
         qk_layer_norm=encoder_qk_layer_norm,
-        use_post_attn_norm=encoder_use_post_attn_norm,
-        use_post_ffw_norm=encoder_use_post_ffw_norm,
+        init_residual_scale=encoder_init_residual_scale,
     )
 
     transformer_decoder_kwargs = dict(
@@ -90,20 +86,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         use_bias=decoder_use_bias,
         resblocks_hidden_size=decoder_hidden_size,
         qk_layer_norm=decoder_qk_layer_norm,
-        use_post_attn_norm=decoder_use_post_attn_norm,
-        use_post_ffw_norm=decoder_use_post_ffw_norm,
+        init_residual_scale=decoder_init_residual_scale,
     )
 
     cfg.encoder.timestep_encoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
-    cfg.encoder.state_encoder = ConfigDict()
+    cfg.encoder.state_transformer = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [
-        cfg.encoder.timestep_encoder,
-        cfg.encoder.state_encoder,
-    ]:
+    for encoder in [cfg.encoder.timestep_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
@@ -113,26 +105,34 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
+    set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
+
     cfg.encoder.timestep_encoder.need_pos = True
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_encoder.num_layers = 4
-    cfg.encoder.state_encoder.need_pos = False
+    cfg.encoder.state_transformer.num_layers = 4
+    cfg.encoder.state_transformer.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
-    # Policy Head Configuration
-    cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
-
-    cfg.value_head = ConfigDict()
-    cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 3
-    cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-
-    cfg.train = train
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
+    cfg.action_head.qk_logits.use_bias = True
+
+    cfg.winloss_head = ConfigDict()
+    cfg.winloss_head.dense = ConfigDict()
+    cfg.winloss_head.dense.features = 3
+    cfg.winloss_head.dense.use_bias = True
+    cfg.winloss_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+
+    cfg.entropy_head = ConfigDict()
+    cfg.entropy_head.dense = ConfigDict()
+    cfg.entropy_head.dense.features = 1
+    cfg.entropy_head.dense.use_bias = True
+
+    cfg.potential_value_head = ConfigDict()
+    cfg.potential_value_head.dense = ConfigDict()
+    cfg.potential_value_head.dense.features = 1
+    cfg.potential_value_head.dense.use_bias = True
 
     for head in [cfg.action_head]:
         head.train = train
@@ -143,7 +143,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
-    base_size = 96
+    base_size = 64
     num_heads = 4
     scale = 1
 
@@ -159,10 +159,9 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     hidden_size = int(hidden_size_scale * entity_size)
     qkv_scale = 1 / num_heads
     qkv_size = int(qkv_scale * entity_size)
+    use_bias = False
     qk_layer_norm = True
-    use_bias = True
-    use_post_attn_norm = False
-    use_post_ffw_norm = False
+    init_residual_scale = 0.0
 
     transformer_kwargs = dict(
         num_layers=num_layers,
@@ -173,8 +172,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         use_bias=use_bias,
         resblocks_hidden_size=hidden_size,
         qk_layer_norm=qk_layer_norm,
-        use_post_attn_norm=use_post_attn_norm,
-        use_post_ffw_norm=use_post_ffw_norm,
+        init_residual_scale=init_residual_scale,
     )
 
     cfg.encoder = ConfigDict()
@@ -200,11 +198,13 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.logits = ConfigDict()
-    cfg.entropy_head.logits.features = 1
+    cfg.entropy_head.dense = ConfigDict()
+    cfg.entropy_head.dense.features = 1
+    cfg.entropy_head.dense.use_bias = True
 
-    cfg.value_head.logits = ConfigDict()
-    cfg.value_head.logits.features = 3
+    cfg.value_head.dense = ConfigDict()
+    cfg.value_head.dense.features = 3
+    cfg.value_head.dense.use_bias = True
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     for head in [

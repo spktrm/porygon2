@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from rl.model.utils import ParamsContainer
+
 load_dotenv()
 import argparse
 import concurrent.futures
@@ -89,7 +91,13 @@ def run_eval_heuristic(
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = actor.pull_main_player()
+                player = ParamsContainer(
+                    step_count=step_count,
+                    player_frame_count=0,
+                    builder_frame_count=0,
+                    player_params=learner.player_state.target_params,
+                    builder_params=learner.builder_state.target_params,
+                )
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -99,7 +107,13 @@ def run_eval_heuristic(
                     @ CAT_VF_SUPPORT
                 )
 
-                wandb_run.log({"training_step": step_count, f"wr-{session_id}": payoff})
+                wandb_run.log(
+                    {
+                        "training_step": step_count,
+                        f"payoff-{session_id}": payoff,
+                        f"wr-{session_id}": payoff > 0,
+                    }
+                )
 
         except Exception:
             logger.error("Error running eval heuristic", exc_info=True)

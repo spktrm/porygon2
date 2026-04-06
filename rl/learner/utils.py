@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, TypeVar
 
 import chex
 import jax
@@ -9,6 +9,14 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
+from rl.learner.targets import PlayerTargets
+from rl.utils import average
+
+T = TypeVar("T")
+
+
+def promote_map(tree: T, dtype) -> T:
+    return jax.tree.map(lambda x: x.astype(dtype), tree)
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -20,7 +28,7 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig
+    batch: Trajectory, config: Porygon2LearnerConfig, player_targets: PlayerTargets
 ) -> Dict[str, Any]:
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     player_lengths = player_valid.sum(0)
@@ -29,23 +37,32 @@ def collect_batch_telemetry_data(
         ..., FieldFeature.FIELD_FEATURE__VALID
     ].sum(0)
 
-    can_move = (
+    can_move = batch.player_transitions.env_output.action_mask[
+        ...,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
+        + 1,
+        :,
+    ].any((-2, -1))
+    can_wildcard = (
         batch.player_transitions.env_output.action_mask[
             ...,
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
+            + 1,
             :,
-        ]
-        .reshape(-1)
-        .any(-1)
-    )
-    can_switch = (
+        ].any((-2, -1))
+    ) | (
         batch.player_transitions.env_output.action_mask[
             ...,
-            ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6,
-        ]
-        .reshape(-1)
-        .any(-1)
+            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
+            + 1,
+            :,
+        ].any((-2, -1))
     )
+    can_switch = batch.player_transitions.env_output.action_mask[
+        ...,
+        ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6 + 1,
+        :,
+    ].any((-2, -1))
     can_act = can_move & can_switch & player_valid
 
     src_action_index = (
@@ -60,15 +77,20 @@ def collect_batch_telemetry_data(
         & can_move
     )
     did_wildcard = (
-        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
-    ) | (
-        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+        (
+            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
+            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
+        )
+        | (
+            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
+            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+        )
     ) & can_move
     did_switch = (
-        (tgt_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
-        & (tgt_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
+        (src_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
+        & (src_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
+        & (tgt_action_index >= ActionEnum.ACTION_ENUM__ALLY_1)
+        & (tgt_action_index <= ActionEnum.ACTION_ENUM__ALLY_2)
         & can_switch
     )
     move_ratio = renormalize(did_move, can_act)
@@ -87,6 +109,16 @@ def collect_batch_telemetry_data(
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
+        player_proactive_switch_advantange=average(
+            player_targets.win_advantages, player_valid & did_switch & can_move
+        ),
+        player_passive_switch_advantange=average(
+            player_targets.win_advantages, player_valid & did_switch & ~can_move
+        ),
+        player_wildcard_hold_advantange=average(
+            player_targets.win_advantages,
+            player_valid & did_move & ~did_wildcard & can_wildcard,
+        ),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),

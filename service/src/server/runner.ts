@@ -321,10 +321,10 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 " terastallize"
             );
         } else if (
-            ActionEnum.ACTION_ENUM__RESERVE_1 <= tgtIndex &&
-            tgtIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
+            ActionEnum.ACTION_ENUM__RESERVE_1 <= srcIndex &&
+            srcIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
         ) {
-            const switchIndex = tgtIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
+            const switchIndex = srcIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
             return `switch ${switchIndex + 1}`;
         } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
@@ -540,6 +540,36 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 }
 
+function hpDiff(battle: Battle): number {
+    let p1Total = 0;
+    let p2Total = 0;
+
+    for (let i = 0; i < 2; i++) {
+        const side = battle.sides[i];
+        let knownHp = 0;
+
+        // Use a standard for-loop instead of .reduce
+        for (let j = 0; j < side.team.length; j++) {
+            const pkmn = side.team[j];
+            if (pkmn.fainted) continue;
+
+            if (pkmn.maxhp === 0) {
+                knownHp += 1;
+            } else {
+                knownHp += pkmn.hp / pkmn.maxhp;
+            }
+        }
+
+        const unknownHp = side.totalPokemon - side.team.length;
+        const total = knownHp + unknownHp;
+
+        if (i === 0) p1Total = total;
+        else p2Total = total;
+    }
+
+    return p1Total - p2Total;
+}
+
 const MAX_REQUEST_COUNT = 32 * 3;
 
 export function createBattle(
@@ -591,14 +621,52 @@ export function createBattle(
 >player p2 ${JSON.stringify(p2spec)}`);
 
     (async () => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const spectator = new Battle(new Generations(Dex), null);
+
+        const windowSize = 20;
+        const maxChange = 0.01;
+
+        // Track strictly what we need. No arrays!
+        let lastHpDiff = 0;
+        let stagnantTurns = 0;
+        let isFirstTurn = true;
+
         for await (const chunk of streams.omniscient) {
+            for (const line of chunk.split("\n")) {
+                spectator.add(line);
+
+                if (line.startsWith("|turn")) {
+                    const currentHpDiff = hpDiff(spectator);
+
+                    if (isFirstTurn) {
+                        lastHpDiff = currentHpDiff;
+                        isFirstTurn = false;
+                        continue;
+                    }
+
+                    // Calculate absolute change
+                    const change = Math.abs(currentHpDiff - lastHpDiff);
+                    lastHpDiff = currentHpDiff;
+
+                    // O(1) Stalling check: just update a counter
+                    if (change <= maxChange) {
+                        stagnantTurns++;
+                    } else {
+                        stagnantTurns = 0; // Reset momentum
+                    }
+                }
+            }
+
             if (
                 p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount
+                p2.requestCount >= maxRequestCount ||
+                stagnantTurns >= windowSize
             ) {
                 p1.finishEarly();
                 p2.finishEarly();
+                // Optional: You might want to break the stream here
+                // depending on how your simulator handles early termination.
+                break;
             }
         }
     })();

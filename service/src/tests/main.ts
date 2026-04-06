@@ -55,7 +55,7 @@ async function playerController(player: TrainablePlayerAI) {
             );
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableMoveset = StateHandler.toReadableMoveset(
-                state.getMoveset_asU8(),
+                state.getMyMoveset_asU8(),
             );
 
             const request = player.getRequest();
@@ -83,8 +83,9 @@ async function playerController(player: TrainablePlayerAI) {
 const testFormats = [
     "gen9randomdoublesbattle",
     // "gen9vgc2025regibo3",
-    "gen9ou",
-    "gen9randombattle",
+    // "gen9ou",
+    // "gen9randombattle",
+    // "gen9vgc2026",
 ];
 const testPackedTeamArray = [
     0, 397, 40, 289, 850, 364, 857, 639, 11, 5, 58, 2, 0, 23, 23, 17, 4, 23, 0,
