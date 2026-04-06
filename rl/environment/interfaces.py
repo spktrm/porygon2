@@ -10,6 +10,7 @@ class PlayerEnvOutput:
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
+    state_potential: ArrayLike = ()
     public_team: ArrayLike = ()
     revealed_team: ArrayLike = ()
     field: ArrayLike = ()
@@ -79,6 +80,9 @@ class PlayerActorOutput:
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
     conditional_entropy_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    potential_value_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
 
@@ -171,17 +175,19 @@ class BuilderTransition:
 
 @dataclass
 class PlayerTargets:
-    returns: ArrayLike = ()
-    advantages: ArrayLike = ()
-    raw_ent_advantages: ArrayLike = ()
+    win_returns: ArrayLike = ()
+    win_advantages: ArrayLike = ()
+    ent_advantages: ArrayLike = ()
     ent_returns: ArrayLike = ()
+    potential_returns: ArrayLike = ()
+    potential_advantages: ArrayLike = ()
 
 
 @dataclass
 class BuilderTargets:
-    returns: ArrayLike = ()
+    win_returns: ArrayLike = ()
     win_advantages: ArrayLike = ()
-    raw_ent_advantages: ArrayLike = ()
+    ent_advantages: ArrayLike = ()
     ent_returns: ArrayLike = ()
 
 
@@ -195,9 +201,6 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
-
-    player_targets: PlayerTargets = field(default_factory=PlayerTargets)
-    builder_targets: BuilderTargets = field(default_factory=BuilderTargets)
 
 
 @dataclass

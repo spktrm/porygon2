@@ -1,3 +1,4 @@
 {
-    "NUM_HISTORY": 512
+    "NUM_HISTORY": 512,
+    "MAX_RATIO_TOKEN": 16384
 }

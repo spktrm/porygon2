@@ -81,10 +81,10 @@ async function playerController(player: TrainablePlayerAI) {
 }
 
 const testFormats = [
-    // "gen9randomdoublesbattle",
+    "gen9randomdoublesbattle",
     // "gen9vgc2025regibo3",
     // "gen9ou",
-    "gen9randombattle",
+    // "gen9randombattle",
     // "gen9vgc2026",
 ];
 const testPackedTeamArray = [
