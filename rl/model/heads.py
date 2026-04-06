@@ -10,7 +10,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.modules import PointerLogits, activation_fn, layer_norm
+from rl.model.modules import PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
 
 
@@ -33,6 +33,7 @@ class PolicyQKHead(nn.Module):
         head: PolicyHeadOutput,
         valid_mask: jax.Array = None,
         head_params: HeadParams = HeadParams(),
+        prior: jax.Array = None,
     ):
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
@@ -61,12 +62,20 @@ class PolicyQKHead(nn.Module):
         log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
         entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
 
+        if prior is None:
+            prior = jnp.ones_like(logits) / logits.shape[-1]
+
+        prior = prior.astype(logits.dtype)
+        kl_prior = prior * (jnp.where(prior == 0, 0, jnp.log(prior)) - log_policy)
+        kl_prior = kl_prior.sum(axis=-1)
+
         return PolicyHeadOutput(
             action_index=action_index.reshape(entropy.shape),
             log_prob=log_prob.reshape(entropy.shape),
             entropy=entropy,
             normalized_entropy=entropy * entropy_scale,
             log_policy=log_policy,
+            kl_prior=kl_prior,
         )
 
 
@@ -75,8 +84,7 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = activation_fn(layer_norm(x))
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = nn.Dense(**self.cfg.dense.to_dict())(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
@@ -95,6 +103,7 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = activation_fn(layer_norm(x))
-        x = nn.Dense(**self.cfg.logits.to_dict(), dtype=x.dtype)(x)
+        x = nn.Dense(**self.cfg.dense.to_dict())(x)
+        if getattr(self.cfg, "output_activation", None) is not None:
+            x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

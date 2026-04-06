@@ -14,11 +14,11 @@ from rl.environment.data import STOI, toid
 
 ALL_FORMATS = [
     "ou",
-    # "ubers",
-    # "uu",
-    # "zu",
-    # "pu",
-    # "nu",
+    "ubers",
+    "uu",
+    "zu",
+    "pu",
+    "nu",
 ]
 BASE_URL = (
     "https://github.com/pkmn/smogon/raw/refs/heads/main/data/stats/gen{gen}{fmt}.json"

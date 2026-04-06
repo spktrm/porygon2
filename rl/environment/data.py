@@ -5,6 +5,7 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
+from constants import MAX_RATIO_TOKEN
 from rl.environment.protos.enums_pb2 import (
     AbilitiesEnum,
     BattlemajorargsEnum,
@@ -71,14 +72,8 @@ NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
 
-NUM_HISTORY = 128 * 3
-
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
-
-
-MAX_RATIO_TOKEN = 16384
-MAX_BOOST_VALUE = 13
 
 
 ENTITY_PUBLIC_MAX_VALUES = {
@@ -162,7 +157,7 @@ NUM_PACKED_SET_FEATURES = len(PackedSetFeature.keys())
 ONEHOT_DTYPE = jnp.bfloat16
 
 
-CAT_VF_SUPPORT = np.array([-1, 0, 1], dtype=np.float32)
+CAT_VF_SUPPORT = np.array([-1, -0.1, 1], dtype=np.float32)
 
 
 def add_pretrained_embedding(generation):

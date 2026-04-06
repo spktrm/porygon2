@@ -164,10 +164,15 @@ export class EnvironmentState extends jspb.Message {
   getHistoryLength(): number;
   setHistoryLength(value: number): void;
 
-  getMoveset(): Uint8Array | string;
-  getMoveset_asU8(): Uint8Array;
-  getMoveset_asB64(): string;
-  setMoveset(value: Uint8Array | string): void;
+  getMyMoveset(): Uint8Array | string;
+  getMyMoveset_asU8(): Uint8Array;
+  getMyMoveset_asB64(): string;
+  setMyMoveset(value: Uint8Array | string): void;
+
+  getOppMoveset(): Uint8Array | string;
+  getOppMoveset_asU8(): Uint8Array;
+  getOppMoveset_asB64(): string;
+  setOppMoveset(value: Uint8Array | string): void;
 
   getPublicTeam(): Uint8Array | string;
   getPublicTeam_asU8(): Uint8Array;
@@ -214,7 +219,8 @@ export namespace EnvironmentState {
     historyEntityEdges: Uint8Array | string,
     historyField: Uint8Array | string,
     historyLength: number,
-    moveset: Uint8Array | string,
+    myMoveset: Uint8Array | string,
+    oppMoveset: Uint8Array | string,
     publicTeam: Uint8Array | string,
     revealedTeam: Uint8Array | string,
     privateTeam: Uint8Array | string,

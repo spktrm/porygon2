@@ -1,8 +1,6 @@
 import functools
-from functools import partial
 from pprint import pprint
 
-import chex
 import cloudpickle as pickle
 import flax.linen as nn
 import jax
@@ -22,7 +20,6 @@ from rl.environment.data import (
     NUM_SPECIES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
-    PACKED_SET_MAX_VALUES,
 )
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import (
@@ -48,22 +45,8 @@ from rl.model.heads import (
     PolicyQKHead,
     RegressionValueLogitHead,
 )
-from rl.model.modules import MLP, TransformerEncoder
+from rl.model.modules import MLP, RMSNorm, TransformerEncoder
 from rl.model.utils import get_most_recent_file, get_num_params
-
-
-def _encode_one_hot(
-    entity: jax.Array,
-    feature_idx: int,
-    max_values: dict[int, int],
-    value_offset: int = 0,
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
-
-
-_encode_one_hot_set = partial(_encode_one_hot, max_values=PACKED_SET_MAX_VALUES)
 
 
 class Porygon2BuilderModel(nn.Module):
@@ -77,6 +60,7 @@ class Porygon2BuilderModel(nn.Module):
         self.cfg.dtype
 
         dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
+        embedding_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
         self.species_linear = nn.Dense(
             name="species_linear", use_bias=False, **dense_kwargs
@@ -95,44 +79,53 @@ class Porygon2BuilderModel(nn.Module):
             1.0, "fan_in", "normal", out_axis=0
         )
         self.sos_embedding = self.param(
-            "sos_embedding",
-            embedding_init,
-            (1, entity_size),
+            "sos_embedding", embedding_init, (1, entity_size)
         )
         self.nature_embedding = self.param(
-            "nature_embedding",
-            embedding_init,
-            (NUM_NATURES, entity_size),
+            "nature_embedding", embedding_init, (NUM_NATURES, entity_size)
         )
         self.gender_embedding = self.param(
-            "gender_embedding",
-            embedding_init,
-            (NUM_GENDERS, entity_size),
+            "gender_embedding", embedding_init, (NUM_GENDERS, entity_size)
         )
-        self.ev_embedding = self.param(
-            "ev_embedding",
-            embedding_init,
-            (64, entity_size),
+        self.hp_ev_embedding = self.param(
+            "hp_ev_embedding", embedding_init, (64, entity_size)
+        )
+        self.atk_ev_embedding = self.param(
+            "atk_ev_embedding", embedding_init, (64, entity_size)
+        )
+        self.def_ev_embedding = self.param(
+            "def_ev_embedding", embedding_init, (64, entity_size)
+        )
+        self.spa_ev_embedding = self.param(
+            "spa_ev_embedding", embedding_init, (64, entity_size)
+        )
+        self.spd_ev_embedding = self.param(
+            "spd_ev_embedding", embedding_init, (64, entity_size)
+        )
+        self.spe_ev_embedding = self.param(
+            "spe_ev_embedding", embedding_init, (64, entity_size)
         )
         self.typechart_embedding = self.param(
-            "typechart_embedding",
-            embedding_init,
-            (NUM_TYPECHART, entity_size),
+            "typechart_embedding", embedding_init, (NUM_TYPECHART, entity_size)
         )
 
-        self.positional_embedding = nn.Embed(6, entity_size, self.cfg.dtype)
-        self.attribute_embedding = nn.Embed(
-            NUM_PACKED_SET_FEATURES, entity_size, self.cfg.dtype
-        )
+        self.positional_embedding = nn.Embed(6, **embedding_kwargs)
+        self.attribute_embedding = nn.Embed(NUM_PACKED_SET_FEATURES, **embedding_kwargs)
 
+        self.input_norm = RMSNorm()
         self.encoder = TransformerEncoder(**self.cfg.encoder.to_dict())
-        self.norm_out = nn.RMSNorm(dtype=self.cfg.dtype)
+        self.output_norm = RMSNorm()
 
         self.species_head_mlp = MLP()
         self.item_head_mlp = MLP()
         self.ability_head_mlp = MLP()
         self.move_head_mlp = MLP()
-        self.ev_head_mlp = MLP()
+        self.hp_ev_head_mlp = MLP()
+        self.atk_ev_head_mlp = MLP()
+        self.def_ev_head_mlp = MLP()
+        self.spa_ev_head_mlp = MLP()
+        self.spd_ev_head_mlp = MLP()
+        self.spe_ev_head_mlp = MLP()
         self.nature_head_mlp = MLP()
         self.gender_head_mlp = MLP()
         self.hiddenpower_head_mlp = MLP()
@@ -142,16 +135,18 @@ class Porygon2BuilderModel(nn.Module):
         self.item_head = PolicyQKHead(self.cfg.item_head)
         self.ability_head = PolicyQKHead(self.cfg.ability_head)
         self.move_head = PolicyQKHead(self.cfg.move_head)
-        self.ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.hp_ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.atk_ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.def_ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.spa_ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.spd_ev_head = PolicyQKHead(self.cfg.ev_head)
+        self.spe_ev_head = PolicyQKHead(self.cfg.ev_head)
         self.nature_head = PolicyQKHead(self.cfg.nature_head)
         self.gender_head = PolicyQKHead(self.cfg.gender_head)
         self.hiddenpower_head = PolicyQKHead(self.cfg.hiddenpower_head)
         self.teratype_head = PolicyQKHead(self.cfg.teratype_head)
 
-        self.value_head_mlp = MLP()
         self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
-
-        self.conditional_entropy_head_mlp = MLP()
         self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _embed_species(self, token: jax.Array):
@@ -187,11 +182,9 @@ class Porygon2BuilderModel(nn.Module):
         return mask * self.moves_linear(_ohe_encoder(token))
 
     def _forward_value_head(self, embedding: jax.Array):
-        embedding = self.value_head_mlp(embedding)
         return self.value_head(embedding)
 
     def _forward_conditional_entropy_head(self, embedding: jax.Array):
-        embedding = self.conditional_entropy_head_mlp(embedding)
         return self.conditional_entropy_head(embedding)
 
     def _encode_team(
@@ -227,11 +220,35 @@ class Porygon2BuilderModel(nn.Module):
         )[..., None] * jnp.take(
             self.gender_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
         )
-        ev_embeddings = (
-            (attribute_id >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
-            & (attribute_id <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV)
+        hp_ev_embeddings = (attribute_id == PackedSetFeature.PACKED_SET_FEATURE__HP_EV)[
+            ..., None
+        ] * jnp.take(
+            self.hp_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        atk_ev_embeddings = (
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__ATK_EV
         )[..., None] * jnp.take(
-            self.ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+            self.atk_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        def_ev_embeddings = (
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__DEF_EV
+        )[..., None] * jnp.take(
+            self.def_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        spa_ev_embeddings = (
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPA_EV
+        )[..., None] * jnp.take(
+            self.spa_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        spd_ev_embeddings = (
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPD_EV
+        )[..., None] * jnp.take(
+            self.spd_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
+        )
+        spe_ev_embeddings = (
+            attribute_id == PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
+        )[..., None] * jnp.take(
+            self.spe_ev_embedding.astype(self.cfg.dtype), token, axis=0, mode="clip"
         )
         typechart_embeddings = self.typechart_embedding.astype(self.cfg.dtype)
         hiddenpower_embeddings = (
@@ -247,17 +264,20 @@ class Porygon2BuilderModel(nn.Module):
         packed_set_embeddings = (
             position_embedding
             + attribute_embedding
-            + (
-                species_embeddings
-                + ability_embeddings
-                + item_embeddings
-                + move_embeddings
-                + nature_embeddings
-                + gender_embeddings
-                + ev_embeddings
-                + hiddenpower_embeddings
-                + teratype_embedding
-            ).reshape(-1, self.cfg.entity_size)
+            + species_embeddings
+            + ability_embeddings
+            + item_embeddings
+            + move_embeddings
+            + nature_embeddings
+            + gender_embeddings
+            + hp_ev_embeddings
+            + atk_ev_embeddings
+            + def_ev_embeddings
+            + spa_ev_embeddings
+            + spd_ev_embeddings
+            + spe_ev_embeddings
+            + hiddenpower_embeddings
+            + teratype_embedding
         )
 
         sos_token = self.sos_embedding.astype(self.cfg.dtype)
@@ -267,8 +287,10 @@ class Porygon2BuilderModel(nn.Module):
 
         seq_len = packed_set_embeddings.shape[0]
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
+
+        packed_set_embeddings = self.input_norm(packed_set_embeddings)
         packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
-        return self.norm_out(packed_set_embeddings)
+        return self.output_norm(packed_set_embeddings)
 
     def _forward(
         self,
@@ -292,6 +314,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.species_mask,
             head_params=head_params,
+            prior=env_step.species_usage,
         )
         item_head = self.item_head(
             self.item_head_mlp(hidden_state),
@@ -299,6 +322,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.item_mask,
             head_params=head_params,
+            prior=env_step.item_usage,
         )
         ability_head = self.ability_head(
             self.ability_head_mlp(hidden_state),
@@ -306,6 +330,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.ability_mask,
             head_params=head_params,
+            prior=env_step.ability_usage,
         )
         move_head = self.move_head(
             self.move_head_mlp(hidden_state),
@@ -313,13 +338,55 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.move_mask,
             head_params=head_params,
+            prior=env_step.move_usage,
         )
-        ev_head = self.ev_head(
-            self.ev_head_mlp(hidden_state),
-            self.ev_embedding,
+        hp_ev_head = self.hp_ev_head(
+            self.hp_ev_head_mlp(hidden_state),
+            self.hp_ev_embedding,
             actor_output.action_head,
-            env_step.ev_mask,
+            env_step.hp_ev_mask,
             head_params=head_params,
+            prior=env_step.hp_ev_usage,
+        )
+        atk_ev_head = self.atk_ev_head(
+            self.atk_ev_head_mlp(hidden_state),
+            self.atk_ev_embedding,
+            actor_output.action_head,
+            env_step.atk_ev_mask,
+            head_params=head_params,
+            prior=env_step.atk_ev_usage,
+        )
+        def_ev_head = self.def_ev_head(
+            self.def_ev_head_mlp(hidden_state),
+            self.def_ev_embedding,
+            actor_output.action_head,
+            env_step.def_ev_mask,
+            head_params=head_params,
+            prior=env_step.def_ev_usage,
+        )
+        spa_ev_head = self.spa_ev_head(
+            self.spa_ev_head_mlp(hidden_state),
+            self.spa_ev_embedding,
+            actor_output.action_head,
+            env_step.spa_ev_mask,
+            head_params=head_params,
+            prior=env_step.spa_ev_usage,
+        )
+        spd_ev_head = self.spd_ev_head(
+            self.spd_ev_head_mlp(hidden_state),
+            self.spd_ev_embedding,
+            actor_output.action_head,
+            env_step.spd_ev_mask,
+            head_params=head_params,
+            prior=env_step.spd_ev_usage,
+        )
+        spe_ev_head = self.spe_ev_head(
+            self.spe_ev_head_mlp(hidden_state),
+            self.spe_ev_embedding,
+            actor_output.action_head,
+            env_step.spe_ev_mask,
+            head_params=head_params,
+            prior=env_step.spe_ev_usage,
         )
         nature_head = self.nature_head(
             self.nature_head_mlp(hidden_state),
@@ -327,6 +394,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.nature_mask,
             head_params=head_params,
+            prior=env_step.nature_usage,
         )
         gender_head = self.gender_head(
             self.gender_head_mlp(hidden_state),
@@ -334,6 +402,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.gender_mask,
             head_params=head_params,
+            prior=env_step.gender_usage,
         )
         teratype_head = self.teratype_head(
             self.teratype_head_mlp(hidden_state),
@@ -341,6 +410,7 @@ class Porygon2BuilderModel(nn.Module):
             actor_output.action_head,
             env_step.teratype_mask,
             head_params=head_params,
+            prior=env_step.teratype_usage,
         )
 
         action_indices = jnp.stack(
@@ -349,7 +419,12 @@ class Porygon2BuilderModel(nn.Module):
                 item_head.action_index,
                 ability_head.action_index,
                 move_head.action_index,
-                ev_head.action_index,
+                hp_ev_head.action_index,
+                atk_ev_head.action_index,
+                def_ev_head.action_index,
+                spa_ev_head.action_index,
+                spd_ev_head.action_index,
+                spe_ev_head.action_index,
                 nature_head.action_index,
                 gender_head.action_index,
                 teratype_head.action_index,
@@ -361,7 +436,12 @@ class Porygon2BuilderModel(nn.Module):
                 item_head.log_prob,
                 ability_head.log_prob,
                 move_head.log_prob,
-                ev_head.log_prob,
+                hp_ev_head.log_prob,
+                atk_ev_head.log_prob,
+                def_ev_head.log_prob,
+                spa_ev_head.log_prob,
+                spd_ev_head.log_prob,
+                spe_ev_head.log_prob,
                 nature_head.log_prob,
                 gender_head.log_prob,
                 teratype_head.log_prob,
@@ -373,7 +453,12 @@ class Porygon2BuilderModel(nn.Module):
                 item_head.entropy,
                 ability_head.entropy,
                 move_head.entropy,
-                ev_head.entropy,
+                hp_ev_head.entropy,
+                atk_ev_head.entropy,
+                def_ev_head.entropy,
+                spa_ev_head.entropy,
+                spd_ev_head.entropy,
+                spe_ev_head.entropy,
                 nature_head.entropy,
                 gender_head.entropy,
                 teratype_head.entropy,
@@ -385,10 +470,32 @@ class Porygon2BuilderModel(nn.Module):
                 item_head.normalized_entropy,
                 ability_head.normalized_entropy,
                 move_head.normalized_entropy,
-                ev_head.normalized_entropy,
+                hp_ev_head.normalized_entropy,
+                atk_ev_head.normalized_entropy,
+                def_ev_head.normalized_entropy,
+                spa_ev_head.normalized_entropy,
+                spd_ev_head.normalized_entropy,
+                spe_ev_head.normalized_entropy,
                 nature_head.normalized_entropy,
                 gender_head.normalized_entropy,
                 teratype_head.normalized_entropy,
+            )
+        )
+        kl_prior = jnp.stack(
+            (
+                species_head.kl_prior,
+                item_head.kl_prior,
+                ability_head.kl_prior,
+                move_head.kl_prior,
+                hp_ev_head.kl_prior,
+                atk_ev_head.kl_prior,
+                def_ev_head.kl_prior,
+                spa_ev_head.kl_prior,
+                spd_ev_head.kl_prior,
+                spe_ev_head.kl_prior,
+                nature_head.kl_prior,
+                gender_head.kl_prior,
+                teratype_head.kl_prior,
             )
         )
         mask = jnp.stack(
@@ -401,11 +508,12 @@ class Porygon2BuilderModel(nn.Module):
                     env_step.curr_attribute
                     <= PackedSetFeature.PACKED_SET_FEATURE__MOVE4
                 ),
-                (env_step.curr_attribute >= PackedSetFeature.PACKED_SET_FEATURE__HP_EV)
-                & (
-                    env_step.curr_attribute
-                    <= PackedSetFeature.PACKED_SET_FEATURE__SPE_EV
-                ),
+                (env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__HP_EV),
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__ATK_EV,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__DEF_EV,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPA_EV,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPD_EV,
+                env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__SPE_EV,
                 env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__NATURE,
                 env_step.curr_attribute == PackedSetFeature.PACKED_SET_FEATURE__GENDER,
                 env_step.curr_attribute
@@ -421,6 +529,7 @@ class Porygon2BuilderModel(nn.Module):
             log_prob=_fold(log_probs),
             entropy=_fold(entropies),
             normalized_entropy=_fold(normalized_entropies),
+            kl_prior=_fold(kl_prior),
         )
 
         return BuilderActorOutput(

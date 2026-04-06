@@ -6,13 +6,10 @@ from tqdm import tqdm
 from rl.environment.data import NUM_ABILITIES, NUM_ITEMS, NUM_MOVES, NUM_SPECIES
 from rl.environment.interfaces import (
     BuilderHistoryOutput,
-    BuilderTargets,
     BuilderTransition,
     Trajectory,
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
-from rl.learner.config import Porygon2LearnerConfig
-from rl.learner.targets import compute_builder_targets, compute_player_targets
 
 
 class BuilderTrajectoryStore:
@@ -113,9 +110,6 @@ class PlayerTrajectoryStore:
     Mirrors the structure of BuilderTrajectoryStore: trajectories are kept
     until they have been sampled at least max_reuses times, after which they
     become eligible for replacement.
-
-    Targets (TD(λ) returns and GAE advantages) are computed once at add time
-    so that train_step does not repeat this work on every reuse.
     """
 
     def __init__(
@@ -123,8 +117,6 @@ class PlayerTrajectoryStore:
         max_size: int = 1000,
         max_reuses: int = 5,
         need_tracking: bool = False,
-        learner_config: Porygon2LearnerConfig = Porygon2LearnerConfig(),
-        compute_builder: bool = True,
     ):
         self._trajectories: dict[int, Trajectory] = {}
         self._reuses = np.zeros(max_size, dtype=int)
@@ -137,10 +129,6 @@ class PlayerTrajectoryStore:
         self._sample_cv = threading.Condition()
 
         self._progress = tqdm(desc="player_producer", smoothing=0.1)
-
-        # Target computation parameters.
-        self._learner_config = learner_config
-        self._compute_builder = compute_builder
 
         # Tracking
         self.need_tracking = need_tracking
@@ -156,6 +144,16 @@ class PlayerTrajectoryStore:
         if limit is None:
             limit = self._max_size
         return len(self._trajectories) >= limit
+
+    def is_min_fill_fraction_reached(self, fraction: float = 0.5) -> bool:
+        """Returns True if the store is at least ``fraction`` full.
+
+        Args:
+            fraction: Required fill level in [0.0, 1.0].
+        """
+        if not 0.0 <= fraction <= 1.0:
+            raise ValueError(f"fraction must be in [0.0, 1.0], got {fraction}")
+        return len(self._trajectories) >= int(self._max_size * fraction)
 
     def ready_to_sample(self, n: int = None) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
@@ -211,38 +209,10 @@ class PlayerTrajectoryStore:
             NUM_MOVES,
         )
 
-    def _compute_targets(self, traj: Trajectory) -> Trajectory:
-        """Compute and attach TD(λ) returns and GAE advantages to *traj*."""
-        player_targets = compute_player_targets(
-            traj,
-            td_lambda=self._learner_config.player_td_lambda,
-            gae_lambda=self._learner_config.player_gae_lambda,
-        )
-        if self._compute_builder:
-            builder_targets = compute_builder_targets(
-                traj,
-                td_lambda=self._learner_config.builder_td_lambda,
-                gae_lambda=self._learner_config.builder_gae_lambda,
-                entropy_normalising_constant=self._learner_config.builder_entropy_prediction_normalising_constant,
-            )
-        else:
-            builder_targets = BuilderTargets()
-
-        return traj.replace(
-            player_targets=player_targets,
-            builder_targets=builder_targets,
-        )
-
     def add(self, traj: Trajectory):
-        """Adds a trajectory, replacing the oldest over-used entry if the store is full.
-
-        Targets (returns and advantages) are computed once here so that
-        train_step can reuse the cached values on every sample.
-        """
+        """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
         if self.need_tracking:
             self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
-
-        traj = self._compute_targets(traj)
 
         if len(self._trajectories) < self._max_size:
             current_index = len(self._trajectories)
