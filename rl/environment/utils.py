@@ -4,10 +4,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from constants import NUM_HISTORY
+from constants import MAX_RATIO_TOKEN, NUM_HISTORY
 from rl.environment.data import (
     EX_TRAJECTORY,
-    MAX_RATIO_TOKEN,
     NUM_ABILITIES,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
@@ -196,10 +195,13 @@ def process_state(
         / MAX_RATIO_TOKEN
     )
 
+    state_potential = info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+
     env_step = PlayerEnvOutput(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
+        state_potential=state_potential.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         revealed_team=revealed_team,

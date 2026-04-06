@@ -32,7 +32,8 @@ from rl.learner.loss import (
     policy_gradient_loss,
     power_schedule,
 )
-from rl.learner.utils import calculate_r2, collect_batch_telemetry_data
+from rl.learner.targets import compute_builder_targets, compute_player_targets
+from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
@@ -60,8 +61,24 @@ def train_step(
         history=player_history,
     )
 
+    player_target_pred = player_state.apply_fn(
+        player_state.target_params,
+        player_actor_input,
+        player_transitions.agent_output.actor_output,
+        HeadParams(),
+    )
+
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
+
+    # Calculate importance sampling ratios for off-policy correction.
     player_actor_log_prob = player_actor_action_head.log_prob
+    player_target_log_prob = player_target_pred.action_head.log_prob
+    player_actor_target_log_ratio = player_actor_log_prob - player_target_log_prob
+    player_actor_target_ratio = jnp.exp(player_actor_target_log_ratio)
+    player_target_actor_ratio = jnp.exp(-player_actor_target_log_ratio)
+    player_actor_target_clipped_ratio = jnp.clip(
+        player_actor_target_ratio, min=0.0, max=2.0
+    )
 
     float_dtype = player_actor_log_prob.dtype
 
@@ -75,45 +92,56 @@ def train_step(
     )
 
     # --- Player ---
-    # Targets are pre-computed at buffer add time; cast to the model's float dtype.
-    player_returns = batch.player_targets.returns.astype(float_dtype)
-    player_win_advantages = batch.player_targets.advantages.astype(float_dtype)
-    player_ent_returns = batch.player_targets.ent_returns.astype(float_dtype)
-    player_ent_advantages = (
-        player_entropy_temp
-        * batch.player_targets.raw_ent_advantages.astype(float_dtype)
+    # Compute targets inside train_step (JAX/JIT compatible).
+    player_targets = compute_player_targets(
+        batch,
+        player_target_pred,
+        importance_sampling_ratios=player_target_actor_ratio,
+        td_lambda=config.player_td_lambda,
+        gae_lambda=config.player_gae_lambda,
+        entropy_normalising_constant=config.player_entropy_prediction_normalising_constant,
     )
+    player_returns = promote_map(player_targets, float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    no_valid = player_valid.sum() == 0
-    player_valid = player_valid + no_valid
 
-    player_advantages = player_win_advantages + player_ent_advantages
+    player_advantages = (
+        player_targets.win_advantages
+        + player_entropy_temp * player_targets.ent_advantages
+        + config.player_potential_advantage_scale * player_targets.potential_advantages
+    )
+
+    win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
+    player_win_returns = player_targets.win_returns / win_return_correction
 
     training_logs = {}
 
     def player_loss_fn(params: Params):
 
-        player_pred = player_state.apply_fn(
+        learner_player_pred = player_state.apply_fn(
             params,
             player_actor_input,
             player_transitions.agent_output.actor_output,
             HeadParams(),
         )
 
-        learner_value_head = player_pred.value_head
-        learner_action_head = player_pred.action_head
-        learner_conditional_entropy_head = player_pred.conditional_entropy_head
-
+        learner_value_head = learner_player_pred.value_head
+        learner_action_head = learner_player_pred.action_head
+        learner_conditional_entropy_head = learner_player_pred.conditional_entropy_head
+        learner_potential_value_head = learner_player_pred.potential_value_head
         learner_log_prob = learner_action_head.log_prob
+
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
-        ratio = learner_actor_ratio
+        learner_target_log_ratio = learner_log_prob - player_target_log_prob
+        learner_target_ratio = jnp.exp(learner_target_log_ratio)
+
+        player_policy_ratio = player_actor_target_clipped_ratio * learner_actor_ratio
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
-            policy_ratios=ratio,
+            policy_ratios=player_policy_ratio,
             advantages=player_advantages,
             valid=player_valid,
             clip_ppo=config.clip_ppo,
@@ -122,7 +150,7 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits, labels=player_returns
+                logits=learner_value_head.logits, labels=player_win_returns
             ),
             player_valid,
         )
@@ -142,17 +170,24 @@ def train_step(
 
         loss_conditional_entropy = mse_value_loss(
             pred=learner_conditional_entropy_head.logits,
-            target=player_ent_returns,
+            target=player_targets.ent_returns,
+            valid=player_valid,
+        )
+
+        loss_potential_value = mse_value_loss(
+            pred=learner_potential_value_head.logits,
+            target=player_targets.potential_returns,
             valid=player_valid,
         )
 
         loss_magnet_kl = -average(learner_action_head.kl_prior, valid=player_valid)
 
-        loss = ~no_valid * (
+        loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
+            + config.player_state_potential_loss_coef * loss_potential_value
             + player_entropy_temp * loss_magnet_kl
         )
 
@@ -162,20 +197,24 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
+            player_loss_potential_value=loss_potential_value,
             player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
             player_ratio_clip_fraction=clip_fraction(
-                policy_ratios=ratio, valid=player_valid, clip_ppo=config.clip_ppo
+                policy_ratios=player_policy_ratio,
+                valid=player_valid,
+                clip_ppo=config.clip_ppo,
             ),
             player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
+            player_learner_target_ratio=average(learner_target_ratio, player_valid),
             # Approx KL values
             player_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
             player_value_function_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
-                value_target=player_returns @ cat_vf_support,
+                value_target=player_returns.win_returns @ cat_vf_support,
                 mask=player_valid,
             ),
             player_conditional_entropy_head_mean=average(
@@ -186,16 +225,17 @@ def train_step(
             ),
         )
 
-    mean_abs_ent = average(jnp.abs(player_ent_advantages), player_valid)
-    mean_abs_win = average(jnp.abs(player_win_advantages), player_valid)
-    player_ent_win_adv_ratio = mean_abs_ent / (mean_abs_win + 1e-8)
+    mean_abs_win = average(jnp.abs(player_targets.win_advantages), player_valid)
+    mean_abs_ent = average(
+        jnp.abs(player_entropy_temp * player_targets.ent_advantages), player_valid
+    )
+    mean_abs_pot = average(
+        jnp.abs(player_entropy_temp * player_targets.potential_advantages), player_valid
+    )
+    total_signal_denom = mean_abs_win + mean_abs_ent + mean_abs_pot + 1e-8
 
-    # A cosine similarity near 0 means the entropy advantage is doing
-    # completely different work than the win advantage.
-    dot_product = jnp.sum(player_ent_advantages * player_win_advantages * player_valid)
-    norm_ent = jnp.sqrt(jnp.sum(jnp.square(player_ent_advantages) * player_valid))
-    norm_win = jnp.sqrt(jnp.sum(jnp.square(player_win_advantages) * player_valid))
-    player_ent_win_adv_cosine_sim = dot_product / (norm_ent * norm_win + 1e-8)
+    player_ent_win_adv_ratio = mean_abs_ent / total_signal_denom
+    player_pot_win_adv_ratio = mean_abs_pot / total_signal_denom
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
@@ -209,16 +249,22 @@ def train_step(
             )
             .sum(axis=0)
             .mean(),
+            player_win_return_correction=average(
+                win_return_correction.reshape(player_valid.shape), player_valid
+            ),
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["action_head"]
             ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["winloss_value_head"]
+                player_grads["params"]["winloss_head"]
             ),
             player_conditional_entropy_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["conditional_entropy_head"]
+            ),
+            player_potential_value_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["potential_value_head"]
             ),
             player_local_timestep_encoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_encoder"]
@@ -229,16 +275,13 @@ def train_step(
             player_history_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["history_decoder"]
             ),
-            player_latent_state_encoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["latent_state_encoder"]
-            ),
-            player_output_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["output_decoder"]
+            player_state_transformer_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["state_transformer"]
             ),
             player_norm_adv_mean=average(player_advantages, player_valid),
             player_norm_adv_std=player_advantages.std(where=player_valid),
             player_ent_win_adv_ratio=player_ent_win_adv_ratio,
-            player_ent_win_cosine_sim=player_ent_win_adv_cosine_sim,
+            player_pot_win_adv_ratio=player_pot_win_adv_ratio,
         )
     )
 
@@ -246,6 +289,11 @@ def train_step(
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
+        target_params=optax.incremental_update(
+            player_state.params,
+            player_state.target_params,
+            config.player_ema_update_rate,
+        ),
     )
 
     # --- Builder ---
@@ -255,10 +303,30 @@ def train_step(
             env=builder_transitions.env_output,
             history=builder_history,
         )
+
+        builder_target_pred = builder_state.apply_fn(
+            builder_state.target_params,
+            builder_actor_input,
+            builder_transitions.agent_output.actor_output,
+            HeadParams(),
+        )
+
         builder_actor_action_head = (
             builder_transitions.agent_output.actor_output.action_head
         )
+
+        # Calculate importance sampling ratios for off-policy correction.
         builder_actor_log_prob = builder_actor_action_head.log_prob
+        builder_target_log_prob = builder_target_pred.action_head.log_prob
+        builder_actor_target_log_ratio = (
+            builder_actor_log_prob - builder_target_log_prob
+        )
+        builder_actor_target_ratio = jnp.exp(builder_actor_target_log_ratio)
+        builder_target_actor_ratio = jnp.exp(-builder_actor_target_log_ratio)
+        builder_actor_target_clipped_ratio = jnp.clip(
+            builder_actor_target_ratio, min=0.0, max=2.0
+        )
+
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
         builder_entropy_temp = power_schedule(
@@ -269,19 +337,28 @@ def train_step(
             config.builder_entropy_temp_ceil,
         )
 
-        # Targets are pre-computed at buffer add time; cast to the model's float dtype.
-        # The entropy temperature changes with the step count, so the raw (unscaled)
-        # entropy advantages are cached and the scalar multiplication is applied here.
-        builder_returns = batch.builder_targets.returns.astype(float_dtype)
-        ent_returns = batch.builder_targets.ent_returns.astype(float_dtype)
-        builder_win_advantages = batch.builder_targets.win_advantages.astype(
-            float_dtype
+        # Compute builder targets inside train_step (JAX/JIT compatible).
+        builder_targets = compute_builder_targets(
+            batch,
+            builder_target_pred,
+            builder_target_actor_ratio,
+            td_lambda=config.builder_td_lambda,
+            gae_lambda=config.builder_gae_lambda,
+            entropy_normalising_constant=config.builder_entropy_prediction_normalising_constant,
         )
-        builder_ent_advantages = (
-            builder_entropy_temp
-            * batch.builder_targets.raw_ent_advantages.astype(float_dtype)
+        builder_returns = promote_map(builder_targets, float_dtype)
+
+        builder_advantages = (
+            builder_targets.win_advantages
+            + builder_entropy_temp * builder_targets.ent_advantages
         )
-        builder_advantages = builder_win_advantages + builder_ent_advantages
+
+        builder_win_return_correction = builder_targets.win_returns.sum(
+            axis=-1, keepdims=True
+        )
+        builder_win_returns = (
+            builder_targets.win_returns / builder_win_return_correction
+        )
 
         def builder_loss_fn(params: Params):
 
@@ -300,9 +377,16 @@ def train_step(
             learner_actor_log_ratio = learner_log_prob - builder_actor_log_prob
             learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
 
+            learner_target_log_ratio = learner_log_prob - builder_target_log_prob
+            learner_target_ratio = jnp.exp(learner_target_log_ratio)
+
+            builder_policy_ratio = (
+                builder_actor_target_clipped_ratio * learner_actor_ratio
+            )
+
             # Calculate the losses.
             loss_pg = policy_gradient_loss(
-                policy_ratios=learner_actor_ratio,
+                policy_ratios=builder_policy_ratio,
                 advantages=builder_advantages,
                 valid=builder_valid,
                 clip_ppo=config.clip_ppo,
@@ -310,7 +394,7 @@ def train_step(
 
             loss_v = average(
                 optax.softmax_cross_entropy(
-                    logits=learner_value_head.logits, labels=builder_returns
+                    logits=learner_value_head.logits, labels=builder_win_returns
                 ),
                 builder_valid,
             )
@@ -318,7 +402,7 @@ def train_step(
             loss_builder_entropy = -average(learner_action_head.entropy, builder_valid)
             loss_builder_conditional_entropy = mse_value_loss(
                 pred=learner_conditional_entropy_head.logits,
-                target=ent_returns,
+                target=builder_targets.ent_returns,
                 valid=builder_valid,
             )
 
@@ -369,6 +453,9 @@ def train_step(
                     clip_ppo=config.clip_ppo,
                 ),
                 builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
+                builder_learner_target_ratio=average(
+                    learner_target_ratio, builder_valid
+                ),
                 # Approx KL values
                 builder_learner_actor_approx_kl=loss_forward_kl,
                 builder_learner_condtional_entropy_head_mean=average(
@@ -380,10 +467,20 @@ def train_step(
                 # Extra stats
                 builder_value_function_r2=calculate_r2(
                     value_prediction=learner_value_head.expectation,
-                    value_target=builder_returns @ cat_vf_support,
+                    value_target=builder_returns.win_returns @ cat_vf_support,
                     mask=builder_valid,
                 ),
             )
+
+        builder_mean_abs_ent = average(
+            jnp.abs(builder_targets.ent_advantages), builder_valid
+        )
+        builder_mean_abs_win = average(
+            jnp.abs(builder_targets.win_advantages), builder_valid
+        )
+        builder_total_signal_denom = builder_mean_abs_win + builder_mean_abs_ent + 1e-8
+
+        builder_ent_win_adv_ratio = builder_mean_abs_ent / builder_total_signal_denom
 
         builder_grad_fn = jax.value_and_grad(builder_loss_fn, has_aux=True)
         (builder_loss_val, builder_logs), builder_grads = builder_grad_fn(
@@ -393,23 +490,35 @@ def train_step(
         training_logs.update(
             dict(
                 builder_loss=builder_loss_val,
+                builder_win_return_correction=average(
+                    builder_win_return_correction.reshape(builder_valid.shape),
+                    builder_valid,
+                ),
+                builder_nll_sum=(
+                    batch.builder_transitions.agent_output.actor_output.action_head.log_prob
+                    * builder_valid
+                )
+                .sum(axis=0)
+                .mean(),
                 builder_param_norm=optax.global_norm(builder_state.params),
                 builder_gradient_norm=optax.global_norm(builder_grads),
                 builder_norm_adv_mean=average(builder_advantages, builder_valid),
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
-                builder_ent_win_adv_ratio=average(
-                    jnp.abs(builder_ent_advantages), builder_valid
-                )
-                / (average(jnp.abs(builder_win_advantages), builder_valid) + 1e-8),
+                builder_ent_win_adv_ratio=builder_ent_win_adv_ratio,
             )
         )
         builder_state = builder_state.apply_gradients(grads=builder_grads)
         builder_state = builder_state.replace(
             step_count=builder_state.step_count + 1,
             frame_count=builder_state.frame_count + builder_valid.sum(),
+            target_params=optax.incremental_update(
+                builder_state.params,
+                builder_state.target_params,
+                config.builder_ema_update_rate,
+            ),
         )
 
-    training_logs.update(collect_batch_telemetry_data(batch, config))
+    training_logs.update(collect_batch_telemetry_data(batch, config, player_targets))
     training_logs.update(
         dict(
             player_frame_count=player_state.frame_count,
@@ -453,10 +562,6 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
-        player_targets=jax.tree.map(
-            lambda x: x[:num_valid], stacked_trajectory.player_targets
-        ),
-        builder_targets=stacked_trajectory.builder_targets,
     )
 
 
@@ -489,8 +594,6 @@ class Learner:
             max_size=self.config.player_replay_buffer_capacity,
             max_reuses=self.config.player_replay_ratio,
             need_tracking=is_not_randoms,
-            learner_config=self.config,
-            compute_builder=is_not_randoms,
         )
 
         # Threading
