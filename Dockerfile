@@ -5,9 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install system dependencies: Python, Node.js, tmux, git, protobuf compiler
 RUN apt-get update && \
     apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
+        python3.11 \
+        python3.11-venv \
         curl \
         tmux \
         git \
@@ -39,19 +38,19 @@ RUN cd data && npm install
 # Copy the rest of the application
 COPY . .
 
-ENV PYTHONPATH="/app:${PYTHONPATH}"
+ENV PYTHONPATH="/app"
 
 # Create a virtual environment and install all Python dependencies
 # (requirements.txt already includes JAX with CUDA 13 support)
-RUN python3 -m venv env && \
+RUN python3.11 -m venv env && \
     . env/bin/activate && \
     pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install -r requirements.txt && \
+    pip install jax[cuda13] 
 
 # Generate indices from Pokemon Showdown data
-RUN . env/bin/activate && make datas
+RUN . env/bin/activate
 
-# Compile protocol buffer definitions for Python and TypeScript
-RUN . env/bin/activate && make protos
+RUN make datas && make protos
 
 CMD ["/app/start.sh"]
