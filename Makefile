@@ -17,3 +17,6 @@ kill:
 	-tmux kill-server 2>/dev/null
 	-killall -9 python 2>/dev/null
 	-killall -9 node 2>/dev/null
+
+build:
+	sudo docker build -t porygon2:latest .
