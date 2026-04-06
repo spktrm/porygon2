@@ -9,7 +9,6 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
-from rl.learner.loss import approx_backward_kl
 
 
 def segmented_cumsum(x: jax.Array, discount: jax.Array) -> jax.Array:

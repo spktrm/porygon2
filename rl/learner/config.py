@@ -56,7 +56,7 @@ class Porygon2LearnerConfig:
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
-    replay_buffer_min_fill_fraction: float = 1 / 8
+    replay_buffer_min_fill_fraction: float = 1 / 20
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -278,12 +278,14 @@ def save_state(
         opt_state=player_state.opt_state,
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
+        target_params=player_state.target_params,
     )
     data["builder_state"] = dict(
         params=builder_state.params,
         opt_state=builder_state.opt_state,
         step_count=builder_state.step_count,
         frame_count=builder_state.frame_count,
+        target_params=builder_state.target_params,
     )
     data["league"] = league.serialize()
     with open(save_path, "wb") as f:
@@ -310,8 +312,8 @@ def _init_league(
             player_frame_count=np.array(player_state.frame_count).item(),
             builder_frame_count=np.array(builder_state.frame_count).item(),
             step_count=MAIN_KEY,
-            player_params=player_state.params,
-            builder_params=builder_state.params,
+            player_params=player_state.target_params,
+            builder_params=builder_state.target_params,
         ),
         players=[],
         league_size=learner_config.league_size,
@@ -371,6 +373,7 @@ def load_from_checkpoint(
     # Fully replace player state
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
+        target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
@@ -379,6 +382,7 @@ def load_from_checkpoint(
     # Fully replace builder state
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],
+        target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
         step_count=ckpt_builder_state["step_count"],
         frame_count=ckpt_builder_state["frame_count"],
