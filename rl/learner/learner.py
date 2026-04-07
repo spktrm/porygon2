@@ -230,7 +230,11 @@ def train_step(
         jnp.abs(player_entropy_temp * player_targets.ent_advantages), player_valid
     )
     mean_abs_pot = average(
-        jnp.abs(player_entropy_temp * player_targets.potential_advantages), player_valid
+        jnp.abs(
+            config.player_potential_advantage_scale
+            * player_targets.potential_advantages
+        ),
+        player_valid,
     )
     total_signal_denom = mean_abs_win + mean_abs_ent + mean_abs_pot + 1e-8
 
@@ -266,8 +270,8 @@ def train_step(
             player_potential_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["potential_value_head"]
             ),
-            player_local_timestep_encoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["local_timestep_encoder"]
+            player_local_local_timestep_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["local_local_timestep_decoder"]
             ),
             player_input_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["input_decoder"]

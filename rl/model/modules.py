@@ -115,6 +115,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
+    slots: Optional[int] = None
 
     @nn.compact
     def __call__(
@@ -187,12 +188,12 @@ class MultiHeadAttention(nn.Module):
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
 
         attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
-        attn_log_probs = nn.log_softmax(attn_logits, axis=-1)
+        attn_log_probs = nn.log_softmax(attn_logits, axis=self.slots or -1)
         attn_probs = jnp.exp(attn_log_probs)
         attn_probs = jnp.where(mask, attn_probs, 0)
 
-        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / math.log(
-            attn_probs.shape[-1]
+        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
+            mask.sum(axis=-1).clip(min=1)
         )
 
         # Weight the values by the attention and flatten the head vectors.
@@ -259,6 +260,7 @@ class TransformerEncoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
+    slots: Optional[int] = None
 
     def layer(
         self,
@@ -278,6 +280,7 @@ class TransformerEncoder(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
+            slots=self.slots,
         )(
             q=qkv_ln,
             kv=qkv_ln,
@@ -352,6 +355,7 @@ class TransformerDecoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
+    slots: Optional[int] = None
 
     def layer(
         self,
@@ -374,6 +378,7 @@ class TransformerDecoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
+            slots=self.slots,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -461,6 +466,7 @@ class Transformer(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
+    slots: Optional[int] = None
 
     def decoder_layer(
         self,
@@ -483,6 +489,7 @@ class Transformer(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
+            slots=self.slots,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -527,6 +534,7 @@ class Transformer(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
+            slots=self.slots,
         )(
             q=qkv_ln,
             kv=qkv_ln,
