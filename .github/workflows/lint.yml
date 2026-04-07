@@ -1,0 +1,40 @@
+name: Lint Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python lint tools
+        run: pip install autoflake==2.3.3 isort==8.0.1 black==26.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies (service)
+        run: npm ci
+        working-directory: service
+
+      - name: Install Node dependencies (data)
+        run: npm ci
+        working-directory: data
+
+      - name: Run lint
+        run: make lint
+
+      - name: Check for diff
+        run: git diff --exit-code

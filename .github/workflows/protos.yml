@@ -1,0 +1,52 @@
+name: Protos Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  protos:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create Python virtual environment
+        run: python -m venv env
+
+      - name: Install Python dependencies
+        run: |
+          . env/bin/activate
+          pip install grpcio-tools==1.71.0 fix-protobuf-imports==0.1.7
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install protolint
+        run: go install github.com/yoheimuta/protolint/cmd/protolint@latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies (service)
+        run: npm ci
+        working-directory: service
+
+      - name: Install grpc-tools for protoc
+        run: npm install -g grpc-tools@1.12.4
+
+      - name: Run protos
+        run: make protos
+
+      - name: Check for diff
+        run: git diff --exit-code
