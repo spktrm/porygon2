@@ -89,13 +89,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         init_residual_scale=decoder_init_residual_scale,
     )
 
-    cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.local_timestep_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.state_transformer = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [cfg.encoder.timestep_encoder]:
+    for encoder in [cfg.encoder.local_timestep_decoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
@@ -107,7 +107,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
 
-    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.local_timestep_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.state_transformer.num_layers = 4

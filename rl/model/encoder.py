@@ -49,7 +49,6 @@ from rl.model.modules import (
     SumEmbeddings,
     Transformer,
     TransformerDecoder,
-    TransformerEncoder,
     create_attention_mask,
     one_hot_concat_jax,
 )
@@ -325,8 +324,11 @@ class Encoder(nn.Module):
         )
 
         # Timestep wise graph attention layers
-        self.local_timestep_encoder = TransformerEncoder(
-            **self.cfg.timestep_encoder.to_dict()
+        self.local_timestep_embedding = nn.Embed(
+            8, name="local_timestep_embedding", **embed_kwargs
+        )
+        self.local_timestep_decoder = TransformerDecoder(
+            **self.cfg.local_timestep_decoder.to_dict()
         )
         self.local_timestep_linear = nn.Dense(
             name="local_timestep_linear", use_bias=False, **dense_kwargs
@@ -949,23 +951,19 @@ class Encoder(nn.Module):
         node_embeddings = jnp.take(entity_embedding_cache, relevant_indices, axis=0)
         edge_embeddings = jnp.take(edge_embedding_cache, relevant_indices, axis=0)
 
-        local_sequence = jnp.concatenate(
-            (field_embeddings, node_embeddings + edge_embeddings), axis=0
-        )
-        sequence_mask = jnp.concatenate(
-            (jnp.ones(3, dtype=jnp.bool), node_edge_mask), axis=0
-        )
-
-        positions = (jnp.arange(local_sequence.shape[0]) - 2).clip(min=0)
-        local_sequence = self.local_timestep_encoder(
-            qkv=self.local_timestep_norm(local_sequence),
-            attn_mask=create_attention_mask(sequence_mask),
-            qkv_positions=positions,
+        local_sequence = self.local_timestep_decoder(
+            q=self.local_timestep_norm(field_embeddings),
+            kv=node_embeddings
+            + edge_embeddings
+            + self.local_timestep_embedding(jnp.arange(relevant_indices.shape[0])),
+            attn_mask=create_attention_mask(
+                jnp.ones(3, dtype=jnp.bool), node_edge_mask
+            ),
         )
 
         # Extract the timestep embedding corresponding to the CLS token.
         local_timestep_embedding = self.local_timestep_linear(
-            local_sequence[:3].reshape(-1)
+            local_sequence.reshape(-1)
         )
 
         return local_timestep_embedding, valid_timestep_mask, history_request_count
