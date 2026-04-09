@@ -3,8 +3,13 @@ from typing import Optional
 
 import flax.linen as nn
 import jax
+import jax.nn.initializers as initjax
 import jax.numpy as jnp
 import numpy as np
+from flax import linen as nn
+from flax.linen.dtypes import promote_dtype
+from flax.linen.module import compact
+from jax import lax
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -27,6 +32,87 @@ class RMSNorm(nn.Module):
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1)).astype(x.dtype)
         return normed_inputs * (1 + scale)
+
+
+class SNDense(nn.Module):
+    """A linear transformation applied over the last dimension of the input with sigmaReparam.
+    Attributes:
+        features: the number of output features.
+        use_bias: whether to add a bias to the output (default: True).
+        dtype: the dtype of the computation (default: infer from input and params).
+        param_dtype: the dtype passed to parameter initializers (default: float32).
+        precision: numerical precision of the computation see `jax.lax.Precision`
+        for details.
+        kernel_init: initializer function for the weight matrix.
+        bias_init: initializer function for the bias.
+    """
+
+    features: int
+    use_bias: bool = True
+    dtype: jnp.dtype | None = None
+    std_init: float = 0.1
+    denom_backward: bool = True
+
+    @compact
+    def __call__(self, inputs: jax.Array) -> jax.Array:
+        """Applies a linear transformation to the inputs along the last dimension.
+        Args:
+            inputs: The nd-array to be transformed.
+        Returns:
+            The transformed input.
+        """
+        initializing = self.is_mutable_collection("params")
+
+        kernel = self.param(
+            "kernel",
+            initjax.normal(self.std_init),
+            (jnp.shape(inputs)[-1], self.features),
+        )
+
+        if self.use_bias:
+            bias = self.param("bias", nn.initializers.zeros_init(), (self.features,))
+        else:
+            bias = None
+
+        # fake init
+        s = jnp.ones((1, 1))
+        vh = jnp.ones((1))
+        if initializing:
+            _, s, vh = lax.stop_gradient(jnp.linalg.svd(kernel, full_matrices=False))
+        sigma_param = self.param("sigma", nn.initializers.ones_init(), (1,))
+        spectral_u_var = self.variable(
+            "spectral", "u", lambda shape: jnp.ones(shape) * vh[0], vh[0].shape
+        )
+        spectral_norm_var = self.variable(
+            "spectral", "norm", lambda shape: jnp.ones(shape) * s[0], (1,)
+        )
+        inputs, kernel, bias = promote_dtype(inputs, kernel, bias, dtype=self.dtype)
+        # power method to compute spectral norm
+        u = spectral_u_var.value
+        v = lax.stop_gradient(jnp.matmul(kernel, u))
+        # l2 norm
+        v = lax.stop_gradient(v / jnp.linalg.norm(v, ord=2))
+        u = lax.stop_gradient(jnp.matmul(jnp.transpose(kernel), v))
+        # l2 norm
+        u = lax.stop_gradient(u / jnp.linalg.norm(u, ord=2))
+        if spectral_u_var.is_mutable() and not initializing:
+            spectral_u_var.value = u
+        sigma = jnp.einsum("c,cd,d->", v, kernel, u)
+
+        if spectral_norm_var.is_mutable() and not initializing:
+            spectral_norm_var.value = sigma
+
+        inputs, sigma_param, sigma = promote_dtype(
+            inputs, sigma_param, sigma, dtype=self.dtype
+        )
+        y = lax.dot_general(
+            inputs,
+            (sigma_param / sigma) * kernel,
+            (((inputs.ndim - 1,), (0,)), ((), ())),
+        )
+        if bias is not None:
+            y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
+        return y
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -133,19 +219,19 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = nn.Dense(
+        query_heads = SNDense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = nn.Dense(
+        key_heads = SNDense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
-        value_heads = nn.Dense(
+        value_heads = SNDense(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
@@ -193,7 +279,7 @@ class MultiHeadAttention(nn.Module):
         attn_probs = jnp.where(mask, attn_probs, 0)
 
         attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
-            mask.sum(axis=-1).clip(min=1)
+            mask.sum(axis=-1, dtype=attn_probs.dtype).clip(min=1)
         )
 
         # Weight the values by the attention and flatten the head vectors.
@@ -201,7 +287,7 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = nn.Dense(
+        final_projection = SNDense(
             model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
@@ -651,10 +737,10 @@ class FFWMLP(nn.Module):
         """
         inp_size = x.shape[-1]
 
-        gating_layer = nn.Dense(
+        gating_layer = SNDense(
             2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias
         )
-        output_layer = nn.Dense(
+        output_layer = SNDense(
             self.output_size or inp_size, dtype=x.dtype, use_bias=self.use_bias
         )
 

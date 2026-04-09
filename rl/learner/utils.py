@@ -109,14 +109,24 @@ def collect_batch_telemetry_data(
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
-        player_proactive_switch_advantange=average(
+        player_proactive_switch_win_advantange=average(
             player_targets.win_advantages, player_valid & did_switch & can_move
         ),
-        player_passive_switch_advantange=average(
+        player_passive_switch_win_advantange=average(
             player_targets.win_advantages, player_valid & did_switch & ~can_move
         ),
-        player_wildcard_hold_advantange=average(
+        player_wildcard_hold_win_advantange=average(
             player_targets.win_advantages,
+            player_valid & did_move & ~did_wildcard & can_wildcard,
+        ),
+        player_proactive_switch_pot_advantange=average(
+            player_targets.potential_advantages, player_valid & did_switch & can_move
+        ),
+        player_passive_switch_pot_advantange=average(
+            player_targets.potential_advantages, player_valid & did_switch & ~can_move
+        ),
+        player_wildcard_hold_pot_advantange=average(
+            player_targets.potential_advantages,
             player_valid & did_move & ~did_wildcard & can_wildcard,
         ),
         move_ratio=move_ratio,

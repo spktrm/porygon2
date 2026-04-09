@@ -121,10 +121,18 @@ class InferenceModel:
 
         agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
-        return StepResponse(
-            v=actor_output.value_head.expectation.item(),
+
+        floats = dict(
+            v_win=actor_output.value_head.expectation.item(),
+            v_ent=actor_output.conditional_entropy_head.logits.item(),
+            v_pot=actor_output.potential_value_head.logits.item(),
             log_prob=actor_output.action_head.log_prob.item(),
             entropy=actor_output.action_head.entropy.item(),
+        )
+        floats = {k: round(v, 3) for k, v in floats.items()}
+
+        return StepResponse(
+            **floats,
             src=agent_output.actor_output.action_head.src_index.item(),
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
