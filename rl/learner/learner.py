@@ -30,7 +30,6 @@ from rl.learner.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    power_schedule,
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
@@ -83,13 +82,6 @@ def train_step(
     float_dtype = player_actor_log_prob.dtype
 
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
-    player_entropy_temp = power_schedule(
-        config.player_temp_coef,
-        jnp.floor(player_state.step_count / config.gradient_accumulation_steps),
-        config.player_entropy_temp_decay,
-        config.player_entropy_temp_floor,
-        config.player_entropy_temp_ceil,
-    )
 
     # --- Player ---
     # Compute targets inside train_step (JAX/JIT compatible).
@@ -97,8 +89,7 @@ def train_step(
         batch,
         player_target_pred,
         importance_sampling_ratios=player_target_actor_ratio,
-        td_lambda=config.player_td_lambda,
-        gae_lambda=config.player_gae_lambda,
+        lambda_=config.player_lambda,
         entropy_normalising_constant=config.player_entropy_prediction_normalising_constant,
     )
     player_returns = promote_map(player_targets, float_dtype)
@@ -107,7 +98,7 @@ def train_step(
 
     player_advantages = (
         player_targets.win_advantages
-        + player_entropy_temp * player_targets.ent_advantages
+        + config.player_entropy_advantage_scale * player_targets.ent_advantages
         + config.player_potential_advantage_scale * player_targets.potential_advantages
     )
 
@@ -186,9 +177,9 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
+            + config.player_entropy_loss_coef * loss_magnet_kl
             + config.player_conditional_entropy_loss_coef * loss_conditional_entropy
             + config.player_state_potential_loss_coef * loss_potential_value
-            + player_entropy_temp * loss_magnet_kl
         )
 
         return loss, dict(
@@ -227,7 +218,8 @@ def train_step(
 
     mean_abs_win = average(jnp.abs(player_targets.win_advantages), player_valid)
     mean_abs_ent = average(
-        jnp.abs(player_entropy_temp * player_targets.ent_advantages), player_valid
+        jnp.abs(config.player_entropy_advantage_scale * player_targets.ent_advantages),
+        player_valid,
     )
     mean_abs_pot = average(
         jnp.abs(
@@ -270,8 +262,8 @@ def train_step(
             player_potential_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["potential_value_head"]
             ),
-            player_local_local_timestep_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["local_local_timestep_decoder"]
+            player_local_timestep_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["local_timestep_decoder"]
             ),
             player_input_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["input_decoder"]
@@ -301,7 +293,6 @@ def train_step(
     )
 
     # --- Builder ---
-    builder_entropy_temp = 0.0
     if config.smogon_format != "randombattle":
         builder_actor_input = BuilderActorInput(
             env=builder_transitions.env_output,
@@ -333,28 +324,19 @@ def train_step(
 
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
 
-        builder_entropy_temp = power_schedule(
-            config.builder_temp_coef,
-            jnp.floor(builder_state.step_count / config.gradient_accumulation_steps),
-            config.builder_entropy_temp_decay,
-            config.builder_entropy_temp_floor,
-            config.builder_entropy_temp_ceil,
-        )
-
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
             batch,
             builder_target_pred,
             builder_target_actor_ratio,
-            td_lambda=config.builder_td_lambda,
-            gae_lambda=config.builder_gae_lambda,
+            lambda_=config.builder_lambda,
             entropy_normalising_constant=config.builder_entropy_prediction_normalising_constant,
         )
         builder_returns = promote_map(builder_targets, float_dtype)
 
         builder_advantages = (
             builder_targets.win_advantages
-            + builder_entropy_temp * builder_targets.ent_advantages
+            + config.builder_entropy_advantage_scale * builder_targets.ent_advantages
         )
 
         builder_win_return_correction = builder_targets.win_returns.sum(
@@ -528,8 +510,6 @@ def train_step(
             player_frame_count=player_state.frame_count,
             builder_frame_count=builder_state.frame_count,
             training_step=player_state.step_count,
-            player_entropy_decay_coeff=player_entropy_temp,
-            builder_entropy_decay_coeff=builder_entropy_temp,
         )
     )
 

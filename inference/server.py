@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from constants import NUM_HISTORY
+
 load_dotenv()
 import secrets
 from typing import Literal
@@ -54,7 +56,7 @@ async def step(request: Request) -> StepResponse:
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
-    ts = process_state(state, max_history=512)
+    ts = process_state(state, max_history=NUM_HISTORY)
     response = await run_in_threadpool(model.step, ts)
     pprint(response)
 

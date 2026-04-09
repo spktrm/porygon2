@@ -81,10 +81,8 @@ class Porygon2LearnerConfig:
     builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
-    player_td_lambda: float = 0.95
-    player_gae_lambda: float = 0.95
-    builder_td_lambda: float = 0.95
-    builder_gae_lambda: float = 0.95
+    player_lambda: float = 0.95
+    builder_lambda: float = 0.95
     clip_ppo: float = 0.3
 
     # Loss coefficients
@@ -92,29 +90,23 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
+    player_entropy_loss_coef: float = 0.01
     player_conditional_entropy_loss_coef: float = 1.0
     player_state_potential_loss_coef: float = 1.0
     player_entropy_prediction_normalising_constant: float = 50
-    player_potential_advantage_scale: float = 0.1
+    player_potential_advantage_scale: float = 0.0
+    player_entropy_advantage_scale: float = 1e-3
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 0.01
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 0
+    builder_entropy_coef: float = 0.01
     builder_entropy_prediction_normalising_constant: float = 100
+    builder_entropy_advantage_scale: float = 1e-3
     # Human
     builder_human_loss_coef: float = 1e-2
-
-    player_temp_coef: float = 0.02
-    player_entropy_temp_decay: float = 0.0
-    player_entropy_temp_ceil: float = 1.0
-    player_entropy_temp_floor: float = 1e-3
-
-    builder_temp_coef: float = 0.3
-    builder_entropy_temp_decay: float = 0.3
-    builder_entropy_temp_ceil: float = 1.0
-    builder_entropy_temp_floor: float = 1e-3
 
     # Smogon Generation
     generation: GenT = 9
