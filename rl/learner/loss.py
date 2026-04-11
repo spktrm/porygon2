@@ -28,15 +28,44 @@ def ppo_objective(
     return jnp.minimum(l1, l2)
 
 
+def off_policy_neurd_objective(
+    *,
+    centered_action_logit: jax.Array,
+    policy_ratios: jax.Array,
+    advantages: jax.Array,
+    threshold: float,
+):
+    """Objective taken from NEURD paper: https://arxiv.org/pdf/2211.13227.pdf"""
+
+    can_decrease = (centered_action_logit > -threshold).astype(jnp.float32)
+    can_increase = (centered_action_logit < threshold).astype(jnp.float32)
+
+    corrected_advantages = advantages * policy_ratios
+    regrets_negative = jnp.clip(corrected_advantages, a_max=0.0)
+    regrets_positive = jnp.clip(corrected_advantages, a_min=0.0)
+
+    advantages_clipped = (
+        regrets_negative * can_decrease + regrets_positive * can_increase
+    )
+
+    # 2. Apply it as the scalar multiplier
+    return advantages_clipped * centered_action_logit
+
+
 def policy_gradient_loss(
     *,
+    centered_action_logit: jax.Array,
     policy_ratios: jax.Array,
     advantages: jax.Array,
     valid: jax.Array,
     clip_ppo: float,
+    threshold: float,
 ):
-    pg_loss = spo_objective(
-        policy_ratios=policy_ratios, advantages=advantages, clip_ppo=clip_ppo
+    pg_loss = off_policy_neurd_objective(
+        centered_action_logit=centered_action_logit,
+        policy_ratios=policy_ratios,
+        advantages=advantages,
+        threshold=threshold,
     )
     return -average(pg_loss, valid)
 
