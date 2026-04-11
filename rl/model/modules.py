@@ -1,4 +1,5 @@
 import math
+from sys import implementation
 from typing import Optional
 
 import flax.linen as nn
@@ -202,6 +203,7 @@ class MultiHeadAttention(nn.Module):
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
     slots: Optional[int] = None
+    implementation: Optional[str] = None  # "cudnn"
 
     @nn.compact
     def __call__(
@@ -219,19 +221,19 @@ class MultiHeadAttention(nn.Module):
         v_size = self.v_size or self.qk_size
         model_size = self.model_size or self.qk_size * self.num_heads
 
-        query_heads = SNDense(
+        query_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="q_proj",
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
-        key_heads = SNDense(
+        key_heads = nn.Dense(
             self.num_heads * qk_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
             name="k_proj",
         )(kv).reshape((*kv_leading_dims, self.num_heads, qk_size))
-        value_heads = SNDense(
+        value_heads = nn.Dense(
             self.num_heads * v_size,
             use_bias=self.use_bias,
             dtype=self.dtype,
@@ -269,25 +271,21 @@ class MultiHeadAttention(nn.Module):
                 *key_heads.shape
             )
 
-        # Compute attention weights.
-        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+        target_shape = list(mask.shape)
+        target_shape[-3] = self.num_heads
+        mask = jnp.broadcast_to(mask, target_shape)
 
-        attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
-        attn_log_probs = nn.log_softmax(attn_logits, axis=self.slots or -1)
-        attn_probs = jnp.exp(attn_log_probs)
-        attn_probs = jnp.where(mask, attn_probs, 0)
-
-        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
-            mask.sum(axis=-1, dtype=attn_probs.dtype).clip(min=1)
+        attn = jax.nn.dot_product_attention(
+            query_heads,
+            key_heads,
+            value_heads,
+            mask=mask,
+            implementation=self.implementation,
         )
-
-        # Weight the values by the attention and flatten the head vectors.
-        attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.
-        final_projection = SNDense(
+        final_projection = nn.Dense(
             model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
         return final_projection(attn)  # [T', D']
@@ -312,8 +310,7 @@ def create_attention_mask(
     if mask2 is None:
         mask2 = mask1
 
-    mask = jnp.einsum("...s,...t->...st", mask1, mask2)
-    return jnp.expand_dims(mask, axis=-3)
+    return mask1[..., None, :, None] & mask2[..., None, None, :]
 
 
 def norm_ratio(x: jax.Array, y: jax.Array, axis: int = -1) -> jax.Array:
@@ -516,15 +513,13 @@ class TransformerDecoder(nn.Module):
             kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
             attn_mask = create_attention_mask(q_mask, kv_mask)
 
-        positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
+        positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(-3)
 
         if self.need_pos:
             if q_positions is None:
                 q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
             if kv_positions is None:
                 kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
-
-        q = layer_norm(q)
 
         for layer_idx in range(self.num_layers):
             q = self.layer(
@@ -664,19 +659,19 @@ class Transformer(nn.Module):
             kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
             cross_attn_mask = create_attention_mask(q_mask, kv_mask)
 
+        encoder_positionwise_mask = self_attn_mask.any(axis=-1, keepdims=True).squeeze(
+            -3
+        )
+        decoder_positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(
+            -3
+        )
+
         for layer_idx in range(self.num_layers):
             q = self.encoder_layer(
-                layer_idx,
-                q,
-                self_attn_mask,
-                self_attn_mask.any(axis=-1, keepdims=True).squeeze(0),
+                layer_idx, q, self_attn_mask, encoder_positionwise_mask
             )
             q = self.decoder_layer(
-                layer_idx,
-                q,
-                kv,
-                cross_attn_mask,
-                cross_attn_mask.any(axis=-1, keepdims=True).squeeze(0),
+                layer_idx, q, kv, cross_attn_mask, decoder_positionwise_mask
             )
 
         return q
@@ -737,16 +732,19 @@ class FFWMLP(nn.Module):
         """
         inp_size = x.shape[-1]
 
-        gating_layer = SNDense(
+        gating_layer = nn.Dense(
             2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias
         )
-        output_layer = SNDense(
+        output_layer = nn.Dense(
             self.output_size or inp_size, dtype=x.dtype, use_bias=self.use_bias
         )
 
         gate = gating_layer(x)
         gate_a, gate_b = jnp.split(gate, 2, axis=-1)
-        hidden = activation_fn(gate_a) * gate_b
+
+        # SwiGLU: Apply Swish (SiLU) to the first half, multiply by the second half
+        hidden = jax.nn.silu(gate_a) * gate_b
+
         return output_layer(hidden)
 
 

@@ -105,6 +105,13 @@ def train_step(
     win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
     player_win_returns = player_targets.win_returns / win_return_correction
 
+    num_valid_actions = player_transitions.env_output.action_mask.sum((-2, -1))
+    dynamic_threshold = 0.5 * jnp.log(
+        (num_valid_actions - 1)
+        * (1 - config.exploration_fraction)
+        / config.exploration_fraction
+    )
+
     training_logs = {}
 
     def player_loss_fn(params: Params):
@@ -132,10 +139,12 @@ def train_step(
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
+            centered_action_logit=learner_action_head.centered_action_logit,
             policy_ratios=player_policy_ratio,
             advantages=player_advantages,
             valid=player_valid,
             clip_ppo=config.clip_ppo,
+            threshold=dynamic_threshold,
         )
 
         # Softmax cross-entropy loss for value head
@@ -264,9 +273,6 @@ def train_step(
             ),
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]
-            ),
-            player_input_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["input_decoder"]
             ),
             player_history_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["history_decoder"]

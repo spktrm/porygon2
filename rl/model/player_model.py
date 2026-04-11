@@ -86,11 +86,17 @@ class Porygon2PlayerModel(nn.Module):
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
 
+        valid_logits = jnp.where(flat_valid_mask, logits, 0)
+        logit_valid_sum = valid_logits.sum(axis=-1)
+        mean_centered_logits = valid_logits - logit_valid_sum / valid_sum
+        centered_action_logit = jnp.take(mean_centered_logits, action_index, axis=-1)
+
         src_index = action_index // NUM_ACTION_FEATURES
         tgt_index = action_index % NUM_ACTION_FEATURES
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
+            centered_action_logit=centered_action_logit,
             log_prob=log_prob,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
