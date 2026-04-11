@@ -192,7 +192,7 @@ def main(args: argparse.Namespace):
         learner_config,
         player_state,
         builder_state,
-        mode="checkpoint",
+        mode="scratch",
     )
 
     logger.info("Initializing WandB...")
