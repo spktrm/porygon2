@@ -1,5 +1,4 @@
 import math
-from sys import implementation
 from typing import Optional
 
 import flax.linen as nn
