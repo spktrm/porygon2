@@ -666,11 +666,11 @@ class Transformer(nn.Module):
         )
 
         for layer_idx in range(self.num_layers):
-            q = self.encoder_layer(
-                layer_idx, q, self_attn_mask, encoder_positionwise_mask
-            )
             q = self.decoder_layer(
                 layer_idx, q, kv, cross_attn_mask, decoder_positionwise_mask
+            )
+            q = self.encoder_layer(
+                layer_idx, q, self_attn_mask, encoder_positionwise_mask
             )
 
         return q
@@ -868,7 +868,7 @@ class PointerLogits(nn.Module):
             key_heads = layer_norm(key_heads)
 
         # Compute attention weights.
-        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = jnp.einsum("...thd,...Thd->...tTh", query_heads, key_heads)
         if self.num_heads <= 1:
             attn_logits = attn_logits.squeeze(-3)
 

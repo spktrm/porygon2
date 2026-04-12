@@ -9,6 +9,7 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
+from rl.learner.config import Porygon2LearnerConfig
 
 
 def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax.Array:
@@ -39,8 +40,7 @@ def compute_player_targets(
     traj: Trajectory,
     target_pred: PlayerActorOutput,
     importance_sampling_ratios: jax.Array,
-    lambda_: float,
-    entropy_normalising_constant: float,
+    config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=importance_sampling_ratios.dtype)
     player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
@@ -55,15 +55,12 @@ def compute_player_targets(
     player_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = player_value_probs.shape[-1]
 
-    # Entropy
-    num_valid_actions = traj.player_transitions.env_output.action_mask.sum((-2, -1))
-    num_valid_actions_clipped = num_valid_actions.clip(max=13, min=1).astype(
-        importance_sampling_ratios.dtype
+    # Regularised reward
+    reg_reward = -config.player_regularised_reward_scale * (
+        traj.player_transitions.agent_output.actor_output.action_head.log_prob
+        - target_pred.action_head.log_prob
     )
-    kl_reward = target_pred.action_head.entropy - jnp.log(num_valid_actions_clipped)
-    player_ent_scaled = (
-        target_pred.conditional_entropy_head.logits * entropy_normalising_constant
-    )
+    player_ent_scaled = target_pred.conditional_entropy_head.logits
 
     # Potential
     state_pot = traj.player_transitions.env_output.state_potential
@@ -76,7 +73,7 @@ def compute_player_targets(
     # --- 2. Concatenate Rewards, Values, and Next Values ---
     # Shape: (T, B, n_bins + 2)
     combined_rewards = jnp.concatenate(
-        [player_reward, kl_reward[..., None], potential_reward[..., None]], axis=-1
+        [player_reward, reg_reward[..., None], potential_reward[..., None]], axis=-1
     )
 
     combined_values = jnp.concatenate(
@@ -110,13 +107,14 @@ def compute_player_targets(
 
     # --- 5. Discounts & Batched Segmented Cumsum ---
     vtrace_errors = vtrace(
-        combined_deltas, player_valid[..., None], c_t[..., None] * lambda_
+        combined_deltas, player_valid[..., None], c_t[..., None] * config.player_lambda
     )
 
     returns = vtrace_errors + combined_values
     q_bootstrap = jnp.concatenate(
         [
-            lambda_ * returns[1:] + (1 - lambda_) * combined_values[1:],
+            config.player_lambda * returns[1:]
+            + (1 - config.player_lambda) * combined_values[1:],
             combined_values[-1:],
         ],
         axis=0,
@@ -126,7 +124,7 @@ def compute_player_targets(
 
     # --- 6. Split Outputs ---
     win_returns = returns[..., :n_bins]
-    ent_returns = returns[..., n_bins] / entropy_normalising_constant
+    ent_returns = returns[..., n_bins]
     potential_returns = returns[..., n_bins + 1]
 
     return PlayerTargets(

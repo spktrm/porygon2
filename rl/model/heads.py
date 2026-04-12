@@ -37,7 +37,7 @@ class PolicyQKHead(nn.Module):
     ):
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(query_embedding[None], key_embeddings).squeeze(0)
+        logits = qk_logits(query_embedding[None], key_embeddings).squeeze(-1)
         logits = logits * (1 / (head_params.temp + 1e-8))
 
         if valid_mask is None:
@@ -84,7 +84,7 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.dense.to_dict())(x)
+        x = nn.Dense(**self.cfg.dense.to_dict(), dtype=x.dtype)(x)
 
         log_probs = nn.log_softmax(x, axis=-1)
         probs = jnp.exp(log_probs)
@@ -103,7 +103,7 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.dense.to_dict())(x)
+        x = nn.Dense(**self.cfg.dense.to_dict(), dtype=x.dtype)(x)
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
