@@ -89,8 +89,7 @@ def train_step(
         batch,
         player_target_pred,
         importance_sampling_ratios=player_target_actor_ratio,
-        lambda_=config.player_lambda,
-        entropy_normalising_constant=config.player_entropy_prediction_normalising_constant,
+        config=config,
     )
     player_returns = promote_map(player_targets, float_dtype)
 

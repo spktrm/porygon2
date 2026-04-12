@@ -86,17 +86,20 @@ class Porygon2LearnerConfig:
     clip_ppo: float = 0.3
     exploration_fraction: float = 1e-2
 
+    # Regularised reward params
+    player_regularised_reward_scale: float = 0.1
+
     # Loss coefficients
     ## Player
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 1e-3
+    player_kl_loss_coef: float = 0.0
+    player_entropy_loss_coef: float = 0.0
     player_conditional_entropy_loss_coef: float = 1.0
     player_state_potential_loss_coef: float = 1.0
-    player_entropy_prediction_normalising_constant: float = 50
     player_potential_advantage_scale: float = 0.0
-    player_entropy_advantage_scale: float = 0.0
+    player_entropy_advantage_scale: float = 1.0
+
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

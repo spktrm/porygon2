@@ -25,6 +25,7 @@ from rl.model.heads import (
     RegressionValueLogitHead,
     sample_categorical,
 )
+from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -41,6 +42,7 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
+        self.state_modulator = MLP((self.cfg.action_head.qk_logits.num_heads))
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
@@ -51,15 +53,17 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_action_head(
         self,
+        state_embeddings: jax.Array,
         action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
     ):
-        logits = (
-            self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
-        )
+        modulator_logits = self.state_modulator(state_embeddings.reshape(-1))
+        head_logits = self.action_head(action_embeddings, action_embeddings)
+        logits = (head_logits @ modulator_logits).reshape(-1) / temp
+
         flat_valid_mask = valid_mask.reshape(-1)
 
         log_policy = legal_log_policy(logits, flat_valid_mask)
@@ -124,6 +128,7 @@ class Porygon2PlayerModel(nn.Module):
     ):
 
         action_head = self._forward_action_head(
+            state_embeddings,
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
@@ -131,17 +136,11 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_hidden, entropy_hidden, potential_hidden = jnp.split(
-            state_embeddings, 3, axis=0
-        )
-
-        value_head = self._forward_value_head(value_hidden.squeeze(0))
+        value_head = self._forward_value_head(state_embeddings)
         conditional_entropy_head = self._forward_conditional_entropy_head(
-            entropy_hidden.squeeze(0)
+            state_embeddings
         )
-        potential_value_head = self._forward_potential_value_head(
-            potential_hidden.squeeze(0)
-        )
+        potential_value_head = self._forward_potential_value_head(state_embeddings)
 
         return PlayerActorOutput(
             action_head=action_head,

@@ -16,6 +16,7 @@ from rl.environment.data import (
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
     FIELD_MAX_VALUES,
+    NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,
@@ -1130,7 +1131,6 @@ class Encoder(nn.Module):
             ],
             axis=0,
         )
-        output_state_mask = jnp.ones_like(output_state_sequence[..., 0], dtype=jnp.bool)
 
         prev_action_src = jnp.take(
             output_state_sequence,
@@ -1199,20 +1199,39 @@ class Encoder(nn.Module):
             )
         )
 
+        self_attn_shape = NUM_ACTION_FEATURES + 1
+        self_attn_output_mask = jnp.zeros(
+            (self_attn_shape, self_attn_shape), dtype=jnp.bool
+        )
+
+        combined_mask = env_step.action_mask | env_step.action_mask.T
+        self_attn_output_mask = self_attn_output_mask.at[
+            -NUM_ACTION_FEATURES:, -NUM_ACTION_FEATURES:
+        ].set(combined_mask)
+
+        self_attn_output_mask = self_attn_output_mask.at[0, 1:].set(
+            combined_mask.any(axis=0)
+        )
+        self_attn_output_mask = self_attn_output_mask.at[1:, 0].set(
+            combined_mask.any(axis=1)
+        )
+        self_attn_output_mask = self_attn_output_mask.at[0, 0].set(True)
+        self_attn_output_mask = self_attn_output_mask[None]
+
         for _ in range(self.cfg.num_thinking_steps):
             output_state_sequence = self.state_transformer(
                 q=output_state_sequence,
                 kv=input_embeddings,
-                self_attn_mask=create_attention_mask(output_state_mask),
+                self_attn_mask=self_attn_output_mask,
                 cross_attn_mask=create_attention_mask(
-                    output_state_mask,
+                    jnp.ones_like(output_state_sequence[..., 0], dtype=jnp.bool),
                     jnp.concatenate((input_state_mask, input_state_mask), axis=0),
                 ),
             )
 
         output_state_embeddings = self.output_norm(output_state_sequence)
 
-        state_embeddings = output_state_embeddings[:3]
+        state_embeddings = output_state_embeddings[0]
         action_embeddings = output_state_embeddings[1:]
 
         return state_embeddings, action_embeddings

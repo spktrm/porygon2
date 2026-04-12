@@ -1,3 +1,5 @@
+from sys import prefix
+
 from dotenv import load_dotenv
 
 from rl.model.utils import ParamsContainer
@@ -84,6 +86,7 @@ def run_eval_heuristic(
     step_count = np.array(learner.player_state.step_count).item()
 
     session_id = actor._env.username
+    swap = True
 
     while not stop_signal[0]:
         try:
@@ -91,13 +94,26 @@ def run_eval_heuristic(
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = ParamsContainer(
-                    step_count=step_count,
-                    player_frame_count=0,
-                    builder_frame_count=0,
-                    player_params=learner.player_state.target_params,
-                    builder_params=learner.builder_state.target_params,
-                )
+                if swap:
+                    prefix = "main"
+                    player = ParamsContainer(
+                        step_count=step_count,
+                        player_frame_count=0,
+                        builder_frame_count=0,
+                        player_params=learner.player_state.params,
+                        builder_params=learner.builder_state.params,
+                    )
+                else:
+                    prefix = "ema"
+                    player = ParamsContainer(
+                        step_count=step_count,
+                        player_frame_count=0,
+                        builder_frame_count=0,
+                        player_params=learner.player_state.target_params,
+                        builder_params=learner.builder_state.target_params,
+                    )
+
+                swap = not swap
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -110,8 +126,8 @@ def run_eval_heuristic(
                 wandb_run.log(
                     {
                         "training_step": step_count,
-                        f"payoff-{session_id}": payoff,
-                        f"wr-{session_id}": payoff > 0,
+                        f"{prefix}-payoff-{session_id}": payoff,
+                        f"{prefix}-wr-{session_id}": payoff > 0,
                     }
                 )
 
@@ -189,10 +205,7 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
-        learner_config,
-        player_state,
-        builder_state,
-        mode="scratch",
+        learner_config, player_state, builder_state
     )
 
     logger.info("Initializing WandB...")
