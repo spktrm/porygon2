@@ -105,8 +105,9 @@ def train_step(
     player_win_returns = player_targets.win_returns / win_return_correction
 
     num_valid_actions = player_transitions.env_output.action_mask.sum((-2, -1))
+    safe_valid_action_sum = jnp.maximum(num_valid_actions, 2)
     dynamic_threshold = 0.5 * jnp.log(
-        (num_valid_actions - 1)
+        (safe_valid_action_sum - 1)
         * (1 - config.exploration_fraction)
         / config.exploration_fraction
     )
@@ -179,7 +180,7 @@ def train_step(
             valid=player_valid,
         )
 
-        loss_magnet_kl = -average(learner_action_head.kl_prior, valid=player_valid)
+        loss_magnet_kl = average(learner_action_head.kl_prior, valid=player_valid)
 
         loss = (
             config.player_policy_loss_coef * loss_pg

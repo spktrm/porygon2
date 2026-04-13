@@ -37,7 +37,9 @@ class PolicyQKHead(nn.Module):
     ):
         qk_logits = PointerLogits(**self.cfg.qk_logits.to_dict())
 
-        logits = qk_logits(query_embedding[None], key_embeddings).squeeze(-1)
+        logits = qk_logits(query_embedding[None], key_embeddings).reshape(
+            key_embeddings.shape[0]
+        )
         logits = logits * (1 / (head_params.temp + 1e-8))
 
         if valid_mask is None:

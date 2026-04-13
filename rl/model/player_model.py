@@ -25,7 +25,6 @@ from rl.model.heads import (
     RegressionValueLogitHead,
     sample_categorical,
 )
-from rl.model.modules import MLP
 from rl.model.utils import (
     get_most_recent_file,
     get_num_params,
@@ -42,7 +41,6 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.state_modulator = MLP((self.cfg.action_head.qk_logits.num_heads))
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
@@ -53,32 +51,33 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_action_head(
         self,
-        state_embeddings: jax.Array,
         action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
     ):
-        modulator_logits = self.state_modulator(state_embeddings.reshape(-1))
         head_logits = self.action_head(action_embeddings, action_embeddings)
-        logits = (head_logits @ modulator_logits).reshape(-1) / temp
+        logits = head_logits.squeeze(-1).reshape(-1) / temp
 
         flat_valid_mask = valid_mask.reshape(-1)
+        valid_sum = jnp.maximum(flat_valid_mask.sum(axis=-1), 1)
 
         log_policy = legal_log_policy(logits, flat_valid_mask)
         policy = legal_policy(logits, flat_valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        valid_sum = flat_valid_mask.sum(axis=-1)
-        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
-        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
-        normalized_entropy = entropy * entropy_scale
-
         # Cross-entropy with uniform distribution over valid actions (for KL)
         uniform_policy = flat_valid_mask / valid_sum
         uniform_log_policy = legal_log_policy(uniform_policy, flat_valid_mask)
         cross_entropy = -jnp.sum(policy * uniform_log_policy, axis=-1)
+
+        # KL to uniform "prior"
+        magnet_kl = cross_entropy - entropy
+
+        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
+        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
+        normalized_entropy = entropy * entropy_scale
 
         if train:
             action_index = head.action_index
@@ -106,7 +105,7 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
-            kl_prior=entropy - cross_entropy,
+            kl_prior=magnet_kl,
         )
 
     def _forward_value_head(self, state_embedding: jax.Array):
@@ -128,7 +127,6 @@ class Porygon2PlayerModel(nn.Module):
     ):
 
         action_head = self._forward_action_head(
-            state_embeddings,
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
