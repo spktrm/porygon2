@@ -116,7 +116,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
-    cfg.action_head.qk_logits.num_heads = 4
+    cfg.action_head.qk_logits.num_heads = 1
     cfg.action_head.qk_logits.use_bias = True
 
     cfg.winloss_head = ConfigDict()

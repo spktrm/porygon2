@@ -623,13 +623,13 @@ export function createBattle(
     (async () => {
         const spectator = new Battle(new Generations(Dex), null);
 
-        const windowSize = 20;
+        // Replace your tracking variables with this:
+        const windowSize = 40;
         const maxChange = 0.01;
 
-        // Track strictly what we need. No arrays!
-        let lastHpDiff = 0;
-        let stagnantTurns = 0;
-        let isFirstTurn = true;
+        const hpHistory = new Float32Array(windowSize);
+        let historyIndex = 0;
+        let turnsLogged = 0;
 
         for await (const chunk of streams.omniscient) {
             for (const line of chunk.split("\n")) {
@@ -638,34 +638,39 @@ export function createBattle(
                 if (line.startsWith("|turn")) {
                     const currentHpDiff = hpDiff(spectator);
 
-                    if (isFirstTurn) {
-                        lastHpDiff = currentHpDiff;
-                        isFirstTurn = false;
-                        continue;
-                    }
+                    // Log the current HP diff into our circular buffer
+                    hpHistory[historyIndex] = currentHpDiff;
+                    historyIndex = (historyIndex + 1) % windowSize;
+                    turnsLogged++;
 
-                    // Calculate absolute change
-                    const change = Math.abs(currentHpDiff - lastHpDiff);
-                    lastHpDiff = currentHpDiff;
+                    // Only check for stagnation if we've filled the window
+                    if (turnsLogged >= windowSize) {
+                        let maxDiff = -Infinity;
+                        let minDiff = Infinity;
 
-                    // O(1) Stalling check: just update a counter
-                    if (change <= maxChange) {
-                        stagnantTurns++;
-                    } else {
-                        stagnantTurns = 0; // Reset momentum
+                        // Find the highest and lowest HP diffs in the last 40 turns
+                        for (let i = 0; i < windowSize; i++) {
+                            if (hpHistory[i] > maxDiff) maxDiff = hpHistory[i];
+                            if (hpHistory[i] < minDiff) minDiff = hpHistory[i];
+                        }
+
+                        // If the total fluctuation over 40 turns is tiny, it's a stall
+                        if (maxDiff - minDiff <= maxChange) {
+                            p1.finishEarly();
+                            p2.finishEarly();
+                            break;
+                        }
                     }
                 }
             }
 
+            // Check request count fallback
             if (
                 p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount ||
-                stagnantTurns >= windowSize
+                p2.requestCount >= maxRequestCount
             ) {
                 p1.finishEarly();
                 p2.finishEarly();
-                // Optional: You might want to break the stream here
-                // depending on how your simulator handles early termination.
                 break;
             }
         }

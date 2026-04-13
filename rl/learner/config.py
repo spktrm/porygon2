@@ -46,8 +46,10 @@ class Porygon2LearnerConfig:
     num_player_actors: int = 12
     num_builder_actors: int = 4
     num_eval_actors: int = 2
-
     unroll_length: int = 128
+
+    # Batch iteration params
+    batch_size: int = 4
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 4
@@ -56,7 +58,9 @@ class Porygon2LearnerConfig:
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
-    replay_buffer_min_fill_fraction: float = 1 / 20
+    replay_buffer_min_fill_fraction: float = (
+        player_replay_ratio * batch_size / player_replay_buffer_capacity
+    )
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
@@ -66,9 +70,6 @@ class Porygon2LearnerConfig:
     add_player_max_frames: int = int(3e7)
     minimum_historical_player_steps: int = 1_000_000
     league_size: int = 16
-
-    # Batch iteration params
-    batch_size: int = 4
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -87,18 +88,18 @@ class Porygon2LearnerConfig:
     exploration_fraction: float = 1e-2
 
     # Regularised reward params
-    player_regularised_reward_scale: float = 0.1
+    player_regularised_reward_scale: float = 1e-3
 
     # Loss coefficients
     ## Player
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.0
-    player_entropy_loss_coef: float = 0.0
-    player_conditional_entropy_loss_coef: float = 1.0
-    player_state_potential_loss_coef: float = 1.0
+    player_entropy_loss_coef: float = 1e-3
+    player_conditional_entropy_loss_coef: float = 0.0
+    player_state_potential_loss_coef: float = 0.0
     player_potential_advantage_scale: float = 0.0
-    player_entropy_advantage_scale: float = 1.0
+    player_entropy_advantage_scale: float = 0.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5

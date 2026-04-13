@@ -1,5 +1,3 @@
-from sys import prefix
-
 from dotenv import load_dotenv
 
 from rl.model.utils import ParamsContainer
