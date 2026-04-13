@@ -120,7 +120,9 @@ def compute_player_targets(
         axis=0,
     )
     q_estimate = combined_rewards + player_valid[..., None] * q_bootstrap
-    pg_advantages = rho_t[..., None] * (q_estimate - combined_values)
+
+    inv_mu = jnp.exp(-traj.player_transitions.agent_output.actor_output.action_head.log_prob)
+    pg_advantages = inv_mu[..., None] * (q_estimate - combined_values)
 
     # --- 6. Split Outputs ---
     win_returns = returns[..., :n_bins]

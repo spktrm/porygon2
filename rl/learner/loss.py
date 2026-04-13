@@ -34,10 +34,12 @@ def off_policy_neurd_objective(
     policy_ratios: jax.Array,
     advantages: jax.Array,
     threshold: float,
+    advantages_clip: float = 100.0,
 ):
     """Smoothed Neurd objective, combines SPO and Neurd."""
-    corrected_advantages = jax.lax.stop_gradient(advantages * policy_ratios)
-
+    corrected_advantages = jax.lax.stop_gradient(advantages * policy_ratios).clip(
+        -advantages_clip, advantages_clip
+    )
     return corrected_advantages * centered_action_logit - (
         jnp.abs(corrected_advantages) * centered_action_logit**2
     ) / (2 * threshold)
