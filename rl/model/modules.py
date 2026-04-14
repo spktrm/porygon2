@@ -282,7 +282,6 @@ class MultiHeadAttention(nn.Module):
         #     implementation=self.implementation,
         # )
 
-
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
