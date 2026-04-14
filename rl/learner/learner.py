@@ -121,6 +121,7 @@ def train_step(
         * (1 - config.exploration_fraction)
         / config.exploration_fraction
     )
+    dynamic_threshold = jnp.ones_like(dynamic_threshold) * 10
 
     training_logs = {}
 
