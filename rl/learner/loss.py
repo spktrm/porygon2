@@ -30,34 +30,50 @@ def ppo_objective(
 
 def off_policy_neurd_objective(
     *,
-    centered_action_logit: jax.Array,
+    logits: jax.Array,
+    policy: jax.Array,
+    mask: jax.Array,
     policy_ratios: jax.Array,
-    advantages: jax.Array,
+    q_values: jax.Array,
     threshold: float,
     advantages_clip: float = 100.0,
 ):
     """Smoothed Neurd objective, combines SPO and Neurd."""
-    corrected_advantages = jax.lax.stop_gradient(advantages * policy_ratios).clip(
+
+    advantages = q_values - jnp.sum(policy * q_values, axis=-1, keepdims=True)
+    corrected_advantages = jax.lax.stop_gradient(advantages).clip(
         -advantages_clip, advantages_clip
     )
-    return corrected_advantages * centered_action_logit - (
-        jnp.abs(corrected_advantages) * centered_action_logit**2
-    ) / (2 * threshold)
+
+    valid_logit_sum = jnp.sum(logits * mask, axis=-1)
+    valid_mask_sum = jnp.sum(mask, axis=-1).clip(min=1)
+    valid_logit_mean = valid_logit_sum / valid_mask_sum
+    mean_centered_logits = logits - valid_logit_mean[..., None]
+
+    loss = corrected_advantages * mean_centered_logits - (
+        jnp.abs(corrected_advantages) * mean_centered_logits**2
+    ) / (2 * threshold[..., None])
+
+    return jnp.where(mask, loss, 0.0).sum(axis=-1)
 
 
 def policy_gradient_loss(
     *,
-    centered_action_logit: jax.Array,
+    logits: jax.Array,
+    policy: jax.Array,
+    mask: jax.Array,
     policy_ratios: jax.Array,
-    advantages: jax.Array,
+    q_values: jax.Array,
     valid: jax.Array,
     clip_ppo: float,
     threshold: float,
 ):
     pg_loss = off_policy_neurd_objective(
-        centered_action_logit=centered_action_logit,
+        logits=logits,
+        policy=policy,
+        mask=mask,
         policy_ratios=policy_ratios,
-        advantages=advantages,
+        q_values=q_values,
         threshold=threshold,
     )
     return -average(pg_loss, valid)

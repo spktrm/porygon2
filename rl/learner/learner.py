@@ -101,6 +101,16 @@ def train_step(
         + config.player_potential_advantage_scale * player_targets.potential_advantages
     )
 
+    action_mask = player_transitions.env_output.action_mask
+    action_mask_flat = jax.lax.collapse(action_mask, -2)
+    selected_action = (
+        batch.player_transitions.agent_output.actor_output.action_head.action_index
+    )
+    q_values = player_target_pred.value_head.expectation[..., None] + (
+        jax.nn.one_hot(selected_action, action_mask_flat.shape[-1], dtype=float_dtype)
+        * player_advantages[..., None]
+    )
+
     win_return_correction = player_targets.win_returns.sum(axis=-1, keepdims=True)
     player_win_returns = player_targets.win_returns / win_return_correction
 
@@ -139,9 +149,11 @@ def train_step(
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
-            centered_action_logit=learner_action_head.centered_action_logit,
+            logits=learner_action_head.logits,
+            policy=learner_action_head.policy,
+            mask=action_mask_flat,
             policy_ratios=player_policy_ratio,
-            advantages=player_advantages,
+            q_values=q_values,
             valid=player_valid,
             clip_ppo=config.clip_ppo,
             threshold=dynamic_threshold,
@@ -741,15 +753,18 @@ class Learner:
 
         # 2. Validate Numerical Stability
         # Convert JAX arrays to python scalars for cheap comparison
-        p_loss_valid = jnp.isfinite(logs["player_loss"]).item()
-        b_loss_valid = True
-        if self.config.smogon_format != "randombattle":
-            b_loss_valid = jnp.isfinite(logs["builder_loss"]).item()
+        if self.config.check_finite_loss:
+            p_loss_valid = jnp.isfinite(logs["player_loss"]).item()
+            b_loss_valid = True
+            if self.config.smogon_format != "randombattle":
+                b_loss_valid = jnp.isfinite(logs["builder_loss"]).item()
 
-        if not p_loss_valid or not b_loss_valid:
-            step = logs["training_step"]
-            logger.warning(f"Skipping update: Non-finite loss detected @ step {step}")
-            return None
+            if not p_loss_valid or not b_loss_valid:
+                step = logs["training_step"]
+                logger.warning(
+                    f"Skipping update: Non-finite loss detected @ step {step}"
+                )
+                return None
 
         # 3. Apply State Update
         self.player_state = new_player_state
