@@ -270,17 +270,34 @@ class MultiHeadAttention(nn.Module):
                 *key_heads.shape
             )
 
-        target_shape = list(mask.shape)
-        target_shape[-3] = self.num_heads
-        mask = jnp.broadcast_to(mask, target_shape)
+        # target_shape = list(mask.shape)
+        # target_shape[-3] = self.num_heads
+        # mask = jnp.broadcast_to(mask, target_shape)
 
-        attn = jax.nn.dot_product_attention(
-            query_heads,
-            key_heads,
-            value_heads,
-            mask=mask,
-            implementation=self.implementation,
+        # attn = jax.nn.dot_product_attention(
+        #     query_heads,
+        #     key_heads,
+        #     value_heads,
+        #     mask=mask,
+        #     implementation=self.implementation,
+        # )
+
+
+        # Compute attention weights.
+        attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
+        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+
+        attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
+        attn_log_probs = nn.log_softmax(attn_logits, axis=-1)
+        attn_probs = jnp.exp(attn_log_probs)
+        attn_probs = jnp.where(mask, attn_probs, 0)
+
+        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / math.log(
+            attn_probs.shape[-1]
         )
+
+        # Weight the values by the attention and flatten the head vectors.
+        attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
         # Apply another projection to get the final embeddings.

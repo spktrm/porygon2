@@ -82,8 +82,8 @@ class Porygon2LearnerConfig:
     builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
-    player_lambda: float = 0.95
-    builder_lambda: float = 0.95
+    player_lambda: float = 0.99
+    builder_lambda: float = 0.99
     clip_ppo: float = 0.3
     exploration_fraction: float = 1e-2
 
