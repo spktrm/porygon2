@@ -95,7 +95,7 @@ class Porygon2LearnerConfig:
     player_value_loss_coef: float = 1.0
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.0
-    player_entropy_loss_coef: float = 1e-3
+    player_entropy_loss_coef: float = 1e-5
     player_conditional_entropy_loss_coef: float = 0.0
     player_state_potential_loss_coef: float = 0.0
     player_potential_advantage_scale: float = 0.0
@@ -119,6 +119,7 @@ class Porygon2LearnerConfig:
 
     # Logging params
     log_artifacts_online: bool = False
+    check_finite_loss: bool = False
 
 
 def get_learner_config():

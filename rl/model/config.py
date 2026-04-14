@@ -63,7 +63,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
     decoder_use_bias = True
     decoder_qk_layer_norm = True
-    decoder_init_residual_scale = 0.0
+    decoder_init_residual_scale = 0.01
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,

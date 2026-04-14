@@ -71,7 +71,9 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
-    centered_action_logit: ArrayLike = ()
+    logits: ArrayLike = ()
+    policy: ArrayLike = ()
+    log_policy: ArrayLike = ()
 
 
 @dataclass
