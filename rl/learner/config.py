@@ -66,6 +66,7 @@ class Porygon2LearnerConfig:
     save_interval_steps: int = 20_000
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
+    main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
     minimum_historical_player_steps: int = 1_000_000
@@ -85,7 +86,7 @@ class Porygon2LearnerConfig:
     player_lambda: float = 0.95
     builder_lambda: float = 0.95
     clip_ppo: float = 0.3
-    exploration_fraction: float = 1e-2
+    exploration_fraction: float = 1e-1
 
     # Regularised reward params
     player_regularised_reward_scale: float = 1e-3
