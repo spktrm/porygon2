@@ -662,31 +662,44 @@ class Transformer(nn.Module):
         self,
         q: jax.Array,
         kv: jax.Array,
-        self_attn_mask: jax.Array | None = None,
+        q_self_attn_mask: jax.Array | None = None,
+        kv_self_attn_mask: jax.Array | None = None,
         cross_attn_mask: jax.Array | None = None,
     ) -> jax.Array:
 
-        if self_attn_mask is None:
+        if q_self_attn_mask is None:
             q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-            self_attn_mask = create_attention_mask(q_mask, q_mask)
+            q_self_attn_mask = create_attention_mask(q_mask, q_mask)
+
+        if kv_self_attn_mask is None:
+            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+            kv_self_attn_mask = create_attention_mask(kv_mask, kv_mask)
 
         if cross_attn_mask is None:
             kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
             cross_attn_mask = create_attention_mask(q_mask, kv_mask)
 
-        encoder_positionwise_mask = self_attn_mask.any(axis=-1, keepdims=True).squeeze(
-            -3
-        )
+        q_encoder_positionwise_mask = q_self_attn_mask.any(
+            axis=-1, keepdims=True
+        ).squeeze(-3)
+        kv_encoder_positionwise_mask = kv_self_attn_mask.any(
+            axis=-1, keepdims=True
+        ).squeeze(-3)
         decoder_positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(
             -3
         )
 
         for layer_idx in range(self.num_layers):
+            kv = self.encoder_layer(
+                layer_idx, kv, kv_self_attn_mask, kv_encoder_positionwise_mask
+            )
+
+        for layer_idx in range(self.num_layers, 2 * self.num_layers):
+            q = self.encoder_layer(
+                layer_idx, q, q_self_attn_mask, q_encoder_positionwise_mask
+            )
             q = self.decoder_layer(
                 layer_idx, q, kv, cross_attn_mask, decoder_positionwise_mask
-            )
-            q = self.encoder_layer(
-                layer_idx, q, self_attn_mask, encoder_positionwise_mask
             )
 
         return q

@@ -1186,9 +1186,10 @@ class Encoder(nn.Module):
         input_latent_mask = jnp.ones_like(
             self.latent_input_queries[..., 0], dtype=jnp.bool
         )
+        latent_input_queries = self.latent_input_queries.astype(self.cfg.dtype)
 
         latent_input_embeddings = self.input_decoder(
-            q=self.input_decoder_query_norm(self.latent_input_queries),
+            q=self.input_decoder_query_norm(latent_input_queries),
             kv=input_state_sequence,
             attn_mask=create_attention_mask(input_latent_mask, input_state_mask),
         )
@@ -1229,14 +1230,19 @@ class Encoder(nn.Module):
         self_attn_output_mask = self_attn_output_mask.at[0, 0].set(True)
         self_attn_output_mask = self_attn_output_mask[None]
 
+        latent_input_mask = jnp.ones_like(
+            latent_input_embeddings[..., 0], dtype=jnp.bool
+        )
+
         for _ in range(self.cfg.num_thinking_steps):
             output_state_sequence = self.state_transformer(
                 q=self.state_transformer_query_norm(output_state_sequence),
                 kv=latent_input_embeddings,
-                self_attn_mask=self_attn_output_mask,
+                q_self_attn_mask=self_attn_output_mask,
+                kv_self_attn_mask=create_attention_mask(latent_input_mask),
                 cross_attn_mask=create_attention_mask(
                     jnp.ones_like(output_state_sequence[..., 0], dtype=jnp.bool),
-                    jnp.ones_like(latent_input_embeddings[..., 0], dtype=jnp.bool),
+                    latent_input_mask,
                 ),
             )
 

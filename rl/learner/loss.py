@@ -38,10 +38,10 @@ def off_policy_neurd_objective(
     threshold: float,
     advantages_clip: float = 100.0,
 ):
-    """Smoothed Neurd objective, combines SPO and Neurd."""
+    """Neurd objective"""
 
     advantages = q_values - jnp.sum(policy * q_values, axis=-1, keepdims=True)
-    corrected_advantages = jax.lax.stop_gradient(advantages).clip(
+    corrected_advantages = (advantages * policy_ratios[..., None]).clip(
         -advantages_clip, advantages_clip
     )
 
@@ -50,9 +50,13 @@ def off_policy_neurd_objective(
     valid_logit_mean = valid_logit_sum / valid_mask_sum
     mean_centered_logits = logits - valid_logit_mean[..., None]
 
-    loss = corrected_advantages * mean_centered_logits - (
-        jnp.abs(corrected_advantages) * mean_centered_logits**2
-    ) / (2 * threshold[..., None])
+    threshold = threshold[..., None]
+    can_decrease = mean_centered_logits > -threshold
+    can_increase = mean_centered_logits < threshold
+    force_negative = jnp.minimum(corrected_advantages, 0.0)
+    force_positive = jnp.maximum(corrected_advantages, 0.0)
+    clipped_force = can_decrease * force_negative + can_increase * force_positive
+    loss = mean_centered_logits * jax.lax.stop_gradient(clipped_force)
 
     return jnp.where(mask, loss, 0.0).sum(axis=-1)
 
