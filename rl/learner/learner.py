@@ -694,10 +694,10 @@ class Learner:
                     continue  # Skip this step if update failed
 
                 # 3. Logging & Checkpointing
-                self._handle_periodic_tasks(logs)
+                step = jax.device_get(logs["training_step"]).item()
+                self._handle_periodic_tasks(step, logs)
 
                 # 4. League Logic (Periodic)
-                step = int(logs["training_step"])
                 if (step - prev_league_check_step) >= 10:
                     self._manage_league(step)
                     prev_league_check_step = step
@@ -772,9 +772,8 @@ class Learner:
 
         return logs
 
-    def _handle_periodic_tasks(self, logs: dict):
+    def _handle_periodic_tasks(self, step: int, logs: dict):
         """Handles logging, progress bars, and checkpointing."""
-        step = int(logs["training_step"])
 
         # Console Progress
         self.train_progress.update(1)
@@ -791,14 +790,15 @@ class Learner:
         self.wandb_run.log(logs)
 
         # Main Player Update & Checkpoint
-        self._update_main_player_in_league()
+        if step % self.config.main_player_update_steps == 0:
+            self._update_main_player_in_league()
 
         if step % self.config.save_interval_steps == 0:
             save_train_state(
                 self.wandb_run,
                 self.config,
-                self.player_state,
-                self.builder_state,
+                jax.device_get(self.player_state),
+                jax.device_get(self.builder_state),
                 self.league,
             )
 
@@ -845,11 +845,11 @@ class Learner:
 
     def _create_params_container(self, step_key):
         return ParamsContainer(
-            player_frame_count=np.array(self.player_state.frame_count).item(),
-            builder_frame_count=np.array(self.builder_state.frame_count).item(),
+            player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+            builder_frame_count=jax.device_get(self.builder_state.frame_count).item(),
             step_count=step_key,
-            player_params=self.player_state.params,
-            builder_params=self.builder_state.params,
+            player_params=jax.device_get(self.player_state.params),
+            builder_params=jax.device_get(self.builder_state.params),
         )
 
     def _get_usage_counts(self):
