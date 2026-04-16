@@ -286,6 +286,9 @@ def train_step(
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]
             ),
+            player_input_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["input_decoder"]
+            ),
             player_history_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["history_decoder"]
             ),
@@ -685,16 +688,17 @@ class Learner:
 
                 # 1. Fetch Data (Blocking)
                 batch = self.device_q.get()
-                batch = jax.device_put(batch)
+                with self.gpu_lock:
+                    batch = jax.device_put(batch)
+                    # 2. Update Model
+                    logs = self._train_step(batch)
 
-                # 2. Update Model
-                logs = self._train_step(batch)
+                    if logs is None:
+                        continue  # Skip this step if update failed
 
-                if logs is None:
-                    continue  # Skip this step if update failed
+                    # 3. Logging & Checkpointing
+                    step = jax.device_get(logs["training_step"]).item()
 
-                # 3. Logging & Checkpointing
-                step = jax.device_get(logs["training_step"]).item()
                 self._handle_periodic_tasks(step, logs)
 
                 # 4. League Logic (Periodic)
@@ -743,13 +747,12 @@ class Learner:
         Returns training logs on success, or None if the step was invalid (e.g. NaN loss).
         """
         # 1. Run JAX Step (thread-safe)
-        with self.gpu_lock:
-            new_player_state, new_builder_state, logs = self._train_step_jit(
-                self.player_state,
-                self.builder_state,
-                batch,
-                self.config,
-            )
+        new_player_state, new_builder_state, logs = self._train_step_jit(
+            self.player_state,
+            self.builder_state,
+            batch,
+            self.config,
+        )
 
         # 2. Validate Numerical Stability
         # Convert JAX arrays to python scalars for cheap comparison

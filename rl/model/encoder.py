@@ -276,6 +276,11 @@ class Encoder(nn.Module):
             learnable_query_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
+        self.latent_history_queries = self.param(
+            "latent_history_queries",
+            learnable_query_init,
+            (self.cfg.num_latent_embeddings, entity_size),
+        )
         self.latent_input_embedding = self.param(
             "latent_input_embedding", embedding_init, (1, entity_size)
         )
@@ -334,8 +339,6 @@ class Encoder(nn.Module):
             name="local_timestep_linear", use_bias=False, **dense_kwargs
         )
 
-        self.local_timestep_norm = RMSNorm()
-
         # Transformer Decoders
         self.state_embeddings = self.param(
             "state_embeddings", learnable_query_init, (3, entity_size)
@@ -353,9 +356,6 @@ class Encoder(nn.Module):
         )
         self.state_transformer = Transformer(**self.cfg.state_transformer.to_dict())
 
-        self.input_decoder_query_norm = RMSNorm()
-        self.history_decoder_query_norm = RMSNorm()
-        self.state_transformer_query_norm = RMSNorm()
         self.final_norm = RMSNorm()
 
     def _embed_species(self, token: jax.Array):
@@ -952,7 +952,7 @@ class Encoder(nn.Module):
         edge_embeddings = jnp.take(edge_embedding_cache, relevant_indices, axis=0)
 
         local_sequence = self.local_timestep_decoder(
-            q=self.local_timestep_norm(field_embeddings),
+            q=field_embeddings,
             kv=node_embeddings
             + edge_embeddings
             + self.local_timestep_embedding(jnp.arange(relevant_indices.shape[0])),
@@ -1186,16 +1186,14 @@ class Encoder(nn.Module):
         input_latent_mask = jnp.ones_like(
             self.latent_input_queries[..., 0], dtype=jnp.bool
         )
-        latent_input_queries = self.latent_input_queries.astype(self.cfg.dtype)
 
         latent_input_embeddings = self.input_decoder(
-            q=self.input_decoder_query_norm(latent_input_queries),
+            q=self.latent_input_queries.astype(self.cfg.dtype),
             kv=input_state_sequence,
             attn_mask=create_attention_mask(input_latent_mask, input_state_mask),
         )
-
         latent_history_embeddings = self.history_decoder(
-            q=self.history_decoder_query_norm(latent_input_embeddings),
+            q=self.latent_history_queries.astype(self.cfg.dtype),
             kv=timestep_embeddings,
             attn_mask=create_attention_mask(input_latent_mask, timestep_mask),
             q_positions=jnp.expand_dims(current_position, axis=-1),
@@ -1228,6 +1226,8 @@ class Encoder(nn.Module):
             combined_mask.any(axis=1)
         )
         self_attn_output_mask = self_attn_output_mask.at[0, 0].set(True)
+        output_state_mask = self_attn_output_mask.any(1) | self_attn_output_mask.any(0)
+
         self_attn_output_mask = self_attn_output_mask[None]
 
         latent_input_mask = jnp.ones_like(
@@ -1236,13 +1236,12 @@ class Encoder(nn.Module):
 
         for _ in range(self.cfg.num_thinking_steps):
             output_state_sequence = self.state_transformer(
-                q=self.state_transformer_query_norm(output_state_sequence),
+                q=output_state_sequence,
                 kv=latent_input_embeddings,
                 q_self_attn_mask=self_attn_output_mask,
                 kv_self_attn_mask=create_attention_mask(latent_input_mask),
                 cross_attn_mask=create_attention_mask(
-                    jnp.ones_like(output_state_sequence[..., 0], dtype=jnp.bool),
-                    latent_input_mask,
+                    output_state_mask, latent_input_mask
                 ),
             )
 

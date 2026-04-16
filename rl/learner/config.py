@@ -76,8 +76,8 @@ class Porygon2LearnerConfig:
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
-    player_clip_gradient: float = 1.0
-    builder_clip_gradient: float = 1.0
+    player_clip_gradient: float = 1000.0
+    builder_clip_gradient: float = 1000.0
     gradient_accumulation_steps: int = 1
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
@@ -90,11 +90,12 @@ class Porygon2LearnerConfig:
 
     # Regularised reward params
     player_regularised_reward_scale: float = 1e-3
+    max_num_actions: int = 13  # 4+4+5 = 13 (max possible actions in a given state)
 
     # Loss coefficients
     ## Player
     player_value_loss_coef: float = 1.0
-    player_policy_loss_coef: float = 1.0
+    player_policy_loss_coef: float = 1 / max_num_actions
     player_kl_loss_coef: float = 0.0
     player_entropy_loss_coef: float = 1e-3
     player_conditional_entropy_loss_coef: float = 0.0
@@ -172,7 +173,7 @@ def create_train_state(
         actor_output=ex_player_actor_out,
     )
     player_optimizer = optax.chain(
-        optax.clip_by_global_norm(config.player_clip_gradient),
+        optax.clip(config.player_clip_gradient),
         optax.adamw(
             learning_rate=config.player_learning_rate,
             b1=config.adam.b1,
@@ -201,7 +202,7 @@ def create_train_state(
         head_params=HeadParams(),
     )
     builder_optimizer = optax.chain(
-        optax.clip_by_global_norm(config.builder_clip_gradient),
+        optax.clip(config.builder_clip_gradient),
         optax.adamw(
             learning_rate=config.builder_learning_rate,
             b1=config.adam.b1,
