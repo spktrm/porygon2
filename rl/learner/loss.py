@@ -28,6 +28,45 @@ def ppo_objective(
     return jnp.minimum(l1, l2)
 
 
+def hard_neurd_objective(
+    mean_centered_logits: jax.Array,
+    corrected_advantages: jax.Array,
+    threshold: jax.Array,
+):
+    can_decrease = mean_centered_logits > -threshold
+    can_increase = mean_centered_logits < threshold
+    force_negative = jnp.minimum(corrected_advantages, 0.0)
+    force_positive = jnp.maximum(corrected_advantages, 0.0)
+    clipped_force = can_decrease * force_negative + can_increase * force_positive
+    return mean_centered_logits * jax.lax.stop_gradient(clipped_force)
+
+
+def soft_neurd_objective(
+    mean_centered_logits: jax.Array,
+    corrected_advantages: jax.Array,
+    threshold: jax.Array,
+    leak: float = 0.0,
+    gain: float = 2.0,
+):
+    corrected_advantages = jax.lax.stop_gradient(corrected_advantages)
+    abs_adv = jnp.abs(corrected_advantages)
+
+    # 1. Numerically stable Softmin using logsumexp
+    # Equivalent to: -(1/g) * log(exp(-g*a) + exp(-g*b))
+    arg1 = -gain * corrected_advantages * mean_centered_logits
+    arg2 = -gain * abs_adv * threshold
+    loss = -(1.0 / gain) * jax.nn.logsumexp(jnp.stack([arg1, arg2], axis=-1), axis=-1)
+
+    if leak > 0:
+        # 2. Numerically stable safe leak using softplus
+        # Equivalent to: -(1/g) * log(1 + exp(-g*z))
+        sgn_adv = jnp.sign(corrected_advantages)
+        z = threshold - sgn_adv * mean_centered_logits
+        loss -= (leak * abs_adv / gain) * jax.nn.softplus(-gain * z)
+
+    return loss
+
+
 def off_policy_neurd_objective(
     *,
     logits: jax.Array,
@@ -51,12 +90,12 @@ def off_policy_neurd_objective(
     mean_centered_logits = logits - valid_logit_mean[..., None]
 
     threshold = threshold[..., None]
-    can_decrease = mean_centered_logits > -threshold
-    can_increase = mean_centered_logits < threshold
-    force_negative = jnp.minimum(corrected_advantages, 0.0)
-    force_positive = jnp.maximum(corrected_advantages, 0.0)
-    clipped_force = can_decrease * force_negative + can_increase * force_positive
-    loss = mean_centered_logits * jax.lax.stop_gradient(clipped_force)
+
+    loss = soft_neurd_objective(
+        mean_centered_logits=mean_centered_logits,
+        corrected_advantages=corrected_advantages,
+        threshold=threshold,
+    )
 
     return jnp.where(mask, loss, 0.0).sum(axis=-1)
 
