@@ -9,8 +9,6 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
-from rl.learner.targets import PlayerTargets
-from rl.utils import average
 
 T = TypeVar("T")
 
@@ -28,7 +26,7 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig, player_targets: PlayerTargets
+    batch: Trajectory, config: Porygon2LearnerConfig
 ) -> Dict[str, Any]:
     player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
     player_lengths = player_valid.sum(0)
@@ -109,26 +107,6 @@ def collect_batch_telemetry_data(
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
         history_lengths_mean=history_lengths.mean(),
-        player_proactive_switch_win_advantange=average(
-            player_targets.win_advantages, player_valid & did_switch & can_move
-        ),
-        player_passive_switch_win_advantange=average(
-            player_targets.win_advantages, player_valid & did_switch & ~can_move
-        ),
-        player_wildcard_hold_win_advantange=average(
-            player_targets.win_advantages,
-            player_valid & did_move & ~did_wildcard & can_wildcard,
-        ),
-        player_proactive_switch_pot_advantange=average(
-            player_targets.potential_advantages, player_valid & did_switch & can_move
-        ),
-        player_passive_switch_pot_advantange=average(
-            player_targets.potential_advantages, player_valid & did_switch & ~can_move
-        ),
-        player_wildcard_hold_pot_advantange=average(
-            player_targets.potential_advantages,
-            player_valid & did_move & ~did_wildcard & can_wildcard,
-        ),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),

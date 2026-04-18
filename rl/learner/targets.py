@@ -38,6 +38,7 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
 
 def compute_player_targets(
     traj: Trajectory,
+    learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
     importance_sampling_ratios: jax.Array,
     config: Porygon2LearnerConfig,
@@ -45,67 +46,40 @@ def compute_player_targets(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=importance_sampling_ratios.dtype)
     player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
 
-    # --- V-Trace IMPALA Variables ---
     rho_t = jnp.minimum(1.0, importance_sampling_ratios)
     c_t = jnp.minimum(1.0, importance_sampling_ratios)
 
-    # --- 1. Extract and Scale Base Values & Rewards ---
-    # Value
-    player_reward = traj.player_transitions.env_output.win_reward  # (T, B, 3)
+    player_reward = traj.player_transitions.env_output.win_reward
     player_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = player_value_probs.shape[-1]
 
-    # Regularised reward
-    reg_reward = -config.player_regularised_reward_scale * (
-        traj.player_transitions.agent_output.actor_output.action_head.log_prob
-        - target_pred.action_head.log_prob
+    learner_target_log_ratio = (
+        learner_pred.action_head.log_policy - target_pred.action_head.log_policy
     )
-    player_ent_scaled = target_pred.conditional_entropy_head.logits
 
-    # Potential
-    state_pot = traj.player_transitions.env_output.state_potential
-    player_state_potential = jnp.concatenate(
-        [jnp.zeros_like(state_pot[:1]), state_pot], axis=0
+    reg_reward = -jnp.sum(
+        learner_pred.action_head.policy * learner_target_log_ratio, axis=-1
     )
-    potential_reward = player_state_potential[1:] - player_state_potential[:-1]
-    player_potential_value = target_pred.potential_value_head.logits
+    target_ent_scaled = (
+        config.player_entropy_normalising_constant * target_pred.entropy_head.logits
+    )
 
-    # --- 2. Concatenate Rewards, Values, and Next Values ---
-    # Shape: (T, B, n_bins + 2)
-    combined_rewards = jnp.concatenate(
-        [player_reward, reg_reward[..., None], potential_reward[..., None]], axis=-1
-    )
+    combined_rewards = jnp.concatenate([player_reward, reg_reward[..., None]], axis=-1)
 
     combined_values = jnp.concatenate(
-        [
-            player_value_probs,
-            player_ent_scaled[..., None],
-            player_potential_value[..., None],
-        ],
-        axis=-1,
+        [player_value_probs, target_ent_scaled[..., None]], axis=-1
     )
-
-    # Construct the offset for next values, maintaining the zero-padding logic for entropy
-    last_values = jnp.concatenate(
-        [
-            player_value_probs[-1:],
-            player_ent_scaled[-1:][..., None],
-            player_potential_value[-1:][..., None],
-        ],
-        axis=-1,
-    )
+    last_values = combined_values[-1:]
 
     combined_next_values = (
         jnp.concatenate([combined_values[1:], last_values], axis=0)
         * player_valid[..., None]
     )
 
-    # --- 3. Compute Combined Deltas in one batched operation ---
     combined_deltas = rho_t[..., None] * (
         combined_rewards + combined_next_values - combined_values
     )
 
-    # --- 5. Discounts & Batched Segmented Cumsum ---
     vtrace_errors = vtrace(
         combined_deltas, player_valid[..., None], c_t[..., None] * config.player_lambda
     )
@@ -121,23 +95,40 @@ def compute_player_targets(
     )
     q_estimate = combined_rewards + player_valid[..., None] * q_bootstrap
 
+    pg_advantages = q_estimate - combined_values
     inv_mu = jnp.exp(
         -traj.player_transitions.agent_output.actor_output.action_head.log_prob
     )
-    pg_advantages = inv_mu[..., None] * (q_estimate - combined_values)
+    combined_advantage = inv_mu * (
+        pg_advantages[..., :n_bins] @ cat_vf_support
+        + config.player_entropy_reward_scale * pg_advantages[..., n_bins]
+    )
 
-    # --- 6. Split Outputs ---
     win_returns = returns[..., :n_bins]
-    ent_returns = returns[..., n_bins]
-    potential_returns = returns[..., n_bins + 1]
+    ent_returns = returns[..., n_bins] / config.player_entropy_normalising_constant
+
+    action_mask = traj.player_transitions.env_output.action_mask
+    action_mask_flat = jax.lax.collapse(action_mask, -2)
+    selected_action = (
+        traj.player_transitions.agent_output.actor_output.action_head.action_index
+    )
+    q_values = (
+        jnp.expand_dims(
+            target_pred.value_head.expectation
+            + config.player_entropy_reward_scale * target_ent_scaled,
+            axis=-1,
+        )
+        - config.player_entropy_reward_scale * learner_target_log_ratio
+        + (
+            jax.nn.one_hot(
+                selected_action, action_mask_flat.shape[-1], dtype=cat_vf_support.dtype
+            )
+            * combined_advantage[..., None]
+        )
+    )
 
     return PlayerTargets(
-        win_returns=win_returns,
-        win_advantages=pg_advantages[..., :n_bins] @ cat_vf_support,
-        ent_returns=ent_returns,
-        ent_advantages=pg_advantages[..., n_bins],
-        potential_returns=potential_returns,
-        potential_advantages=pg_advantages[..., n_bins + 1],
+        win_returns=win_returns, ent_returns=ent_returns, q_values=q_values
     )
 
 

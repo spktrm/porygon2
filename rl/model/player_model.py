@@ -44,10 +44,7 @@ class Porygon2PlayerModel(nn.Module):
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
-        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
-        self.potential_value_head = RegressionValueLogitHead(
-            self.cfg.potential_value_head
-        )
+        self.entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _forward_action_head(
         self,
@@ -108,11 +105,8 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
 
-    def _forward_conditional_entropy_head(self, state_embedding: jax.Array):
-        return self.conditional_entropy_head(state_embedding)
-
-    def _forward_potential_value_head(self, state_embedding: jax.Array):
-        return self.potential_value_head(state_embedding)
+    def _forward_entropy_head(self, state_embedding: jax.Array):
+        return self.entropy_head(state_embedding)
 
     def get_head_outputs(
         self,
@@ -131,17 +125,13 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(state_embeddings)
-        conditional_entropy_head = self._forward_conditional_entropy_head(
-            state_embeddings
-        )
-        potential_value_head = self._forward_potential_value_head(state_embeddings)
+        value_head = self._forward_value_head(state_embeddings[0])
+        entropy_head = self._forward_entropy_head(state_embeddings[1])
 
         return PlayerActorOutput(
             action_head=action_head,
             value_head=value_head,
-            conditional_entropy_head=conditional_entropy_head,
-            potential_value_head=potential_value_head,
+            entropy_head=entropy_head,
         )
 
     def __call__(
