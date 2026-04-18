@@ -130,11 +130,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
 
-    cfg.potential_value_head = ConfigDict()
-    cfg.potential_value_head.dense = ConfigDict()
-    cfg.potential_value_head.dense.features = 1
-    cfg.potential_value_head.dense.use_bias = True
-
     for head in [cfg.action_head]:
         head.train = train
 

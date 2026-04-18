@@ -1,7 +1,5 @@
 from dotenv import load_dotenv
 
-from rl.model.utils import ParamsContainer
-
 load_dotenv()
 import argparse
 import concurrent.futures
@@ -27,6 +25,7 @@ from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
+from rl.model.utils import ParamsContainer
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +204,9 @@ def main(args: argparse.Namespace):
     player_state, builder_state, league = load_train_state(
         learner_config, player_state, builder_state
     )
+
+    player_state = jax.device_put(player_state)
+    builder_state = jax.device_put(builder_state)
 
     logger.info("Initializing WandB...")
     wandb_run = wandb.init(

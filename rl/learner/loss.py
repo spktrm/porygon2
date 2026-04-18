@@ -46,7 +46,7 @@ def soft_neurd_objective(
     corrected_advantages: jax.Array,
     threshold: jax.Array,
     leak: float = 0.0,
-    gain: float = 2.0,
+    gain: float = -0.1,
 ):
     corrected_advantages = jax.lax.stop_gradient(corrected_advantages)
     abs_adv = jnp.abs(corrected_advantages)
@@ -104,7 +104,6 @@ def policy_gradient_loss(
     *,
     logits: jax.Array,
     policy: jax.Array,
-    mask: jax.Array,
     policy_ratios: jax.Array,
     q_values: jax.Array,
     valid: jax.Array,
@@ -114,7 +113,7 @@ def policy_gradient_loss(
     pg_loss = off_policy_neurd_objective(
         logits=logits,
         policy=policy,
-        mask=mask,
+        mask=policy > 0,
         policy_ratios=policy_ratios,
         q_values=q_values,
         threshold=threshold,

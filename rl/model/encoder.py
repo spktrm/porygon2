@@ -1225,7 +1225,14 @@ class Encoder(nn.Module):
         self_attn_output_mask = self_attn_output_mask.at[1:, 0].set(
             combined_mask.any(axis=1)
         )
-        self_attn_output_mask = self_attn_output_mask.at[0, 0].set(True)
+        self_attn_output_mask = self_attn_output_mask.at[:2, :2].set(True)
+        self_attn_output_mask = self_attn_output_mask.at[:2].set(
+            self_attn_output_mask[0][None]
+        )
+        self_attn_output_mask = self_attn_output_mask.at[..., :2].set(
+            self_attn_output_mask[0][..., None]
+        )
+
         output_state_mask = self_attn_output_mask.any(1) | self_attn_output_mask.any(0)
 
         self_attn_output_mask = self_attn_output_mask[None]
@@ -1247,7 +1254,7 @@ class Encoder(nn.Module):
 
         output_state_embeddings = self.final_norm(output_state_sequence)
 
-        state_embeddings = output_state_embeddings[0]
+        state_embeddings = output_state_embeddings[:2]
         action_embeddings = output_state_embeddings[1:]
 
         return state_embeddings, action_embeddings

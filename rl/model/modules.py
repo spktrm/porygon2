@@ -876,6 +876,7 @@ class PointerLogits(nn.Module):
     use_bias: bool = False
     qk_layer_norm: bool = False
     inverse_sqrt_normalisation: bool = True
+    kernel_init_std: float = 1e-2
 
     @nn.compact
     def __call__(self, q: jax.Array, k: jax.Array) -> jax.Array:
@@ -885,11 +886,17 @@ class PointerLogits(nn.Module):
         qk_size = self.qk_size or k.shape[-1] // self.num_heads
 
         query_heads = nn.Dense(
-            self.num_heads * qk_size, use_bias=self.use_bias, dtype=q.dtype
+            self.num_heads * qk_size,
+            kernel_init=nn.initializers.normal(self.kernel_init_std),
+            use_bias=self.use_bias,
+            dtype=q.dtype,
         )(q).reshape((*q_leading_dims, self.num_heads, qk_size))
 
         key_heads = nn.Dense(
-            self.num_heads * qk_size, use_bias=self.use_bias, dtype=k.dtype
+            self.num_heads * qk_size,
+            kernel_init=nn.initializers.normal(self.kernel_init_std),
+            use_bias=self.use_bias,
+            dtype=k.dtype,
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 
         if self.qk_layer_norm:
