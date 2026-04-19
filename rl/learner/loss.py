@@ -46,7 +46,7 @@ def soft_neurd_objective(
     corrected_advantages: jax.Array,
     threshold: jax.Array,
     leak: float = 0.0,
-    gain: float = -0.1,
+    gain: float = 5.0,
 ):
     corrected_advantages = jax.lax.stop_gradient(corrected_advantages)
     abs_adv = jnp.abs(corrected_advantages)
