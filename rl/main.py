@@ -1,7 +1,5 @@
 from dotenv import load_dotenv
 
-from rl.model.utils import ParamsContainer
-
 load_dotenv()
 import argparse
 import concurrent.futures
@@ -27,6 +25,7 @@ from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
+from rl.model.utils import ParamsContainer
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +83,7 @@ def run_eval_heuristic(
     step_count = np.array(learner.player_state.step_count).item()
 
     session_id = actor._env.username
+    swap = True
 
     while not stop_signal[0]:
         try:
@@ -91,13 +91,26 @@ def run_eval_heuristic(
             if new_step_count > step_count:
                 step_count = new_step_count
 
-                player = ParamsContainer(
-                    step_count=step_count,
-                    player_frame_count=0,
-                    builder_frame_count=0,
-                    player_params=learner.player_state.target_params,
-                    builder_params=learner.builder_state.target_params,
-                )
+                if swap:
+                    prefix = "main"
+                    player = ParamsContainer(
+                        step_count=step_count,
+                        player_frame_count=0,
+                        builder_frame_count=0,
+                        player_params=learner.player_state.params,
+                        builder_params=learner.builder_state.params,
+                    )
+                else:
+                    prefix = "ema"
+                    player = ParamsContainer(
+                        step_count=step_count,
+                        player_frame_count=0,
+                        builder_frame_count=0,
+                        player_params=learner.player_state.target_params,
+                        builder_params=learner.builder_state.target_params,
+                    )
+
+                swap = not swap
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -110,8 +123,8 @@ def run_eval_heuristic(
                 wandb_run.log(
                     {
                         "training_step": step_count,
-                        f"payoff-{session_id}": payoff,
-                        f"wr-{session_id}": payoff > 0,
+                        f"{prefix}-payoff-{session_id}": payoff,
+                        f"{prefix}-wr-{session_id}": payoff > 0,
                     }
                 )
 
@@ -189,11 +202,11 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
-        learner_config,
-        player_state,
-        builder_state,
-        mode="checkpoint",
+        learner_config, player_state, builder_state
     )
+
+    player_state = jax.device_put(player_state)
+    builder_state = jax.device_put(builder_state)
 
     logger.info("Initializing WandB...")
     wandb_run = wandb.init(

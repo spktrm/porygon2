@@ -46,8 +46,10 @@ class Porygon2LearnerConfig:
     num_player_actors: int = 12
     num_builder_actors: int = 4
     num_eval_actors: int = 2
-
     unroll_length: int = 128
+
+    # Batch iteration params
+    batch_size: int = 4
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 4
@@ -56,65 +58,60 @@ class Porygon2LearnerConfig:
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
     # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
-    replay_buffer_min_fill_fraction: float = 1 / 20
+    replay_buffer_min_fill_fraction: float = (
+        player_replay_ratio * batch_size / player_replay_buffer_capacity
+    )
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
+    main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
     minimum_historical_player_steps: int = 1_000_000
     league_size: int = 16
 
-    # Batch iteration params
-    batch_size: int = 4
-
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
-    player_clip_gradient: float = 1.0
-    builder_clip_gradient: float = 1.0
+    player_clip_gradient: float = 10.0
+    builder_clip_gradient: float = 10.0
     gradient_accumulation_steps: int = 1
-    player_ema_update_rate: float = 1e-3
-    builder_ema_update_rate: float = 1e-3
+    player_ema_update_rate: float = 1e-4
+    builder_ema_update_rate: float = 1e-4
 
     # Advantage estimation params
-    player_td_lambda: float = 0.95
-    player_gae_lambda: float = 0.95
-    builder_td_lambda: float = 0.95
-    builder_gae_lambda: float = 0.95
+    player_lambda: float = 0.95
+    builder_lambda: float = 0.95
     clip_ppo: float = 0.3
+    exploration_fraction: float = 0.1
+
+    # Regularised reward params
+    player_entropy_reward_scale: float = 0.1
+    player_entropy_normalising_constant: float = 20.0
+    max_num_actions: int = 13  # 4+4+5 = 13 (max possible actions in a given state)
 
     # Loss coefficients
     ## Player
-    player_value_loss_coef: float = 1.0
-    player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.1
-    player_conditional_entropy_loss_coef: float = 1.0
-    player_state_potential_loss_coef: float = 1.0
-    player_entropy_prediction_normalising_constant: float = 50
-    player_potential_advantage_scale: float = 0.1
+    player_policy_loss_coef: float = 1 / max_num_actions
+    player_kl_loss_coef: float = 0.0
+    player_entropy_loss_coef: float = 0.0
+    player_value_head_loss_coef: float = 1.0
+    player_entropy_head_loss_coef: float = 1.0
+
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
+    builder_entropy_loss_coef: float = 0.01
     builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 0
+    builder_entropy_coef: float = 0.01
     builder_entropy_prediction_normalising_constant: float = 100
+    builder_entropy_advantage_scale: float = 1e-3
     # Human
     builder_human_loss_coef: float = 1e-2
-
-    player_temp_coef: float = 0.01
-    player_entropy_temp_decay: float = 0.0
-    player_entropy_temp_ceil: float = 1.0
-    player_entropy_temp_floor: float = 1e-3
-
-    builder_temp_coef: float = 0.3
-    builder_entropy_temp_decay: float = 0.3
-    builder_entropy_temp_ceil: float = 1.0
-    builder_entropy_temp_floor: float = 1e-3
 
     # Smogon Generation
     generation: GenT = 9
@@ -122,6 +119,7 @@ class Porygon2LearnerConfig:
 
     # Logging params
     log_artifacts_online: bool = False
+    check_finite_loss: bool = False
 
 
 def get_learner_config():

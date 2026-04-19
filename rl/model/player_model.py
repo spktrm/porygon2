@@ -44,10 +44,7 @@ class Porygon2PlayerModel(nn.Module):
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
-        self.conditional_entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
-        self.potential_value_head = RegressionValueLogitHead(
-            self.cfg.potential_value_head
-        )
+        self.entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _forward_action_head(
         self,
@@ -57,24 +54,27 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
     ):
-        logits = (
-            self.action_head(action_embeddings, action_embeddings).reshape(-1) / temp
-        )
+        head_logits = self.action_head(action_embeddings, action_embeddings)
+        logits = head_logits.squeeze(-1).reshape(-1) / temp
+
         flat_valid_mask = valid_mask.reshape(-1)
+        valid_sum = jnp.maximum(flat_valid_mask.sum(axis=-1), 1)
 
         log_policy = legal_log_policy(logits, flat_valid_mask)
         policy = legal_policy(logits, flat_valid_mask)
         entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-        valid_sum = flat_valid_mask.sum(axis=-1)
-        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
-        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
-        normalized_entropy = entropy * entropy_scale
-
         # Cross-entropy with uniform distribution over valid actions (for KL)
         uniform_policy = flat_valid_mask / valid_sum
         uniform_log_policy = legal_log_policy(uniform_policy, flat_valid_mask)
         cross_entropy = -jnp.sum(policy * uniform_log_policy, axis=-1)
+
+        # KL to uniform "prior"
+        magnet_kl = cross_entropy - entropy
+
+        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
+        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
+        normalized_entropy = entropy * entropy_scale
 
         if train:
             action_index = head.action_index
@@ -91,22 +91,22 @@ class Porygon2PlayerModel(nn.Module):
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
+            logits=logits,
+            policy=policy,
+            log_policy=log_policy,
             log_prob=log_prob,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
-            kl_prior=entropy - cross_entropy,
+            kl_prior=magnet_kl,
         )
 
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
 
-    def _forward_conditional_entropy_head(self, state_embedding: jax.Array):
-        return self.conditional_entropy_head(state_embedding)
-
-    def _forward_potential_value_head(self, state_embedding: jax.Array):
-        return self.potential_value_head(state_embedding)
+    def _forward_entropy_head(self, state_embedding: jax.Array):
+        return self.entropy_head(state_embedding)
 
     def get_head_outputs(
         self,
@@ -125,23 +125,13 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_hidden, entropy_hidden, potential_hidden = jnp.split(
-            state_embeddings, 3, axis=0
-        )
-
-        value_head = self._forward_value_head(value_hidden.squeeze(0))
-        conditional_entropy_head = self._forward_conditional_entropy_head(
-            entropy_hidden.squeeze(0)
-        )
-        potential_value_head = self._forward_potential_value_head(
-            potential_hidden.squeeze(0)
-        )
+        value_head = self._forward_value_head(state_embeddings[0])
+        entropy_head = self._forward_entropy_head(state_embeddings[1])
 
         return PlayerActorOutput(
             action_head=action_head,
             value_head=value_head,
-            conditional_entropy_head=conditional_entropy_head,
-            potential_value_head=potential_value_head,
+            entropy_head=entropy_head,
         )
 
     def __call__(
