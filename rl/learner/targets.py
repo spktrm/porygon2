@@ -119,12 +119,10 @@ def compute_player_targets(
             axis=-1,
         )
         - config.player_entropy_reward_scale * learner_target_log_ratio
-        + (
-            jax.nn.one_hot(
-                selected_action, action_mask_flat.shape[-1], dtype=cat_vf_support.dtype
-            )
-            * combined_advantage[..., None]
+        + jax.nn.one_hot(
+            selected_action, action_mask_flat.shape[-1], dtype=cat_vf_support.dtype
         )
+        * combined_advantage[..., None]
     )
 
     return PlayerTargets(
