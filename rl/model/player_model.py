@@ -45,6 +45,7 @@ class Porygon2PlayerModel(nn.Module):
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
         self.entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
+        self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
 
     def _forward_action_head(
         self,
@@ -108,9 +109,14 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_entropy_head(self, state_embedding: jax.Array):
         return self.entropy_head(state_embedding)
 
+    def _forward_potential_head(self, state_embedding: jax.Array):
+        return self.potential_head(state_embedding)
+
     def get_head_outputs(
         self,
-        state_embeddings: jax.Array,
+        value_embedding: jax.Array,
+        entropy_emebdding: jax.Array,
+        potential_embedding: jax.Array,
         action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -125,13 +131,15 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(state_embeddings[0])
-        entropy_head = self._forward_entropy_head(state_embeddings[1])
+        value_head = self._forward_value_head(value_embedding)
+        entropy_head = self._forward_entropy_head(entropy_emebdding)
+        potential_head = self._forward_potential_head(potential_embedding)
 
         return PlayerActorOutput(
             action_head=action_head,
             value_head=value_head,
             entropy_head=entropy_head,
+            potential_head=potential_head,
         )
 
     def __call__(
@@ -144,13 +152,25 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        state_embeddings, action_embeddings = self.encoder(
+        (
+            value_embedding,
+            entropy_emebdding,
+            potential_embedding,
+            action_embeddings,
+        ) = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(state_embeddings, action_embeddings, actor_input.env, actor_output)
+        )(
+            value_embedding,
+            entropy_emebdding,
+            potential_embedding,
+            action_embeddings,
+            actor_input.env,
+            actor_output,
+        )
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

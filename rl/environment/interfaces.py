@@ -85,6 +85,9 @@ class PlayerActorOutput:
     entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
+    potential_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
 
 
 @dataclass
@@ -177,6 +180,7 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     ent_returns: ArrayLike = ()
+    pot_returns: ArrayLike = ()
     q_values: ArrayLike = ()
 
 

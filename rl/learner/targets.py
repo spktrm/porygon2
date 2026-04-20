@@ -64,10 +64,27 @@ def compute_player_targets(
         config.player_entropy_normalising_constant * target_pred.entropy_head.logits
     )
 
-    combined_rewards = jnp.concatenate([player_reward, reg_reward[..., None]], axis=-1)
+    state_potential = traj.player_transitions.env_output.state_potential
+    next_state_potential = (
+        jnp.concatenate([state_potential[1:], state_potential[-1:]], axis=0)
+        * player_valid
+    )
+    potential_reward = next_state_potential - state_potential
+    target_pot_scaled = (
+        config.player_potential_normalising_constant * target_pred.potential_head.logits
+    )
+
+    combined_rewards = jnp.concatenate(
+        [player_reward, reg_reward[..., None], potential_reward[..., None]], axis=-1
+    )
 
     combined_values = jnp.concatenate(
-        [player_value_probs, target_ent_scaled[..., None]], axis=-1
+        [
+            player_value_probs,
+            target_ent_scaled[..., None],
+            target_pot_scaled[..., None],
+        ],
+        axis=-1,
     )
     last_values = combined_values[-1:]
 
@@ -102,10 +119,14 @@ def compute_player_targets(
     combined_advantage = inv_mu * (
         pg_advantages[..., :n_bins] @ cat_vf_support
         + config.player_entropy_reward_scale * pg_advantages[..., n_bins]
+        + config.player_potential_reward_scale * pg_advantages[..., n_bins + 1]
     )
 
     win_returns = returns[..., :n_bins]
     ent_returns = returns[..., n_bins] / config.player_entropy_normalising_constant
+    pot_returns = (
+        returns[..., n_bins + 1] / config.player_potential_normalising_constant
+    )
 
     action_mask = traj.player_transitions.env_output.action_mask
     action_mask_flat = jax.lax.collapse(action_mask, -2)
@@ -115,7 +136,8 @@ def compute_player_targets(
     q_values = (
         jnp.expand_dims(
             target_pred.value_head.expectation
-            + config.player_entropy_reward_scale * target_ent_scaled,
+            + config.player_entropy_reward_scale * target_ent_scaled
+            + config.player_potential_reward_scale * target_pot_scaled,
             axis=-1,
         )
         - config.player_entropy_reward_scale * learner_target_log_ratio
@@ -126,7 +148,10 @@ def compute_player_targets(
     )
 
     return PlayerTargets(
-        win_returns=win_returns, ent_returns=ent_returns, q_values=q_values
+        win_returns=win_returns,
+        ent_returns=ent_returns,
+        pot_returns=pot_returns,
+        q_values=q_values,
     )
 
 
