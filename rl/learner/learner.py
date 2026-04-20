@@ -98,6 +98,7 @@ def train_step(
         learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
         learner_entropy_head = learner_player_pred.entropy_head
+        learner_potential_head = learner_player_pred.potential_head
         learner_log_prob = learner_action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -154,6 +155,12 @@ def train_step(
             valid=player_valid,
         )
 
+        loss_potential = mse_value_loss(
+            pred=learner_potential_head.logits,
+            target=player_targets.pot_returns,
+            valid=player_valid,
+        )
+
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=player_valid)
 
         loss = (
@@ -162,6 +169,7 @@ def train_step(
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * loss_magnet_kl
             + config.player_entropy_head_loss_coef * loss_conditional_entropy
+            + config.player_potential_head_loss_coef * loss_potential
         )
 
         return loss, dict(
@@ -171,6 +179,7 @@ def train_step(
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
             player_loss_magnet_kl=loss_magnet_kl,
+            player_loss_potential=loss_potential,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -179,14 +188,30 @@ def train_step(
             # Approx KL values
             player_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
-            player_value_function_r2=calculate_r2(
+            player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
+                mask=player_valid,
+            ),
+            player_entropy_head_r2=calculate_r2(
+                value_prediction=learner_entropy_head.logits,
+                value_target=player_targets.ent_returns,
+                mask=player_valid,
+            ),
+            player_potential_head_r2=calculate_r2(
+                value_prediction=learner_potential_head.logits,
+                value_target=player_targets.pot_returns,
                 mask=player_valid,
             ),
             player_entropy_head_mean=average(learner_entropy_head.logits, player_valid),
             player_entropy_head_std=jnp.std(
                 learner_entropy_head.logits, where=player_valid
+            ),
+            player_potential_head_mean=average(
+                learner_potential_head.logits, player_valid
+            ),
+            player_potential_head_std=jnp.std(
+                learner_potential_head.logits, where=player_valid
             ),
         )
 

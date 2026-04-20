@@ -16,7 +16,6 @@ from rl.environment.data import (
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
     FIELD_MAX_VALUES,
-    NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,
@@ -341,10 +340,10 @@ class Encoder(nn.Module):
 
         # Transformer Decoders
         self.state_embeddings = self.param(
-            "state_embeddings", learnable_query_init, (3, entity_size)
+            "state_embeddings", learnable_query_init, (2, entity_size)
         )
         self.extra_embeddings = self.param(
-            "extra_embeddings", learnable_query_init, (3, entity_size)
+            "extra_embeddings", learnable_query_init, (6, entity_size)
         )
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
@@ -1209,55 +1208,53 @@ class Encoder(nn.Module):
             )
         )
 
-        self_attn_shape = NUM_ACTION_FEATURES + 1
-        self_attn_output_mask = jnp.zeros(
-            (self_attn_shape, self_attn_shape), dtype=jnp.bool
-        )
+        q_self_attn_mask = env_step.action_mask | env_step.action_mask.T
+        q_self_attn_mask = q_self_attn_mask.at[
+            ActionEnum.ACTION_ENUM__VALUE_EMBEDDING :
+        ].set(jnp.any(q_self_attn_mask, axis=0, keepdims=True))
+        q_self_attn_mask = q_self_attn_mask | q_self_attn_mask.T
+        q_self_attn_mask = q_self_attn_mask.at[
+            ActionEnum.ACTION_ENUM__VALUE_EMBEDDING :,
+            ActionEnum.ACTION_ENUM__VALUE_EMBEDDING :,
+        ].set(True)
 
-        combined_mask = env_step.action_mask | env_step.action_mask.T
-        self_attn_output_mask = self_attn_output_mask.at[
-            -NUM_ACTION_FEATURES:, -NUM_ACTION_FEATURES:
-        ].set(combined_mask)
-
-        self_attn_output_mask = self_attn_output_mask.at[0, 1:].set(
-            combined_mask.any(axis=0)
-        )
-        self_attn_output_mask = self_attn_output_mask.at[1:, 0].set(
-            combined_mask.any(axis=1)
-        )
-        self_attn_output_mask = self_attn_output_mask.at[:2, :2].set(True)
-        self_attn_output_mask = self_attn_output_mask.at[:2].set(
-            self_attn_output_mask[0][None]
-        )
-        self_attn_output_mask = self_attn_output_mask.at[..., :2].set(
-            self_attn_output_mask[0][..., None]
-        )
-
-        output_state_mask = self_attn_output_mask.any(1) | self_attn_output_mask.any(0)
-
-        self_attn_output_mask = self_attn_output_mask[None]
-
+        output_state_mask = q_self_attn_mask.any(axis=0)
         latent_input_mask = jnp.ones_like(
             latent_input_embeddings[..., 0], dtype=jnp.bool
         )
+
+        q_self_attn_mask = jnp.expand_dims(q_self_attn_mask, axis=0)
+        kv_self_attn_mask = create_attention_mask(latent_input_mask)
+        cross_attn_mask = create_attention_mask(output_state_mask, latent_input_mask)
 
         for _ in range(self.cfg.num_thinking_steps):
             output_state_sequence = self.state_transformer(
                 q=output_state_sequence,
                 kv=latent_input_embeddings,
-                q_self_attn_mask=self_attn_output_mask,
-                kv_self_attn_mask=create_attention_mask(latent_input_mask),
-                cross_attn_mask=create_attention_mask(
-                    output_state_mask, latent_input_mask
-                ),
+                q_self_attn_mask=q_self_attn_mask,
+                kv_self_attn_mask=kv_self_attn_mask,
+                cross_attn_mask=cross_attn_mask,
             )
 
         output_state_embeddings = self.final_norm(output_state_sequence)
 
-        state_embeddings = output_state_embeddings[:2]
-        action_embeddings = output_state_embeddings[1:]
+        value_embedding = output_state_embeddings[
+            ActionEnum.ACTION_ENUM__VALUE_EMBEDDING
+        ]
+        entropy_emebdding = output_state_embeddings[
+            ActionEnum.ACTION_ENUM__ENTROPY_EMBEDDING
+        ]
+        potential_embedding = output_state_embeddings[
+            ActionEnum.ACTION_ENUM__POTENTIAL_EMBEDDING
+        ]
+        action_embeddings = output_state_embeddings
 
-        return state_embeddings, action_embeddings
+        return (
+            value_embedding,
+            entropy_emebdding,
+            potential_embedding,
+            action_embeddings,
+        )
 
     def __call__(
         self,
@@ -1277,9 +1274,12 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        state_embeddings, action_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
-        )(
+        (
+            value_embedding,
+            entropy_emebdding,
+            potential_embedding,
+            action_embeddings,
+        ) = jax.vmap(self._batched_forward, in_axes=(0, 0, 0, None, None, None))(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
@@ -1288,4 +1288,9 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return state_embeddings, action_embeddings
+        return (
+            value_embedding,
+            entropy_emebdding,
+            potential_embedding,
+            action_embeddings,
+        )

@@ -79,8 +79,8 @@ class Porygon2LearnerConfig:
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
     gradient_accumulation_steps: int = 1
-    player_ema_update_rate: float = 1e-4
-    builder_ema_update_rate: float = 1e-4
+    player_ema_update_rate: float = 1e-3
+    builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
     player_lambda: float = 0.95
@@ -89,17 +89,20 @@ class Porygon2LearnerConfig:
     exploration_fraction: float = 0.1
 
     # Regularised reward params
-    player_entropy_reward_scale: float = 0.1
-    player_entropy_normalising_constant: float = 20.0
+    player_entropy_reward_scale: float = 0.2
+    player_potential_reward_scale: float = 0.2
+    player_entropy_normalising_constant: float = 4.0
+    player_potential_normalising_constant: float = 1 / 3
     max_num_actions: int = 13  # 4+4+5 = 13 (max possible actions in a given state)
 
     # Loss coefficients
     ## Player
-    player_policy_loss_coef: float = 1 / max_num_actions
+    player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.0
     player_entropy_loss_coef: float = 0.0
     player_value_head_loss_coef: float = 1.0
     player_entropy_head_loss_coef: float = 1.0
+    player_potential_head_loss_coef: float = 1.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5
