@@ -131,16 +131,17 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        value_head = self._forward_value_head(value_embedding)
-        entropy_head = self._forward_entropy_head(entropy_emebdding)
-        potential_head = self._forward_potential_head(potential_embedding)
+        if self.cfg.train:
+            train_kwargs = dict(
+                value_head=self._forward_value_head(value_embedding),
+                entropy_head=self._forward_entropy_head(entropy_emebdding),
+                potential_head=self._forward_potential_head(potential_embedding),
+                action_embeddings=action_embeddings,
+            )
+        else:
+            train_kwargs = dict()
 
-        return PlayerActorOutput(
-            action_head=action_head,
-            value_head=value_head,
-            entropy_head=entropy_head,
-            potential_head=potential_head,
-        )
+        return PlayerActorOutput(action_head=action_head, **train_kwargs)
 
     def __call__(
         self,

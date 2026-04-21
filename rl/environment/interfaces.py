@@ -88,6 +88,7 @@ class PlayerActorOutput:
     potential_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
+    action_embeddings: ArrayLike = ()
 
 
 @dataclass
@@ -202,6 +203,11 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+
+
+@dataclass
+class Batch(Trajectory):
+    rng_key: ArrayLike = ()
 
 
 @dataclass
