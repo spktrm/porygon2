@@ -19,8 +19,8 @@ const server = "ws://localhost:8000/showdown/websocket";
 // const server = "wss://pokeagentshowdown.com/showdown/websocket";
 const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
 // const smogonFormat = "gen9ou";
-// const smogonFormat = "gen9randombattle";
-const smogonFormat = "gen9randomdoublesbattle";
+const smogonFormat = "gen9randombattle";
+// const smogonFormat = "gen9randomdoublesbattle";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie

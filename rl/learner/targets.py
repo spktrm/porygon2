@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.interfaces import (
+    Batch,
     BuilderActorOutput,
     BuilderTargets,
     PlayerActorOutput,
@@ -37,19 +38,19 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
 
 
 def compute_player_targets(
-    traj: Trajectory,
+    batch: Batch,
     learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
     importance_sampling_ratios: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=importance_sampling_ratios.dtype)
-    player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
+    player_valid = jnp.logical_not(batch.player_transitions.env_output.done)  # (T, B)
 
     rho_t = jnp.minimum(1.0, importance_sampling_ratios)
     c_t = jnp.minimum(1.0, importance_sampling_ratios)
 
-    player_reward = traj.player_transitions.env_output.win_reward
+    player_reward = batch.player_transitions.env_output.win_reward
     player_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = player_value_probs.shape[-1]
 
@@ -64,7 +65,7 @@ def compute_player_targets(
         config.player_entropy_normalising_constant * target_pred.entropy_head.logits
     )
 
-    state_potential = traj.player_transitions.env_output.state_potential
+    state_potential = batch.player_transitions.env_output.state_potential
     next_state_potential = (
         jnp.concatenate([state_potential[1:], state_potential[-1:]], axis=0)
         * player_valid
@@ -114,7 +115,7 @@ def compute_player_targets(
 
     pg_advantages = q_estimate - combined_values
     inv_mu = jnp.exp(
-        -traj.player_transitions.agent_output.actor_output.action_head.log_prob
+        -batch.player_transitions.agent_output.actor_output.action_head.log_prob
     )
     combined_advantage = inv_mu * (
         pg_advantages[..., :n_bins] @ cat_vf_support
@@ -128,10 +129,10 @@ def compute_player_targets(
         returns[..., n_bins + 1] / config.player_potential_normalising_constant
     )
 
-    action_mask = traj.player_transitions.env_output.action_mask
+    action_mask = batch.player_transitions.env_output.action_mask
     action_mask_flat = jax.lax.collapse(action_mask, -2)
     selected_action = (
-        traj.player_transitions.agent_output.actor_output.action_head.action_index
+        batch.player_transitions.agent_output.actor_output.action_head.action_index
     )
     q_values = (
         jnp.expand_dims(

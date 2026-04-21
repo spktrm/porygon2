@@ -45,7 +45,6 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.model.modules import (
-    RMSNorm,
     SumEmbeddings,
     Transformer,
     TransformerDecoder,
@@ -354,8 +353,6 @@ class Encoder(nn.Module):
             **self.cfg.history_decoder.to_dict(),
         )
         self.state_transformer = Transformer(**self.cfg.state_transformer.to_dict())
-
-        self.final_norm = RMSNorm()
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1236,7 +1233,9 @@ class Encoder(nn.Module):
                 cross_attn_mask=cross_attn_mask,
             )
 
-        output_state_embeddings = self.final_norm(output_state_sequence)
+        output_state_embeddings = jnp.where(
+            output_state_mask[..., None], output_state_sequence, 0
+        )
 
         value_embedding = output_state_embeddings[
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING

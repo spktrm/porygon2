@@ -1,7 +1,52 @@
+from typing import Optional
+
 import jax
 import jax.numpy as jnp
 
 from rl.utils import average
+
+
+def sigreg_loss(
+    x: jax.Array,
+    rng_key: jax.random.PRNGKey,
+    mask: Optional[jax.Array] = None,
+    sketch_dim: int = 64,
+):
+    """
+    Forces ECF(x) ~ ECF(Gaussian).
+    Matches ALL Moments (Maximum Entropy Cloud).
+    Exact implementation of LeJEPA Algorithm 1.
+    """
+    N, C = x.shape
+
+    if mask is None:
+        mask = jnp.ones((N,))
+
+    x_norm = jnp.linalg.norm(x, ord=2, axis=-1, keepdims=True)
+    x = (x * (C**0.5)) / x_norm.clip(min=1e-6)
+
+    # 1. Sketching
+    if C > sketch_dim:
+        # Generate random matrix S
+        S = jax.random.normal(rng_key, (sketch_dim, C)) / (C**0.5)
+        x = x @ S.T  # [N, sketch_dim]
+    else:
+        sketch_dim = C
+
+    # 2. Centering
+    mask_sum = jnp.maximum(mask.sum(axis=0, keepdims=True), 1)
+    mean_x = jnp.where(mask[..., None], x, 0.0).sum(axis=0) / mask_sum
+    x = jnp.where(mask[..., None], x - mean_x, 0.0)
+
+    # 3. Covariance
+    cov_denominator = jnp.maximum(mask_sum - 1.0, 1e-6)
+    cov = (x.T @ x) / cov_denominator
+
+    # 4. Target Identity
+    target = jnp.eye(sketch_dim)
+
+    # 5. Frobenius Norm
+    return jnp.linalg.norm(cov - target, ord="fro")
 
 
 def spo_objective(

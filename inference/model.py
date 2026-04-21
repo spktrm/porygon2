@@ -125,6 +125,7 @@ class InferenceModel:
         floats = dict(
             v_win=actor_output.value_head.expectation.item(),
             v_ent=actor_output.entropy_head.logits.item(),
+            v_pot=actor_output.potential_head.logits.item(),
             log_prob=actor_output.action_head.log_prob.item(),
             entropy=actor_output.action_head.entropy.item(),
         )

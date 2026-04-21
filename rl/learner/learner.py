@@ -1,5 +1,6 @@
 import logging
 import queue
+import random
 import threading
 import traceback
 from _thread import LockType
@@ -14,7 +15,12 @@ from tqdm import tqdm
 
 import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
-from rl.environment.interfaces import BuilderActorInput, PlayerActorInput, Trajectory
+from rl.environment.interfaces import (
+    Batch,
+    BuilderActorInput,
+    PlayerActorInput,
+    Trajectory,
+)
 from rl.environment.utils import clip_history, clip_packed_history
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
@@ -30,6 +36,7 @@ from rl.learner.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
+    sigreg_loss,
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
@@ -43,7 +50,7 @@ logger = logging.getLogger(__name__)
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-    batch: Trajectory,
+    batch: Batch,
     config: Porygon2LearnerConfig,
 ):
     """Train for a single step."""
@@ -155,6 +162,15 @@ def train_step(
             valid=player_valid,
         )
 
+        sig_reg_mask = player_valid[..., None, None] & (
+            learner_player_pred.action_embeddings.sum(axis=-1, keepdims=True) > 0
+        )
+        loss_ssl_representation = sigreg_loss(
+            jax.lax.collapse(learner_player_pred.action_embeddings, 0, -1),
+            batch.rng_key,
+            mask=sig_reg_mask.reshape(-1),
+        )
+
         loss_potential = mse_value_loss(
             pred=learner_potential_head.logits,
             target=player_targets.pot_returns,
@@ -170,6 +186,7 @@ def train_step(
             + config.player_entropy_loss_coef * loss_magnet_kl
             + config.player_entropy_head_loss_coef * loss_conditional_entropy
             + config.player_potential_head_loss_coef * loss_potential
+            + config.player_ssl_representation_loss_coef * loss_ssl_representation
         )
 
         return loss, dict(
@@ -180,6 +197,7 @@ def train_step(
             player_loss_conditional_entropy=loss_conditional_entropy,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_potential=loss_potential,
+            player_loss_ssl_representation=loss_ssl_representation,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -481,7 +499,8 @@ def _stack_and_pad_batch(
     batch: list[Trajectory],
     player_transition_resolution: int = 50,
     player_history_resolution: int = 128,
-) -> Trajectory:
+    rng_key: jax.Array = None,
+) -> Batch:
     """Stacks a list of trajectories and pads them to a fixed resolution."""
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
@@ -494,7 +513,7 @@ def _stack_and_pad_batch(
         np.ceil(valid_sum / player_transition_resolution) * player_transition_resolution
     )
 
-    return Trajectory(
+    return Batch(
         builder_transitions=stacked_trajectory.builder_transitions,
         builder_history=stacked_trajectory.builder_history,
         player_transitions=jax.tree.map(
@@ -507,6 +526,7 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, resolution=player_history_resolution
         ),
+        rng_key=rng_key,
     )
 
 
@@ -542,7 +562,7 @@ class Learner:
         )
 
         # Threading
-        self.device_q: queue.Queue[Trajectory] = queue.Queue(maxsize=1)
+        self.device_q: queue.Queue[Batch] = queue.Queue(maxsize=1)
 
         # Progress Bars
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
@@ -583,6 +603,7 @@ class Learner:
                 )
             )
 
+        init_key = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
         while not self.done:
             # Burst processing to minimize lock contention overhead
             for _ in range(max_burst):
@@ -606,7 +627,8 @@ class Learner:
                 self.consumer_progress.update(minibatch_size)
 
                 # Process pure data outside lock
-                stacked = _stack_and_pad_batch(batch)
+                init_key, batch_key = jax.random.split(init_key)
+                stacked = _stack_and_pad_batch(batch, rng_key=batch_key)
                 self.device_q.put(stacked)
 
         logger.info("host_to_device_worker exiting.")
@@ -681,7 +703,7 @@ class Learner:
             transfer_thread.join(timeout=10)
             print("Training Finished.")
 
-    def _train_step(self, batch: Trajectory) -> dict | None:
+    def _train_step(self, batch: Batch) -> dict | None:
         """
         Runs the JAX update, verifies gradients/loss, and updates internal state.
         Returns training logs on success, or None if the step was invalid (e.g. NaN loss).
