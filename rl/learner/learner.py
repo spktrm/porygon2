@@ -162,13 +162,12 @@ def train_step(
             valid=player_valid,
         )
 
-        sig_reg_mask = player_valid[..., None, None] & (
-            learner_player_pred.action_embeddings.sum(axis=-1, keepdims=True) > 0
-        )
         loss_ssl_representation = sigreg_loss(
-            jax.lax.collapse(learner_player_pred.action_embeddings, 0, -1),
+            jax.lax.collapse(
+                jax.lax.collapse(learner_player_pred.latent_input_embeddings, -2), 0, 2
+            ),
             batch.rng_key,
-            mask=sig_reg_mask.reshape(-1),
+            mask=player_valid.reshape(-1),
         )
 
         loss_potential = mse_value_loss(
