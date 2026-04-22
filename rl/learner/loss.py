@@ -136,7 +136,7 @@ def off_policy_neurd_objective(
 
     threshold = threshold[..., None]
 
-    loss = soft_neurd_objective(
+    loss = hard_neurd_objective(
         mean_centered_logits=mean_centered_logits,
         corrected_advantages=corrected_advantages,
         threshold=threshold,

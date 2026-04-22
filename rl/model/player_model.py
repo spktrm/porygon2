@@ -118,6 +118,7 @@ class Porygon2PlayerModel(nn.Module):
         entropy_emebdding: jax.Array,
         potential_embedding: jax.Array,
         action_embeddings: jax.Array,
+        latent_input_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -131,12 +132,12 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        if self.cfg.train:
+        if self.cfg.train or self.cfg.output_value_heads:
             train_kwargs = dict(
                 value_head=self._forward_value_head(value_embedding),
                 entropy_head=self._forward_entropy_head(entropy_emebdding),
                 potential_head=self._forward_potential_head(potential_embedding),
-                action_embeddings=action_embeddings,
+                latent_input_embeddings=latent_input_embeddings,
             )
         else:
             train_kwargs = dict()
@@ -158,6 +159,7 @@ class Porygon2PlayerModel(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
+            latent_input_embeddings,
         ) = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
@@ -169,6 +171,7 @@ class Porygon2PlayerModel(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
+            latent_input_embeddings,
             actor_input.env,
             actor_output,
         )

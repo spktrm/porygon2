@@ -88,7 +88,7 @@ class PlayerActorOutput:
     potential_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    action_embeddings: ArrayLike = ()
+    latent_input_embeddings: ArrayLike = ()
 
 
 @dataclass
