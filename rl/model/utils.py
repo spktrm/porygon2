@@ -36,7 +36,7 @@ def legal_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """A soft-max policy that respects legal_actions."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
-    masked_logits = jnp.where(legal_actions, logits, jnp.finfo(logits.dtype).min)
+    masked_logits = jnp.where(legal_actions, logits, -1e9)
     policy = jax.nn.softmax(masked_logits, axis=-1)
     return jnp.where(legal_actions, policy, 0.0)
 
@@ -44,7 +44,7 @@ def legal_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
 def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     """Return the log of the policy on legal action, 0 on illegal action."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
-    masked_logits = jnp.where(legal_actions, logits, jnp.finfo(logits.dtype).min)
+    masked_logits = jnp.where(legal_actions, logits, -1e9)
     log_policy = jax.nn.log_softmax(masked_logits, axis=-1)
     return jnp.where(legal_actions, log_policy, 0.0)
 

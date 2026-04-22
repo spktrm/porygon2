@@ -1246,6 +1246,7 @@ class Encoder(nn.Module):
         potential_embedding = output_state_embeddings[
             ActionEnum.ACTION_ENUM__POTENTIAL_EMBEDDING
         ]
+
         action_embeddings = output_state_embeddings
 
         return (
@@ -1253,7 +1254,6 @@ class Encoder(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
-            latent_input_embeddings,
         )
 
     def __call__(
@@ -1279,7 +1279,6 @@ class Encoder(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
-            latent_input_embeddings,
         ) = jax.vmap(self._batched_forward, in_axes=(0, 0, 0, None, None, None))(
             env_step,
             timestep_mask,
@@ -1294,5 +1293,4 @@ class Encoder(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
-            latent_input_embeddings,
         )

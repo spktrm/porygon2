@@ -16,20 +16,14 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 
 class RMSNorm(nn.Module):
-    """RMSNorm layer."""
-
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
         scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],))
-        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
-        # Jax.lax.rsqrt is used because it returns different floats than
-        # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-        normed_inputs = x * jax.lax.rsqrt(var + 1e-6)
+        x_fp32 = x.astype(jnp.float32)
+        var = jnp.mean(jnp.square(x_fp32), axis=-1, keepdims=True)
+        normed_inputs = x * jax.lax.rsqrt(var + 1e-6).astype(x.dtype)
 
-        # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
-        # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
-        # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1)).astype(x.dtype)
         return normed_inputs * (1 + scale)
 
@@ -284,9 +278,9 @@ class MultiHeadAttention(nn.Module):
 
         # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
-        attn_logits = attn_logits / np.sqrt(qk_size).astype(q.dtype)
+        attn_logits = softcap(attn_logits / np.sqrt(qk_size).astype(q.dtype))
 
-        attn_logits = jnp.where(mask, attn_logits, jnp.finfo(attn_logits.dtype).min)
+        attn_logits = jnp.where(mask, attn_logits, -1e9)
         attn_log_probs = nn.log_softmax(attn_logits, axis=-1)
         attn_probs = jnp.exp(attn_log_probs)
         attn_probs = jnp.where(mask, attn_probs, 0)
@@ -437,7 +431,7 @@ class TransformerEncoder(nn.Module):
                 layer_idx, qkv, attn_mask, positionwise_mask, qkv_positions
             )
 
-        return qkv
+        return layer_norm(qkv)
 
 
 class TransformerDecoder(nn.Module):
@@ -547,7 +541,7 @@ class TransformerDecoder(nn.Module):
                 kv_positions,
             )
 
-        return q
+        return layer_norm(q)
 
 
 class Transformer(nn.Module):
@@ -569,14 +563,39 @@ class Transformer(nn.Module):
         layer_idx: int,
         q: jax.Array,
         kv: jax.Array,
-        attn_mask: jax.Array,
+        self_attn_mask: jax.Array,
+        cross_attn_mask: jax.Array,
         positionwise_mask: jax.Array,
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
-    ):
+    ) -> jax.Array:
+        q_ln = layer_norm(q)
+        mhsa = MultiHeadAttention(
+            num_heads=self.num_heads,
+            qk_size=self.qk_size,
+            v_size=self.v_size,
+            model_size=self.model_size,
+            use_bias=self.use_bias,
+            qk_layer_norm=self.qk_layer_norm,
+            need_pos=self.need_pos,
+            dtype=q.dtype,
+            slots=self.slots,
+        )(
+            q=q_ln,
+            kv=q_ln,
+            mask=self_attn_mask,
+            q_positions=q_positions,
+            kv_positions=kv_positions,
+        )
+        mhsa_a = self.param(
+            f"decoder_mhsa_a_{layer_idx}",
+            nn.initializers.constant(self.init_residual_scale),
+            (1,),
+        )
+        q = q + mhsa_a.astype(q.dtype) * mhsa
         q_ln = layer_norm(q)
         kv_ln = layer_norm(kv)
-        mha = MultiHeadAttention(
+        mhca = MultiHeadAttention(
             num_heads=self.num_heads,
             qk_size=self.qk_size,
             v_size=self.v_size,
@@ -589,16 +608,16 @@ class Transformer(nn.Module):
         )(
             q=q_ln,
             kv=kv_ln,
-            mask=attn_mask,
+            mask=cross_attn_mask,
             q_positions=q_positions,
             kv_positions=kv_positions,
         )
-        mha_a = self.param(
-            f"decoder_mha_a_{layer_idx}",
+        mhca_a = self.param(
+            f"decoder_mhca_a_{layer_idx}",
             nn.initializers.constant(self.init_residual_scale),
             (1,),
         )
-        q = q + mha_a.astype(q.dtype) * mha
+        q = q + mhca_a.astype(q.dtype) * mhca
         qkv_ln = layer_norm(q)
         ffn = FFWMLP(
             hidden_size=self.resblocks_hidden_size,
@@ -685,24 +704,26 @@ class Transformer(nn.Module):
         kv_encoder_positionwise_mask = kv_self_attn_mask.any(
             axis=-1, keepdims=True
         ).squeeze(-3)
-        decoder_positionwise_mask = cross_attn_mask.any(axis=-1, keepdims=True).squeeze(
-            -3
-        )
 
         for layer_idx in range(self.num_layers):
             kv = self.encoder_layer(
-                layer_idx, kv, kv_self_attn_mask, kv_encoder_positionwise_mask
+                layer_idx,
+                kv,
+                kv_self_attn_mask,
+                kv_encoder_positionwise_mask,
             )
 
         for layer_idx in range(self.num_layers, 2 * self.num_layers):
-            q = self.encoder_layer(
-                layer_idx, q, q_self_attn_mask, q_encoder_positionwise_mask
-            )
             q = self.decoder_layer(
-                layer_idx, q, kv, cross_attn_mask, decoder_positionwise_mask
+                layer_idx,
+                q,
+                kv,
+                q_self_attn_mask,
+                cross_attn_mask,
+                q_encoder_positionwise_mask,
             )
 
-        return q
+        return layer_norm(q)
 
 
 class MLP(nn.Module):

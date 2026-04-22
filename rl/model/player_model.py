@@ -67,7 +67,8 @@ class Porygon2PlayerModel(nn.Module):
 
         # Cross-entropy with uniform distribution over valid actions (for KL)
         uniform_policy = flat_valid_mask / valid_sum
-        uniform_log_policy = legal_log_policy(uniform_policy, flat_valid_mask)
+        safe_prior = jnp.where(flat_valid_mask, uniform_policy, 1e-9)
+        uniform_log_policy = jnp.where(flat_valid_mask, jnp.log(safe_prior), 0.0)
         cross_entropy = -jnp.sum(policy * uniform_log_policy, axis=-1)
 
         # KL to uniform "prior"
@@ -81,8 +82,7 @@ class Porygon2PlayerModel(nn.Module):
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(flat_valid_mask, logits, jnp.finfo(logits.dtype).min),
-                self.make_rng("sampling"),
+                jnp.where(flat_valid_mask, logits, -1e9), self.make_rng("sampling")
             )
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
@@ -118,7 +118,6 @@ class Porygon2PlayerModel(nn.Module):
         entropy_emebdding: jax.Array,
         potential_embedding: jax.Array,
         action_embeddings: jax.Array,
-        latent_input_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -137,7 +136,6 @@ class Porygon2PlayerModel(nn.Module):
                 value_head=self._forward_value_head(value_embedding),
                 entropy_head=self._forward_entropy_head(entropy_emebdding),
                 potential_head=self._forward_potential_head(potential_embedding),
-                latent_input_embeddings=latent_input_embeddings,
             )
         else:
             train_kwargs = dict()
@@ -159,7 +157,6 @@ class Porygon2PlayerModel(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
-            latent_input_embeddings,
         ) = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
@@ -171,7 +168,6 @@ class Porygon2PlayerModel(nn.Module):
             entropy_emebdding,
             potential_embedding,
             action_embeddings,
-            latent_input_embeddings,
             actor_input.env,
             actor_output,
         )

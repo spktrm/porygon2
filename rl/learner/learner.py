@@ -36,7 +36,6 @@ from rl.learner.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    sigreg_loss,
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
@@ -138,7 +137,8 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits, labels=player_targets.win_returns
+                logits=learner_value_head.logits,
+                labels=player_targets.win_returns,
             ),
             player_valid,
         )
@@ -162,14 +162,6 @@ def train_step(
             valid=player_valid,
         )
 
-        loss_ssl_representation = sigreg_loss(
-            jax.lax.collapse(
-                jax.lax.collapse(learner_player_pred.latent_input_embeddings, -2), 0, 2
-            ),
-            batch.rng_key,
-            mask=player_valid.reshape(-1),
-        )
-
         loss_potential = mse_value_loss(
             pred=learner_potential_head.logits,
             target=player_targets.pot_returns,
@@ -181,11 +173,10 @@ def train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
-            + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * loss_magnet_kl
             + config.player_entropy_head_loss_coef * loss_conditional_entropy
             + config.player_potential_head_loss_coef * loss_potential
-            + config.player_ssl_representation_loss_coef * loss_ssl_representation
+            + config.player_kl_loss_coef * loss_backward_kl
+            + config.player_entropy_loss_coef * loss_magnet_kl
         )
 
         return loss, dict(
@@ -196,7 +187,6 @@ def train_step(
             player_loss_conditional_entropy=loss_conditional_entropy,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_potential=loss_potential,
-            player_loss_ssl_representation=loss_ssl_representation,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
