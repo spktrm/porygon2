@@ -93,7 +93,6 @@ class Porygon2LearnerConfig:
     player_potential_reward_scale: float = 0.1
     player_entropy_normalising_constant: float = 2.0
     player_potential_normalising_constant: float = 1 / 2
-    max_num_actions: int = 13  # 4+4+5 = 13 (max possible actions in a given state)
 
     # Loss coefficients
     ## Player
@@ -103,7 +102,6 @@ class Porygon2LearnerConfig:
     player_value_head_loss_coef: float = 1.0
     player_entropy_head_loss_coef: float = 1.0
     player_potential_head_loss_coef: float = 1.0
-    player_ssl_representation_loss_coef: float = 0.01
 
     ## Builder
     builder_value_loss_coef: float = 0.5
