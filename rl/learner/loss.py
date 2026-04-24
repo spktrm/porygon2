@@ -107,7 +107,6 @@ def policy_gradient_loss(
     policy_ratios: jax.Array,
     q_values: jax.Array,
     valid: jax.Array,
-    clip_ppo: float,
     threshold: float,
 ):
     pg_loss = off_policy_neurd_objective(

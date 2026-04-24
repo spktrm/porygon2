@@ -285,8 +285,8 @@ class MultiHeadAttention(nn.Module):
         attn_probs = jnp.exp(attn_log_probs)
         attn_probs = jnp.where(mask, attn_probs, 0)
 
-        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / math.log(
-            attn_probs.shape[-1]
+        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
+            mask.sum(axis=-1)
         )
 
         # Weight the values by the attention and flatten the head vectors.

@@ -403,7 +403,6 @@ export interface ActionEnumMap {
   ACTION_ENUM__ALLY_2_PASS: 30;
   ACTION_ENUM__VALUE_EMBEDDING: 31;
   ACTION_ENUM__ENTROPY_EMBEDDING: 32;
-  ACTION_ENUM__POTENTIAL_EMBEDDING: 33;
 }
 
 export const ActionEnum: ActionEnumMap;
