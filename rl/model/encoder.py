@@ -250,9 +250,6 @@ class Encoder(nn.Module):
         self.my_move_embedding = self.param(
             "my_move_embedding", embedding_init, (1, entity_size)
         )
-        self.opp_move_embedding = self.param(
-            "opp_move_embedding", embedding_init, (1, entity_size)
-        )
         self.private_embedding = self.param(
             "private_embedding", embedding_init, (1, entity_size)
         )
@@ -271,11 +268,6 @@ class Encoder(nn.Module):
 
         self.latent_input_queries = self.param(
             "latent_input_queries",
-            learnable_query_init,
-            (self.cfg.num_latent_embeddings, entity_size),
-        )
-        self.latent_history_queries = self.param(
-            "latent_history_queries",
             learnable_query_init,
             (self.cfg.num_latent_embeddings, entity_size),
         )
@@ -341,6 +333,7 @@ class Encoder(nn.Module):
         self.state_embeddings = self.param(
             "state_embeddings", learnable_query_init, (2, entity_size)
         )
+        # TODO: make this 5 since we have remove potential head prediction
         self.extra_embeddings = self.param(
             "extra_embeddings", learnable_query_init, (6, entity_size)
         )
@@ -1081,7 +1074,7 @@ class Encoder(nn.Module):
         )
 
         my_move_embeddings, my_move_mask = self._embed_moves(env_step.my_moveset)
-        opp_move_embeddings, opp_move_mask = self._embed_moves(env_step.opp_moveset)
+        # opp_move_embeddings, opp_move_mask = self._embed_moves(env_step.opp_moveset)
 
         my_move_mask = my_move_mask & jnp.take(
             env_step.action_mask, MOVE_INDICES, axis=0
@@ -1108,9 +1101,6 @@ class Encoder(nn.Module):
         my_move_embeddings = my_move_embeddings + self.my_move_embedding.astype(
             self.cfg.dtype
         )
-        opp_move_embeddings = opp_move_embeddings + self.opp_move_embedding.astype(
-            self.cfg.dtype
-        )
         private_embeddings = private_embeddings + self.private_embedding.astype(
             self.cfg.dtype
         )
@@ -1127,7 +1117,8 @@ class Encoder(nn.Module):
                 my_move_embeddings,
                 private_embeddings,
                 self.active_embeddings.astype(self.cfg.dtype),
-                extra_embeddings,
+                # TODO: make this just extra_embeddings when we change the number of extra embeddings to 5
+                extra_embeddings[:-1],
             ],
             axis=0,
         )
@@ -1151,8 +1142,6 @@ class Encoder(nn.Module):
 
         input_state_sequence = jnp.concatenate(
             (
-                my_move_embeddings,
-                opp_move_embeddings,
                 private_embeddings,
                 public_embeddings,
                 prev_action_src_embedding,
@@ -1169,16 +1158,14 @@ class Encoder(nn.Module):
             ],
             dtype=jnp.bool,
         )
-        input_state_mask = jnp.concatenate(
-            (
-                my_move_mask,
-                opp_move_mask,
-                private_mask,
-                entity_mask,
-                prev_action_doubles_mask,
-                jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
-            )
+
+        modality_masks = (
+            private_mask,
+            entity_mask,
+            prev_action_doubles_mask,
+            jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
         )
+        input_state_mask = jnp.concatenate(modality_masks, axis=0)
         input_latent_mask = jnp.ones_like(
             self.latent_input_queries[..., 0], dtype=jnp.bool
         )
@@ -1189,7 +1176,7 @@ class Encoder(nn.Module):
             attn_mask=create_attention_mask(input_latent_mask, input_state_mask),
         )
         latent_history_embeddings = self.history_decoder(
-            q=self.latent_history_queries.astype(self.cfg.dtype),
+            q=latent_input_embeddings,
             kv=timestep_embeddings,
             attn_mask=create_attention_mask(input_latent_mask, timestep_mask),
             q_positions=jnp.expand_dims(current_position, axis=-1),
@@ -1224,14 +1211,13 @@ class Encoder(nn.Module):
         kv_self_attn_mask = create_attention_mask(latent_input_mask)
         cross_attn_mask = create_attention_mask(output_state_mask, latent_input_mask)
 
-        for _ in range(self.cfg.num_thinking_steps):
-            output_state_sequence = self.state_transformer(
-                q=output_state_sequence,
-                kv=latent_input_embeddings,
-                q_self_attn_mask=q_self_attn_mask,
-                kv_self_attn_mask=kv_self_attn_mask,
-                cross_attn_mask=cross_attn_mask,
-            )
+        output_state_sequence = self.state_transformer(
+            q=output_state_sequence,
+            kv=latent_input_embeddings,
+            q_self_attn_mask=q_self_attn_mask,
+            kv_self_attn_mask=kv_self_attn_mask,
+            cross_attn_mask=cross_attn_mask,
+        )
 
         output_state_embeddings = jnp.where(
             output_state_mask[..., None], output_state_sequence, 0
@@ -1243,18 +1229,10 @@ class Encoder(nn.Module):
         entropy_emebdding = output_state_embeddings[
             ActionEnum.ACTION_ENUM__ENTROPY_EMBEDDING
         ]
-        potential_embedding = output_state_embeddings[
-            ActionEnum.ACTION_ENUM__POTENTIAL_EMBEDDING
-        ]
 
         action_embeddings = output_state_embeddings
 
-        return (
-            value_embedding,
-            entropy_emebdding,
-            potential_embedding,
-            action_embeddings,
-        )
+        return value_embedding, entropy_emebdding, action_embeddings
 
     def __call__(
         self,
@@ -1274,12 +1252,9 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        (
-            value_embedding,
-            entropy_emebdding,
-            potential_embedding,
-            action_embeddings,
-        ) = jax.vmap(self._batched_forward, in_axes=(0, 0, 0, None, None, None))(
+        value_embedding, entropy_emebdding, action_embeddings = jax.vmap(
+            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
+        )(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
@@ -1288,9 +1263,4 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return (
-            value_embedding,
-            entropy_emebdding,
-            potential_embedding,
-            action_embeddings,
-        )
+        return value_embedding, entropy_emebdding, action_embeddings

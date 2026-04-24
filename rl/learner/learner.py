@@ -32,7 +32,6 @@ from rl.learner.config import (
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.loss import (
     backward_kl_loss,
-    clip_fraction,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
@@ -104,7 +103,6 @@ def train_step(
         learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
         learner_entropy_head = learner_player_pred.entropy_head
-        learner_potential_head = learner_player_pred.potential_head
         learner_log_prob = learner_action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -127,10 +125,9 @@ def train_step(
         loss_pg = policy_gradient_loss(
             logits=learner_action_head.logits,
             policy=learner_action_head.policy,
-            policy_ratios=learner_actor_ratio,
+            policy_ratios=jnp.minimum(learner_actor_ratio, 1.0),
             q_values=player_targets.q_values,
             valid=player_valid,
-            clip_ppo=config.clip_ppo,
             threshold=dynamic_threshold,
         )
 
@@ -162,19 +159,12 @@ def train_step(
             valid=player_valid,
         )
 
-        loss_potential = mse_value_loss(
-            pred=learner_potential_head.logits,
-            target=player_targets.pot_returns,
-            valid=player_valid,
-        )
-
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=player_valid)
 
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_entropy_head_loss_coef * loss_conditional_entropy
-            + config.player_potential_head_loss_coef * loss_potential
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * loss_magnet_kl
         )
@@ -186,7 +176,6 @@ def train_step(
             player_loss_kl=loss_backward_kl,
             player_loss_conditional_entropy=loss_conditional_entropy,
             player_loss_magnet_kl=loss_magnet_kl,
-            player_loss_potential=loss_potential,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
@@ -205,20 +194,9 @@ def train_step(
                 value_target=player_targets.ent_returns,
                 mask=player_valid,
             ),
-            player_potential_head_r2=calculate_r2(
-                value_prediction=learner_potential_head.logits,
-                value_target=player_targets.pot_returns,
-                mask=player_valid,
-            ),
             player_entropy_head_mean=average(learner_entropy_head.logits, player_valid),
             player_entropy_head_std=jnp.std(
                 learner_entropy_head.logits, where=player_valid
-            ),
-            player_potential_head_mean=average(
-                learner_potential_head.logits, player_valid
-            ),
-            player_potential_head_std=jnp.std(
-                learner_potential_head.logits, where=player_valid
             ),
         )
 
@@ -354,7 +332,6 @@ def train_step(
                 policy_ratios=builder_policy_ratio,
                 advantages=builder_advantages,
                 valid=builder_valid,
-                clip_ppo=config.clip_ppo,
             )
 
             loss_v = average(
@@ -412,11 +389,6 @@ def train_step(
                 builder_loss_conditional_entropy=loss_builder_conditional_entropy,
                 builder_loss_human=loss_human,
                 # Ratios
-                builder_ratio_clip_fraction=clip_fraction(
-                    policy_ratios=learner_actor_ratio,
-                    valid=builder_valid,
-                    clip_ppo=config.clip_ppo,
-                ),
                 builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
                 builder_learner_target_ratio=average(
                     learner_target_ratio, builder_valid

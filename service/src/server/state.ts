@@ -1502,7 +1502,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3891,7 +3891,8 @@ export class StateHandler {
             }
         }
 
-        return Math.floor(((p1Total - p2Total) / 12) * MAX_RATIO_TOKEN);
+        const frac = (p1Total - p2Total) / 12;
+        return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 
     getInfo() {

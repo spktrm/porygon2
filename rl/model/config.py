@@ -45,8 +45,7 @@ def get_player_model_config(
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 16
-    cfg.encoder.num_thinking_steps = 1
+    cfg.encoder.num_latent_embeddings = 24
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -132,11 +131,6 @@ def get_player_model_config(
     cfg.entropy_head.dense = ConfigDict()
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
-
-    cfg.potential_head = ConfigDict()
-    cfg.potential_head.dense = ConfigDict()
-    cfg.potential_head.dense.features = 1
-    cfg.potential_head.dense.use_bias = True
 
     for head in [cfg.action_head]:
         head.train = train
