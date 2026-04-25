@@ -72,10 +72,14 @@ def compute_player_targets(
     )
     potential_reward = next_state_potential - state_potential
 
-    combined_rewards = jnp.concatenate((player_reward, reg_reward[..., None]), axis=-1)
+    combined_rewards = jnp.concatenate(
+        (player_reward, reg_reward[..., None], potential_reward[..., None]), axis=-1
+    )
 
+    heuristic_zeros = jnp.zeros_like(potential_reward)
     combined_values = jnp.concatenate(
-        [player_value_probs, target_ent_scaled[..., None]], axis=-1
+        [player_value_probs, target_ent_scaled[..., None], heuristic_zeros[..., None]],
+        axis=-1,
     )
     last_values = combined_values[-1:]
 
@@ -110,7 +114,7 @@ def compute_player_targets(
     combined_advantage = inv_mu * (
         pg_advantages[..., :n_bins] @ cat_vf_support
         + config.player_entropy_reward_scale * pg_advantages[..., n_bins]
-        + config.player_potential_reward_scale * potential_reward
+        + config.player_potential_reward_scale * pg_advantages[..., n_bins + 1]
     )
 
     win_returns = returns[..., :n_bins]

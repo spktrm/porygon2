@@ -38,7 +38,7 @@ class InferenceModel:
     ):
         self._learner_config = get_learner_config()
         self._player_model_config = get_player_model_config(
-            self._learner_config.generation, train=False, output_value_heads=True
+            self._learner_config.generation, train=False
         )
         self._builder_model_config = get_builder_model_config(
             self._learner_config.generation, train=False

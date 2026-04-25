@@ -85,10 +85,6 @@ class PlayerActorOutput:
     entropy_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    potential_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
-    latent_input_embeddings: ArrayLike = ()
 
 
 @dataclass

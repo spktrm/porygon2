@@ -22,9 +22,7 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(
-    generation: int = 3, train: bool = False, output_value_heads: bool = False
-) -> ConfigDict:
+def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 64
@@ -37,7 +35,6 @@ def get_player_model_config(
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
     cfg.train = train
-    cfg.output_value_heads = output_value_heads
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -134,7 +131,6 @@ def get_player_model_config(
 
     for head in [cfg.action_head]:
         head.train = train
-        head.output_value_heads = output_value_heads
 
     return cfg
 
