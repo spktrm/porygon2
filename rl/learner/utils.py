@@ -101,6 +101,10 @@ def collect_batch_telemetry_data(
     ).min(axis=0)
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
+    player_value_expectation = (
+        batch.player_transitions.agent_output.actor_output.value_head.expectation
+    )
+    early_valid_length = 5
 
     telemetry = dict(
         player_trajectory_length_mean=player_lengths.mean(),
@@ -111,6 +115,11 @@ def collect_batch_telemetry_data(
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=(final_reward @ CAT_VF_SUPPORT).mean(),
+        value_expectation_mean=renormalize(player_value_expectation, player_valid),
+        value_expectation_early_mean=renormalize(
+            player_value_expectation[:early_valid_length],
+            player_valid[:early_valid_length],
+        ),
         early_finish_rate=(jnp.abs(final_reward @ CAT_VF_SUPPORT) < 1)
         .astype(jnp.float32)
         .mean(),
