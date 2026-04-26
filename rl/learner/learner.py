@@ -118,6 +118,8 @@ def train_step(
             importance_sampling_ratios=learner_actor_ratio,
             config=config,
         )
+        mask = player_targets.mask
+
         player_targets = promote_map(player_targets, float_dtype)
         player_targets = jax.lax.stop_gradient(player_targets)
 
@@ -127,7 +129,7 @@ def train_step(
             policy=learner_action_head.policy,
             policy_ratios=jnp.minimum(learner_actor_ratio, 1.0),
             q_values=player_targets.q_values,
-            valid=player_valid,
+            valid=mask,
             threshold=dynamic_threshold,
         )
 
@@ -137,29 +139,29 @@ def train_step(
                 logits=learner_value_head.logits,
                 labels=player_targets.win_returns,
             ),
-            player_valid,
+            mask,
         )
 
-        action_head_entropy = average(learner_action_head.entropy, player_valid)
+        action_head_entropy = average(learner_action_head.entropy, mask)
 
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=player_valid,
+            valid=mask,
         )
         loss_backward_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=player_valid,
+            valid=mask,
         )
 
         loss_conditional_entropy = mse_value_loss(
             pred=learner_entropy_head.logits,
             target=player_targets.ent_returns,
-            valid=player_valid,
+            valid=mask,
         )
 
-        loss_magnet_kl = average(learner_action_head.kl_prior, valid=player_valid)
+        loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
 
         loss = (
             config.player_policy_loss_coef * loss_pg
@@ -179,25 +181,29 @@ def train_step(
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
-            player_learner_actor_ratio=average(learner_actor_ratio, player_valid),
-            player_learner_target_ratio=average(learner_target_ratio, player_valid),
+            player_learner_actor_ratio=average(learner_actor_ratio, mask),
+            player_learner_target_ratio=average(learner_target_ratio, mask),
             # Approx KL values
             player_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
             player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
-                mask=player_valid,
+                mask=mask,
             ),
             player_entropy_head_r2=calculate_r2(
                 value_prediction=learner_entropy_head.logits,
                 value_target=player_targets.ent_returns,
-                mask=player_valid,
+                mask=mask,
             ),
-            player_entropy_head_mean=average(learner_entropy_head.logits, player_valid),
-            player_entropy_head_std=jnp.std(
-                learner_entropy_head.logits, where=player_valid
-            ),
+            player_entropy_head_mean=average(learner_entropy_head.logits, mask),
+            player_entropy_head_std=jnp.std(learner_entropy_head.logits, where=mask),
+            player_nll_sum=(
+                batch.player_transitions.agent_output.actor_output.action_head.log_prob
+                * mask
+            )
+            .sum(axis=0)
+            .mean(),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
@@ -206,12 +212,6 @@ def train_step(
     training_logs.update(
         dict(
             player_loss=player_loss_val,
-            player_nll_sum=(
-                batch.player_transitions.agent_output.actor_output.action_head.log_prob
-                * player_valid
-            )
-            .sum(axis=0)
-            .mean(),
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_action_head_gradient_norm=optax.global_norm(

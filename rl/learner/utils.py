@@ -28,7 +28,8 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 def collect_batch_telemetry_data(
     batch: Trajectory, config: Porygon2LearnerConfig
 ) -> Dict[str, Any]:
-    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    done = batch.player_transitions.env_output.done
+    player_valid = 1 - (jnp.cumsum(done, axis=0) - done)
     player_lengths = player_valid.sum(0)
 
     history_lengths = batch.player_history.field[

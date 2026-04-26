@@ -110,9 +110,13 @@ class PlayerActor:
             player_actor_input = self._env.step(action)
 
         if len(player_traj) < self._unroll_length:
-            player_traj += [player_transition] * (
-                self._unroll_length - len(player_traj)
+            padding_step = PlayerTransition(
+                env_output=player_actor_input_clipped.env.replace(
+                    done=np.zeros_like(player_actor_input_clipped.env.done)
+                ),
+                agent_output=player_agent_output,
             )
+            player_traj += [padding_step] * (self._unroll_length - len(player_traj))
 
         # Pack the trajectory and reset parent state.
         player_trajectory = jax.device_get(player_traj)
