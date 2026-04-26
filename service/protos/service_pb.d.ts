@@ -401,6 +401,8 @@ export interface ActionEnumMap {
   ACTION_ENUM__TARGET_AUTO: 28;
   ACTION_ENUM__ALLY_1_PASS: 29;
   ACTION_ENUM__ALLY_2_PASS: 30;
+  ACTION_ENUM__VALUE_EMBEDDING: 31;
+  ACTION_ENUM__ENTROPY_EMBEDDING: 32;
 }
 
 export const ActionEnum: ActionEnumMap;

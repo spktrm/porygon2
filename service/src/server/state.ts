@@ -3882,7 +3882,7 @@ export class StateHandler {
             }
 
             const unknownHp = side.totalPokemon - side.team.length;
-            const total = knownAlive + unknownHp + (knownHp + unknownHp) / 10;
+            const total = knownAlive + knownHp + 2 * unknownHp;
 
             if (i === 0) {
                 p1Total = total;
@@ -3891,7 +3891,8 @@ export class StateHandler {
             }
         }
 
-        return Math.floor(((p1Total - p2Total) / 6) * MAX_RATIO_TOKEN);
+        const frac = (p1Total - p2Total) / 12;
+        return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 
     getInfo() {
