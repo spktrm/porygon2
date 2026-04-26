@@ -45,14 +45,17 @@ def compute_player_targets(
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=importance_sampling_ratios.dtype)
-    player_valid = jnp.logical_not(batch.player_transitions.env_output.done)  # (T, B)
 
-    rho_t = jnp.minimum(1.0, importance_sampling_ratios)
-    c_t = jnp.minimum(1.0, importance_sampling_ratios)
+    dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
+    mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
+    discounts = (1 - dones_expanded) * config.player_gamma * mask_expanded
+
+    rho_expanded = jnp.minimum(1.0, importance_sampling_ratios)[..., None]
+    c_expanded = jnp.minimum(1.0, importance_sampling_ratios)[..., None]
 
     player_reward = batch.player_transitions.env_output.win_reward
-    player_value_probs = jnp.exp(target_pred.value_head.log_probs)
-    n_bins = player_value_probs.shape[-1]
+    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
+    n_bins = target_value_probs.shape[-1]
 
     learner_target_log_ratio = (
         learner_pred.action_head.log_policy - target_pred.action_head.log_policy
@@ -65,38 +68,33 @@ def compute_player_targets(
         config.player_entropy_normalising_constant * target_pred.entropy_head.logits
     )
 
-    state_potential = batch.player_transitions.env_output.state_potential
-    next_state_potential = (
-        jnp.concatenate([state_potential[1:], state_potential[-1:]], axis=0)
-        * player_valid
-    )
-    potential_reward = next_state_potential - state_potential
-
+    heuristic_zeros = jnp.zeros_like(reg_reward)
     combined_rewards = jnp.concatenate(
-        (player_reward, reg_reward[..., None], potential_reward[..., None]), axis=-1
+        (player_reward, reg_reward[..., None], heuristic_zeros[..., None]), axis=-1
     )
 
-    heuristic_zeros = jnp.zeros_like(potential_reward)
     combined_values = jnp.concatenate(
-        [player_value_probs, target_ent_scaled[..., None], heuristic_zeros[..., None]],
+        (
+            target_value_probs,
+            target_ent_scaled[..., None],
+            batch.player_transitions.env_output.state_potential[..., None],
+        ),
         axis=-1,
     )
     last_values = combined_values[-1:]
 
-    combined_next_values = (
-        jnp.concatenate([combined_values[1:], last_values], axis=0)
-        * player_valid[..., None]
-    )
-
-    combined_deltas = rho_t[..., None] * (
-        combined_rewards + combined_next_values - combined_values
+    combined_next_values = jnp.concatenate([combined_values[1:], last_values], axis=0)
+    combined_deltas = (
+        rho_expanded
+        * mask_expanded
+        * (combined_rewards + discounts * combined_next_values - combined_values)
     )
 
     vtrace_errors = vtrace(
-        combined_deltas, player_valid[..., None], c_t[..., None] * config.player_lambda
+        combined_deltas, discounts, c_expanded * config.player_lambda
     )
 
-    returns = vtrace_errors + combined_values
+    returns = (vtrace_errors + combined_values) * mask_expanded
     q_bootstrap = jnp.concatenate(
         [
             config.player_lambda * returns[1:]
@@ -105,9 +103,9 @@ def compute_player_targets(
         ],
         axis=0,
     )
-    q_estimate = combined_rewards + player_valid[..., None] * q_bootstrap
+    q_estimate = combined_rewards + discounts * q_bootstrap
 
-    pg_advantages = q_estimate - combined_values
+    pg_advantages = mask_expanded * (q_estimate - combined_values)
     inv_mu = jnp.exp(
         -batch.player_transitions.agent_output.actor_output.action_head.log_prob
     )
@@ -139,7 +137,10 @@ def compute_player_targets(
     )
 
     return PlayerTargets(
-        win_returns=win_returns, ent_returns=ent_returns, q_values=q_values
+        win_returns=win_returns,
+        ent_returns=ent_returns,
+        q_values=q_values,
+        mask=jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_),
     )
 
 
