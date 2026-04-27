@@ -179,6 +179,7 @@ class PlayerTargets:
     ent_returns: ArrayLike = ()
     q_values: ArrayLike = ()
     mask: ArrayLike = ()
+    win_returns_norm_factor: ArrayLike = ()
 
 
 @dataclass
