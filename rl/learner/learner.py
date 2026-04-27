@@ -115,7 +115,7 @@ def train_step(
             batch,
             learner_player_pred,
             player_target_pred,
-            importance_sampling_ratios=learner_actor_ratio,
+            isr=learner_actor_ratio,
             config=config,
         )
         mask = player_targets.mask

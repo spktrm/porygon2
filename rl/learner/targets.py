@@ -41,17 +41,22 @@ def compute_player_targets(
     batch: Batch,
     learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
-    importance_sampling_ratios: jax.Array,
+    isr: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
-    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=importance_sampling_ratios.dtype)
+    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
     discounts = (1 - dones_expanded) * config.player_gamma * mask_expanded
 
-    rho_expanded = jnp.minimum(1.0, importance_sampling_ratios)[..., None]
-    c_expanded = jnp.minimum(1.0, importance_sampling_ratios)[..., None]
+    alpha = config.player_alpha
+
+    rho_expanded = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    rho_expanded = jnp.expand_dims(rho_expanded, axis=-1)
+
+    c_expanded = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    c_expanded = jnp.expand_dims(c_expanded, axis=-1)
 
     player_reward = batch.player_transitions.env_output.win_reward
     target_value_probs = jnp.exp(target_pred.value_head.log_probs)
@@ -84,14 +89,14 @@ def compute_player_targets(
     last_values = combined_values[-1:]
 
     combined_next_values = jnp.concatenate([combined_values[1:], last_values], axis=0)
-    combined_deltas = (
+    combined_td_errors = (
         rho_expanded
         * mask_expanded
         * (combined_rewards + discounts * combined_next_values - combined_values)
     )
 
     vtrace_errors = vtrace(
-        combined_deltas, discounts, c_expanded * config.player_lambda
+        combined_td_errors, discounts, c_expanded * config.player_lambda
     )
 
     returns = (vtrace_errors + combined_values) * mask_expanded
@@ -104,8 +109,8 @@ def compute_player_targets(
         axis=0,
     )
     q_estimate = combined_rewards + discounts * q_bootstrap
+    pg_advantages = mask_expanded * rho_expanded * (q_estimate - combined_values)
 
-    pg_advantages = mask_expanded * (q_estimate - combined_values)
     inv_mu = jnp.exp(
         -batch.player_transitions.agent_output.actor_output.action_head.log_prob
     )
@@ -116,6 +121,8 @@ def compute_player_targets(
     )
 
     win_returns = returns[..., :n_bins]
+    norm_factor = win_returns.sum(axis=-1, keepdims=True)
+    win_returns = win_returns / norm_factor.clip(min=1e-8)
     ent_returns = returns[..., n_bins] / config.player_entropy_normalising_constant
 
     action_mask = batch.player_transitions.env_output.action_mask
@@ -141,6 +148,7 @@ def compute_player_targets(
         ent_returns=ent_returns,
         q_values=q_values,
         mask=jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_),
+        win_returns_norm_factor=norm_factor,
     )
 
 
@@ -212,13 +220,13 @@ def compute_builder_targets(
     )
 
     # --- 3. Compute Combined Deltas in one batched operation ---
-    combined_deltas = rho_t[..., None] * (
+    combined_td_errors = rho_t[..., None] * (
         combined_rewards + combined_next_values - combined_values
     )
 
     # --- 5. Discounts & Batched Segmented Cumsum ---
     vtrace_errors = vtrace(
-        combined_deltas, builder_valid[..., None], c_t[..., None] * lambda_
+        combined_td_errors, builder_valid[..., None], c_t[..., None] * lambda_
     )
     returns = vtrace_errors + combined_values
     q_bootstrap = jnp.concatenate(
