@@ -42,8 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 32
-    cfg.encoder.num_thinking_steps = 1
+    cfg.encoder.num_latent_embeddings = 24
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -89,13 +88,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         init_residual_scale=decoder_init_residual_scale,
     )
 
-    cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.local_timestep_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.state_transformer = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [cfg.encoder.timestep_encoder]:
+    for encoder in [cfg.encoder.local_timestep_decoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
@@ -107,15 +106,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
 
-    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.local_timestep_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_transformer.num_layers = 4
+    cfg.encoder.state_transformer.num_layers = 2
     cfg.encoder.state_transformer.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()
+    cfg.action_head.qk_logits.num_heads = 1
     cfg.action_head.qk_logits.use_bias = True
 
     cfg.winloss_head = ConfigDict()
@@ -128,11 +128,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entropy_head.dense = ConfigDict()
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
-
-    cfg.potential_value_head = ConfigDict()
-    cfg.potential_value_head.dense = ConfigDict()
-    cfg.potential_value_head.dense.features = 1
-    cfg.potential_value_head.dense.use_bias = True
 
     for head in [cfg.action_head]:
         head.train = train

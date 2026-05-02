@@ -33,10 +33,12 @@ def policy_gradient_loss(
     policy_ratios: jax.Array,
     advantages: jax.Array,
     valid: jax.Array,
-    clip_ppo: float,
+    threshold: float,
 ):
     pg_loss = spo_objective(
-        policy_ratios=policy_ratios, advantages=advantages, clip_ppo=clip_ppo
+        policy_ratios=policy_ratios,
+        advantages=advantages,
+        clip_ppo=threshold,
     )
     return -average(pg_loss, valid)
 

@@ -190,12 +190,15 @@ def process_state(
                 info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
                 info[InfoFeature.INFO_FEATURE__TIE_REWARD],
                 info[InfoFeature.INFO_FEATURE__WIN_REWARD],
-            ]
+            ],
+            dtype=np.float32,
         )
         / MAX_RATIO_TOKEN
     )
 
-    state_potential = info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+    state_potential = (
+        info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+    ).astype(np.float32)
 
     env_step = PlayerEnvOutput(
         info=info,

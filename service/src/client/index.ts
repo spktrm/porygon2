@@ -20,6 +20,7 @@ const server = "ws://localhost:8000/showdown/websocket";
 const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
 // const smogonFormat = "gen9ou";
 const smogonFormat = "gen9randombattle";
+// const smogonFormat = "gen9randomdoublesbattle";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -363,7 +364,7 @@ class User {
     }
 
     async search(format: string): Promise<void> {
-        if (!format.endsWith("randombattle")) {
+        if (!format.includes("random")) {
             while (true) {
                 const response = await fetch(`${RL_SERVER_URL}/reset`, {
                     method: "POST",

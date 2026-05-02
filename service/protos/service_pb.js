@@ -2954,7 +2954,8 @@ proto.servicev2.ActionEnum = {
   ACTION_ENUM__ENEMY_2: 27,
   ACTION_ENUM__TARGET_AUTO: 28,
   ACTION_ENUM__ALLY_1_PASS: 29,
-  ACTION_ENUM__ALLY_2_PASS: 30
+  ACTION_ENUM__ALLY_2_PASS: 30,
+  ACTION_ENUM__VALUE_EMBEDDING: 31
 };
 
 goog.object.extend(exports, proto.servicev2);

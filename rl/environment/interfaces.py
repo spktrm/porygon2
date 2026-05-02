@@ -79,12 +79,6 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    conditional_entropy_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
-    potential_value_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
 
 
 @dataclass
@@ -176,11 +170,9 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
-    win_advantages: ArrayLike = ()
-    ent_advantages: ArrayLike = ()
-    ent_returns: ArrayLike = ()
-    potential_returns: ArrayLike = ()
-    potential_advantages: ArrayLike = ()
+    advantages: ArrayLike = ()
+    mask: ArrayLike = ()
+    win_returns_norm_factor: ArrayLike = ()
 
 
 @dataclass
@@ -201,6 +193,11 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+
+
+@dataclass
+class Batch(Trajectory):
+    rng_key: ArrayLike = ()
 
 
 @dataclass
