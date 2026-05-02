@@ -127,6 +127,7 @@ ACTION_MAX_VALUES = {
     MovesetFeature.MOVESET_FEATURE__PP: 64,
     MovesetFeature.MOVESET_FEATURE__MAXPP: 64,
     MovesetFeature.MOVESET_FEATURE__DISABLED: 2,
+    MovesetFeature.MOVESET_FEATURE__IS_WILDCARD: 2,
 }
 
 with open("data/data/data.json", "r") as f:

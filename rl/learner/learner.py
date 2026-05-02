@@ -102,7 +102,6 @@ def train_step(
 
         learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
-        learner_entropy_head = learner_player_pred.entropy_head
         learner_log_prob = learner_action_head.log_prob
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
@@ -111,11 +110,17 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
+        target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
+        target_actor_ratio = jnp.exp(target_actor_log_ratio)
+        actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(
+            min=0.0, max=2.0
+        )
+
         player_targets = compute_player_targets(
             batch,
             learner_player_pred,
             player_target_pred,
-            isr=learner_actor_ratio,
+            isr=target_actor_ratio,
             config=config,
         )
         mask = player_targets.mask
@@ -125,10 +130,8 @@ def train_step(
 
         # Calculate losses.
         loss_pg = policy_gradient_loss(
-            logits=learner_action_head.logits,
-            policy=learner_action_head.policy,
-            policy_ratios=jnp.minimum(learner_actor_ratio, 1.0),
-            q_values=player_targets.q_values,
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_targets.advantages,
             valid=mask,
             threshold=dynamic_threshold,
         )
@@ -155,18 +158,11 @@ def train_step(
             valid=mask,
         )
 
-        loss_conditional_entropy = mse_value_loss(
-            pred=learner_entropy_head.logits,
-            target=player_targets.ent_returns,
-            valid=mask,
-        )
-
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
 
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
-            + config.player_entropy_head_loss_coef * loss_conditional_entropy
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * loss_magnet_kl
         )
@@ -176,7 +172,6 @@ def train_step(
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
-            player_loss_conditional_entropy=loss_conditional_entropy,
             player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
@@ -191,13 +186,6 @@ def train_step(
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=mask,
             ),
-            player_entropy_head_r2=calculate_r2(
-                value_prediction=learner_entropy_head.logits,
-                value_target=player_targets.ent_returns,
-                mask=mask,
-            ),
-            player_entropy_head_mean=average(learner_entropy_head.logits, mask),
-            player_entropy_head_std=jnp.std(learner_entropy_head.logits, where=mask),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
                 * mask
@@ -219,9 +207,6 @@ def train_step(
             ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["winloss_head"]
-            ),
-            player_entropy_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["entropy_head"]
             ),
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]

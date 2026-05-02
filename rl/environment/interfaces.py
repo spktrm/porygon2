@@ -71,9 +71,6 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
-    logits: ArrayLike = ()
-    policy: ArrayLike = ()
-    log_policy: ArrayLike = ()
 
 
 @dataclass
@@ -82,9 +79,6 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    entropy_head: RegressionValueHeadOutput = field(
-        default_factory=RegressionValueHeadOutput
-    )
 
 
 @dataclass
@@ -176,8 +170,7 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
-    ent_returns: ArrayLike = ()
-    q_values: ArrayLike = ()
+    advantages: ArrayLike = ()
     mask: ArrayLike = ()
     win_returns_norm_factor: ArrayLike = ()
 

@@ -62,26 +62,14 @@ def compute_player_targets(
     target_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = target_value_probs.shape[-1]
 
-    learner_target_log_ratio = (
-        learner_pred.action_head.log_policy - target_pred.action_head.log_policy
-    )
-
-    reg_reward = -jnp.sum(
-        learner_pred.action_head.policy * learner_target_log_ratio, axis=-1
-    )
-    target_ent_scaled = (
-        config.player_entropy_normalising_constant * target_pred.entropy_head.logits
-    )
-
-    heuristic_zeros = jnp.zeros_like(reg_reward)
+    heuristic_zeros = jnp.zeros_like(player_reward[..., 0])
     combined_rewards = jnp.concatenate(
-        (player_reward, reg_reward[..., None], heuristic_zeros[..., None]), axis=-1
+        (player_reward, heuristic_zeros[..., None]), axis=-1
     )
 
     combined_values = jnp.concatenate(
         (
             target_value_probs,
-            target_ent_scaled[..., None],
             batch.player_transitions.env_output.state_potential[..., None],
         ),
         axis=-1,
@@ -111,42 +99,19 @@ def compute_player_targets(
     q_estimate = combined_rewards + discounts * q_bootstrap
     pg_advantages = mask_expanded * rho_expanded * (q_estimate - combined_values)
 
-    inv_mu = jnp.exp(
-        -batch.player_transitions.agent_output.actor_output.action_head.log_prob
-    )
-    combined_advantage = inv_mu * (
+    combined_advantage = (
         pg_advantages[..., :n_bins] @ cat_vf_support
-        + config.player_entropy_reward_scale * pg_advantages[..., n_bins]
-        + config.player_potential_reward_scale * pg_advantages[..., n_bins + 1]
+        + config.player_potential_reward_scale * pg_advantages[..., n_bins]
     )
 
     win_returns = returns[..., :n_bins]
+    win_returns = jnp.maximum(win_returns, 0.0)
     norm_factor = win_returns.sum(axis=-1, keepdims=True)
     win_returns = win_returns / norm_factor.clip(min=1e-8)
-    ent_returns = returns[..., n_bins] / config.player_entropy_normalising_constant
-
-    action_mask = batch.player_transitions.env_output.action_mask
-    action_mask_flat = jax.lax.collapse(action_mask, -2)
-    selected_action = (
-        batch.player_transitions.agent_output.actor_output.action_head.action_index
-    )
-    q_values = (
-        jnp.expand_dims(
-            target_pred.value_head.expectation
-            + config.player_entropy_reward_scale * target_ent_scaled,
-            axis=-1,
-        )
-        - config.player_entropy_reward_scale * learner_target_log_ratio
-        + jax.nn.one_hot(
-            selected_action, action_mask_flat.shape[-1], dtype=cat_vf_support.dtype
-        )
-        * combined_advantage[..., None]
-    )
 
     return PlayerTargets(
         win_returns=win_returns,
-        ent_returns=ent_returns,
-        q_values=q_values,
+        advantages=combined_advantage,
         mask=jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_),
         win_returns_norm_factor=norm_factor,
     )

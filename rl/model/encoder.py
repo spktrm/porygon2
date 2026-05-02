@@ -237,9 +237,6 @@ class Encoder(nn.Module):
             name="effect_from_source_embedding",
             **embed_kwargs,
         )
-        self.wildcard_embedding = nn.Embed(
-            num_embeddings=2, name="wildcard_embedding", **embed_kwargs
-        )
 
         # Positional / Modality Embeddings
         embedding_init = nn.initializers.variance_scaling(
@@ -302,8 +299,8 @@ class Encoder(nn.Module):
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
         )
-        self.action_linear = nn.Dense(
-            name="action_linear", use_bias=False, **dense_kwargs
+        self.action_sum = SumEmbeddings(
+            output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
         self.entity_edge_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="entity_edge_sum"
@@ -322,6 +319,9 @@ class Encoder(nn.Module):
         self.local_timestep_embedding = nn.Embed(
             8, name="local_timestep_embedding", **embed_kwargs
         )
+        self.node_edge_projection = nn.Dense(
+            name="node_edge_projection", use_bias=False, **dense_kwargs
+        )
         self.local_timestep_decoder = TransformerDecoder(
             **self.cfg.local_timestep_decoder.to_dict()
         )
@@ -335,7 +335,7 @@ class Encoder(nn.Module):
         )
         # TODO: make this 5 since we have remove potential head prediction
         self.extra_embeddings = self.param(
-            "extra_embeddings", learnable_query_init, (6, entity_size)
+            "extra_embeddings", learnable_query_init, (4, entity_size)
         )
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
@@ -939,18 +939,19 @@ class Encoder(nn.Module):
 
         node_embeddings = jnp.take(entity_embedding_cache, relevant_indices, axis=0)
         edge_embeddings = jnp.take(edge_embedding_cache, relevant_indices, axis=0)
+        node_edge_projection = self.node_edge_projection(
+            jnp.concatenate((node_embeddings, edge_embeddings), axis=-1)
+        )
 
         local_sequence = self.local_timestep_decoder(
             q=field_embeddings,
-            kv=node_embeddings
-            + edge_embeddings
+            kv=node_edge_projection
             + self.local_timestep_embedding(jnp.arange(relevant_indices.shape[0])),
             attn_mask=create_attention_mask(
                 jnp.ones(3, dtype=jnp.bool), node_edge_mask
             ),
         )
 
-        # Extract the timestep embedding corresponding to the CLS token.
         local_timestep_embedding = self.local_timestep_linear(
             local_sequence.reshape(-1)
         )
@@ -1010,15 +1011,15 @@ class Encoder(nn.Module):
                 _encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__DISABLED
                 ),
+                _encode_one_hot_action(
+                    action, MovesetFeature.MOVESET_FEATURE__IS_WILDCARD
+                ),
             ],
             dtype=self.cfg.dtype,
         )
-        embedding = (
-            self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID])
-            + self.action_linear(boolean_code)
-            + self.wildcard_embedding(
-                action[MovesetFeature.MOVESET_FEATURE__IS_WILDCARD]
-            )
+        embedding = self.action_sum(
+            self._embed_move(action[MovesetFeature.MOVESET_FEATURE__MOVE_ID]),
+            boolean_code,
         )
 
         mask = (
@@ -1117,8 +1118,7 @@ class Encoder(nn.Module):
                 my_move_embeddings,
                 private_embeddings,
                 self.active_embeddings.astype(self.cfg.dtype),
-                # TODO: make this just extra_embeddings when we change the number of extra embeddings to 5
-                extra_embeddings[:-1],
+                extra_embeddings,
             ],
             axis=0,
         )
@@ -1226,13 +1226,10 @@ class Encoder(nn.Module):
         value_embedding = output_state_embeddings[
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING
         ]
-        entropy_emebdding = output_state_embeddings[
-            ActionEnum.ACTION_ENUM__ENTROPY_EMBEDDING
-        ]
 
         action_embeddings = output_state_embeddings
 
-        return value_embedding, entropy_emebdding, action_embeddings
+        return value_embedding, action_embeddings
 
     def __call__(
         self,
@@ -1252,7 +1249,7 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        value_embedding, entropy_emebdding, action_embeddings = jax.vmap(
+        value_embedding, action_embeddings = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1263,4 +1260,4 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return value_embedding, entropy_emebdding, action_embeddings
+        return value_embedding, action_embeddings
