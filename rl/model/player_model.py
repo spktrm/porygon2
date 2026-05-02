@@ -22,7 +22,6 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
-    RegressionValueLogitHead,
     sample_categorical,
 )
 from rl.model.utils import (
@@ -44,7 +43,6 @@ class Porygon2PlayerModel(nn.Module):
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
 
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
-        self.entropy_head = RegressionValueLogitHead(self.cfg.entropy_head)
 
     def _forward_action_head(
         self,
@@ -91,9 +89,6 @@ class Porygon2PlayerModel(nn.Module):
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
-            logits=logits,
-            policy=policy,
-            log_policy=log_policy,
             log_prob=log_prob,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
@@ -105,13 +100,9 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
 
-    def _forward_entropy_head(self, state_embedding: jax.Array):
-        return self.entropy_head(state_embedding)
-
     def get_head_outputs(
         self,
         value_embedding: jax.Array,
-        entropy_emebdding: jax.Array,
         action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -126,11 +117,8 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
         value_head = self._forward_value_head(value_embedding)
-        entropy_head = self._forward_entropy_head(entropy_emebdding)
 
-        return PlayerActorOutput(
-            action_head=action_head, value_head=value_head, entropy_head=entropy_head
-        )
+        return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
     def __call__(
         self,
@@ -142,7 +130,7 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        value_embedding, entropy_emebdding, action_embeddings = self.encoder(
+        value_embedding, action_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
@@ -150,7 +138,6 @@ class Porygon2PlayerModel(nn.Module):
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
             value_embedding,
-            entropy_emebdding,
             action_embeddings,
             actor_input.env,
             actor_output,

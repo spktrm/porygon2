@@ -858,6 +858,21 @@ def simple_sum_embeddings(
     return sum(embeddings) / divisor
 
 
+def simple_concat_embeddings(*embeddings: list[jax.Array]) -> jax.Array:
+    """
+    Get the concat of the embeddings.
+
+    Args:
+        embeddings (list[jax.Array]): List of embedding arrays.
+
+    Returns:
+        jax.Array: Sum of the embeddings.
+    """
+    if len(embeddings) == 0:
+        raise ValueError("No embeddings provided")
+    return jnp.concatenate(embeddings, axis=-1)
+
+
 class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
@@ -871,33 +886,20 @@ class SumEmbeddings(nn.Module):
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
 
-        # Calculate the dense projections
-        dense_projections = [
-            nn.Dense(
-                self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
-            )(embedding)
-            for embedding in embeddings
-        ]
-
         # Sum and scale the variance by dividing by sqrt(N)
-        aggregated = simple_sum_embeddings(*dense_projections, divisor=1)
+        aggregated = simple_concat_embeddings(*embeddings)
 
-        # Add the bias after scaling
-        if self.use_bias:
-            aggregated += self.param(
-                "bias", nn.initializers.zeros_init(), (self.output_size,)
-            )
-
-        return aggregated.astype(self.dtype)
+        return nn.Dense(
+            self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
+        )(aggregated).astype(self.dtype)
 
 
 class PointerLogits(nn.Module):
     qk_size: int = None
     num_heads: int = 1
-    use_bias: bool = False
+    use_bias: bool = True
     qk_layer_norm: bool = True
     inverse_sqrt_normalisation: bool = True
-    kernel_init_std: float = 1e-2
 
     @nn.compact
     def __call__(self, q: jax.Array, k: jax.Array) -> jax.Array:

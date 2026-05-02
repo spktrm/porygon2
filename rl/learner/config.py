@@ -84,25 +84,22 @@ class Porygon2LearnerConfig:
 
     # Advantage estimation params
     player_gamma: float = 1.0
-    player_alpha: float = 0.9
+    player_alpha: float = 1.0
     player_gamma: float = 1.0
     player_lambda: float = 1.0
-    builder_alpha: float = 0.9
+    builder_alpha: float = 1.0
     builder_lambda: float = 1.0
     exploration_fraction: float = 0.1
 
     # Regularised reward params
-    player_entropy_reward_scale: float = 0.1
     player_potential_reward_scale: float = 0.1
-    player_entropy_normalising_constant: float = 2.0
 
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.0
-    player_entropy_loss_coef: float = 0.0
+    player_kl_loss_coef: float = 0.1
+    player_entropy_loss_coef: float = 0.02
     player_value_head_loss_coef: float = 1.0
-    player_entropy_head_loss_coef: float = 1.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5

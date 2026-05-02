@@ -41,7 +41,6 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__VALUE_EMBEDDING: _ClassVar[ActionEnum]
-    ACTION_ENUM__ENTROPY_EMBEDDING: _ClassVar[ActionEnum]
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_1: ActionEnum
@@ -74,7 +73,6 @@ ACTION_ENUM__TARGET_AUTO: ActionEnum
 ACTION_ENUM__ALLY_1_PASS: ActionEnum
 ACTION_ENUM__ALLY_2_PASS: ActionEnum
 ACTION_ENUM__VALUE_EMBEDDING: ActionEnum
-ACTION_ENUM__ENTROPY_EMBEDDING: ActionEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")
