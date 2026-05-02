@@ -26,7 +26,7 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=secrets.randbits(32),
-    player_head_params=HeadParams(temp=0.8),
+    player_head_params=HeadParams(temp=0.5),
     builder_head_params=HeadParams(temp=0.8),
 )
 
