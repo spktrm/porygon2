@@ -214,6 +214,7 @@ export interface InfoFeatureMap {
   INFO_FEATURE__PREV_ACTION_SRC: 17;
   INFO_FEATURE__PREV_ACTION_TGT: 18;
   INFO_FEATURE__STATE_POTENTIAL: 19;
+  INFO_FEATURE__HISTORY_STEP_COUNT: 20;
 }
 
 export const InfoFeature: InfoFeatureMap;

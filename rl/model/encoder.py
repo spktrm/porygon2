@@ -217,6 +217,54 @@ def _max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
     )
 
 
+def barlow_twins_loss(
+    z_pred: jax.Array, z_target: jax.Array, mask: jax.Array, lambda_param: float = 0.005
+) -> jax.Array:
+    """
+    Computes Barlow Twins loss over valid sequence elements.
+    Forces feature dimensions to decorrelate to prevent collapse.
+    """
+    feature_dim = z_pred.shape[-1]
+
+    # Flatten batch and seq dimensions: (B * T, D)
+    z_a = z_pred.reshape(-1, feature_dim)
+    z_b = z_target.reshape(-1, feature_dim)
+    mask_flat = mask.reshape(-1, 1)  # (B * T, 1)
+
+    # Avoid division by zero
+    valid_count = jnp.maximum(mask_flat.sum(), 1.0)
+
+    # 1. Mean center the valid embeddings
+    mean_a = jnp.sum(z_a * mask_flat, axis=0, keepdims=True) / valid_count
+    mean_b = jnp.sum(z_b * mask_flat, axis=0, keepdims=True) / valid_count
+
+    z_a_centered = (z_a - mean_a) * mask_flat
+    z_b_centered = (z_b - mean_b) * mask_flat
+
+    # 2. Compute standard deviation over valid elements
+    std_a = jnp.sqrt(
+        jnp.sum(z_a_centered**2, axis=0, keepdims=True) / valid_count + 1e-6
+    )
+    std_b = jnp.sqrt(
+        jnp.sum(z_b_centered**2, axis=0, keepdims=True) / valid_count + 1e-6
+    )
+
+    # 3. Normalize
+    z_a_norm = z_a_centered / std_a
+    z_b_norm = z_b_centered / std_b
+
+    # 4. Compute cross-correlation matrix (D x D)
+    c = jnp.dot(z_a_norm.T, z_b_norm) / valid_count
+
+    # 5. Compute loss: (1 - diagonal)^2 + lambda * off_diagonal^2
+    on_diag = jnp.sum((jnp.diag(c) - 1.0) ** 2)
+
+    off_diag_mask = 1.0 - jnp.eye(feature_dim, dtype=c.dtype)
+    off_diag = jnp.sum((c * off_diag_mask) ** 2)
+
+    return on_diag + lambda_param * off_diag
+
+
 class Encoder(nn.Module):
     """
     Encoder model for processing environment steps and history to generate embeddings.
@@ -273,6 +321,11 @@ class Encoder(nn.Module):
         )
         self.latent_history_embedding = self.param(
             "latent_history_embedding", embedding_init, (1, entity_size)
+        )
+        self.future_queries = self.param(
+            "future_queries",
+            learnable_query_init,
+            (self.cfg.num_future_queries, entity_size),
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -346,6 +399,9 @@ class Encoder(nn.Module):
             **self.cfg.history_decoder.to_dict(),
         )
         self.state_transformer = Transformer(**self.cfg.state_transformer.to_dict())
+        self.future_decoder = TransformerDecoder(
+            **self.cfg.future_decoder.to_dict(),
+        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1066,9 +1122,11 @@ class Encoder(nn.Module):
         env_step: PlayerEnvOutput,
         timestep_mask: jax.Array,
         current_position: jax.Array,
+        current_history_step: jax.Array,
         timestep_embeddings: jax.Array,
         timestep_positions: jax.Array,
         initial_private_team: jax.Array,
+        history_valid_mask: jax.Array,
     ):
         entity_embeddings, field_embeddings, entity_mask = self._embed_public_entities(
             env_step
@@ -1211,12 +1269,29 @@ class Encoder(nn.Module):
         kv_self_attn_mask = create_attention_mask(latent_input_mask)
         cross_attn_mask = create_attention_mask(output_state_mask, latent_input_mask)
 
-        output_state_sequence = self.state_transformer(
+        output_state_sequence, encoder_output = self.state_transformer(
             q=output_state_sequence,
             kv=latent_input_embeddings,
             q_self_attn_mask=q_self_attn_mask,
             kv_self_attn_mask=kv_self_attn_mask,
             cross_attn_mask=cross_attn_mask,
+        )
+
+        future_indices = jnp.arange(self.cfg.num_future_queries) + current_history_step
+        future_mask = jnp.take(
+            history_valid_mask, future_indices, axis=0, mode="fill", fill_value=False
+        )
+        predicted_future_sequence = self.future_decoder(
+            q=self.future_queries.astype(self.cfg.dtype),
+            kv=encoder_output,
+            attn_mask=create_attention_mask(future_mask, latent_input_mask),
+        )
+        true_future_sequence = jnp.take(
+            timestep_embeddings, future_indices, axis=0, mode="clip"
+        )
+
+        pred_future_loss = barlow_twins_loss(
+            predicted_future_sequence, true_future_sequence, future_mask
         )
 
         output_state_embeddings = jnp.where(
@@ -1229,7 +1304,7 @@ class Encoder(nn.Module):
 
         action_embeddings = output_state_embeddings
 
-        return value_embedding, action_embeddings
+        return value_embedding, action_embeddings, pred_future_loss
 
     def __call__(
         self,
@@ -1242,6 +1317,10 @@ class Encoder(nn.Module):
         )
 
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        history_step_count = env_step.info[
+            ..., InfoFeature.INFO_FEATURE__HISTORY_STEP_COUNT
+        ]
+
         # For padded timesteps, request count is 0, so we use a large bias value.
         timestep_mask = request_count[..., None] >= jnp.where(
             history_valid_mask,
@@ -1249,15 +1328,21 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        value_embedding, action_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
+        (
+            value_embedding,
+            action_embeddings,
+            pred_future_loss,
+        ) = jax.vmap(
+            self._batched_forward, in_axes=(0, 0, 0, 0, None, None, None, None)
         )(
             env_step,
             timestep_mask,
             jnp.expand_dims(request_count, -1),
+            jnp.expand_dims(history_step_count, -1),
             timestep_embeddings,
             history_request_count,
             env_step.private_team[0],
+            history_valid_mask,
         )
 
-        return value_embedding, action_embeddings
+        return value_embedding, action_embeddings, pred_future_loss

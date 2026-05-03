@@ -53,8 +53,8 @@ async function runBattle() {
 
         p1team: getSampleTeam("gen9ou"),
         p2team: getSampleTeam("gen9ou", "Zoroark"),
-        // smogonFormat: "gen9ou",
-        smogonFormat: "gen9randomdoublesbattle",
+        smogonFormat: "gen9ou",
+        // smogonFormat: "gen9randomdoublesbattle",
         // smogonFormat: "gen9vgc2025regibo3",
     });
 

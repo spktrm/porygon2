@@ -195,7 +195,6 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
-    slots: Optional[int] = None
     implementation: Optional[str] = None  # "cudnn"
 
     @nn.compact
@@ -352,7 +351,6 @@ class TransformerEncoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    slots: Optional[int] = None
 
     def layer(
         self,
@@ -372,7 +370,6 @@ class TransformerEncoder(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
-            slots=self.slots,
         )(
             q=qkv_ln,
             kv=qkv_ln,
@@ -447,7 +444,6 @@ class TransformerDecoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    slots: Optional[int] = None
 
     def layer(
         self,
@@ -470,7 +466,6 @@ class TransformerDecoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
-            slots=self.slots,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -556,7 +551,7 @@ class Transformer(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    slots: Optional[int] = None
+    return_encoder_output: bool = True
 
     def decoder_layer(
         self,
@@ -579,7 +574,6 @@ class Transformer(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
-            slots=self.slots,
         )(
             q=q_ln,
             kv=q_ln,
@@ -604,7 +598,6 @@ class Transformer(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
-            slots=self.slots,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -649,7 +642,6 @@ class Transformer(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
-            slots=self.slots,
         )(
             q=qkv_ln,
             kv=qkv_ln,
@@ -723,7 +715,12 @@ class Transformer(nn.Module):
                 q_encoder_positionwise_mask,
             )
 
-        return layer_norm(q)
+        q = layer_norm(q)
+
+        if self.return_encoder_output:
+            return q, kv
+
+        return q
 
 
 class MLP(nn.Module):

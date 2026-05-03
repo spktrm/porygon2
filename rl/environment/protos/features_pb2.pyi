@@ -200,6 +200,7 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__PREV_ACTION_SRC: _ClassVar[InfoFeature]
     INFO_FEATURE__PREV_ACTION_TGT: _ClassVar[InfoFeature]
     INFO_FEATURE__STATE_POTENTIAL: _ClassVar[InfoFeature]
+    INFO_FEATURE__HISTORY_STEP_COUNT: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -404,6 +405,7 @@ INFO_FEATURE__HAS_PREV_ACTION: InfoFeature
 INFO_FEATURE__PREV_ACTION_SRC: InfoFeature
 INFO_FEATURE__PREV_ACTION_TGT: InfoFeature
 INFO_FEATURE__STATE_POTENTIAL: InfoFeature
+INFO_FEATURE__HISTORY_STEP_COUNT: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType
