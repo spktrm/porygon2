@@ -80,13 +80,6 @@ def train_step(
 
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
-    num_valid_actions = player_transitions.env_output.action_mask.sum((-2, -1))
-    safe_valid_action_sum = jnp.maximum(num_valid_actions, 2)
-    dynamic_threshold = 0.5 * jnp.log(
-        (safe_valid_action_sum - 1)
-        * (1 - config.exploration_fraction)
-        / config.exploration_fraction
-    )
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
     training_logs = {}
@@ -133,7 +126,7 @@ def train_step(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
             advantages=player_targets.advantages,
             valid=mask,
-            threshold=dynamic_threshold,
+            threshold=config.player_ppo_clip_threshold,
         )
 
         # Softmax cross-entropy loss for value head
@@ -160,11 +153,14 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
 
+        loss_future_pred = average(learner_player_pred.pred_future_loss, mask)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * loss_magnet_kl
+            + config.player_future_pred_loss_coef * loss_future_pred
         )
 
         return loss, dict(
@@ -173,6 +169,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
+            player_loss_future_pred=loss_future_pred,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios

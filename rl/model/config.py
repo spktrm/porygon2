@@ -43,6 +43,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     # Params for scaling
     cfg.encoder.num_latent_embeddings = 24
+    cfg.encoder.num_future_queries = 6
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -92,6 +93,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.state_transformer = ConfigDict()
+    cfg.encoder.future_decoder = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
     for encoder in [cfg.encoder.local_timestep_decoder]:
@@ -100,11 +102,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     for decoder in [
         cfg.encoder.input_decoder,
         cfg.encoder.history_decoder,
+        cfg.encoder.future_decoder,
         cfg.encoder.output_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
+    cfg.encoder.state_transformer.return_encoder_output = True
 
     cfg.encoder.local_timestep_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False

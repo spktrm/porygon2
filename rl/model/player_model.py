@@ -106,6 +106,7 @@ class Porygon2PlayerModel(nn.Module):
         action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
+        pred_future_loss: jax.Array,
         head_params: HeadParams,
     ):
 
@@ -118,7 +119,11 @@ class Porygon2PlayerModel(nn.Module):
         )
         value_head = self._forward_value_head(value_embedding)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=value_head,
+            pred_future_loss=pred_future_loss,
+        )
 
     def __call__(
         self,
@@ -130,7 +135,7 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        value_embedding, action_embeddings = self.encoder(
+        value_embedding, action_embeddings, pred_future_loss = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
@@ -141,6 +146,7 @@ class Porygon2PlayerModel(nn.Module):
             action_embeddings,
             actor_input.env,
             actor_output,
+            pred_future_loss,
         )
 
 

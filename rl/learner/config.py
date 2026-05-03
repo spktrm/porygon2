@@ -89,7 +89,7 @@ class Porygon2LearnerConfig:
     player_lambda: float = 1.0
     builder_alpha: float = 1.0
     builder_lambda: float = 1.0
-    exploration_fraction: float = 0.1
+    player_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
     player_potential_reward_scale: float = 0.1
@@ -100,6 +100,7 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.1
     player_entropy_loss_coef: float = 0.02
     player_value_head_loss_coef: float = 1.0
+    player_future_pred_loss_coef: float = 0.01
 
     ## Builder
     builder_value_loss_coef: float = 0.5

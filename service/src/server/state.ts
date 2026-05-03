@@ -3895,7 +3895,7 @@ export class StateHandler {
         return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 
-    getInfo() {
+    getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
@@ -3909,6 +3909,8 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__DONE] = +this.player.done;
         infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_COUNT] =
             this.player.requestCount;
+        infoBuffer[InfoFeature.INFO_FEATURE__HISTORY_STEP_COUNT] =
+            historyLength;
 
         const { winReward, lossReward, tieReward } = this.getWinReward();
         infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] =
@@ -4102,17 +4104,6 @@ export class StateHandler {
         if (!this.player.done && request === undefined) {
             throw new Error("Need Request");
         }
-
-        const state = new EnvironmentState();
-        const info = this.getInfo();
-        state.setInfo(info);
-
-        const { actionMask } = this.getActionMask({
-            request,
-            format: this.player.privateBattle.gameType,
-        });
-        state.setActionMask(actionMask.buffer);
-
         const {
             historyEntityPublic,
             historyEntityRevealed,
@@ -4121,6 +4112,17 @@ export class StateHandler {
             historyLength,
             historyPackedLength,
         } = this.getHistory(NUM_HISTORY);
+
+        const state = new EnvironmentState();
+        const info = this.getInfo(historyLength);
+        state.setInfo(info);
+
+        const { actionMask } = this.getActionMask({
+            request,
+            format: this.player.privateBattle.gameType,
+        });
+        state.setActionMask(actionMask.buffer);
+
         state.setHistoryEntityPublic(historyEntityPublic);
         state.setHistoryEntityRevealed(historyEntityRevealed);
         state.setHistoryEntityEdges(historyEntityEdges);
