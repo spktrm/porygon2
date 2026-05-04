@@ -217,54 +217,6 @@ def _max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
     )
 
 
-def barlow_twins_loss(
-    z_pred: jax.Array, z_target: jax.Array, mask: jax.Array, lambda_param: float = 0.005
-) -> jax.Array:
-    """
-    Computes Barlow Twins loss over valid sequence elements.
-    Forces feature dimensions to decorrelate to prevent collapse.
-    """
-    feature_dim = z_pred.shape[-1]
-
-    # Flatten batch and seq dimensions: (B * T, D)
-    z_a = z_pred.reshape(-1, feature_dim)
-    z_b = z_target.reshape(-1, feature_dim)
-    mask_flat = mask.reshape(-1, 1)  # (B * T, 1)
-
-    # Avoid division by zero
-    valid_count = jnp.maximum(mask_flat.sum(), 1.0)
-
-    # 1. Mean center the valid embeddings
-    mean_a = jnp.sum(z_a * mask_flat, axis=0, keepdims=True) / valid_count
-    mean_b = jnp.sum(z_b * mask_flat, axis=0, keepdims=True) / valid_count
-
-    z_a_centered = (z_a - mean_a) * mask_flat
-    z_b_centered = (z_b - mean_b) * mask_flat
-
-    # 2. Compute standard deviation over valid elements
-    std_a = jnp.sqrt(
-        jnp.sum(z_a_centered**2, axis=0, keepdims=True) / valid_count + 1e-6
-    )
-    std_b = jnp.sqrt(
-        jnp.sum(z_b_centered**2, axis=0, keepdims=True) / valid_count + 1e-6
-    )
-
-    # 3. Normalize
-    z_a_norm = z_a_centered / std_a
-    z_b_norm = z_b_centered / std_b
-
-    # 4. Compute cross-correlation matrix (D x D)
-    c = jnp.dot(z_a_norm.T, z_b_norm) / valid_count
-
-    # 5. Compute loss: (1 - diagonal)^2 + lambda * off_diagonal^2
-    on_diag = jnp.sum((jnp.diag(c) - 1.0) ** 2)
-
-    off_diag_mask = 1.0 - jnp.eye(feature_dim, dtype=c.dtype)
-    off_diag = jnp.sum((c * off_diag_mask) ** 2)
-
-    return on_diag + lambda_param * off_diag
-
-
 class Encoder(nn.Module):
     """
     Encoder model for processing environment steps and history to generate embeddings.
@@ -1290,10 +1242,6 @@ class Encoder(nn.Module):
             timestep_embeddings, future_indices, axis=0, mode="clip"
         )
 
-        pred_future_loss = barlow_twins_loss(
-            predicted_future_sequence, true_future_sequence, future_mask
-        )
-
         output_state_embeddings = jnp.where(
             output_state_mask[..., None], output_state_sequence, 0
         )
@@ -1304,7 +1252,13 @@ class Encoder(nn.Module):
 
         action_embeddings = output_state_embeddings
 
-        return value_embedding, action_embeddings, pred_future_loss
+        return (
+            value_embedding,
+            action_embeddings,
+            predicted_future_sequence,
+            true_future_sequence,
+            future_mask,
+        )
 
     def __call__(
         self,
@@ -1331,7 +1285,9 @@ class Encoder(nn.Module):
         (
             value_embedding,
             action_embeddings,
-            pred_future_loss,
+            predicted_future_sequence,
+            true_future_sequence,
+            future_mask,
         ) = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, 0, None, None, None, None)
         )(
@@ -1345,4 +1301,10 @@ class Encoder(nn.Module):
             history_valid_mask,
         )
 
-        return value_embedding, action_embeddings, pred_future_loss
+        return (
+            value_embedding,
+            action_embeddings,
+            predicted_future_sequence,
+            true_future_sequence,
+            future_mask,
+        )

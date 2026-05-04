@@ -79,7 +79,10 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    pred_future_loss: ArrayLike = ()
+
+    predicted_future_sequence: ArrayLike = ()
+    true_future_sequence: ArrayLike = ()
+    future_mask: ArrayLike = ()
 
 
 @dataclass

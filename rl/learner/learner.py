@@ -32,6 +32,7 @@ from rl.learner.config import (
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.loss import (
     backward_kl_loss,
+    barlow_twins_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
@@ -153,7 +154,12 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
 
-        loss_future_pred = average(learner_player_pred.pred_future_loss, mask)
+        loss_future_pred = barlow_twins_loss(
+            z_pred=learner_player_pred.predicted_future_sequence,
+            z_target=jax.lax.stop_gradient(learner_player_pred.true_future_sequence),
+            mask=learner_player_pred.future_mask,
+            lambda_param=0.005,
+        )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
