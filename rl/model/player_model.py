@@ -106,7 +106,6 @@ class Porygon2PlayerModel(nn.Module):
         action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
-        predicted_future_sequence: jax.Array,
         true_future_sequence: jax.Array,
         future_mask: jax.Array,
         head_params: HeadParams,
@@ -124,7 +123,7 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerActorOutput(
             action_head=action_head,
             value_head=value_head,
-            predicted_future_sequence=predicted_future_sequence,
+            action_embeddings=action_embeddings,
             true_future_sequence=true_future_sequence,
             future_mask=future_mask,
         )
@@ -142,7 +141,6 @@ class Porygon2PlayerModel(nn.Module):
         (
             value_embedding,
             action_embeddings,
-            predicted_future_sequence,
             true_future_sequence,
             future_mask,
         ) = self.encoder(
@@ -156,7 +154,6 @@ class Porygon2PlayerModel(nn.Module):
             action_embeddings,
             actor_input.env,
             actor_output,
-            predicted_future_sequence,
             true_future_sequence,
             future_mask,
         )

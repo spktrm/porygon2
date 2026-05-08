@@ -108,7 +108,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
-    cfg.encoder.state_transformer.return_encoder_output = True
 
     cfg.encoder.local_timestep_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False

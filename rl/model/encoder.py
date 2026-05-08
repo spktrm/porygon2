@@ -274,11 +274,6 @@ class Encoder(nn.Module):
         self.latent_history_embedding = self.param(
             "latent_history_embedding", embedding_init, (1, entity_size)
         )
-        self.future_queries = self.param(
-            "future_queries",
-            learnable_query_init,
-            (self.cfg.num_future_queries, entity_size),
-        )
 
         # Initialize linear layers for encoding various entity features.
         self.species_linear = nn.Dense(
@@ -338,9 +333,13 @@ class Encoder(nn.Module):
         self.state_embeddings = self.param(
             "state_embeddings", learnable_query_init, (2, entity_size)
         )
-        # TODO: make this 5 since we have remove potential head prediction
         self.extra_embeddings = self.param(
             "extra_embeddings", learnable_query_init, (4, entity_size)
+        )
+        self.future_embeddings = self.param(
+            "future_embeddings",
+            learnable_query_init,
+            (self.cfg.num_future_queries, entity_size),
         )
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
@@ -351,9 +350,6 @@ class Encoder(nn.Module):
             **self.cfg.history_decoder.to_dict(),
         )
         self.state_transformer = Transformer(**self.cfg.state_transformer.to_dict())
-        self.future_decoder = TransformerDecoder(
-            **self.cfg.future_decoder.to_dict(),
-        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1121,6 +1117,7 @@ class Encoder(nn.Module):
 
         state_embeddings = self.state_embeddings.astype(self.cfg.dtype)
         extra_embeddings = self.extra_embeddings.astype(self.cfg.dtype)
+        future_embeddings = self.future_embeddings.astype(self.cfg.dtype)
 
         output_state_sequence = jnp.concatenate(
             [
@@ -1129,6 +1126,7 @@ class Encoder(nn.Module):
                 private_embeddings,
                 self.active_embeddings.astype(self.cfg.dtype),
                 extra_embeddings,
+                future_embeddings,
             ],
             axis=0,
         )
@@ -1202,6 +1200,11 @@ class Encoder(nn.Module):
             )
         )
 
+        future_indices = jnp.arange(self.cfg.num_future_queries) + current_history_step
+        future_mask = jnp.take(
+            history_valid_mask, future_indices, axis=0, mode="fill", fill_value=False
+        )
+
         q_self_attn_mask = env_step.action_mask | env_step.action_mask.T
         q_self_attn_mask = q_self_attn_mask.at[
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING :
@@ -1221,7 +1224,7 @@ class Encoder(nn.Module):
         kv_self_attn_mask = create_attention_mask(latent_input_mask)
         cross_attn_mask = create_attention_mask(output_state_mask, latent_input_mask)
 
-        output_state_sequence, encoder_output = self.state_transformer(
+        output_state_sequence = self.state_transformer(
             q=output_state_sequence,
             kv=latent_input_embeddings,
             q_self_attn_mask=q_self_attn_mask,
@@ -1229,19 +1232,9 @@ class Encoder(nn.Module):
             cross_attn_mask=cross_attn_mask,
         )
 
-        future_indices = jnp.arange(self.cfg.num_future_queries) + current_history_step
-        future_mask = jnp.take(
-            history_valid_mask, future_indices, axis=0, mode="fill", fill_value=False
-        )
-        predicted_future_sequence = self.future_decoder(
-            q=self.future_queries.astype(self.cfg.dtype),
-            kv=encoder_output,
-            attn_mask=create_attention_mask(future_mask, latent_input_mask),
-        )
         true_future_sequence = jnp.take(
             timestep_embeddings, future_indices, axis=0, mode="clip"
         )
-
         output_state_embeddings = jnp.where(
             output_state_mask[..., None], output_state_sequence, 0
         )
@@ -1255,7 +1248,6 @@ class Encoder(nn.Module):
         return (
             value_embedding,
             action_embeddings,
-            predicted_future_sequence,
             true_future_sequence,
             future_mask,
         )
@@ -1285,7 +1277,6 @@ class Encoder(nn.Module):
         (
             value_embedding,
             action_embeddings,
-            predicted_future_sequence,
             true_future_sequence,
             future_mask,
         ) = jax.vmap(
@@ -1304,7 +1295,6 @@ class Encoder(nn.Module):
         return (
             value_embedding,
             action_embeddings,
-            predicted_future_sequence,
             true_future_sequence,
             future_mask,
         )

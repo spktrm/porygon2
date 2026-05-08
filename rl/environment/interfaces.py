@@ -80,7 +80,7 @@ class PlayerActorOutput:
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
-    predicted_future_sequence: ArrayLike = ()
+    action_embeddings: ArrayLike = ()
     true_future_sequence: ArrayLike = ()
     future_mask: ArrayLike = ()
 
