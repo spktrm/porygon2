@@ -551,7 +551,6 @@ class Transformer(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    return_encoder_output: bool = True
 
     def decoder_layer(
         self,
@@ -716,9 +715,6 @@ class Transformer(nn.Module):
             )
 
         q = layer_norm(q)
-
-        if self.return_encoder_output:
-            return q, kv
 
         return q
 

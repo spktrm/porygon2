@@ -21,6 +21,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
+from rl.environment.protos.service_pb2 import ActionEnum
 from rl.environment.utils import clip_history, clip_packed_history
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
@@ -155,7 +156,9 @@ def train_step(
         loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
 
         loss_future_pred = barlow_twins_loss(
-            z_pred=learner_player_pred.predicted_future_sequence,
+            z_pred=learner_player_pred.action_embeddings[
+                ..., ActionEnum.ACTION_ENUM__FUTURE_PRED1 :, :
+            ],
             z_target=jax.lax.stop_gradient(learner_player_pred.true_future_sequence),
             mask=learner_player_pred.future_mask,
             lambda_param=0.005,
