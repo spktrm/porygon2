@@ -39,6 +39,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 
 from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
@@ -248,13 +249,11 @@ def plot_entropy_summary(records: list[AttentionRecord], output_dir: str) -> str
         linewidth=0.9,
         label="0.5 threshold",
     )
-    ax.set_ylabel("Mean normalised entropy  (0 = peaked,  1 = uniform)")
+    ax.set_ylabel("Mean normalized entropy  (0 = peaked,  1 = uniform)")
     ax.set_title(
         "Attention entropy per head / layer\n"
         "Low entropy  →  concentrated attention  →  potential bottleneck"
     )
-
-    from matplotlib.patches import Patch  # noqa: PLC0415
 
     legend_handles = [
         Patch(facecolor=color_map[c], label=c) for c in component_names
