@@ -288,6 +288,19 @@ class MultiHeadAttention(nn.Module):
             mask.sum(axis=-1)
         )
 
+        # Capture attention weights and entropy as Flax intermediates so that
+        # visualisation scripts can inspect them without modifying the forward pass.
+        # self.sow(
+        #     "intermediates",
+        #     "attn_weights",
+        #     attn_probs.astype(jnp.float32),
+        # )
+        # self.sow(
+        #     "intermediates",
+        #     "attn_entropy",
+        #     jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
+        # )
+
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
