@@ -343,6 +343,9 @@ class Encoder(nn.Module):
         )
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
+        self.active_decoder = TransformerDecoder(
+            **self.cfg.input_decoder.to_dict(),
+        )
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
         )
@@ -1118,13 +1121,20 @@ class Encoder(nn.Module):
         state_embeddings = self.state_embeddings.astype(self.cfg.dtype)
         extra_embeddings = self.extra_embeddings.astype(self.cfg.dtype)
         future_embeddings = self.future_embeddings.astype(self.cfg.dtype)
+        active_embeddings = self.active_embeddings.astype(self.cfg.dtype)
+        active_mask = jnp.ones_like(active_embeddings[..., 0], dtype=jnp.bool)
+        active_embeddings = self.active_decoder(
+            q=active_embeddings,
+            kv=public_embeddings,
+            attn_mask=create_attention_mask(active_mask, entity_mask),
+        )
 
         output_state_sequence = jnp.concatenate(
             [
                 state_embeddings,
                 my_move_embeddings,
                 private_embeddings,
-                self.active_embeddings.astype(self.cfg.dtype),
+                active_embeddings,
                 extra_embeddings,
                 future_embeddings,
             ],
