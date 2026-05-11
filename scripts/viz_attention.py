@@ -47,7 +47,6 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 
-
 # ---------------------------------------------------------------------------
 # Token-sequence label helpers
 # ---------------------------------------------------------------------------
@@ -77,7 +76,11 @@ def _seq_labels(component: str, T: int, role: str) -> list[str]:
     if component == "history_decoder":
         return _labels(T, "latent_") if role == "q" else [f"hist_{i}" for i in range(T)]
     if component == "local_timestep_decoder":
-        return ["field", "my_side", "opp_side"][:T] if role == "q" else [f"entity_{i}" for i in range(T)]
+        return (
+            ["field", "my_side", "opp_side"][:T]
+            if role == "q"
+            else [f"entity_{i}" for i in range(T)]
+        )
     if component in ("state_transformer_kv_enc", "state_transformer_q_self"):
         return [f"tok_{i}" for i in range(T)]
     if component == "state_transformer_q_cross":
@@ -255,9 +258,7 @@ def plot_entropy_summary(records: list[AttentionRecord], output_dir: str) -> str
         "Low entropy  →  concentrated attention  →  potential bottleneck"
     )
 
-    legend_handles = [
-        Patch(facecolor=color_map[c], label=c) for c in component_names
-    ]
+    legend_handles = [Patch(facecolor=color_map[c], label=c) for c in component_names]
     ax.legend(handles=legend_handles, loc="upper right", fontsize=7, ncol=2)
 
     plt.tight_layout()
@@ -270,6 +271,7 @@ def plot_entropy_summary(records: list[AttentionRecord], output_dir: str) -> str
 # ---------------------------------------------------------------------------
 # Ordered MHA labels for _batched_forward and _embed_local_timestep
 # ---------------------------------------------------------------------------
+
 
 def _build_batched_labels(cfg) -> list[tuple[str, int, str]]:
     """
@@ -309,6 +311,7 @@ def _build_local_labels(cfg) -> list[tuple[str, int, str]]:
 # ---------------------------------------------------------------------------
 # Forward-pass helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(encoder: Encoder, enc_vars: dict, method_fn, *args):
     """Apply encoder method, return (output, intermediates)."""
@@ -418,6 +421,7 @@ def _capture_batched_forward(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Visualise player-encoder attention scores."
@@ -428,8 +432,12 @@ def main() -> None:
         help="Path to a cloudpickle checkpoint file. "
         "If omitted, random parameters are used.",
     )
-    parser.add_argument("--generation", type=int, default=9,
-                        help="Game generation to use (1 or 9, default: 9).")
+    parser.add_argument(
+        "--generation",
+        type=int,
+        default=9,
+        help="Game generation to use (1 or 9, default: 9).",
+    )
     parser.add_argument(
         "--output",
         default="attention_viz",
@@ -462,9 +470,7 @@ def main() -> None:
     packed_history = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], actor_input.packed_history)
     )
-    history = jax.device_put(
-        jax.tree.map(lambda x: x[:, 0], actor_input.history)
-    )
+    history = jax.device_put(jax.tree.map(lambda x: x[:, 0], actor_input.history))
 
     # ── Load / init params ───────────────────────────────────────────────────
     if args.ckpt:
@@ -474,7 +480,7 @@ def main() -> None:
         # Support both flat and nested checkpoint formats
         player_state = ckpt.get("player_state", ckpt)
         params = player_state.get("params", player_state)
-        enc_params = params["encoder"]
+        enc_params = params["params"]["encoder"]
     else:
         print("No checkpoint supplied — using random parameters.")
         # env_step_single has no T-dim; encoder.init expects a T=1 leading dim

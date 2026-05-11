@@ -52,7 +52,7 @@ class Porygon2LearnerConfig:
     batch_size: int = 4
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 4
+    player_replay_buffer_capacity: int = 1024 * 2
     player_replay_ratio: int = 4
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
@@ -92,7 +92,7 @@ class Porygon2LearnerConfig:
     player_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_potential_reward_scale: float = 0.1
+    player_potential_reward_scale: float = 0.01
 
     # Loss coefficients
     ## Player
