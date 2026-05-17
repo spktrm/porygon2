@@ -11,6 +11,8 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_ENUM___UNSPECIFIED: _ClassVar[ActionEnum]
     ACTION_ENUM__DEFAULT: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_TARGET: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_1: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_2: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_3: _ClassVar[ActionEnum]
@@ -19,6 +21,8 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_TARGET: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_1: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_2: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_3: _ClassVar[ActionEnum]
@@ -27,28 +31,42 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_5: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_6: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__ENEMY_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__ENEMY_2: _ClassVar[ActionEnum]
     ACTION_ENUM__TARGET_AUTO: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_MOVE_4: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_MOVE_1: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_MOVE_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_MOVE_3: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_MOVE_4: _ClassVar[ActionEnum]
     ACTION_ENUM__VALUE_EMBEDDING: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED1: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED2: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED3: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED4: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED5: _ClassVar[ActionEnum]
-    ACTION_ENUM__FUTURE_PRED6: _ClassVar[ActionEnum]
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
+ACTION_ENUM__ALLY_1_TARGET: ActionEnum
+ACTION_ENUM__ALLY_1_PASS: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_1: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_2: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_3: ActionEnum
@@ -57,6 +75,8 @@ ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_TARGET: ActionEnum
+ACTION_ENUM__ALLY_2_PASS: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_1: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_2: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_3: ActionEnum
@@ -65,26 +85,38 @@ ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: ActionEnum
-ACTION_ENUM__RESERVE_1: ActionEnum
-ACTION_ENUM__RESERVE_2: ActionEnum
-ACTION_ENUM__RESERVE_3: ActionEnum
-ACTION_ENUM__RESERVE_4: ActionEnum
-ACTION_ENUM__RESERVE_5: ActionEnum
-ACTION_ENUM__RESERVE_6: ActionEnum
-ACTION_ENUM__ALLY_1: ActionEnum
-ACTION_ENUM__ALLY_2: ActionEnum
-ACTION_ENUM__ENEMY_1: ActionEnum
-ACTION_ENUM__ENEMY_2: ActionEnum
 ACTION_ENUM__TARGET_AUTO: ActionEnum
-ACTION_ENUM__ALLY_1_PASS: ActionEnum
-ACTION_ENUM__ALLY_2_PASS: ActionEnum
+ACTION_ENUM__RESERVE_1_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_1_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_1_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_1_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_1_MOVE_4: ActionEnum
+ACTION_ENUM__RESERVE_2_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_2_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_2_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_2_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_2_MOVE_4: ActionEnum
+ACTION_ENUM__RESERVE_3_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_3_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_3_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_3_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_3_MOVE_4: ActionEnum
+ACTION_ENUM__RESERVE_4_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_4_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_4_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_4_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_4_MOVE_4: ActionEnum
+ACTION_ENUM__RESERVE_5_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_5_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_5_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_5_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_5_MOVE_4: ActionEnum
+ACTION_ENUM__RESERVE_6_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_6_MOVE_1: ActionEnum
+ACTION_ENUM__RESERVE_6_MOVE_2: ActionEnum
+ACTION_ENUM__RESERVE_6_MOVE_3: ActionEnum
+ACTION_ENUM__RESERVE_6_MOVE_4: ActionEnum
 ACTION_ENUM__VALUE_EMBEDDING: ActionEnum
-ACTION_ENUM__FUTURE_PRED1: ActionEnum
-ACTION_ENUM__FUTURE_PRED2: ActionEnum
-ACTION_ENUM__FUTURE_PRED3: ActionEnum
-ACTION_ENUM__FUTURE_PRED4: ActionEnum
-ACTION_ENUM__FUTURE_PRED5: ActionEnum
-ACTION_ENUM__FUTURE_PRED6: ActionEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")

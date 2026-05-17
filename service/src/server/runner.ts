@@ -17,11 +17,12 @@ import { Protocol } from "@pkmn/protocol";
 import {
     Action,
     EnvironmentState,
-    ActionEnum,
     StepRequest,
+    ActionEnum,
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
+import { numActionFeatures } from "./data";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -138,16 +139,6 @@ export class AsyncQueue<T> implements Queue<T> {
     // Get a copy of all items without removing them
     getItems(): T[] {
         return [...this.items];
-    }
-}
-
-function targetIdxToShowdownFormat(targetIndex: number): string {
-    if (0 <= targetIndex && targetIndex < 2) {
-        return `-` + (targetIndex + 1).toString();
-    } else if (2 <= targetIndex && targetIndex < 4) {
-        return "+" + (targetIndex - 1).toString();
-    } else {
-        return "";
     }
 }
 
@@ -281,8 +272,30 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         const srcIndex = action.getSrc();
         const tgtIndex = action.getTgt();
 
-        const targetIndex = tgtIndex - ActionEnum.ACTION_ENUM__ALLY_1;
-        const showdownFormat = targetIdxToShowdownFormat(targetIndex);
+        // Safe mapping for switch-ins since they are interleaved with RESERVE_MOVEs in V2
+        const reserveSwitchIndices: number[] = [
+            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+        ];
+
+        const targetLookup = {
+            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
+            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
+            [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "+1",
+            [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "+2",
+        };
+
+        let showdownFormat = "";
+        if (
+            tgtIndex !==
+            numActionFeatures + ActionEnum.ACTION_ENUM__TARGET_AUTO
+        ) {
+            showdownFormat = targetLookup[tgtIndex];
+        }
 
         if (
             ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
@@ -320,11 +333,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
                 " terastallize"
             );
-        } else if (
-            ActionEnum.ACTION_ENUM__RESERVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
-        ) {
-            const switchIndex = srcIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
+        } else if (reserveSwitchIndices.includes(srcIndex)) {
+            const switchIndex = reserveSwitchIndices.indexOf(srcIndex);
+
             return `switch ${switchIndex + 1}`;
         } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
@@ -466,7 +477,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 const fromIdx = parseInt(choice.split(" ")[1]) - 1;
                 [order[toIdx], order[fromIdx]] = [order[fromIdx], order[toIdx]];
             }
-            return "team " + order.join("");
+            const slicedOrder = order.slice(0, request.maxChosenTeamSize ?? 6);
+            return "team " + slicedOrder.join("");
         };
 
         const choice =

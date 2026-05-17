@@ -111,8 +111,9 @@ def clip_packed_history(
 
 def get_action_mask(state: EnvironmentState):
     buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
-    mask = np.unpackbits(buffer, axis=-1)[: NUM_ACTION_FEATURES**2]
-    return mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    action_width = 2 * NUM_ACTION_FEATURES
+    mask = np.unpackbits(buffer, axis=-1)[: action_width**2]
+    return mask.astype(bool).reshape(action_width, action_width)
 
 
 def process_state(

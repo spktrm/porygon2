@@ -1,4 +1,4 @@
-import { AnyObject, PokemonSet, Teams, TeamValidator, toID } from "@pkmn/sim";
+import { AnyObject, toID } from "@pkmn/sim";
 import {
     Args,
     BattleInitArgName,
@@ -19,7 +19,6 @@ import {
     ItemeffecttypesEnum,
     ItemsEnum,
     MovesEnum,
-    NaturesEnum,
     SideconditionEnum,
     SpeciesEnum,
     StatusEnum,
@@ -65,7 +64,6 @@ import {
     MovesetHasPP,
     PackedSetFeature,
     RequestType,
-    RewardFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
@@ -3319,19 +3317,75 @@ export class StateHandler {
         this.player = player;
     }
 
-    getActionMask(args: { request?: AnyObject | null; format?: string }): {
+    getActionMask(args: {
+        request?: AnyObject | null;
+        format?: string;
+        allyActive: (Pokemon | null)[];
+        enemyActive: (Pokemon | null)[];
+    }): {
         actionMask: OneDBoolean;
         isStruggling: boolean;
     } {
-        const { request, format } = args;
+        const { request, format, allyActive, enemyActive } = args;
 
-        const arrLength = numActionFeatures ** 2;
-        const actionMask = new OneDBoolean(
-            arrLength,
-            Uint8Array,
-            numActionFeatures,
-        );
+        const arrWidth = 2 * numActionFeatures;
+        const arrLength = arrWidth ** 2;
+        const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
         let isStruggling = false;
+
+        const moveIndices = [
+            [
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+            ],
+            [
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+            ],
+        ];
+        const wildCardIndices = [
+            [
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+            ],
+            [
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+            ],
+        ];
+        const reserveIndices = [
+            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+        ];
+        const allyTargets = [
+            allyActive[0] !== null
+                ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET
+                : undefined,
+            allyActive[1] !== null
+                ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET
+                : undefined,
+        ];
+
+        const enemyTargets = [
+            enemyActive[0] !== null
+                ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET
+                : undefined,
+            enemyActive[1] !== null
+                ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET
+                : undefined,
+        ];
 
         const setAll = (val: boolean) => {
             for (let i = 0; i < arrLength; i++) {
@@ -3354,12 +3408,11 @@ export class StateHandler {
                         continue;
                     }
 
-                    const rowColValPassValue =
-                        ActionEnum[
-                            `ACTION_ENUM__ALLY_${
-                                i + 1
-                            }_PASS` as keyof typeof ActionEnum
-                        ];
+                    const rowColValPassValue = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                    ][i];
+
                     if (!mustSwitch) {
                         actionMask.setRowCol(
                             rowColValPassValue,
@@ -3396,9 +3449,12 @@ export class StateHandler {
                             ActionEnum[
                                 `ACTION_ENUM__RESERVE_${
                                     j + 1
-                                }` as keyof typeof ActionEnum
+                                }_SWITCH_IN` as keyof typeof ActionEnum
                             ],
-                            ActionEnum.ACTION_ENUM__ALLY_1 + i,
+                            [
+                                ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                                ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
+                            ][i],
                             true,
                         );
                     }
@@ -3420,12 +3476,10 @@ export class StateHandler {
                         continue;
                     }
 
-                    const rowColValPassValue =
-                        ActionEnum[
-                            `ACTION_ENUM__ALLY_${
-                                i + 1
-                            }_PASS` as keyof typeof ActionEnum
-                        ];
+                    const rowColValPassValue = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                    ][i];
                     if (
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
@@ -3472,42 +3526,40 @@ export class StateHandler {
                             this.player.privateBattle.gameType === "doubles" &&
                             "target" in move
                         ) {
+                            const allyTarget = allyTargets[1 - i];
                             switch (move.target) {
                                 case "any":
                                 case "normal":
-                                    actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__ALLY_${
-                                                2 - i
-                                            }` as keyof typeof ActionEnum
-                                        ],
-                                        ActionEnum.ACTION_ENUM__ENEMY_1,
-                                        ActionEnum.ACTION_ENUM__ENEMY_2,
-                                    );
+                                    for (const target of enemyTargets) {
+                                        if (target !== undefined) {
+                                            actionIndices.push(target);
+                                        }
+                                    }
+                                    if (allyTarget !== undefined) {
+                                        actionIndices.push(allyTarget);
+                                    }
                                     break;
 
                                 case "adjacentAlly":
-                                    actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__ALLY_${
-                                                2 - i
-                                            }` as keyof typeof ActionEnum
-                                        ],
-                                    );
+                                    if (allyTarget !== undefined) {
+                                        actionIndices.push(allyTarget);
+                                    }
                                     break;
 
                                 case "adjacentFoe":
-                                    actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__ENEMY_1,
-                                        ActionEnum.ACTION_ENUM__ENEMY_2,
-                                    );
+                                    for (const target of enemyTargets) {
+                                        if (target !== undefined) {
+                                            actionIndices.push(target);
+                                        }
+                                    }
                                     break;
 
                                 case "adjacentAllyOrSelf":
-                                    actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__ALLY_1,
-                                        ActionEnum.ACTION_ENUM__ALLY_2,
-                                    );
+                                    for (const target of allyTargets) {
+                                        if (target !== undefined) {
+                                            actionIndices.push(target);
+                                        }
+                                    }
                                     break;
 
                                 case "self":
@@ -3527,15 +3579,18 @@ export class StateHandler {
 
                                 default:
                                     actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                        numActionFeatures +
+                                            ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
                             }
                         } else {
                             actionIndices.push(
-                                ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                numActionFeatures +
+                                    ActionEnum.ACTION_ENUM__TARGET_AUTO,
                             );
                         }
+
                         for (const actionIndex of actionIndices) {
                             if (actionIndex === undefined) {
                                 throw new Error(
@@ -3546,20 +3601,10 @@ export class StateHandler {
                                     }`,
                                 );
                             }
-                            const rowIndex =
-                                ActionEnum[
-                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
-                                        j + 1
-                                    }` as keyof typeof ActionEnum
-                                ];
+                            const rowIndex = moveIndices[i][j];
                             actionMask.setRowCol(rowIndex, actionIndex, true);
-                            const wildCardRowIndex =
-                                ActionEnum[
-                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
-                                        j + 1
-                                    }_WILDCARD` as keyof typeof ActionEnum
-                                ];
 
+                            const wildCardRowIndex = wildCardIndices[i][j];
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
                                     WILDCARDS.map((wildcard) =>
@@ -3596,12 +3641,16 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchToIndex = ActionEnum.ACTION_ENUM__ALLY_1 + i;
+                    const switchToIndex =
+                        allyTargets[i] ??
+                        [
+                            ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                            ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
+                        ][i];
 
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            const switchFromIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+                            const switchFromIndex = reserveIndices[j];
 
                             actionMask.setRowCol(
                                 switchFromIndex,
@@ -3612,25 +3661,66 @@ export class StateHandler {
                     }
                 }
             } else if (request.teamPreview) {
-                const pokemon = request.side.pokemon;
+                const reserveSources = [
+                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+                ];
 
-                for (let i = this.player.choices.length; i < 6; i++) {
-                    for (let j = this.player.choices.length; j < 6; j++) {
-                        const poke_i = pokemon[i];
-                        const poke_j = pokemon[j];
+                const activeTargets: number[] = [
+                    ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                ];
 
-                        if (poke_i && poke_j) {
-                            const switchFromIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + i;
-                            const switchToIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+                if (this.player.privateBattle.gameType === "doubles") {
+                    activeTargets.push(ActionEnum.ACTION_ENUM__ALLY_2_TARGET);
+                }
 
-                            actionMask.setRowCol(
-                                switchFromIndex,
-                                switchToIndex,
-                                true,
-                            );
+                const reserveTargets: number[] = [
+                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+                ];
+
+                if (!this.player.privateBattle.tier.includes("VGC")) {
+                    // Both 6v6 Singles and 6v6 Doubles need at least Reserve 3 and 4
+                    reserveTargets.push(
+                        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+                        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+                    );
+
+                    // ONLY 6v6 Singles needs Reserve 5 (1 Active + 5 Reserves = 6 Total)
+                    if (this.player.privateBattle.gameType !== "doubles") {
+                        reserveTargets.push(
+                            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+                        );
+                    }
+                }
+
+                const allTargets = [...activeTargets, ...reserveTargets].slice(
+                    this.player.choices.length,
+                );
+                const alreadyChosenSources = this.player.choices.map(
+                    (choice) => {
+                        if (choice.startsWith("switch ")) {
+                            const idx = parseInt(choice.split(" ")[1]) - 1;
+                            return reserveSources[idx];
                         }
+                        return null;
+                    },
+                );
+                const filteredSources = reserveSources.filter(
+                    (value, index) => {
+                        return (
+                            value !== null &&
+                            !alreadyChosenSources.includes(value)
+                        );
+                    },
+                );
+                for (const src of filteredSources) {
+                    for (const target of allTargets) {
+                        actionMask.setRowCol(src, target, true);
                     }
                 }
             }
@@ -4104,6 +4194,11 @@ export class StateHandler {
         if (!this.player.done && request === undefined) {
             throw new Error("Need Request");
         }
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
+
         const {
             historyEntityPublic,
             historyEntityRevealed,
@@ -4117,9 +4212,14 @@ export class StateHandler {
         const info = this.getInfo(historyLength);
         state.setInfo(info);
 
+        const allyActive = this.player.publicBattle.sides[playerIndex].active;
+        const enemyActive =
+            this.player.publicBattle.sides[1 - playerIndex].active;
         const { actionMask } = this.getActionMask({
             request,
             format: this.player.privateBattle.gameType,
+            allyActive,
+            enemyActive,
         });
         state.setActionMask(actionMask.buffer);
 
@@ -4129,11 +4229,6 @@ export class StateHandler {
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
-
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error("Player index is undefined");
-        }
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));

@@ -90,30 +90,30 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     )
 
     cfg.encoder.local_timestep_decoder = ConfigDict()
+    cfg.encoder.query_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
-    cfg.encoder.state_transformer = ConfigDict()
-    cfg.encoder.future_decoder = ConfigDict()
+    cfg.encoder.latent_encoder = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [cfg.encoder.local_timestep_decoder]:
+    for encoder in [cfg.encoder.latent_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
+        cfg.encoder.local_timestep_decoder,
         cfg.encoder.input_decoder,
+        cfg.encoder.query_decoder,
         cfg.encoder.history_decoder,
-        cfg.encoder.future_decoder,
         cfg.encoder.output_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
-    set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
-
     cfg.encoder.local_timestep_decoder.need_pos = False
+    cfg.encoder.query_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_transformer.num_layers = 2
-    cfg.encoder.state_transformer.need_pos = False
+    cfg.encoder.latent_encoder.num_layers = 2
+    cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.action_head = ConfigDict()

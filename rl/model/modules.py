@@ -864,21 +864,6 @@ def simple_sum_embeddings(
     return sum(embeddings) / divisor
 
 
-def simple_concat_embeddings(*embeddings: list[jax.Array]) -> jax.Array:
-    """
-    Get the concat of the embeddings.
-
-    Args:
-        embeddings (list[jax.Array]): List of embedding arrays.
-
-    Returns:
-        jax.Array: Sum of the embeddings.
-    """
-    if len(embeddings) == 0:
-        raise ValueError("No embeddings provided")
-    return jnp.concatenate(embeddings, axis=-1)
-
-
 class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
@@ -892,12 +877,21 @@ class SumEmbeddings(nn.Module):
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
 
-        # Sum and scale the variance by dividing by sqrt(N)
-        aggregated = simple_concat_embeddings(*embeddings)
+        embeddings = [
+            nn.Dense(
+                self.hidden_size or self.output_size, dtype=self.dtype, use_bias=False
+            )(emb)
+            for emb in embeddings
+        ]
 
-        return nn.Dense(
-            self.hidden_size or self.output_size, use_bias=False, dtype=self.dtype
-        )(aggregated).astype(self.dtype)
+        # Sum and scale the variance by dividing by sqrt(N)
+        aggregated = simple_sum_embeddings(*embeddings)
+
+        if self.use_bias:
+            bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
+            return aggregated + bias.astype(self.dtype)
+        else:
+            return aggregated
 
 
 class PointerLogits(nn.Module):
