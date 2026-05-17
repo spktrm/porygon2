@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import NUM_ACTION_FEATURES
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -83,8 +82,9 @@ class Porygon2PlayerModel(nn.Module):
 
         log_prob = jnp.take(log_policy, action_index, axis=-1)
 
-        src_index = action_index // NUM_ACTION_FEATURES
-        tgt_index = action_index % NUM_ACTION_FEATURES
+        mask_width = valid_mask.shape[-1]
+        src_index = action_index // mask_width
+        tgt_index = action_index % mask_width
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,

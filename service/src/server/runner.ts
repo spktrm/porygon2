@@ -287,6 +287,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
             [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "+1",
             [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "+2",
+            [numActionFeatures + ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
         };
 
         let showdownFormat = "";
@@ -302,6 +303,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return `move ${moveIndex + 1} ${showdownFormat}`.trim();
         } else if (
@@ -310,6 +314,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return (
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
@@ -320,6 +327,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return `move ${moveIndex + 1} ${showdownFormat}`.trim();
         } else if (
@@ -328,6 +338,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return (
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
