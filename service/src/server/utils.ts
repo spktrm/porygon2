@@ -86,12 +86,12 @@ const typedArrayElementSizes: {
 };
 
 export class OneDBoolean<T extends TypedArray = Uint8Array> {
-    private readonly length: number;
-    private readonly width: number | undefined;
-    private readonly height: number | undefined;
-    private readonly data: T;
-    private readonly bitsPerElement: number;
-    private readonly mask: number;
+    readonly length: number;
+    readonly width: number | undefined;
+    readonly height: number | undefined;
+    readonly data: T;
+    readonly bitsPerElement: number;
+    readonly mask: number;
 
     constructor(
         length: number,
