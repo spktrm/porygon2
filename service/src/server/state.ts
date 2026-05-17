@@ -3446,11 +3446,7 @@ export class StateHandler {
 
                     for (const [j, _] of canSwitch) {
                         actionMask.setRowCol(
-                            ActionEnum[
-                                `ACTION_ENUM__RESERVE_${
-                                    j + 1
-                                }_SWITCH_IN` as keyof typeof ActionEnum
-                            ],
+                            reserveIndices[j],
                             [
                                 ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
                                 ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
@@ -3573,7 +3569,8 @@ export class StateHandler {
                                 case "allies":
                                 case "scripted":
                                     actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                        numActionFeatures +
+                                            ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
 

@@ -4,7 +4,12 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
+from rl.environment.data import (
+    ALLY_TARGET_INDICES,
+    CAT_VF_SUPPORT,
+    NUM_PACKED_SET_FEATURES,
+    RESERVE_ENTITY_INDICES,
+)
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
@@ -59,7 +64,7 @@ def collect_batch_telemetry_data(
     )
     can_switch = batch.player_transitions.env_output.action_mask[
         ...,
-        ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6 + 1,
+        RESERVE_ENTITY_INDICES,
         :,
     ].any((-2, -1))
     can_act = can_move & can_switch & player_valid
@@ -86,10 +91,8 @@ def collect_batch_telemetry_data(
         )
     ) & can_move
     did_switch = (
-        (src_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
-        & (tgt_action_index >= ActionEnum.ACTION_ENUM__ALLY_1)
-        & (tgt_action_index <= ActionEnum.ACTION_ENUM__ALLY_2)
+        (src_action_index[..., None] == RESERVE_ENTITY_INDICES[None, None]).any(axis=-1)
+        & (tgt_action_index[..., None] == ALLY_TARGET_INDICES[None, None]).any(axis=-1)
         & can_switch
     )
     move_ratio = renormalize(did_move, can_act)

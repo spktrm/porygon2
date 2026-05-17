@@ -12,15 +12,30 @@ from ml_collections import ConfigDict
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     ACTION_MAX_VALUES,
+    ALLY_1_INDICES,
+    ALLY_2_INDICES,
+    ALLY_TARGET_INDICES,
     ENTITY_EDGE_MAX_VALUES,
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
     FIELD_MAX_VALUES,
+    MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
+    PASS_INDICES,
+    RESERVE_1_INDICES,
+    RESERVE_2_INDICES,
+    RESERVE_3_INDICES,
+    RESERVE_4_INDICES,
+    RESERVE_5_INDICES,
+    RESERVE_6_INDICES,
+    RESERVE_ENTITY_INDICES,
+    RESERVE_MOVE_INDICES,
+    TARGET_AUTO_INDICES,
+    VALUE_EMBEDDING_INDICES,
 )
 from rl.environment.interfaces import (
     PlayerEnvOutput,
@@ -51,153 +66,6 @@ from rl.model.modules import (
     TransformerEncoder,
     create_attention_mask,
     one_hot_concat_jax,
-)
-
-MOVE_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
-    ]
-)
-RESERVE_ENTITY_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-    ]
-)
-RESERVE_MOVE_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_4,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_4,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_4,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_4,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_4,
-    ]
-)
-ALLY_TARGET_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-        ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
-    ]
-)
-PASS_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
-    ]
-)
-TARGET_AUTO_INDICES = np.array([ActionEnum.ACTION_ENUM__TARGET_AUTO])
-VALUE_EMBEDDING_INDICES = np.array([ActionEnum.ACTION_ENUM__VALUE_EMBEDDING])
-ALLY_1_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-    ]
-)
-ALLY_2_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
-    ]
-)
-RESERVE_1_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_1_MOVE_4,
-    ]
-)
-RESERVE_2_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_2_MOVE_4,
-    ]
-)
-RESERVE_3_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_3_MOVE_4,
-    ]
-)
-RESERVE_4_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_4_MOVE_4,
-    ]
-)
-RESERVE_5_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_5_MOVE_4,
-    ]
-)
-RESERVE_6_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_1,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_2,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_3,
-        ActionEnum.ACTION_ENUM__RESERVE_6_MOVE_4,
-    ]
 )
 
 

@@ -81,11 +81,10 @@ async function playerController(player: TrainablePlayerAI) {
 }
 
 const testFormats = [
-    // "gen9randomdoublesbattle",
+    "gen9randomdoublesbattle",
     "gen9vgc2026regf",
-    // "gen9championsvgc2026regma",
-    // "gen9ou",
-    // "gen9randombattle",
+    "gen9ou",
+    "gen9randombattle",
 ];
 const testPackedTeamArray = [
     0, 397, 40, 289, 850, 364, 857, 639, 11, 5, 58, 2, 0, 23, 23, 17, 4, 23, 0,
