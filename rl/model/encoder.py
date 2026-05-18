@@ -1295,9 +1295,11 @@ class Encoder(nn.Module):
         for indices in (
             RESERVE_ENTITY_INDICES,
             RESERVE_MOVE_INDICES,
+            ALLY_TARGET_INDICES,
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
             NUM_ACTION_FEATURES + RESERVE_ENTITY_INDICES,
             NUM_ACTION_FEATURES + RESERVE_MOVE_INDICES,
+            NUM_ACTION_FEATURES + ALLY_TARGET_INDICES,
             NUM_ACTION_FEATURES + ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
         ):
             output_state_mask = output_state_mask.at[indices].set(True)
