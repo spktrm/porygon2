@@ -42,6 +42,7 @@ def compute_player_targets(
     learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
     isr: jax.Array,
+    advantage_mixing_alpha: float,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
@@ -100,8 +101,8 @@ def compute_player_targets(
     pg_advantages = mask_expanded * rho_expanded * (q_estimate - combined_values)
 
     combined_advantage = (
-        pg_advantages[..., :n_bins] @ cat_vf_support
-        + config.player_potential_reward_scale * pg_advantages[..., n_bins]
+        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
+        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
     )
 
     win_returns = returns[..., :n_bins]

@@ -81,6 +81,9 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
+    player_advantage_mixing_alpha = config.player_advantage_mixing_alpha_fn(
+        player_state.step_count
+    )
 
     training_logs = {}
 
@@ -114,6 +117,7 @@ def train_step(
             learner_player_pred,
             player_target_pred,
             isr=target_actor_ratio,
+            advantage_mixing_alpha=player_advantage_mixing_alpha,
             config=config,
         )
         mask = player_targets.mask
