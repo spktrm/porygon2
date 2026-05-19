@@ -56,7 +56,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 4
+    decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
@@ -111,7 +111,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.query_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.latent_encoder.num_layers = 3
+    cfg.encoder.latent_encoder.num_layers = 2
     cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 
