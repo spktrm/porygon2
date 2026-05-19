@@ -521,7 +521,9 @@ class Learner:
         if debug:
             self._train_step_jit = train_step
         else:
-            self._train_step_jit = jax.jit(train_step, static_argnames=["config"])
+            self._train_step_jit = jax.jit(
+                train_step, static_argnames=["config"], donate_argnums=(2,)
+            )
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
@@ -582,6 +584,10 @@ class Learner:
 
         logger.info("host_to_device_worker exiting.")
 
+    def _post_step_callback(self, logs: dict):
+        step = logs["training_step"].item()
+        self._handle_periodic_tasks(step, logs)
+
     def train(self):
         """
         High-level training loop.
@@ -593,8 +599,6 @@ class Learner:
         transfer_thread.start()
 
         try:
-            prev_league_check_step = 0
-
             for _ in range(self.config.num_steps):
 
                 # 1. Fetch Data (Blocking)
@@ -607,15 +611,8 @@ class Learner:
                     if logs is None:
                         continue  # Skip this step if update failed
 
-                    # 3. Logging & Checkpointing
-                    step = jax.device_get(logs["training_step"]).item()
-
-                self._handle_periodic_tasks(step, logs)
-
-                # 4. League Logic (Periodic)
-                if (step - prev_league_check_step) >= 10:
-                    self._manage_league(step)
-                    prev_league_check_step = step
+                # jax.debug.callback(self._post_step_callback, logs)
+                self._post_step_callback(logs)
 
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received. Saving checkpoint...")
@@ -658,31 +655,12 @@ class Learner:
         Returns training logs on success, or None if the step was invalid (e.g. NaN loss).
         """
         # 1. Run JAX Step (thread-safe)
-        new_player_state, new_builder_state, logs = self._train_step_jit(
+        self.player_state, self.builder_state, logs = self._train_step_jit(
             self.player_state,
             self.builder_state,
             batch,
             self.config,
         )
-
-        # 2. Validate Numerical Stability
-        # Convert JAX arrays to python scalars for cheap comparison
-        if self.config.check_finite_loss:
-            p_loss_valid = jnp.isfinite(logs["player_loss"]).item()
-            b_loss_valid = True
-            if self.config.smogon_format != "randombattle":
-                b_loss_valid = jnp.isfinite(logs["builder_loss"]).item()
-
-            if not p_loss_valid or not b_loss_valid:
-                step = logs["training_step"]
-                logger.warning(
-                    f"Skipping update: Non-finite loss detected @ step {step}"
-                )
-                return None
-
-        # 3. Apply State Update
-        self.player_state = new_player_state
-        self.builder_state = new_builder_state
 
         return logs
 
@@ -715,6 +693,9 @@ class Learner:
                 jax.device_get(self.builder_state),
                 self.league,
             )
+
+        if step % self.config.manage_league_interval == 0:
+            self._manage_league(step)
 
     def _manage_league(self, step: int):
         """Checks if a new player should be added to the league."""

@@ -71,6 +71,7 @@ class Porygon2LearnerConfig:
     add_player_max_frames: int = int(3e7)
     minimum_historical_player_steps: int = 1_000_000
     league_size: int = 16
+    manage_league_interval: int = 10
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -92,9 +93,7 @@ class Porygon2LearnerConfig:
     player_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: jnp.clip(
-        step / 100_000, min=0.0, max=1.0
-    )
+    player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
 
     # Loss coefficients
     ## Player

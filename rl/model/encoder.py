@@ -1292,12 +1292,17 @@ class Encoder(nn.Module):
             axis=1
         )
 
+        # Force certain indices to be valid to ensure the model can always attend to them
+        # even if they are masked out for action selection. This allows the model to use
+        # these indices as stable reference points for attention and contextualization.
         for indices in (
             RESERVE_ENTITY_INDICES,
             RESERVE_MOVE_INDICES,
+            ALLY_TARGET_INDICES,
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
             NUM_ACTION_FEATURES + RESERVE_ENTITY_INDICES,
             NUM_ACTION_FEATURES + RESERVE_MOVE_INDICES,
+            NUM_ACTION_FEATURES + ALLY_TARGET_INDICES,
             NUM_ACTION_FEATURES + ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
         ):
             output_state_mask = output_state_mask.at[indices].set(True)
@@ -1321,8 +1326,9 @@ class Encoder(nn.Module):
         )
 
         # Combine latent spaces
-        latent_queries = (
-            latent_queries + latent_input_embeddings + latent_history_embeddings
+        latent_queries = jnp.concatenate(
+            (latent_queries, latent_input_embeddings, latent_history_embeddings),
+            axis=0,
         )
 
         # bulk of computation
