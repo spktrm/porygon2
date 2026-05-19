@@ -41,7 +41,7 @@ class PlayerActor:
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
 
-    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 128):
+    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 96):
         return PlayerActorInput(
             env=timestep.env,
             packed_history=clip_packed_history(
