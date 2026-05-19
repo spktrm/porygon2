@@ -1500,7 +1500,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -3370,19 +3370,15 @@ export class StateHandler {
             ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
         ];
         const allyTargets = [
-            allyActive[0] !== null
-                ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET
-                : undefined,
-            allyActive[1] !== null
-                ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET
-                : undefined,
+            !!allyActive[0] ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET : undefined,
+            !!allyActive[1] ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET : undefined,
         ];
 
         const enemyTargets = [
-            enemyActive[0] !== null
+            !!enemyActive[0]
                 ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET
                 : undefined,
-            enemyActive[1] !== null
+            !!enemyActive[1]
                 ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET
                 : undefined,
         ];
@@ -3518,10 +3514,7 @@ export class StateHandler {
 
                     for (const [j, move] of canMove) {
                         const actionIndices: number[] = [];
-                        if (
-                            this.player.privateBattle.gameType === "doubles" &&
-                            "target" in move
-                        ) {
+                        if ("target" in move) {
                             const allyTarget = allyTargets[1 - i];
                             switch (move.target) {
                                 case "any":

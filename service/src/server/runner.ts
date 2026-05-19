@@ -290,13 +290,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             [numActionFeatures + ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
         };
 
-        let showdownFormat = "";
-        if (
-            tgtIndex !==
-            numActionFeatures + ActionEnum.ACTION_ENUM__TARGET_AUTO
-        ) {
-            showdownFormat = targetLookup[tgtIndex];
-        }
+        const showdownFormat = targetLookup[tgtIndex];
 
         if (
             ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
