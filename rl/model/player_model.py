@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import functools
 from pprint import pprint
 
@@ -183,7 +187,7 @@ def main(generation: int = 9):
     )
     pprint(learner_output)
 
-    pprint(get_num_params(params))
+    pprint(get_num_params(params), sort_dicts=False)
 
 
 if __name__ == "__main__":
