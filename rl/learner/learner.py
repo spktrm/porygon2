@@ -446,8 +446,8 @@ def train_step(
 
 def _stack_and_pad_batch(
     batch: list[Trajectory],
-    player_transition_resolution: int = 48,
-    player_history_resolution: int = 96,
+    player_transition_resolution: int = 64,
+    player_history_resolution: int = 64,
     rng_key: jax.Array = None,
 ) -> Batch:
     """Stacks a list of trajectories and pads them to a fixed resolution."""
@@ -605,7 +605,6 @@ class Learner:
                     batch = jax.device_put(batch)
                     # 2. Update Model
                     logs = self._train_step(batch)
-                    logs = jax.device_get(jax.block_until_ready(logs))
 
                     if logs is None:
                         continue  # Skip this step if update failed

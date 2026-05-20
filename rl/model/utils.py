@@ -103,7 +103,13 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
                         value, total_params, current_depth + 1
                     )
                 param_dict[key] = param_entry
-        return param_dict
+        return dict(
+            sorted(
+                param_dict.items(),
+                key=lambda item: getattr(item[1], "num_params", 0),
+                reverse=True,
+            )
+        )
 
     total_params = calculate_params("base", vars)
     return build_param_dict(vars, total_params, 0)

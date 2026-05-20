@@ -284,22 +284,21 @@ class MultiHeadAttention(nn.Module):
         attn_probs = jnp.exp(attn_log_probs)
         attn_probs = jnp.where(mask, attn_probs, 0)
 
-        attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
-            mask.sum(axis=-1)
-        )
-
+        # attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
+        #     mask.sum(axis=-1)
+        # )
         # Capture attention weights and entropy as Flax intermediates so that
         # visualisation scripts can inspect them without modifying the forward pass.
-        self.sow(
-            "intermediates",
-            "attn_weights",
-            attn_probs.astype(jnp.float32),
-        )
-        self.sow(
-            "intermediates",
-            "attn_entropy",
-            jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
-        )
+        # self.sow(
+        #     "intermediates",
+        #     "attn_weights",
+        #     attn_probs.astype(jnp.float32),
+        # )
+        # self.sow(
+        #     "intermediates",
+        #     "attn_entropy",
+        #     jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
+        # )
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
@@ -374,7 +373,7 @@ class TransformerEncoder(nn.Module):
         qkv_positions: jax.Array | None = None,
     ):
         qkv_ln = layer_norm(qkv)
-        mha = MultiHeadAttention(
+        mha = nn.checkpoint(MultiHeadAttention)(
             num_heads=self.num_heads,
             qk_size=self.qk_size,
             v_size=self.v_size,
@@ -397,7 +396,7 @@ class TransformerEncoder(nn.Module):
         )
         qkv = qkv + mha_a.astype(qkv.dtype) * mha
         qkv_ln = layer_norm(qkv)
-        ffn = FFWMLP(
+        ffn = nn.checkpoint(FFWMLP)(
             hidden_size=self.resblocks_hidden_size,
             use_bias=self.use_bias,
         )(qkv_ln)
@@ -470,7 +469,7 @@ class TransformerDecoder(nn.Module):
     ):
         q_ln = layer_norm(q)
         kv_ln = layer_norm(kv)
-        mha = MultiHeadAttention(
+        mha = nn.checkpoint(MultiHeadAttention)(
             num_heads=self.num_heads,
             qk_size=self.qk_size,
             v_size=self.v_size,
@@ -493,7 +492,7 @@ class TransformerDecoder(nn.Module):
         )
         q = q + mha_a.astype(q.dtype) * mha
         qkv_ln = layer_norm(q)
-        ffn = FFWMLP(
+        ffn = nn.checkpoint(FFWMLP)(
             hidden_size=self.resblocks_hidden_size,
             use_bias=self.use_bias,
         )(qkv_ln)

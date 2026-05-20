@@ -41,7 +41,7 @@ class PlayerActor:
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
 
-    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 96):
+    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 64):
         return PlayerActorInput(
             env=timestep.env,
             packed_history=clip_packed_history(
@@ -153,6 +153,7 @@ class PlayerActor:
         self.reset_game_id()
 
         if self._env.username.startswith("train") and do_push:
+            act_out = jax.device_get(act_out)
             self._learner.enqueue_traj(act_out)
         return act_out
 
