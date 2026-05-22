@@ -208,8 +208,11 @@ def train_step(
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]
             ),
-            player_query_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["query_decoder"]
+            player_query_decoder1_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["query_decoder1"]
+            ),
+            player_query_decoder2_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["query_decoder2"]
             ),
             player_input_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["input_decoder"]

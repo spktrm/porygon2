@@ -49,7 +49,7 @@ class Porygon2LearnerConfig:
     unroll_length: int = 128
 
     # Batch iteration params
-    batch_size: int = 8
+    batch_size: int = 4
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 2
