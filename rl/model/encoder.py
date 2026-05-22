@@ -22,6 +22,7 @@ from rl.environment.data import (
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
+    NUM_MOVE_CONTEXT_FEATURES,
     NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
@@ -326,9 +327,6 @@ class Encoder(nn.Module):
         self.side_condition_linear = nn.Dense(
             name="side_condition_linear", use_bias=False, **dense_kwargs
         )
-        self.field_bias_embeddings = self.param(
-            "field_bias_embeddings", embedding_init, (3, entity_size)
-        )
 
         # Timestep wise graph attention layers
         self.local_timestep_embedding = nn.Embed(
@@ -348,7 +346,10 @@ class Encoder(nn.Module):
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
         # Transformer Decoders
-        self.query_decoder = TransformerDecoder(
+        self.query_decoder1 = TransformerDecoder(
+            **self.cfg.query_decoder.to_dict(),
+        )
+        self.query_decoder2 = TransformerDecoder(
             **self.cfg.query_decoder.to_dict(),
         )
         self.input_decoder = TransformerDecoder(
@@ -902,9 +903,12 @@ class Encoder(nn.Module):
         my_field_embedding = self.side_condition_linear(my_side_condition_encoding)
         opp_field_embedding = self.side_condition_linear(opp_side_condition_encoding)
         field_embeddings = jnp.stack(
-            (field_embedding, my_field_embedding, opp_field_embedding)
-        ) + self.field_bias_embeddings.astype(field_embedding.dtype)
-
+            (
+                field_embedding,
+                my_field_embedding + self.ally_bias.squeeze(0),
+                opp_field_embedding + self.enemy_bias.squeeze(0),
+            )
+        )
         return field_embeddings, mask, request_count
 
     def _embed_public_entities(
@@ -990,6 +994,13 @@ class Encoder(nn.Module):
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
             packed_history.public, packed_history.revealed
         )
+        side_embedding_cache = jnp.where(
+            packed_history.public[
+                ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+            ][..., None],
+            self.ally_bias,
+            self.enemy_bias,
+        )
 
         edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edges)
 
@@ -998,7 +1009,7 @@ class Encoder(nn.Module):
             valid_timestep_mask,
             history_request_count,
         ) = jax.vmap(self._embed_local_timestep, in_axes=(0, None, None))(
-            history, entity_embedding_cache, edge_embedding_cache
+            history, entity_embedding_cache + side_embedding_cache, edge_embedding_cache
         )
 
         # Apply mask to the timestep embeddings.
@@ -1060,32 +1071,6 @@ class Encoder(nn.Module):
     def _embed_moves(self, moveset: jax.Array) -> jax.Array:
         return jax.vmap(self._embed_action)(moveset)
 
-    def _get_latest_timestep_embeddings(
-        self,
-        timestep_embeddings: jax.Array,
-        timestep_mask: jax.Array,
-        timestep_positions: jax.Array,
-        timestep_arange: jax.Array,
-        num_timesteps: int = 24,
-    ):
-        upper_index = jnp.where(timestep_mask, timestep_arange, -1).max(axis=0)
-        latest_timestep_indices = upper_index - jnp.arange(num_timesteps)
-        latest_timestep_indices_clipped = latest_timestep_indices.clip(min=0)
-        latest_timestep_embeddings = jnp.take(
-            timestep_embeddings, latest_timestep_indices_clipped, axis=0
-        )
-        latest_timestep_mask = jnp.take(
-            timestep_mask, latest_timestep_indices_clipped, axis=0
-        ) & (latest_timestep_indices >= 0)
-        latest_timestep_positions = jnp.take(
-            timestep_positions, latest_timestep_indices_clipped, axis=0
-        )
-        return (
-            latest_timestep_embeddings,
-            latest_timestep_mask,
-            latest_timestep_positions,
-        )
-
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
@@ -1131,6 +1116,9 @@ class Encoder(nn.Module):
         output_state_sequence = jnp.zeros(
             (2 * NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
         )
+        move_context_sequence = jnp.zeros(
+            (2 * NUM_MOVE_CONTEXT_FEATURES, self.entity_size), dtype=self.cfg.dtype
+        )
 
         # define positional biases
         ally_move_positional_embedding = self.ally_move_positional_embedding.astype(
@@ -1158,11 +1146,6 @@ class Encoder(nn.Module):
                     private_entity_embeddings + reserve_entity_positional_embedding,
                 ),
                 (
-                    RESERVE_MOVE_INDICES,
-                    jax.lax.collapse(private_move_embeddings, 0, -1)
-                    + reserve_move_positional_embedding,
-                ),
-                (
                     ALLY_TARGET_INDICES,
                     revealed_entity_embeddings[:2] + ally_target_positional_embeddings,
                 ),
@@ -1181,11 +1164,6 @@ class Encoder(nn.Module):
                 revealed_entity_embeddings[6:] + reserve_entity_positional_embedding,
             ),
             (
-                RESERVE_MOVE_INDICES,
-                jax.lax.collapse(revealed_move_embeddings[6:], 0, -1)
-                + reserve_move_positional_embedding,
-            ),
-            (
                 ALLY_TARGET_INDICES,
                 revealed_entity_embeddings[6:8] + ally_target_positional_embeddings,
             ),
@@ -1197,41 +1175,108 @@ class Encoder(nn.Module):
                 indices + NUM_ACTION_FEATURES
             ].add(accumulator)
 
+        move_context_sequence = move_context_sequence.at[RESERVE_MOVE_INDICES].add(
+            jax.lax.collapse(private_move_embeddings, 0, -1)
+        )
+        move_context_sequence = move_context_sequence.at[RESERVE_MOVE_INDICES].add(
+            jax.lax.collapse(revealed_move_embeddings[6:], 0, -1)
+        )
+
         # Contextualise
-        for indices, context in [
-            (ALLY_1_INDICES, revealed_entity_embeddings[0][None]),
-            (ALLY_2_INDICES, revealed_entity_embeddings[1][None]),
-            (RESERVE_1_INDICES, private_entity_embeddings[0][None]),
-            (RESERVE_2_INDICES, private_entity_embeddings[1][None]),
-            (RESERVE_3_INDICES, private_entity_embeddings[2][None]),
-            (RESERVE_4_INDICES, private_entity_embeddings[3][None]),
-            (RESERVE_5_INDICES, private_entity_embeddings[4][None]),
-            (RESERVE_6_INDICES, private_entity_embeddings[5][None]),
+        for seq, indices, context in [
+            (
+                output_state_sequence,
+                ALLY_1_INDICES,
+                revealed_entity_embeddings[0][None],
+            ),
+            (
+                output_state_sequence,
+                ALLY_2_INDICES,
+                revealed_entity_embeddings[1][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_1_INDICES,
+                private_entity_embeddings[0][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_2_INDICES,
+                private_entity_embeddings[1][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_3_INDICES,
+                private_entity_embeddings[2][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_4_INDICES,
+                private_entity_embeddings[3][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_5_INDICES,
+                private_entity_embeddings[4][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_6_INDICES,
+                private_entity_embeddings[5][None],
+            ),
         ]:
             glu_embeddings = jnp.take(
                 output_state_sequence, indices, axis=0
             ) * jax.nn.sigmoid(context)
-            output_state_sequence = output_state_sequence.at[indices].set(
-                glu_embeddings
-            )
+            seq = seq.at[indices].set(glu_embeddings)
 
-        for indices, context in [
-            (ALLY_1_INDICES, revealed_entity_embeddings[6][None]),
-            (ALLY_2_INDICES, revealed_entity_embeddings[7][None]),
-            (RESERVE_1_INDICES, revealed_entity_embeddings[6][None]),
-            (RESERVE_2_INDICES, revealed_entity_embeddings[7][None]),
-            (RESERVE_3_INDICES, revealed_entity_embeddings[8][None]),
-            (RESERVE_4_INDICES, revealed_entity_embeddings[9][None]),
-            (RESERVE_5_INDICES, revealed_entity_embeddings[10][None]),
-            (RESERVE_6_INDICES, revealed_entity_embeddings[11][None]),
+        for seq, indices, context in [
+            (
+                output_state_sequence,
+                ALLY_1_INDICES,
+                revealed_entity_embeddings[6][None],
+            ),
+            (
+                output_state_sequence,
+                ALLY_2_INDICES,
+                revealed_entity_embeddings[7][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_1_INDICES,
+                revealed_entity_embeddings[6][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_2_INDICES,
+                revealed_entity_embeddings[7][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_3_INDICES,
+                revealed_entity_embeddings[8][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_4_INDICES,
+                revealed_entity_embeddings[9][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_5_INDICES,
+                revealed_entity_embeddings[10][None],
+            ),
+            (
+                move_context_sequence,
+                RESERVE_6_INDICES,
+                revealed_entity_embeddings[11][None],
+            ),
         ]:
             updated_indices = indices + NUM_ACTION_FEATURES
             glu_embeddings = jnp.take(
                 output_state_sequence, updated_indices, axis=0
             ) * jax.nn.sigmoid(context)
-            output_state_sequence = output_state_sequence.at[updated_indices].set(
-                glu_embeddings
-            )
+            seq = seq.at[updated_indices].set(glu_embeddings)
 
         ally_bias = self.ally_bias.astype(self.cfg.dtype)
         enemy_bias = self.enemy_bias.astype(self.cfg.dtype)
@@ -1242,6 +1287,12 @@ class Encoder(nn.Module):
         output_state_sequence = output_state_sequence.at[NUM_ACTION_FEATURES:].add(
             enemy_bias
         )
+        move_context_sequence = move_context_sequence.at[
+            :NUM_MOVE_CONTEXT_FEATURES
+        ].add(ally_bias)
+        move_context_sequence = move_context_sequence.at[
+            NUM_MOVE_CONTEXT_FEATURES:
+        ].add(enemy_bias)
 
         prev_action_src = jnp.take(
             output_state_sequence,
@@ -1260,10 +1311,27 @@ class Encoder(nn.Module):
             0,
             -1,
         )
+
+        revealed_entity_embeddings_length = revealed_entity_embeddings.shape[0]
+        biased_revealed_entity_embeddings = (
+            revealed_entity_embeddings.at[: revealed_entity_embeddings_length // 2]
+            .add(ally_bias)
+            .at[revealed_entity_embeddings_length // 2 :]
+            .add(enemy_bias)
+        )
+
+        revealed_move_embeddings_glu_length = revealed_move_embeddings_glu.shape[0]
+        biased_revealed_move_embeddings_glu = (
+            revealed_move_embeddings_glu.at[: revealed_move_embeddings_glu_length // 2]
+            .add(ally_bias)
+            .at[revealed_move_embeddings_glu_length // 2 :]
+            .add(enemy_bias)
+        )
+
         input_state_sequence = jnp.concatenate(
             (
-                revealed_entity_embeddings,
-                revealed_move_embeddings_glu,
+                biased_revealed_entity_embeddings,
+                biased_revealed_move_embeddings_glu,
                 prev_action_src + self.prev_action_src_embedding.astype(self.cfg.dtype),
                 prev_action_tgt + self.prev_action_tgt_embedding.astype(self.cfg.dtype),
                 field_embeddings,
@@ -1297,20 +1365,26 @@ class Encoder(nn.Module):
         # these indices as stable reference points for attention and contextualization.
         for indices in (
             RESERVE_ENTITY_INDICES,
-            RESERVE_MOVE_INDICES,
             ALLY_TARGET_INDICES,
             ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
             NUM_ACTION_FEATURES + RESERVE_ENTITY_INDICES,
-            NUM_ACTION_FEATURES + RESERVE_MOVE_INDICES,
             NUM_ACTION_FEATURES + ALLY_TARGET_INDICES,
             NUM_ACTION_FEATURES + ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
         ):
             output_state_mask = output_state_mask.at[indices].set(True)
 
-        latent_queries = self.query_decoder(
+        latent_queries = self.query_decoder1(
             q=self.latent_queries.astype(self.cfg.dtype),
             kv=output_state_sequence,
             attn_mask=create_attention_mask(latent_query_mask, output_state_mask),
+        )
+        latent_queries = self.query_decoder2(
+            q=latent_queries,
+            kv=move_context_sequence,
+            attn_mask=create_attention_mask(
+                latent_query_mask,
+                jnp.ones_like(move_context_sequence[..., 0], dtype=jnp.bool),
+            ),
         )
         latent_input_embeddings = self.input_decoder(
             q=latent_queries,
