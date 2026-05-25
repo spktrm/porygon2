@@ -1310,7 +1310,7 @@ class Encoder(nn.Module):
 
         action_embeddings = output_state_embeddings
 
-        return value_embedding, action_embeddings
+        return value_embedding, action_embeddings, latent_queries
 
     def __call__(
         self,
@@ -1332,7 +1332,7 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        value_embedding, action_embeddings = jax.vmap(
+        value_embedding, action_embeddings, latent_queries = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1343,4 +1343,4 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return value_embedding, action_embeddings
+        return value_embedding, action_embeddings, latent_queries
