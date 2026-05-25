@@ -134,6 +134,7 @@ class EntityEdgeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_EDGE_FEATURE__STATUS_TOKEN: _ClassVar[EntityEdgeFeature]
     ENTITY_EDGE_FEATURE__MOVE_TOKEN: _ClassVar[EntityEdgeFeature]
     ENTITY_EDGE_FEATURE__HIT_COUNT: _ClassVar[EntityEdgeFeature]
+    ENTITY_EDGE_FEATURE__ENTITY_IDX: _ClassVar[EntityEdgeFeature]
 
 class FieldFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -348,6 +349,7 @@ ENTITY_EDGE_FEATURE__BOOST_EVASION_VALUE: EntityEdgeFeature
 ENTITY_EDGE_FEATURE__STATUS_TOKEN: EntityEdgeFeature
 ENTITY_EDGE_FEATURE__MOVE_TOKEN: EntityEdgeFeature
 ENTITY_EDGE_FEATURE__HIT_COUNT: EntityEdgeFeature
+ENTITY_EDGE_FEATURE__ENTITY_IDX: EntityEdgeFeature
 FIELD_FEATURE___UNSPECIFIED: FieldFeature
 FIELD_FEATURE__WEATHER_ID: FieldFeature
 FIELD_FEATURE__WEATHER_MIN_DURATION: FieldFeature

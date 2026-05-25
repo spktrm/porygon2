@@ -142,6 +142,7 @@ export interface EntityEdgeFeatureMap {
   ENTITY_EDGE_FEATURE__STATUS_TOKEN: 30;
   ENTITY_EDGE_FEATURE__MOVE_TOKEN: 31;
   ENTITY_EDGE_FEATURE__HIT_COUNT: 32;
+  ENTITY_EDGE_FEATURE__ENTITY_IDX: 33;
 }
 
 export const EntityEdgeFeature: EntityEdgeFeatureMap;

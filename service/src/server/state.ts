@@ -384,6 +384,7 @@ const entityEdgeArrayToObject = (array: Int16Array) => {
         move: jsonDatum["moves"][
             array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
         ],
+        entityIdx: array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX],
         damage:
             array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO] /
             MAX_RATIO_TOKEN,
@@ -1194,6 +1195,15 @@ class DynamicArray {
     size() {
         return this.currentCursor / this.increment;
     }
+
+    getColumn(index: number): Int16Array {
+        const numEdges = this.currentCursor / this.increment;
+        const column = new Int16Array(numEdges);
+        for (let i = 0; i < numEdges; i++) {
+            column[i] = this.buffer[i * this.increment + index];
+        }
+        return column;
+    }
 }
 
 class Edge {
@@ -1500,7 +1510,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -1857,7 +1867,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent as PokemonIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent as PokemonIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -1868,6 +1878,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
             value: IndexValueFromEnum(MovesEnum, move.id),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
         this.latestEdge.setEntityEdgeFeature({
             pokemon,
@@ -1932,7 +1947,10 @@ export class EventHandler implements Protocol.Handler {
             pokeIdent,
             pokeDetails,
         );
-        const { pokemon: switchedIn } = this.getPokemon(
+        const { index: switchedOutIndex } = this.getPokemon(
+            switchedOut?.ident as PokemonIdent,
+        );
+        const { pokemon: switchedIn, index: switchedInIndex } = this.getPokemon(
             pokeIdent as PokemonIdent,
         );
 
@@ -1949,6 +1967,11 @@ export class EventHandler implements Protocol.Handler {
                 pokemon: switchedOut,
                 featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
                 value: MovesEnum.MOVES_ENUM___SWITCH_OUT,
+            });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon: switchedOut,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: switchedOutIndex,
             });
             if (argName !== "switch") {
                 const from = (kwArgs as KWArgs["|switch|"]).from;
@@ -1967,6 +1990,11 @@ export class EventHandler implements Protocol.Handler {
                 featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
                 value: MovesEnum.MOVES_ENUM___SWITCH_IN,
             });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon: switchedIn,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: switchedInIndex,
+            });
         }
     }
 
@@ -1980,7 +2008,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -1998,6 +2026,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.addMajorArg({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect: condition, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|faint|"(args: Args["|faint|"]) {
@@ -2010,12 +2043,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
 
         this.latestEdge.addMajorArg({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-fail|"(args: Args["|-fail|"], kwArgs: KWArgs["|-fail|"]) {
@@ -2026,7 +2064,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -2038,6 +2076,11 @@ export class EventHandler implements Protocol.Handler {
             effect,
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-block|"(args: Args["|-block|"], kwArgs: KWArgs["|-block|"]) {
@@ -2048,7 +2091,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -2057,6 +2100,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-notarget|"(args: Args["|-notarget|"]) {
@@ -2068,11 +2116,16 @@ export class EventHandler implements Protocol.Handler {
         }
 
         if (pokeIdent !== undefined) {
-            const { pokemon } = this.getPokemon(pokeIdent)!;
+            const { pokemon, index } = this.getPokemon(pokeIdent)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon not found for ident ${pokeIdent}`);
             }
             this.latestEdge.updateMinorArgs({ argName, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         } else {
             throw new Error(
                 `Pokemon identifier is required for |-notarget| event: ${args}`,
@@ -2093,7 +2146,7 @@ export class EventHandler implements Protocol.Handler {
             idents.push(poke2Ident);
         }
         for (const ident of idents) {
-            const { pokemon } = this.getPokemon(ident)!;
+            const { pokemon, index } = this.getPokemon(ident)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon not found for ident ${ident}`);
             }
@@ -2102,6 +2155,11 @@ export class EventHandler implements Protocol.Handler {
             this.latestEdge.updateEdgeFromOf({
                 effect,
                 pokemon,
+            });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
             });
         }
     }
@@ -2117,7 +2175,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2151,6 +2209,11 @@ export class EventHandler implements Protocol.Handler {
                 currentDamageToken + addedDamageToken,
             ),
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-heal|"(
@@ -2164,7 +2227,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2196,6 +2259,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: Math.min(MAX_RATIO_TOKEN, currentHealToken + addedHealToken),
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-sethp|"(args: Args["|-sethp|"], kwArgs: KWArgs["|-sethp|"]) {
@@ -2204,7 +2272,7 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2224,6 +2292,11 @@ export class EventHandler implements Protocol.Handler {
             );
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {
@@ -2234,7 +2307,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2252,6 +2325,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: statusToken,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-curestatus|"(args: Args["|-curestatus|"]) {
@@ -2262,7 +2340,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             console.warn(`${args} Pokemon ${pokeIdent} not found`);
             return;
@@ -2277,6 +2355,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: statusToken,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-cureteam|"(args: Args["|-cureteam|"]) {
@@ -2287,12 +2370,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     static getStatBoostEdgeFeatureIndex(stat: BoostID) {
@@ -2311,7 +2399,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2321,6 +2409,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex,
             pokemon,
             value: parseInt(value),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2334,7 +2427,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2344,6 +2437,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex,
             pokemon,
             value: -parseInt(value),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2358,7 +2456,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2370,6 +2468,11 @@ export class EventHandler implements Protocol.Handler {
             value: parseInt(value),
         });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-swapboost|"(args: Args["|-swapboost|"], kwArgs: KWArgs["|-swapboost|"]) {
@@ -2380,7 +2483,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2389,6 +2492,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-invertboost|"(
@@ -2402,7 +2510,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2411,6 +2519,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-clearboost|"(
@@ -2424,7 +2537,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2433,6 +2546,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-clearnegativeboost|"(
@@ -2446,7 +2564,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2455,6 +2573,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-copyboost|"() {}
@@ -2498,8 +2621,16 @@ export class EventHandler implements Protocol.Handler {
             if (!pokemon) {
                 continue;
             }
+            const { index } = this.getPokemon(
+                pokemon.originalIdent as PokemonIdent,
+            );
             this.latestEdge.updateMinorArgs({ argName, pokemon });
             this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2518,8 +2649,16 @@ export class EventHandler implements Protocol.Handler {
             if (!pokemon) {
                 continue;
             }
+            const { index } = this.getPokemon(
+                pokemon.originalIdent as PokemonIdent,
+            );
             this.latestEdge.updateMinorArgs({ argName, pokemon });
             this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2533,7 +2672,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2549,6 +2688,11 @@ export class EventHandler implements Protocol.Handler {
             ),
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-end|"(args: Args["|-end|"], kwArgs: KWArgs["|-end|"]) {
@@ -2559,7 +2703,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2572,6 +2716,11 @@ export class EventHandler implements Protocol.Handler {
         this.latestEdge.updateEdgeFromOf({
             effect: this.getCondition(conditionId),
             pokemon,
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2583,11 +2732,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-supereffective|"(args: Args["|-supereffective|"]) {
@@ -2598,11 +2752,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-resisted|"(args: Args["|-resisted|"]) {
@@ -2613,11 +2772,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-immune|"(args: Args["|-immune|"], kwArgs: KWArgs["|-immune|"]) {
@@ -2628,7 +2792,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2641,6 +2805,11 @@ export class EventHandler implements Protocol.Handler {
             effect: this.getCondition(conditionId),
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-item|"(args: Args["|-item|"], kwArgs: KWArgs["|-item|"]) {
@@ -2651,7 +2820,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent as PokemonIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent as PokemonIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2665,6 +2834,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN,
             pokemon,
             value: itemIndex,
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2679,7 +2853,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2694,6 +2868,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: itemIndex,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-ability|"(args: Args["|-ability|"], kwArgs: KWArgs["|-ability|"]) {
@@ -2704,7 +2883,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2722,6 +2901,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: abilityIndex,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-endability|"(
@@ -2735,7 +2919,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2744,6 +2928,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     rememberTransformed(
@@ -2779,13 +2968,18 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.rememberTransformed(pokeIdent, poke2Ident);
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-mega|"() {}
@@ -2806,11 +3000,16 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
@@ -2822,7 +3021,7 @@ export class EventHandler implements Protocol.Handler {
                 throw new Error();
             }
 
-            const { pokemon } = this.getPokemon(pokeIdent)!;
+            const { pokemon, index } = this.getPokemon(pokeIdent)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon ${pokeIdent} not found`);
             }
@@ -2835,6 +3034,11 @@ export class EventHandler implements Protocol.Handler {
             ]) {
                 this.latestEdge.updateEdgeFromOf({ effect, pokemon });
             }
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2846,12 +3050,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-prepare|"(args: Args["|-prepare|"]) {
@@ -2862,12 +3071,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-hitcount|"(args: Args["|-hitcount|"]) {
@@ -2878,7 +3092,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2888,6 +3102,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__HIT_COUNT,
             pokemon,
             value: parseInt(numHits),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -3280,10 +3499,18 @@ class PublicActionHandler {
                     });
                     actionOffset += numMoveFeatures;
                 }
-                addTokenRows(
-                    4 - wildcardMoves.length,
-                    MovesEnum.MOVES_ENUM___UNK,
-                );
+
+                if (hasTera) {
+                    addTokenRows(
+                        4 - wildcardMoves.length,
+                        MovesEnum.MOVES_ENUM___PAD,
+                    );
+                } else {
+                    addTokenRows(
+                        4 - wildcardMoves.length,
+                        MovesEnum.MOVES_ENUM___UNK,
+                    );
+                }
             } else {
                 addTokenRows(8, MovesEnum.MOVES_ENUM___PAD);
             }
@@ -3755,18 +3982,18 @@ export class StateHandler {
         const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
 
         const scoreOrder = (pokemon: Pokemon) => {
-            let score = 0;
-            if (pokemon.isActive()) {
-                score += 1;
+            if (!pokemon.isActive()) {
+                return 0;
             }
-            score += pokemon.slot;
-            return score;
+            return 2 - pokemon.slot;
         };
 
+        const sortedTeam = [...team].sort(
+            (a, b) => scoreOrder(b) - scoreOrder(a),
+        );
+
         try {
-            for (const member of [...team].sort(
-                (a, b) => scoreOrder(b) - scoreOrder(a),
-            )) {
+            for (const member of sortedTeam) {
                 const { publicData, revealedData } = getArrayFromPublicPokemon(
                     member,
                     relativeSide,

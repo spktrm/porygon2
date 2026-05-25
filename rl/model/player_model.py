@@ -153,6 +153,29 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
+def get_attention_maps(
+    model: nn.Module,
+    params: dict,
+    actor_input: PlayerActorInput,
+    actor_output: PlayerActorOutput,
+    head_params: HeadParams,
+    rng_key: jax.Array,
+) -> dict:
+    # Calling apply with mutable=['intermediates'] collects all variables sown to that collection
+    outputs, state = model.apply(
+        params,
+        actor_input,
+        actor_output,
+        head_params,
+        rngs={"sampling": rng_key},
+        mutable=["intermediates"],
+    )
+
+    # Extract the nested dictionary of attention weights
+    intermediates = state.get("intermediates", {})
+    return intermediates
+
+
 def main(generation: int = 9):
     actor_network = get_player_model(get_player_model_config(generation, train=False))
     learner_network = get_player_model(get_player_model_config(generation, train=True))
@@ -181,6 +204,15 @@ def main(generation: int = 9):
         rngs={"sampling": key},
     )
     pprint(actor_output)
+
+    attention_data = get_attention_maps(
+        model=actor_network,
+        params=params,
+        actor_input=ex_actor_input,
+        actor_output=actor_output,
+        head_params=HeadParams(temp=0.8),
+        rng_key=key,
+    )
 
     learner_output = learner_network.apply(
         params, ex_actor_input, actor_output, HeadParams()

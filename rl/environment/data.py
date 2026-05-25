@@ -38,11 +38,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import (
-    ActionEnum,
-    EnvironmentTrajectory,
-    MoveContextEnum,
-)
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentTrajectory
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -75,7 +71,6 @@ NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
-NUM_MOVE_CONTEXT_FEATURES = len(MoveContextEnum.keys())
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
@@ -221,34 +216,6 @@ RESERVE_ENTITY_INDICES = np.array(
         ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
     ]
 )
-RESERVE_MOVE_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_4,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_4,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_4,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_4,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_4,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_4,
-    ]
-)
 ALLY_TARGET_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
@@ -287,53 +254,5 @@ ALLY_2_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_PASS,
-    ]
-)
-RESERVE_1_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_4,
-    ]
-)
-RESERVE_2_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_4,
-    ]
-)
-RESERVE_3_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_4,
-    ]
-)
-RESERVE_4_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_4,
-    ]
-)
-RESERVE_5_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_4,
-    ]
-)
-RESERVE_6_INDICES = np.array(
-    [
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_1,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_2,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_3,
-        MoveContextEnum.MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_4,
     ]
 )

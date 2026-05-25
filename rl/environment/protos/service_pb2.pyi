@@ -39,34 +39,6 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__RESERVE_5_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__VALUE_EMBEDDING: _ClassVar[ActionEnum]
-
-class MoveContextEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    MOVE_CONTEXT_ENUM___UNSPECIFIED: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_4: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_4: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_4: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_4: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_4: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_1: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_2: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_3: _ClassVar[MoveContextEnum]
-    MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_4: _ClassVar[MoveContextEnum]
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
 ACTION_ENUM__ALLY_1_TARGET: ActionEnum
@@ -97,31 +69,6 @@ ACTION_ENUM__RESERVE_4_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_5_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_6_SWITCH_IN: ActionEnum
 ACTION_ENUM__VALUE_EMBEDDING: ActionEnum
-MOVE_CONTEXT_ENUM___UNSPECIFIED: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_4: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_4: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_4: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_4: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_4: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_1: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_2: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_3: MoveContextEnum
-MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_4: MoveContextEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")

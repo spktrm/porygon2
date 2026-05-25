@@ -42,11 +42,11 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 16
+    cfg.encoder.num_latent_embeddings = 24
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
-    encoder_hidden_size_scale = 8
+    encoder_hidden_size_scale = 4
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
@@ -111,7 +111,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.query_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.latent_encoder.num_layers = 4
+    cfg.encoder.latent_encoder.num_layers = 2
     cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.output_decoder.need_pos = False
 

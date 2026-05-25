@@ -29,7 +29,6 @@ goog.exportSymbol('proto.servicev2.EnvironmentResponse', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentState', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentTrajectory', null, global);
 goog.exportSymbol('proto.servicev2.ErrorResponse', null, global);
-goog.exportSymbol('proto.servicev2.MoveContextEnum', null, global);
 goog.exportSymbol('proto.servicev2.ResetRequest', null, global);
 goog.exportSymbol('proto.servicev2.StepRequest', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest', null, global);
@@ -2955,37 +2954,6 @@ proto.servicev2.ActionEnum = {
   ACTION_ENUM__RESERVE_5_SWITCH_IN: 27,
   ACTION_ENUM__RESERVE_6_SWITCH_IN: 28,
   ACTION_ENUM__VALUE_EMBEDDING: 29
-};
-
-/**
- * @enum {number}
- */
-proto.servicev2.MoveContextEnum = {
-  MOVE_CONTEXT_ENUM___UNSPECIFIED: 0,
-  MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_1: 1,
-  MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_2: 2,
-  MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_3: 3,
-  MOVE_CONTEXT_ENUM__RESERVE_1_MOVE_4: 4,
-  MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_1: 5,
-  MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_2: 6,
-  MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_3: 7,
-  MOVE_CONTEXT_ENUM__RESERVE_2_MOVE_4: 8,
-  MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_1: 9,
-  MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_2: 10,
-  MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_3: 11,
-  MOVE_CONTEXT_ENUM__RESERVE_3_MOVE_4: 12,
-  MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_1: 13,
-  MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_2: 14,
-  MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_3: 15,
-  MOVE_CONTEXT_ENUM__RESERVE_4_MOVE_4: 16,
-  MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_1: 17,
-  MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_2: 18,
-  MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_3: 19,
-  MOVE_CONTEXT_ENUM__RESERVE_5_MOVE_4: 20,
-  MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_1: 21,
-  MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_2: 22,
-  MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_3: 23,
-  MOVE_CONTEXT_ENUM__RESERVE_6_MOVE_4: 24
 };
 
 goog.object.extend(exports, proto.servicev2);
