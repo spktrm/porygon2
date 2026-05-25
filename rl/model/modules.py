@@ -15,6 +15,9 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
+COLLECT_INTERMEDIATES = True
+
+
 class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -289,11 +292,11 @@ class MultiHeadAttention(nn.Module):
         # )
         # Capture attention weights and entropy as Flax intermediates so that
         # visualisation scripts can inspect them without modifying the forward pass.
-        # self.sow(
-        #     "intermediates",
-        #     "attn_weights",
-        #     attn_probs.astype(jnp.float32),
-        # )
+        self.sow(
+            "intermediates",
+            "attn_weights",
+            attn_probs.astype(jnp.float32),
+        )
         # self.sow(
         #     "intermediates",
         #     "attn_entropy",
@@ -414,6 +417,7 @@ class TransformerEncoder(nn.Module):
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
     do_checkpoint: bool = False
+    collect_intermediates: bool = COLLECT_INTERMEDIATES
 
     @nn.compact
     def __call__(
@@ -439,9 +443,13 @@ class TransformerEncoder(nn.Module):
         else:
             block = EncoderBlock
 
+        variable_axes = {"params": 0}
+        if self.collect_intermediates:
+            variable_axes["intermediates"] = 0
+
         ScannedEncoderBlock = nn.scan(
             block,
-            variable_axes={"params": 0},
+            variable_axes=variable_axes,
             variable_broadcast=False,
             split_rngs={"params": True},
             in_axes=nn.broadcast,
@@ -530,6 +538,7 @@ class TransformerDecoder(nn.Module):
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
     do_checkpoint: bool = False
+    collect_intermediates: bool = COLLECT_INTERMEDIATES
 
     @nn.compact
     def __call__(
@@ -561,9 +570,13 @@ class TransformerDecoder(nn.Module):
         else:
             block = DecoderBlock
 
+        variable_axes = {"params": 0}
+        if self.collect_intermediates:
+            variable_axes["intermediates"] = 0
+
         ScannedDecoderBlock = nn.scan(
             block,
-            variable_axes={"params": 0},
+            variable_axes=variable_axes,
             variable_broadcast=False,
             split_rngs={"params": True},
             in_axes=nn.broadcast,

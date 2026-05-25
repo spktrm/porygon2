@@ -134,6 +134,7 @@ enum EntityEdgeFeature {
   ENTITY_EDGE_FEATURE__STATUS_TOKEN = 30; // Represents the status condition
   ENTITY_EDGE_FEATURE__MOVE_TOKEN = 31; // Move Id of action
   ENTITY_EDGE_FEATURE__HIT_COUNT = 32; // Hit count
+  ENTITY_EDGE_FEATURE__ENTITY_IDX = 33; // Entity index
 }
 
 
