@@ -142,6 +142,14 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
+const CHOOSABLE_TARGETS = new Set([
+    "normal",
+    "any",
+    "adjacentAlly",
+    "adjacentAllyOrSelf",
+    "adjacentFoe",
+]);
+
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
@@ -268,6 +276,46 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
+    getShowdownTargetFormat(
+        allyIndex: number,
+        moveIndex: number,
+        tgtIndex: number,
+    ): string {
+        const targetLookup = {
+            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
+            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
+            [ActionEnum.ACTION_ENUM__ENEMY_1_TARGET]: "+1",
+            [ActionEnum.ACTION_ENUM__ENEMY_2_TARGET]: "+2",
+            [ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLIES]: "",
+        };
+
+        const request = this.getRequest()! as AnyObject;
+        const allyMoves = request?.active?.[allyIndex]?.moves;
+        const chosenMove = allyMoves?.[moveIndex];
+        const moveTarget = chosenMove?.target;
+
+        if (!CHOOSABLE_TARGETS.has(moveTarget)) {
+            return "";
+        }
+
+        const showdownFormat =
+            targetLookup[tgtIndex as keyof typeof targetLookup];
+
+        if (showdownFormat === undefined) {
+            throw new Error(`Invalid target index: ${tgtIndex}`);
+        }
+
+        return showdownFormat;
+    }
+
     choiceFromAction(action: Action): string {
         const srcIndex = action.getSrc();
         const tgtIndex = action.getTgt();
@@ -282,21 +330,17 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
         ];
 
-        const targetLookup = {
-            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
-            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
-            [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "+1",
-            [numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "+2",
-            [numActionFeatures + ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
-        };
-
-        const showdownFormat = targetLookup[tgtIndex];
-
         if (
             ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
+            const showdownFormat = this.getShowdownTargetFormat(
+                0,
+                moveIndex,
+                tgtIndex,
+            );
+
             if (showdownFormat === undefined) {
                 throw new Error(`Invalid target index: ${tgtIndex}`);
             }
@@ -308,6 +352,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
+            const showdownFormat = this.getShowdownTargetFormat(
+                0,
+                moveIndex,
+                tgtIndex,
+            );
             if (showdownFormat === undefined) {
                 throw new Error(`Invalid target index: ${tgtIndex}`);
             }
@@ -321,6 +370,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
+            const showdownFormat = this.getShowdownTargetFormat(
+                1,
+                moveIndex,
+                tgtIndex,
+            );
             if (showdownFormat === undefined) {
                 throw new Error(`Invalid target index: ${tgtIndex}`);
             }
@@ -332,6 +386,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
+            const showdownFormat = this.getShowdownTargetFormat(
+                1,
+                moveIndex,
+                tgtIndex,
+            );
             if (showdownFormat === undefined) {
                 throw new Error(`Invalid target index: ${tgtIndex}`);
             }
@@ -502,8 +561,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     override async start() {
         const choices = [];
         for await (const chunk of this.stream) {
-            if (chunk.includes("error|")) {
-                console.log(`Error in stream: ${chunk}`);
+            if (chunk.startsWith("|error|")) {
+                if (chunk.includes("Invalid choice")) {
+                    console.error(`Invalid choice error in stream: ${chunk}`);
+                } else if (chunk.includes("Unavailable choice")) {
+                    console.log(`Unavailable move error in stream: ${chunk}`);
+                } else {
+                    console.error(`Error in stream: ${chunk}`);
+                }
             }
 
             if (this.done || this.finishedEarly) {
