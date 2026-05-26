@@ -42,7 +42,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.dtype = DEFAULT_DTYPE
 
     # Params for scaling
-    cfg.encoder.num_latent_embeddings = 24
+    cfg.encoder.num_latent_embeddings = 32
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads

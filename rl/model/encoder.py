@@ -27,7 +27,7 @@ from rl.environment.data import (
     ONEHOT_ENCODERS,
     PASS_INDICES,
     RESERVE_ENTITY_INDICES,
-    TARGET_AUTO_INDICES,
+    TARGET_INDICES,
     VALUE_EMBEDDING_INDICES,
 )
 from rl.environment.interfaces import (
@@ -233,33 +233,21 @@ class Encoder(nn.Module):
         )
         learnable_query_init = nn.initializers.truncated_normal(stddev=0.02)
 
-        self.ally_embedding = self.param(
-            "ally_embedding", embedding_init, (1, entity_size)
-        )
-        self.enemy_embedding = self.param(
-            "enemy_embedding", embedding_init, (1, entity_size)
-        )
-        self.ally_move_positional_embedding = self.param(
-            "ally_move_positional_embedding", embedding_init, (1, entity_size)
-        )
-        self.reserve_entity_positional_embedding = self.param(
-            "reserve_entity_positional_embedding", embedding_init, (1, entity_size)
-        )
-        self.ally_target_positional_embeddings = self.param(
-            "ally_target_positional_embeddings", embedding_init, (2, entity_size)
+        self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
+        self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
+
+        self.reserve_positional_embedding = self.param(
+            "reserve_positional_embedding", embedding_init, (1, entity_size)
         )
         self.pass_embeddings = self.param(
             "pass_embeddings", embedding_init, (2, entity_size)
         )
-        self.target_auto_embedding = self.param(
-            "target_auto_embedding", embedding_init, (1, entity_size)
+        self.target_embeddings = self.param(
+            "target_embeddings", embedding_init, (len(TARGET_INDICES), entity_size)
         )
         self.value_embedding = self.param(
             "value_embedding", embedding_init, (1, entity_size)
         )
-
-        self.ally_bias = self.param("ally_bias", embedding_init, (1, entity_size))
-        self.enemy_bias = self.param("enemy_bias", embedding_init, (1, entity_size))
 
         self.prev_action_src_embedding = self.param(
             "prev_action_src_embedding", embedding_init, (1, entity_size)
@@ -396,9 +384,7 @@ class Encoder(nn.Module):
         _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["moves"]
         return mask * self.moves_linear(_ohe_encoder(token))
 
-    def _embed_public_entity(
-        self, public: jax.Array, revealed: jax.Array, with_side: bool = False
-    ):
+    def _embed_public_entity(self, public: jax.Array, revealed: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.
         _encode_hex = jax.vmap(
             functools.partial(
@@ -455,9 +441,6 @@ class Encoder(nn.Module):
                 EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL,
                 dtype=self.cfg.dtype,
             ),
-            _encode_one_hot_public_entity(
-                public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ),
             _encode_divided_one_hot_public_entity(
                 public,
                 EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO,
@@ -496,12 +479,7 @@ class Encoder(nn.Module):
                 public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
             ),
         ]
-        if with_side:
-            encodings_list.append(
-                _encode_one_hot_public_entity(
-                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
-                )
-            )
+
         boolean_code = one_hot_concat_jax(encodings_list, dtype=self.cfg.dtype)
 
         move_indices = np.array(
@@ -557,7 +535,8 @@ class Encoder(nn.Module):
                         volatiles_encoding,
                         typechange_encoding,
                         hp_features,
-                    ]
+                    ],
+                    axis=-1,
                 ),
                 move_pp_onehot,
                 self._embed_learnset(species_token),
@@ -570,12 +549,21 @@ class Encoder(nn.Module):
             axis=-1,
         )
 
+        pos_bias = self.pos_bias(
+            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE]
+        )
+        side_bias = self.side_bias(
+            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE]
+        )
+
         revealed_embedding = self.public_entity_sum(
             self._embed_species(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             move_embeddings.mean(axis=0),
             public_encoding,
+            pos_bias,
+            side_bias,
         )
 
         # Apply mask to filter out invalid entities.
@@ -891,11 +879,13 @@ class Encoder(nn.Module):
         field_embedding = self.field_linear(field_encoding)
         my_field_embedding = self.side_condition_linear(my_side_condition_encoding)
         opp_field_embedding = self.side_condition_linear(opp_side_condition_encoding)
+
+        pos_biases = self.pos_bias.embedding.astype(field_embedding.dtype)
         field_embeddings = jnp.stack(
             (
                 field_embedding,
-                my_field_embedding + self.ally_bias.squeeze(0),
-                opp_field_embedding + self.enemy_bias.squeeze(0),
+                my_field_embedding + pos_biases[1],
+                opp_field_embedding + pos_biases[0],
             )
         )
         return field_embeddings, mask, request_count, turn_order_value
@@ -983,13 +973,6 @@ class Encoder(nn.Module):
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
             packed_history.public, packed_history.revealed
         )
-        side_embedding_cache = jnp.where(
-            packed_history.public[
-                ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
-            ][..., None],
-            self.ally_bias,
-            self.enemy_bias,
-        )
 
         edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edges)
 
@@ -999,7 +982,7 @@ class Encoder(nn.Module):
             history_request_count,
             turn_order_value,
         ) = jax.vmap(self._embed_local_timestep, in_axes=(0, None, None))(
-            history, entity_embedding_cache + side_embedding_cache, edge_embedding_cache
+            history, entity_embedding_cache, edge_embedding_cache
         )
 
         # Apply mask to the timestep embeddings.
@@ -1107,106 +1090,41 @@ class Encoder(nn.Module):
         )
 
         output_state_sequence = jnp.zeros(
-            (2 * NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
+            (NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
         )
 
         # define positional biases
-        ally_move_positional_embedding = self.ally_move_positional_embedding.astype(
+        reserve_entity_positional_embedding = self.reserve_positional_embedding.astype(
             self.cfg.dtype
         )
-        reserve_entity_positional_embedding = (
-            self.reserve_entity_positional_embedding.astype(self.cfg.dtype)
-        )
-        ally_target_positional_embeddings = (
-            self.ally_target_positional_embeddings.astype(self.cfg.dtype)
-        )
         pass_embeddings = self.pass_embeddings.astype(self.cfg.dtype)
-        target_auto_embedding = self.target_auto_embedding.astype(self.cfg.dtype)
+        target_embeddings = self.target_embeddings.astype(self.cfg.dtype)
         value_embedding = self.value_embedding.astype(self.cfg.dtype)
 
         # set/accumulate ally embeddings and positional biases
         for i, (indices, accumulator) in enumerate(
             [
-                (MOVE_INDICES, my_move_embeddings + ally_move_positional_embedding),
+                (MOVE_INDICES, my_move_embeddings),
                 (
                     RESERVE_ENTITY_INDICES,
                     private_entity_embeddings + reserve_entity_positional_embedding,
                 ),
-                (
-                    ALLY_TARGET_INDICES,
-                    revealed_entity_embeddings[:2] + ally_target_positional_embeddings,
-                ),
+                (ALLY_TARGET_INDICES, revealed_entity_embeddings[:2]),
                 (PASS_INDICES, pass_embeddings),
-                (TARGET_AUTO_INDICES, target_auto_embedding),
+                (TARGET_INDICES, target_embeddings),
                 (VALUE_EMBEDDING_INDICES, value_embedding),
             ]
         ):
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
 
-        # set/accumulate enemy embeddings and positional biases
-        for indices, accumulator in [
-            (MOVE_INDICES, opp_move_embeddings + ally_move_positional_embedding),
-            (
-                RESERVE_ENTITY_INDICES,
-                revealed_entity_embeddings[6:] + reserve_entity_positional_embedding,
-            ),
-            (
-                ALLY_TARGET_INDICES,
-                revealed_entity_embeddings[6:8] + ally_target_positional_embeddings,
-            ),
-            (PASS_INDICES, pass_embeddings),
-            (TARGET_AUTO_INDICES, target_auto_embedding),
-            (VALUE_EMBEDDING_INDICES, value_embedding),
-        ]:
-            output_state_sequence = output_state_sequence.at[
-                indices + NUM_ACTION_FEATURES
-            ].add(accumulator)
-
         # Contextualise
-        for seq, indices, context in [
-            (
-                output_state_sequence,
-                ALLY_1_INDICES,
-                revealed_entity_embeddings[0][None],
-            ),
-            (
-                output_state_sequence,
-                ALLY_2_INDICES,
-                revealed_entity_embeddings[1][None],
-            ),
+        for indices, context in [
+            (ALLY_1_INDICES, revealed_entity_embeddings[0][None]),
+            (ALLY_2_INDICES, revealed_entity_embeddings[1][None]),
         ]:
-            glu_embeddings = jnp.take(
-                output_state_sequence, indices, axis=0
-            ) * jax.nn.sigmoid(context)
-            seq = seq.at[indices].set(glu_embeddings)
-
-        for seq, indices, context in [
-            (
-                output_state_sequence,
-                ALLY_1_INDICES,
-                revealed_entity_embeddings[6][None],
-            ),
-            (
-                output_state_sequence,
-                ALLY_2_INDICES,
-                revealed_entity_embeddings[7][None],
-            ),
-        ]:
-            updated_indices = indices + NUM_ACTION_FEATURES
-            glu_embeddings = jnp.take(
-                output_state_sequence, updated_indices, axis=0
-            ) * jax.nn.sigmoid(context)
-            seq = seq.at[updated_indices].set(glu_embeddings)
-
-        ally_bias = self.ally_bias.astype(self.cfg.dtype)
-        enemy_bias = self.enemy_bias.astype(self.cfg.dtype)
-
-        output_state_sequence = output_state_sequence.at[:NUM_ACTION_FEATURES].add(
-            ally_bias
-        )
-        output_state_sequence = output_state_sequence.at[NUM_ACTION_FEATURES:].add(
-            enemy_bias
-        )
+            output_state_sequence = output_state_sequence.at[indices].mul(
+                jax.nn.sigmoid(context)
+            )
 
         prev_action_src = jnp.take(
             output_state_sequence,
@@ -1251,45 +1169,23 @@ class Encoder(nn.Module):
             axis=1
         )
 
-        # Force certain indices to be valid to ensure the model can always attend to them
-        # even if they are masked out for action selection. This allows the model to use
-        # these indices as stable reference points for attention and contextualization.
-        for indices in (
-            RESERVE_ENTITY_INDICES,
-            ALLY_TARGET_INDICES,
-            ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
-            NUM_ACTION_FEATURES + RESERVE_ENTITY_INDICES,
-            NUM_ACTION_FEATURES + ALLY_TARGET_INDICES,
-            NUM_ACTION_FEATURES + ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
-        ):
-            output_state_mask = output_state_mask.at[indices].set(True)
-
-        output_state_mask = output_state_mask.at[
-            NUM_ACTION_FEATURES + MOVE_INDICES
-        ].set(opp_move_mask)
-
         latent_queries = self.query_decoder(
             q=self.latent_queries.astype(self.cfg.dtype),
-            kv=output_state_sequence,
-            attn_mask=create_attention_mask(latent_query_mask, output_state_mask),
-        )
-        latent_input_embeddings = self.input_decoder(
-            q=latent_queries,
             kv=input_state_sequence,
             attn_mask=create_attention_mask(latent_query_mask, input_state_mask),
         )
-        latent_history_embeddings = self.history_decoder(
+        latent_queries = self.input_decoder(
+            q=latent_queries,
+            kv=output_state_sequence,
+            attn_mask=create_attention_mask(latent_query_mask, output_state_mask),
+        )
+        latent_queries = self.history_decoder(
             q=latent_queries,
             kv=timestep_embeddings,
             attn_mask=create_attention_mask(latent_query_mask, timestep_mask),
             q_positions=jnp.expand_dims(current_position, axis=-1),
             kv_positions=timestep_positions,
         )
-
-        # Combine latent spaces
-        latent_queries = (
-            latent_queries + latent_input_embeddings + latent_history_embeddings
-        ) / jnp.sqrt(3)
 
         # bulk of computation
         latent_queries = self.latent_encoder(qkv=latent_queries)
@@ -1299,15 +1195,7 @@ class Encoder(nn.Module):
             q=output_state_sequence, kv=latent_queries
         )
 
-        value_embedding = output_state_embeddings[
-            np.array(
-                [
-                    ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
-                    NUM_ACTION_FEATURES + ActionEnum.ACTION_ENUM__VALUE_EMBEDDING,
-                ]
-            )
-        ].reshape(-1)
-
+        value_embedding = output_state_embeddings[VALUE_EMBEDDING_INDICES].reshape(-1)
         action_embeddings = output_state_embeddings
 
         return value_embedding, action_embeddings, latent_queries

@@ -1,3 +1,4 @@
+from gc import collect
 import math
 from typing import Optional
 
@@ -15,7 +16,7 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
-COLLECT_INTERMEDIATES = True
+COLLECT_INTERMEDIATES = False
 
 
 class RMSNorm(nn.Module):
@@ -199,6 +200,7 @@ class MultiHeadAttention(nn.Module):
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
     implementation: Optional[str] = None  # "cudnn"
+    collect_intermediates: bool = False
 
     @nn.compact
     def __call__(
@@ -287,21 +289,22 @@ class MultiHeadAttention(nn.Module):
         attn_probs = jnp.exp(attn_log_probs)
         attn_probs = jnp.where(mask, attn_probs, 0)
 
-        # attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
-        #     mask.sum(axis=-1)
-        # )
         # Capture attention weights and entropy as Flax intermediates so that
         # visualisation scripts can inspect them without modifying the forward pass.
-        self.sow(
-            "intermediates",
-            "attn_weights",
-            attn_probs.astype(jnp.float32),
-        )
-        # self.sow(
-        #     "intermediates",
-        #     "attn_entropy",
-        #     jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
-        # )
+        if self.collect_intermediates:
+            self.sow(
+                "intermediates",
+                "attn_weights",
+                attn_probs.astype(jnp.float32),
+            )
+            attn_entropy = -jnp.sum(attn_probs * attn_log_probs, axis=-1) / jnp.log(
+                mask.sum(axis=-1)
+            )
+            self.sow(
+                "intermediates",
+                "attn_entropy",
+                jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
+            )
 
         # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
@@ -363,6 +366,7 @@ class EncoderBlock(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
+    collect_intermediates: bool = False
 
     @nn.compact
     def __call__(
@@ -382,6 +386,7 @@ class EncoderBlock(nn.Module):
             use_bias=self.use_bias,
             need_pos=self.need_pos,
             dtype=qkv.dtype,
+            collect_intermediates=self.collect_intermediates,
         )(
             q=qkv_ln,
             kv=qkv_ln,
@@ -466,6 +471,7 @@ class TransformerEncoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             resblocks_hidden_size=self.resblocks_hidden_size,
             init_residual_scale=self.init_residual_scale,
+            collect_intermediates=self.collect_intermediates,
         )(qkv, attn_mask, positionwise_mask, qkv_positions)
 
         return layer_norm(qkv)
@@ -481,6 +487,7 @@ class DecoderBlock(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
+    collect_intermediates: bool = False
 
     @nn.compact
     def __call__(
@@ -503,6 +510,7 @@ class DecoderBlock(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             need_pos=self.need_pos,
             dtype=q.dtype,
+            collect_intermediates=self.collect_intermediates,
         )(
             q=q_ln,
             kv=kv_ln,
@@ -593,6 +601,7 @@ class TransformerDecoder(nn.Module):
             qk_layer_norm=self.qk_layer_norm,
             resblocks_hidden_size=self.resblocks_hidden_size,
             init_residual_scale=self.init_residual_scale,
+            collect_intermediates=self.collect_intermediates,
         )(q, kv, attn_mask, positionwise_mask, q_positions, kv_positions)
 
         return layer_norm(q)

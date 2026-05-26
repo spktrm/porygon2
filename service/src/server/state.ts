@@ -802,6 +802,13 @@ function getArrayFromPrivatePokemon(
     return dataArr;
 }
 
+const scoreOrder = (pokemon: Pokemon) => {
+    if (!pokemon.isActive()) {
+        return 0;
+    }
+    return 2 - pokemon.slot;
+};
+
 function getArrayFromPublicPokemon(
     candidate: Pokemon | null,
     relativeSide: number,
@@ -956,21 +963,8 @@ function getArrayFromPublicPokemon(
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
         IndexValueFromEnum(GendernameEnum, pokemon.gender);
 
-    const position = candidate.ident.at(2);
-    if (candidate.isActive()) {
-        if (position === "a") {
-            publicData[
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ] = 1;
-        } else if (position === "b") {
-            publicData[
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ] = 2;
-        }
-    } else {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            0;
-    }
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+        scoreOrder(candidate);
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
         +candidate.fainted;
@@ -3555,7 +3549,7 @@ export class StateHandler {
     } {
         const { request, format, allyActive, enemyActive } = args;
 
-        const arrWidth = 2 * numActionFeatures;
+        const arrWidth = numActionFeatures;
         const arrLength = arrWidth ** 2;
         const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
         let isStruggling = false;
@@ -3603,10 +3597,10 @@ export class StateHandler {
 
         const enemyTargets = [
             !!enemyActive[0]
-                ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_1_TARGET
+                ? ActionEnum.ACTION_ENUM__ENEMY_1_TARGET
                 : undefined,
             !!enemyActive[1]
-                ? numActionFeatures + ActionEnum.ACTION_ENUM__ALLY_2_TARGET
+                ? ActionEnum.ACTION_ENUM__ENEMY_2_TARGET
                 : undefined,
         ];
 
@@ -3740,32 +3734,33 @@ export class StateHandler {
                     canMove = filtered.length ? filtered : canMove;
 
                     for (const [j, move] of canMove) {
-                        const actionIndices: number[] = [];
+                        const tgtIndices: number[] = [];
+                        const selfTarget = allyTargets[i];
+                        const allyTarget = allyTargets[1 - i];
                         if ("target" in move) {
-                            const allyTarget = allyTargets[1 - i];
                             switch (move.target) {
                                 case "any":
                                 case "normal":
                                     for (const target of enemyTargets) {
                                         if (target !== undefined) {
-                                            actionIndices.push(target);
+                                            tgtIndices.push(target);
                                         }
                                     }
                                     if (allyTarget !== undefined) {
-                                        actionIndices.push(allyTarget);
+                                        tgtIndices.push(allyTarget);
                                     }
                                     break;
 
                                 case "adjacentAlly":
                                     if (allyTarget !== undefined) {
-                                        actionIndices.push(allyTarget);
+                                        tgtIndices.push(allyTarget);
                                     }
                                     break;
 
                                 case "adjacentFoe":
                                     for (const target of enemyTargets) {
                                         if (target !== undefined) {
-                                            actionIndices.push(target);
+                                            tgtIndices.push(target);
                                         }
                                     }
                                     break;
@@ -3773,43 +3768,86 @@ export class StateHandler {
                                 case "adjacentAllyOrSelf":
                                     for (const target of allyTargets) {
                                         if (target !== undefined) {
-                                            actionIndices.push(target);
+                                            tgtIndices.push(target);
                                         }
                                     }
                                     break;
 
                                 case "self":
+                                    if (selfTarget !== undefined) {
+                                        tgtIndices.push(selfTarget);
+                                    }
+                                    break;
                                 case "all":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL,
+                                    );
+                                    break;
                                 case "allySide":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE,
+                                    );
+                                    break;
                                 case "foeSide":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE,
+                                    );
+                                    break;
                                 case "allyTeam":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM,
+                                    );
+                                    break;
                                 case "randomNormal":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                    );
+                                    break;
                                 case "allAdjacent":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT,
+                                    );
+                                    break;
                                 case "allAdjacentFoes":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES,
+                                    );
+                                    break;
                                 case "allies":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLIES,
+                                    );
+                                    break;
                                 case "scripted":
-                                    actionIndices.push(
-                                        numActionFeatures +
-                                            ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
 
                                 default:
-                                    actionIndices.push(
-                                        numActionFeatures +
-                                            ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
                             }
                         } else {
-                            actionIndices.push(
-                                numActionFeatures +
+                            if (["recharge"].includes(move.id)) {
+                                if (selfTarget !== undefined) {
+                                    tgtIndices.push(selfTarget);
+                                }
+                            } else if (["outrage"].includes(move.id)) {
+                                tgtIndices.push(
+                                    ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                );
+                            } else {
+                                tgtIndices.push(
                                     ActionEnum.ACTION_ENUM__TARGET_AUTO,
-                            );
+                                );
+                            }
                         }
 
-                        for (const actionIndex of actionIndices) {
-                            if (actionIndex === undefined) {
+                        for (const tgtIndex of tgtIndices) {
+                            if (tgtIndex === undefined) {
                                 throw new Error(
                                     `Undefined action index for move ${
                                         move.name
@@ -3818,10 +3856,10 @@ export class StateHandler {
                                     }`,
                                 );
                             }
-                            const rowIndex = moveIndices[i][j];
-                            actionMask.setRowCol(rowIndex, actionIndex, true);
+                            const srcIndex = moveIndices[i][j];
+                            actionMask.setRowCol(srcIndex, tgtIndex, true);
 
-                            const wildCardRowIndex = wildCardIndices[i][j];
+                            const wildCardSrcIndex = wildCardIndices[i][j];
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
                                     WILDCARDS.map((wildcard) =>
@@ -3837,8 +3875,8 @@ export class StateHandler {
                                 !wildCardChosenAlready;
 
                             actionMask.setRowCol(
-                                wildCardRowIndex,
-                                actionIndex,
+                                wildCardSrcIndex,
+                                tgtIndex,
                                 canWildCard,
                             );
                         }
@@ -3980,13 +4018,6 @@ export class StateHandler {
         }
 
         const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
-
-        const scoreOrder = (pokemon: Pokemon) => {
-            if (!pokemon.isActive()) {
-                return 0;
-            }
-            return 2 - pokemon.slot;
-        };
 
         const sortedTeam = [...team].sort(
             (a, b) => scoreOrder(b) - scoreOrder(a),
