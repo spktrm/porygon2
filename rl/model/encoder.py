@@ -15,6 +15,7 @@ from rl.environment.data import (
     ALLY_1_INDICES,
     ALLY_2_INDICES,
     ALLY_TARGET_INDICES,
+    ENEMY_TARGET_INDICES,
     ENTITY_EDGE_MAX_VALUES,
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
@@ -52,7 +53,6 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
     MovesetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum
 from rl.model.modules import (
     SumEmbeddings,
     TransformerDecoder,
@@ -236,6 +236,9 @@ class Encoder(nn.Module):
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
         self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
 
+        self.active_move_positional_embedding = self.param(
+            "active_move_positional_embedding", embedding_init, (1, entity_size)
+        )
         self.reserve_positional_embedding = self.param(
             "reserve_positional_embedding", embedding_init, (1, entity_size)
         )
@@ -1094,6 +1097,9 @@ class Encoder(nn.Module):
         )
 
         # define positional biases
+        active_move_positional_embedding = self.active_move_positional_embedding.astype(
+            self.cfg.dtype
+        )
         reserve_entity_positional_embedding = self.reserve_positional_embedding.astype(
             self.cfg.dtype
         )
@@ -1102,19 +1108,18 @@ class Encoder(nn.Module):
         value_embedding = self.value_embedding.astype(self.cfg.dtype)
 
         # set/accumulate ally embeddings and positional biases
-        for i, (indices, accumulator) in enumerate(
-            [
-                (MOVE_INDICES, my_move_embeddings),
-                (
-                    RESERVE_ENTITY_INDICES,
-                    private_entity_embeddings + reserve_entity_positional_embedding,
-                ),
-                (ALLY_TARGET_INDICES, revealed_entity_embeddings[:2]),
-                (PASS_INDICES, pass_embeddings),
-                (TARGET_INDICES, target_embeddings),
-                (VALUE_EMBEDDING_INDICES, value_embedding),
-            ]
-        ):
+        for indices, accumulator in [
+            (MOVE_INDICES, my_move_embeddings + active_move_positional_embedding),
+            (
+                RESERVE_ENTITY_INDICES,
+                private_entity_embeddings + reserve_entity_positional_embedding,
+            ),
+            (ALLY_TARGET_INDICES, revealed_entity_embeddings[:2]),
+            (ENEMY_TARGET_INDICES, revealed_entity_embeddings[6:8]),
+            (PASS_INDICES, pass_embeddings),
+            (TARGET_INDICES, target_embeddings),
+            (VALUE_EMBEDDING_INDICES, value_embedding),
+        ]:
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
 
         # Contextualise
@@ -1123,7 +1128,7 @@ class Encoder(nn.Module):
             (ALLY_2_INDICES, revealed_entity_embeddings[1][None]),
         ]:
             output_state_sequence = output_state_sequence.at[indices].mul(
-                jax.nn.sigmoid(context)
+                jax.nn.sigmoid(context), unique_indices=True, indices_are_sorted=True
             )
 
         prev_action_src = jnp.take(

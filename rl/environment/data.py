@@ -38,7 +38,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentTrajectory
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -181,7 +181,7 @@ with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
     EX_BUFFER = f.read()
 
 
-EX_TRAJECTORY = EnvironmentTrajectory.FromString(EX_BUFFER)
+EX_BATCH = EnvironmentBatch.FromString(EX_BUFFER)
 
 
 MOVE_INDICES = np.array(
@@ -220,6 +220,12 @@ ALLY_TARGET_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
     ]
 )
+ENEMY_TARGET_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ENEMY_1_TARGET,
+        ActionEnum.ACTION_ENUM__ENEMY_2_TARGET,
+    ]
+)
 PASS_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
@@ -252,7 +258,7 @@ ALLY_1_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
     ]
-)
+).sort()
 ALLY_2_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
@@ -265,4 +271,4 @@ ALLY_2_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_PASS,
     ]
-)
+).sort()

@@ -2,8 +2,6 @@ import jax
 import jax.numpy as jnp
 
 from rl.utils import average
-import jax
-import jax.numpy as jnp
 
 
 def compute_sigreg_loss(

@@ -1,14 +1,17 @@
 from dotenv import load_dotenv
 
 load_dotenv()
-
 import functools
+import os
 from pprint import pprint
 
 import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pandas as pd
+import plotly.express as px
 from ml_collections import ConfigDict
 
 from rl.environment.interfaces import (
@@ -159,6 +162,56 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
+def create_attention_graph(path, value):
+    # Extract string/integer keys from the JAX path tuple
+    path_keys = [p.key for p in path[:-1]]
+
+    if len(path_keys) > 0 and path_keys[-1] == "attn_weights":
+
+        if getattr(value, "val", None) is not None:
+            value = value.val
+        axes_to_mean = tuple(range(value.ndim - 2))
+
+        avg_attn = jnp.mean(value, axis=axes_to_mean)
+        avg_attn_np = np.asarray(avg_attn)
+        avg_attn_df = pd.DataFrame(avg_attn_np)
+
+        path_str = " -> ".join(str(k) for k in path_keys)
+
+        fig = px.imshow(
+            avg_attn_df,
+            text_auto=True,
+            aspect="auto",
+            labels=dict(
+                x="Sample Index",
+                y="Sample Index",
+                color="Cosine Similarity",
+            ),
+            title=path_str,
+        )
+
+        # --- File Saving Logic ---
+        # 1. Ensure the base directory exists
+        base_dir = "attn_weights"
+        os.makedirs(base_dir, exist_ok=True)
+
+        # 2. Create a safe file name from the path (excluding 'attn_weights')
+        # Example: 'layer_0_self_attention'
+        module_name = "_".join(str(k) for k in path_keys[:-1])
+
+        # 3. Save to disk
+        save_path = os.path.join(base_dir, f"{module_name}.html")
+        fig.write_html(save_path)
+
+        # Optional print to track progress during execution
+        print(f"Saved attention map to {save_path}")
+        # -------------------------
+
+        return fig
+
+    return value
+
+
 def get_attention_maps(
     model: nn.Module,
     params: dict,
@@ -179,7 +232,7 @@ def get_attention_maps(
 
     # Extract the nested dictionary of attention weights
     intermediates = state.get("intermediates", {})
-    return intermediates
+    return jax.tree.map_with_path(create_attention_graph, intermediates)
 
 
 def main(generation: int = 9):
@@ -207,7 +260,6 @@ def main(generation: int = 9):
         ex_actor_input,
         PlayerActorOutput(),
         HeadParams(temp=0.8),
-        rngs={"sampling": key},
     )
     pprint(actor_output)
 
@@ -220,12 +272,10 @@ def main(generation: int = 9):
         rng_key=key,
     )
 
-    learner_output = learner_network.apply(
-        params, ex_actor_input, actor_output, HeadParams()
-    )
-    pprint(learner_output)
-
-    pprint(get_num_params(params), sort_dicts=False)
+    try:
+        pprint(get_num_params(params), sort_dicts=False)
+    except Exception as e:
+        print(f"Error calculating number of parameters: {e}")
 
 
 if __name__ == "__main__":
