@@ -1,4 +1,3 @@
-from gc import collect
 import math
 from typing import Optional
 
@@ -17,6 +16,7 @@ jnp.set_printoptions(precision=2, suppress=True)
 
 
 COLLECT_INTERMEDIATES = False
+DO_CHECKPOINT = False
 
 
 class RMSNorm(nn.Module):
@@ -421,7 +421,7 @@ class TransformerEncoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    do_checkpoint: bool = False
+    do_checkpoint: bool = DO_CHECKPOINT
     collect_intermediates: bool = COLLECT_INTERMEDIATES
 
     @nn.compact
@@ -440,7 +440,7 @@ class TransformerEncoder(nn.Module):
         if self.need_pos and qkv_positions is None:
             qkv_positions = jnp.arange(qkv.shape[0], dtype=jnp.int32)
 
-        if self.do_checkpoint:
+        if self.do_checkpoint or self.num_layers > 1:
             block = nn.checkpoint(
                 EncoderBlock,
                 policy=jax.checkpoint_policies.checkpoint_dots,
@@ -545,7 +545,7 @@ class TransformerDecoder(nn.Module):
     qk_layer_norm: bool = True
     resblocks_hidden_size: int | None = None
     init_residual_scale: float = 1.0
-    do_checkpoint: bool = False
+    do_checkpoint: bool = DO_CHECKPOINT
     collect_intermediates: bool = COLLECT_INTERMEDIATES
 
     @nn.compact
@@ -570,7 +570,7 @@ class TransformerDecoder(nn.Module):
             if kv_positions is None:
                 kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
 
-        if self.do_checkpoint:
+        if self.do_checkpoint or self.num_layers > 1:
             block = nn.checkpoint(
                 DecoderBlock,
                 policy=jax.checkpoint_policies.checkpoint_dots,

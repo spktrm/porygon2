@@ -455,7 +455,7 @@ def train_step(
 
 def _stack_and_pad_batch(
     batch: list[Trajectory],
-    player_transition_resolution: int = 64,
+    player_transition_resolution: int = 24,
     player_history_resolution: int = 64,
     rng_key: jax.Array = None,
 ) -> Batch:
@@ -464,11 +464,14 @@ def _stack_and_pad_batch(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
 
-    valid = np.bitwise_not(stacked_trajectory.player_transitions.env_output.done)
-    valid_sum = valid.sum(0).max().item()
+    max_valid = (
+        stacked_trajectory.player_transitions.env_output.done.argmax(axis=0)
+        .max()
+        .item()
+    )
 
     num_valid = int(
-        np.ceil(valid_sum / player_transition_resolution) * player_transition_resolution
+        np.ceil(max_valid / player_transition_resolution) * player_transition_resolution
     )
 
     return Batch(

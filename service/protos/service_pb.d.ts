@@ -252,6 +252,32 @@ export namespace EnvironmentTrajectory {
   }
 }
 
+export class EnvironmentBatch extends jspb.Message {
+  clearTrajectoriesList(): void;
+  getTrajectoriesList(): Array<EnvironmentTrajectory>;
+  setTrajectoriesList(value: Array<EnvironmentTrajectory>): void;
+  addTrajectories(value?: EnvironmentTrajectory, index?: number): EnvironmentTrajectory;
+
+  getMaxTrajectoryLength(): number;
+  setMaxTrajectoryLength(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): EnvironmentBatch.AsObject;
+  static toObject(includeInstance: boolean, msg: EnvironmentBatch): EnvironmentBatch.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: EnvironmentBatch, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): EnvironmentBatch;
+  static deserializeBinaryFromReader(message: EnvironmentBatch, reader: jspb.BinaryReader): EnvironmentBatch;
+}
+
+export namespace EnvironmentBatch {
+  export type AsObject = {
+    trajectoriesList: Array<EnvironmentTrajectory.AsObject>,
+    maxTrajectoryLength: number,
+  }
+}
+
 export class EnvironmentResponse extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;

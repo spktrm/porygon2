@@ -170,6 +170,14 @@ class EnvironmentTrajectory(_message.Message):
     states: _containers.RepeatedCompositeFieldContainer[EnvironmentState]
     def __init__(self, states: _Optional[_Iterable[_Union[EnvironmentState, _Mapping]]] = ...) -> None: ...
 
+class EnvironmentBatch(_message.Message):
+    __slots__ = ("trajectories", "max_trajectory_length")
+    TRAJECTORIES_FIELD_NUMBER: _ClassVar[int]
+    MAX_TRAJECTORY_LENGTH_FIELD_NUMBER: _ClassVar[int]
+    trajectories: _containers.RepeatedCompositeFieldContainer[EnvironmentTrajectory]
+    max_trajectory_length: int
+    def __init__(self, trajectories: _Optional[_Iterable[_Union[EnvironmentTrajectory, _Mapping]]] = ..., max_trajectory_length: _Optional[int] = ...) -> None: ...
+
 class EnvironmentResponse(_message.Message):
     __slots__ = ("username", "state")
     USERNAME_FIELD_NUMBER: _ClassVar[int]

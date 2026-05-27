@@ -1,7 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createBattle, TrainablePlayerAI } from "../server/runner";
-import { EnvironmentTrajectory, StepRequest } from "../../protos/service_pb";
+import {
+    EnvironmentBatch,
+    EnvironmentTrajectory,
+    StepRequest,
+} from "../../protos/service_pb";
 import { InfoFeature } from "../../protos/features_pb";
 import { GetRandomAction } from "../server/baselines/random";
 import { getSampleTeam } from "../server/state";
@@ -46,44 +50,56 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
 }
 
 async function runBattle() {
-    console.log("Creating battle...");
-    const { p1, p2 } = createBattle({
-        p1Name: "Bot1",
-        p2Name: "Bot2",
+    const batch = new EnvironmentBatch();
 
-        p1team: getSampleTeam("gen9ou"),
-        p2team: getSampleTeam("gen9ou", "Zoroark"),
-        smogonFormat: "gen9vgc2026regf",
-        // smogonFormat: "gen9randomdoublesbattle",
-        // smogonFormat: "gen9vgc2025regibo3",
-    });
+    for (let i = 0; i < 10; i++) {
+        console.log(`Creating battle ${i + 1}...`);
+        const { p1, p2 } = createBattle({
+            p1Name: "Bot1",
+            p2Name: "Bot2",
 
-    console.log("Starting asynchronous player controllers...");
-    let trajectories: EnvironmentTrajectory[] = [];
+            p1team: getSampleTeam("gen9ou"),
+            p2team: getSampleTeam("gen9ou", "Zoroark"),
+            smogonFormat: "gen9vgc2026regf",
+            // smogonFormat: "gen9randomdoublesbattle",
+            // smogonFormat: "gen9vgc2025regibo3",
+        });
 
-    try {
-        // Create a promise for each player's control loop.
-        const p1Promise = playerController(p1, "P1");
-        const p2Promise = playerController(p2, "P2");
+        console.log("Starting asynchronous player controllers...");
+        let trajectories: EnvironmentTrajectory[] = [];
 
-        // Wait for both player loops to complete. This happens when the battle ends.
-        trajectories = await Promise.all([p1Promise, p2Promise]);
+        try {
+            // Create a promise for each player's control loop.
+            const p1Promise = playerController(p1, "P1");
+            const p2Promise = playerController(p2, "P2");
 
-        console.log("\nBattle has concluded.");
-    } catch (error) {
-        console.error("An error occurred during the battle:", error);
-    } finally {
-        // Ensure players are properly cleaned up regardless of outcome.
-        console.log("Destroying player instances.");
-        p1.destroy();
-        p2.destroy();
+            // Wait for both player loops to complete. This happens when the battle ends.
+            trajectories = await Promise.all([p1Promise, p2Promise]);
+
+            console.log("\nBattle has concluded.");
+        } catch (error) {
+            console.error("An error occurred during the battle:", error);
+        } finally {
+            // Ensure players are properly cleaned up regardless of outcome.
+            console.log("Destroying player instances.");
+            p1.destroy();
+            p2.destroy();
+        }
+
+        batch.addTrajectories(...trajectories);
+        batch.setMaxTrajectoryLength(
+            Math.max(
+                ...trajectories.map((t) => t.getStatesList().length),
+                batch.getMaxTrajectoryLength(),
+            ),
+        );
     }
 
     // Save the very last state that was recorded.
     const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
     console.log(`Saving latest environment response to ${filePath}`);
-    const data = trajectories[0].serializeBinary();
-    fs.writeFile(filePath, data, (err) => {
+    const data = batch.serializeBinary();
+    fs.writeFile(filePath, Buffer.from(data), (err) => {
         if (err) {
             console.error("Failed to save the environment state:", err);
         }

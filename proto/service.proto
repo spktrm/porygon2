@@ -94,6 +94,11 @@ message EnvironmentTrajectory {
   repeated EnvironmentState states = 1;
 }
 
+message EnvironmentBatch {
+  repeated EnvironmentTrajectory trajectories = 1;
+  int32 max_trajectory_length = 2;
+}
+
 message EnvironmentResponse {
   string username = 1;
   EnvironmentState state = 2;
