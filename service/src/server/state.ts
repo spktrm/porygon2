@@ -750,6 +750,7 @@ function getArrayFromPrivatePokemon(
 
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES] =
         tryFindIndex(SpeciesEnum, [
+            pokemonSet.speciesForme,
             pokemon.baseSpecies.id,
             pokemon.baseSpecies.baseSpecies.toLowerCase(),
         ]);
@@ -1504,7 +1505,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -4122,6 +4123,7 @@ export class StateHandler {
                         name.includes(setSpecies)
                     );
                 });
+
                 buffer.set(
                     getArrayFromPrivatePokemon(matchedTeamMate, member),
                     offset,
@@ -4191,10 +4193,14 @@ export class StateHandler {
     getStatePotential() {
         let p1Total = 0;
         let p2Total = 0;
+
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
         }
+
+        const aliveCoef = 1;
+        const hpCoef = 0.1;
 
         for (const [i, side] of [
             this.player.publicBattle.sides[playerIndex],
@@ -4220,7 +4226,9 @@ export class StateHandler {
             }
 
             const unknownHp = side.totalPokemon - side.team.length;
-            const total = knownAlive + knownHp + 2 * unknownHp;
+            const total =
+                aliveCoef * (knownAlive + unknownHp) +
+                hpCoef * (knownHp + unknownHp);
 
             if (i === 0) {
                 p1Total = total;
@@ -4229,7 +4237,7 @@ export class StateHandler {
             }
         }
 
-        const frac = (p1Total - p2Total) / 12;
+        const frac = p1Total - p2Total;
         return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 

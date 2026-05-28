@@ -205,6 +205,24 @@ def _max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
     )
 
 
+def enforce_sequential_counts(arr):
+    # 1. Identify where sequences reset.
+    # A reset happens if an element is NOT larger than the previous (arr[i] <= arr[i-1]).
+    # We prepend `True` because the very first element always starts at 1.
+    resets = jnp.concatenate([jnp.array([True]), arr[1:] <= arr[:-1]])
+
+    # 2. Create an array of absolute indices: [0, 1, 2, 3, ...]
+    indices = jnp.arange(arr.size)
+
+    # 3. Find the index of the most recent reset for every position.
+    # jnp.where places the current index if it's a reset, or -1 if it's not.
+    # maximum.accumulate then drags the largest (most recent) reset index forward.
+    last_reset_indices = jnp.maximum.accumulate(jnp.where(resets, indices, -1))
+
+    # 4. The new value is simply the distance from the last reset, plus 1.
+    return indices - last_reset_indices
+
+
 class Encoder(nn.Module):
     """
     Encoder model for processing environment steps and history to generate embeddings.
@@ -970,7 +988,10 @@ class Encoder(nn.Module):
         )
 
     def _embed_global_timestep(
-        self, history: PlayerHistoryOutput, packed_history: PlayerPackedHistoryOutput
+        self,
+        env_step: PlayerEnvOutput,
+        history: PlayerHistoryOutput,
+        packed_history: PlayerPackedHistoryOutput,
     ):
 
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
@@ -987,6 +1008,8 @@ class Encoder(nn.Module):
         ) = jax.vmap(self._embed_local_timestep, in_axes=(0, None, None))(
             history, entity_embedding_cache, edge_embedding_cache
         )
+
+        turn_order_value = jnp.maximum(enforce_sequential_counts(turn_order_value), 7)
 
         # Apply mask to the timestep embeddings.
         local_timestep_embedding = jnp.where(
@@ -1212,7 +1235,7 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
     ):
         timestep_embeddings, history_valid_mask, timestep_positions = (
-            self._embed_global_timestep(history_step, packed_history_step)
+            self._embed_global_timestep(env_step, history_step, packed_history_step)
         )
 
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
