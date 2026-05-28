@@ -46,11 +46,12 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
     }
     console.log(`${playerName}: Controller finished.`);
 
-    return trajectory;
+    return { log: player.log.join("\n"), trajectory };
 }
 
 async function runBattle() {
     const batch = new EnvironmentBatch();
+    const battleLogs: string[] = [];
 
     for (let i = 0; i < 10; i++) {
         console.log(`Creating battle ${i + 1}...`);
@@ -60,13 +61,14 @@ async function runBattle() {
 
             p1team: getSampleTeam("gen9ou"),
             p2team: getSampleTeam("gen9ou", "Zoroark"),
-            smogonFormat: "gen9vgc2026regf",
+            smogonFormat: "gen9ou",
+            // smogonFormat: "gen9vgc2026regf",
             // smogonFormat: "gen9randomdoublesbattle",
             // smogonFormat: "gen9vgc2025regibo3",
         });
 
         console.log("Starting asynchronous player controllers...");
-        let trajectories: EnvironmentTrajectory[] = [];
+        const trajectories = [];
 
         try {
             // Create a promise for each player's control loop.
@@ -74,7 +76,7 @@ async function runBattle() {
             const p2Promise = playerController(p2, "P2");
 
             // Wait for both player loops to complete. This happens when the battle ends.
-            trajectories = await Promise.all([p1Promise, p2Promise]);
+            trajectories.push(...(await Promise.all([p1Promise, p2Promise])));
 
             console.log("\nBattle has concluded.");
         } catch (error) {
@@ -86,13 +88,14 @@ async function runBattle() {
             p2.destroy();
         }
 
-        batch.addTrajectories(...trajectories);
+        batch.addTrajectories(...trajectories.map((t) => t.trajectory));
         batch.setMaxTrajectoryLength(
             Math.max(
-                ...trajectories.map((t) => t.getStatesList().length),
+                ...trajectories.map((t) => t.trajectory.getStatesList().length),
                 batch.getMaxTrajectoryLength(),
             ),
         );
+        battleLogs.push(...trajectories.map((t) => t.log));
     }
 
     // Save the very last state that was recorded.
@@ -105,6 +108,21 @@ async function runBattle() {
         }
         console.log("File saved successfully.");
     });
+
+    // Write battle log as txt
+    for (let i = 0; i < battleLogs.length; i++) {
+        const logFilePath = path.join(
+            __dirname,
+            `../../../rl/environment/ex${i}.log`,
+        );
+        console.log(`Saving battle log to ${logFilePath}`);
+        fs.writeFile(logFilePath, battleLogs[i], (err) => {
+            if (err) {
+                console.error("Failed to save the battle log:", err);
+            }
+            console.log("Battle log saved successfully.");
+        });
+    }
 }
 
 // Execute the battle run

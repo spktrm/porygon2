@@ -258,7 +258,7 @@ ALLY_1_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
     ]
-).sort()
+)
 ALLY_2_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
@@ -271,4 +271,18 @@ ALLY_2_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_PASS,
     ]
-).sort()
+)
+
+for indices in [
+    MOVE_INDICES,
+    RESERVE_ENTITY_INDICES,
+    ALLY_TARGET_INDICES,
+    ENEMY_TARGET_INDICES,
+    PASS_INDICES,
+    TARGET_INDICES,
+    VALUE_EMBEDDING_INDICES,
+    ALLY_1_INDICES,
+    ALLY_2_INDICES,
+]:
+    assert len(indices) == len(set(indices)), "Duplicate indices found"
+    indices.sort()

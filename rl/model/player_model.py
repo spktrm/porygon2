@@ -167,27 +167,41 @@ def create_attention_graph(path, value):
     path_keys = [p.key for p in path[:-1]]
 
     if len(path_keys) > 0 and path_keys[-1] == "attn_weights":
-
-        if getattr(value, "val", None) is not None:
-            value = value.val
-        axes_to_mean = tuple(range(value.ndim - 2))
-
-        avg_attn = jnp.mean(value, axis=axes_to_mean)
-        avg_attn_np = np.asarray(avg_attn)
-        avg_attn_df = pd.DataFrame(avg_attn_np)
-
         path_str = " -> ".join(str(k) for k in path_keys)
 
+        if getattr(value, "val", None) is not None:
+            prev_val = value
+            value = value.val
+
+        # axes_to_mean = tuple(range(value.ndim - 2))
+        # avg_attn = jnp.sum(value, axis=axes_to_mean) / jnp.sum(
+        #     value != 0, axis=axes_to_mean
+        # ).clip(min=1)
+
+        avg_attn = value[:, -1]  # Shape: (H, S, S)
+        if avg_attn.ndim > 3:
+            avg_attn = jnp.mean(avg_attn, 0)
+
+        assert (
+            avg_attn.ndim == 3
+        ), f"Expected 3D array for {path_str} attention weights, got shape {avg_attn.shape}"
+
+        avg_attn_np = np.asarray(avg_attn)
+
+        # Use Plotly Express to facet the 3D array along the 0th dimension (Heads)
         fig = px.imshow(
-            avg_attn_df,
-            text_auto=True,
+            avg_attn_np,
+            facet_col=0,  # Creates subplots for each index in the first dimension (H)
+            facet_col_wrap=4,  # Wraps to a new row after 4 heads (great for 8 or 12 heads)
+            text_auto=True,  # Tip: Set to False if your sequence length (S) is large
             aspect="auto",
-            labels=dict(
-                x="Sample Index",
-                y="Sample Index",
-                color="Cosine Similarity",
-            ),
+            labels=dict(color="Attn Prob", facet_col="Head"),
             title=path_str,
+        )
+
+        # Clean up the subplot titles (Changes default "facet_col=0" to "Head 0")
+        fig.for_each_annotation(
+            lambda a: a.update(text=a.text.replace("facet_col=", "Head "))
         )
 
         # --- File Saving Logic ---
@@ -196,7 +210,6 @@ def create_attention_graph(path, value):
         os.makedirs(base_dir, exist_ok=True)
 
         # 2. Create a safe file name from the path (excluding 'attn_weights')
-        # Example: 'layer_0_self_attention'
         module_name = "_".join(str(k) for k in path_keys[:-1])
 
         # 3. Save to disk
@@ -204,7 +217,7 @@ def create_attention_graph(path, value):
         fig.write_html(save_path)
 
         # Optional print to track progress during execution
-        print(f"Saved attention map to {save_path}")
+        print(f"Saved concatenated attention maps to {save_path}")
         # -------------------------
 
         return fig
@@ -260,6 +273,7 @@ def main(generation: int = 9):
         ex_actor_input,
         PlayerActorOutput(),
         HeadParams(temp=0.8),
+        rngs={"sampling": key},
     )
     pprint(actor_output)
 
