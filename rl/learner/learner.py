@@ -160,11 +160,13 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
-        loss_sigreg = compute_sigreg_loss(
-            latent_queries=learner_player_pred.latent_queries,
-            valid_mask=value_mask,
-            key=batch.rng_key,
-        )
+        loss_sigreg = 0.0
+        if config.player_sigreg_loss_coef > 0.0:
+            loss_sigreg = compute_sigreg_loss(
+                latent_queries=learner_player_pred.latent_queries,
+                valid_mask=value_mask,
+                key=batch.rng_key,
+            )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
