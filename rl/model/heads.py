@@ -18,6 +18,55 @@ class HeadParams(NamedTuple):
     temp: float = 1.0
 
 
+class PolicyMetrics(NamedTuple):
+    log_policy: jax.Array
+    entropy: jax.Array
+    normalized_entropy: jax.Array
+    magnet_kl: jax.Array
+
+
+def compute_policy_metrics(
+    logits: jax.Array, valid_mask: jax.Array, prior: jax.Array = None
+):
+    """
+    Computes standard policy distributions, entropy, normalized entropy,
+    and the KL divergence (exploration magnet) penalty.
+    """
+    # 1. Distill policy distributions
+    log_policy = legal_log_policy(logits, valid_mask)
+    policy = legal_policy(logits, valid_mask)
+
+    # 2. Base Entropy
+    entropy = -jnp.sum(policy * log_policy, axis=-1)
+
+    # 3. Normalized Entropy
+    valid_sum = valid_mask.sum(axis=-1)
+    safe_log_sum = jnp.maximum(valid_sum, 2)
+    log_factor = 1.0 / jnp.log(safe_log_sum).astype(entropy.dtype)
+    entropy_scale = jnp.where(valid_sum <= 1, 1.0, log_factor)
+    normalized_entropy = entropy * entropy_scale
+
+    # 4. Exploration KL (magnet_kl)
+    if prior is None:
+        valid_sum_expanded = jnp.maximum(valid_sum[..., None], 1)
+        prior = jnp.where(valid_mask, 1.0 / valid_sum_expanded, 0.0)
+
+    # Safe log calculation
+    safe_prior = jnp.where(valid_mask, prior, 1e-9)
+    log_prior = jnp.where(valid_mask, jnp.log(safe_prior), 0.0)
+
+    # D_KL(Policy || Prior)
+    magnet_kl = policy * (log_policy - log_prior)
+    magnet_kl = jnp.where(valid_mask, magnet_kl, 0.0).sum(axis=-1)
+
+    return PolicyMetrics(
+        log_policy=log_policy,
+        entropy=entropy,
+        normalized_entropy=normalized_entropy,
+        magnet_kl=magnet_kl,
+    )
+
+
 def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
 
@@ -45,9 +94,9 @@ class PolicyQKHead(nn.Module):
         if valid_mask is None:
             valid_mask = jnp.ones_like(logits, dtype=jnp.bool)
 
-        log_policy = legal_log_policy(logits, valid_mask)
-        policy = legal_policy(logits, valid_mask)
-        entropy = -jnp.sum(policy * log_policy, axis=-1)
+        policy_metrics = compute_policy_metrics(
+            logits=logits, valid_mask=valid_mask, prior=prior
+        )
 
         train = self.cfg.get("train", False)
         if train:
@@ -58,26 +107,17 @@ class PolicyQKHead(nn.Module):
                 self.make_rng("sampling"),
             )
 
-        log_prob = jnp.take(log_policy, action_index, axis=-1, mode="clip")
-
-        valid_sum = valid_mask.sum(axis=-1)
-        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
-        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
-
-        if prior is None:
-            prior = jnp.ones_like(logits) / logits.shape[-1]
-
-        prior = prior.astype(logits.dtype)
-        kl_prior = prior * (jnp.where(prior == 0, 0, jnp.log(prior)) - log_policy)
-        kl_prior = kl_prior.sum(axis=-1)
+        log_prob = jnp.take(
+            policy_metrics.log_policy, action_index, axis=-1, mode="clip"
+        )
 
         return PolicyHeadOutput(
-            action_index=action_index.reshape(entropy.shape),
-            log_prob=log_prob.reshape(entropy.shape),
-            entropy=entropy,
-            normalized_entropy=entropy * entropy_scale,
-            log_policy=log_policy,
-            kl_prior=kl_prior,
+            action_index=action_index.reshape(policy_metrics.entropy.shape),
+            log_prob=log_prob.reshape(policy_metrics.entropy.shape),
+            entropy=policy_metrics.entropy,
+            normalized_entropy=policy_metrics.normalized_entropy,
+            log_policy=policy_metrics.log_policy,
+            magnet_kl=policy_metrics.magnet_kl,
         )
 
 

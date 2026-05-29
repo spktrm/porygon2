@@ -85,6 +85,7 @@ def train_step(
     player_advantage_mixing_alpha = config.player_advantage_mixing_alpha_fn(
         player_state.step_count
     )
+    player_entropy_mult = config.player_entropy_mult(player_state.step_count)
 
     training_logs = {}
 
@@ -121,7 +122,8 @@ def train_step(
             advantage_mixing_alpha=player_advantage_mixing_alpha,
             config=config,
         )
-        mask = player_targets.mask
+        policy_mask = player_targets.policy_mask
+        value_mask = player_targets.value_mask
 
         player_targets = promote_map(player_targets, float_dtype)
         player_targets = jax.lax.stop_gradient(player_targets)
@@ -130,7 +132,7 @@ def train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
             advantages=player_targets.advantages,
-            valid=mask,
+            valid=policy_mask,
             threshold=config.player_ppo_clip_threshold,
         )
 
@@ -140,27 +142,27 @@ def train_step(
                 logits=learner_value_head.logits,
                 labels=player_targets.win_returns,
             ),
-            mask,
+            value_mask,
         )
 
-        action_head_entropy = average(learner_action_head.entropy, mask)
+        action_head_entropy = average(learner_action_head.entropy, policy_mask)
 
         loss_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=mask,
+            valid=policy_mask,
         )
         loss_backward_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
-            valid=mask,
+            valid=policy_mask,
         )
 
-        loss_magnet_kl = average(learner_action_head.kl_prior, valid=mask)
+        loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
         loss_sigreg = compute_sigreg_loss(
             latent_queries=learner_player_pred.latent_queries,
-            valid_mask=mask,
+            valid_mask=value_mask,
             key=batch.rng_key,
         )
 
@@ -168,7 +170,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
-            + config.player_entropy_loss_coef * loss_magnet_kl
+            + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
             + config.player_sigreg_loss_coef * loss_sigreg
         )
 
@@ -182,19 +184,19 @@ def train_step(
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
-            player_learner_actor_ratio=average(learner_actor_ratio, mask),
-            player_learner_target_ratio=average(learner_target_ratio, mask),
+            player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
+            player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             # Approx KL values
             player_learner_actor_approx_kl=loss_forward_kl,
             # Extra stats
             player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
-                mask=mask,
+                mask=value_mask,
             ),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
-                * mask
+                * policy_mask
             )
             .sum(axis=0)
             .mean(),
@@ -365,7 +367,7 @@ def train_step(
             )
 
             loss_human = average(
-                learner_action_head.kl_prior, valid=builder_valid & human_valid_mask
+                learner_action_head.magnet_kl, valid=builder_valid & human_valid_mask
             )
 
             loss = (

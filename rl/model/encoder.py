@@ -1196,6 +1196,7 @@ class Encoder(nn.Module):
         output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
             axis=1
         )
+        output_state_mask = output_state_mask.at[VALUE_EMBEDDING_INDICES].set(True)
 
         latent_queries = self.query_decoder(
             q=self.latent_queries.astype(self.cfg.dtype),
