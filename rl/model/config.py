@@ -44,7 +44,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # Params for scaling
     cfg.encoder.num_latent_embeddings = 32
 
-    encoder_num_layers = 4
+    encoder_num_layers = 1
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
@@ -92,10 +92,11 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.query_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
+    cfg.encoder.context_encoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
     cfg.encoder.output_decoder = ConfigDict()
 
-    for encoder in [cfg.encoder.latent_encoder]:
+    for encoder in [cfg.encoder.context_encoder, cfg.encoder.latent_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
@@ -108,10 +109,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     cfg.encoder.local_timestep_decoder.need_pos = False
+    cfg.encoder.context_encoder.need_pos = False
     cfg.encoder.query_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.latent_encoder.need_pos = False
+    cfg.encoder.latent_encoder.num_layers = 4
     cfg.encoder.output_decoder.need_pos = False
 
     cfg.action_head = ConfigDict()
