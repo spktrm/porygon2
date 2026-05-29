@@ -110,11 +110,15 @@ def compute_player_targets(
     norm_factor = win_returns.sum(axis=-1, keepdims=True)
     win_returns = win_returns / norm_factor.clip(min=1e-8)
 
+    value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
+    policy_mask = value_mask & jnp.logical_not(batch.player_transitions.env_output.done)
+
     return PlayerTargets(
         win_returns=win_returns,
         advantages=combined_advantage,
-        mask=jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_),
         win_returns_norm_factor=norm_factor,
+        policy_mask=policy_mask,
+        value_mask=value_mask,
     )
 
 

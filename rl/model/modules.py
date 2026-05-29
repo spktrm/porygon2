@@ -474,7 +474,7 @@ class TransformerEncoder(nn.Module):
             collect_intermediates=self.collect_intermediates,
         )(qkv, attn_mask, positionwise_mask, qkv_positions)
 
-        return layer_norm(qkv)
+        return qkv
 
 
 class DecoderBlock(nn.Module):

@@ -483,19 +483,19 @@ class Porygon2BuilderModel(nn.Module):
         )
         kl_prior = jnp.stack(
             (
-                species_head.kl_prior,
-                item_head.kl_prior,
-                ability_head.kl_prior,
-                move_head.kl_prior,
-                hp_ev_head.kl_prior,
-                atk_ev_head.kl_prior,
-                def_ev_head.kl_prior,
-                spa_ev_head.kl_prior,
-                spd_ev_head.kl_prior,
-                spe_ev_head.kl_prior,
-                nature_head.kl_prior,
-                gender_head.kl_prior,
-                teratype_head.kl_prior,
+                species_head.magnet_kl,
+                item_head.magnet_kl,
+                ability_head.magnet_kl,
+                move_head.magnet_kl,
+                hp_ev_head.magnet_kl,
+                atk_ev_head.magnet_kl,
+                def_ev_head.magnet_kl,
+                spa_ev_head.magnet_kl,
+                spd_ev_head.magnet_kl,
+                spe_ev_head.magnet_kl,
+                nature_head.magnet_kl,
+                gender_head.magnet_kl,
+                teratype_head.magnet_kl,
             )
         )
         mask = jnp.stack(
@@ -529,7 +529,7 @@ class Porygon2BuilderModel(nn.Module):
             log_prob=_fold(log_probs),
             entropy=_fold(entropies),
             normalized_entropy=_fold(normalized_entropies),
-            kl_prior=_fold(kl_prior),
+            magnet_kl=_fold(kl_prior),
         )
 
         return BuilderActorOutput(

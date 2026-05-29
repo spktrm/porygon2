@@ -64,7 +64,7 @@ class PolicyHeadOutput:
     entropy: ArrayLike = ()
     normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
-    kl_prior: ArrayLike = ()
+    magnet_kl: ArrayLike = ()
 
 
 @dataclass
@@ -172,8 +172,9 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     advantages: ArrayLike = ()
-    mask: ArrayLike = ()
     win_returns_norm_factor: ArrayLike = ()
+    policy_mask: ArrayLike = ()
+    value_mask: ArrayLike = ()
 
 
 @dataclass

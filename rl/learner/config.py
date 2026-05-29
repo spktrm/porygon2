@@ -94,11 +94,16 @@ class Porygon2LearnerConfig:
 
     # Regularised reward params
     player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1
+    player_entropy_mult: Callable[[int], float] = (
+        lambda step, scale=gradient_accumulation_steps: 1
+        / (jnp.floor((step + 1) / scale)) ** 0.4
+    )
+
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 0.01
+    player_entropy_loss_coef: float = 1.0
     player_value_head_loss_coef: float = 1.0
     player_sigreg_loss_coef: float = 0.0
 

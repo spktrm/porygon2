@@ -27,14 +27,10 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
+    compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import (
-    get_most_recent_file,
-    get_num_params,
-    legal_log_policy,
-    legal_policy,
-)
+from rl.model.utils import get_most_recent_file, get_num_params
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -60,24 +56,10 @@ class Porygon2PlayerModel(nn.Module):
         logits = head_logits.squeeze(-1).reshape(-1) / temp
 
         flat_valid_mask = valid_mask.reshape(-1)
-        valid_sum = jnp.maximum(flat_valid_mask.sum(axis=-1), 1)
 
-        log_policy = legal_log_policy(logits, flat_valid_mask)
-        policy = legal_policy(logits, flat_valid_mask)
-        entropy = -jnp.sum(policy * log_policy, axis=-1)
-
-        # Cross-entropy with uniform distribution over valid actions (for KL)
-        uniform_policy = flat_valid_mask / valid_sum
-        safe_prior = jnp.where(flat_valid_mask, uniform_policy, 1e-9)
-        uniform_log_policy = jnp.where(flat_valid_mask, jnp.log(safe_prior), 0.0)
-        cross_entropy = -jnp.sum(policy * uniform_log_policy, axis=-1)
-
-        # KL to uniform "prior"
-        magnet_kl = cross_entropy - entropy
-
-        log_factor = 1 / jnp.log(valid_sum).astype(entropy.dtype)
-        entropy_scale = jnp.where(valid_sum <= 1, 1, log_factor)
-        normalized_entropy = entropy * entropy_scale
+        policy_metrics = compute_policy_metrics(
+            logits=logits, valid_mask=flat_valid_mask, prior=None
+        )
 
         if train:
             action_index = head.action_index
@@ -86,7 +68,7 @@ class Porygon2PlayerModel(nn.Module):
                 jnp.where(flat_valid_mask, logits, -1e9), self.make_rng("sampling")
             )
 
-        log_prob = jnp.take(log_policy, action_index, axis=-1)
+        log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -95,11 +77,11 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            entropy=entropy,
-            normalized_entropy=normalized_entropy,
+            entropy=policy_metrics.entropy,
+            normalized_entropy=policy_metrics.normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
-            kl_prior=magnet_kl,
+            magnet_kl=policy_metrics.magnet_kl,
         )
 
     def _forward_value_head(self, state_embedding: jax.Array):
