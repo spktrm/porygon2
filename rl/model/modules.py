@@ -604,7 +604,7 @@ class TransformerDecoder(nn.Module):
             collect_intermediates=self.collect_intermediates,
         )(q, kv, attn_mask, positionwise_mask, q_positions, kv_positions)
 
-        return layer_norm(q)
+        return q
 
 
 class MLP(nn.Module):

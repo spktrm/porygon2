@@ -10,7 +10,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 import plotly.express as px
 from ml_collections import ConfigDict
 
@@ -170,7 +169,6 @@ def create_attention_graph(path, value):
         path_str = " -> ".join(str(k) for k in path_keys)
 
         if getattr(value, "val", None) is not None:
-            prev_val = value
             value = value.val
 
         # axes_to_mean = tuple(range(value.ndim - 2))
