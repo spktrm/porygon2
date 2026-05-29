@@ -1216,11 +1216,16 @@ class Encoder(nn.Module):
         )
 
         # bulk of computation
-        latent_queries = self.latent_encoder(qkv=latent_queries)
+        latent_queries = self.latent_encoder(
+            qkv=latent_queries,
+            attn_mask=create_attention_mask(latent_query_mask, latent_query_mask),
+        )
 
         # project to action embeddings
         output_state_embeddings = self.output_decoder(
-            q=output_state_sequence, kv=latent_queries
+            q=output_state_sequence,
+            kv=latent_queries,
+            attn_mask=create_attention_mask(output_state_mask, latent_query_mask),
         )
 
         value_embedding = output_state_embeddings[VALUE_EMBEDDING_INDICES].reshape(-1)
