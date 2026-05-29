@@ -32,7 +32,6 @@ from rl.learner.config import (
 from rl.learner.league import MAIN_KEY, League
 from rl.learner.loss import (
     backward_kl_loss,
-    compute_sigreg_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
@@ -160,20 +159,11 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
-        loss_sigreg = 0.0
-        if config.player_sigreg_loss_coef > 0.0:
-            loss_sigreg = compute_sigreg_loss(
-                latent_queries=learner_player_pred.latent_queries,
-                valid_mask=value_mask,
-                key=batch.rng_key,
-            )
-
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_backward_kl
             + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
-            + config.player_sigreg_loss_coef * loss_sigreg
         )
 
         return loss, dict(
@@ -182,7 +172,6 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
-            player_loss_sigreg=loss_sigreg,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
