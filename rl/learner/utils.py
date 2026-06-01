@@ -114,7 +114,7 @@ def collect_batch_telemetry_data(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
-        player_trajectory_shape=player_lengths.shape[0],
+        player_trajectory_shape=player_valid.shape[0],
         history_lengths_mean=history_lengths.mean(),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,

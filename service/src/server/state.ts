@@ -1505,7 +1505,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -4201,6 +4201,7 @@ export class StateHandler {
 
         const aliveCoef = 1;
         const hpCoef = 0.1;
+        const maxValue = 6 * (aliveCoef + hpCoef);
 
         for (const [i, side] of [
             this.player.publicBattle.sides[playerIndex],
@@ -4237,7 +4238,7 @@ export class StateHandler {
             }
         }
 
-        const frac = p1Total - p2Total;
+        const frac = (p1Total - p2Total) / maxValue;
         return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 

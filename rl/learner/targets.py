@@ -47,6 +47,9 @@ def compute_player_targets(
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
+    dones = batch.player_transitions.env_output.done
+    state_potential = batch.player_transitions.env_output.state_potential
+
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
     discounts = (1 - dones_expanded) * config.player_gamma * mask_expanded
@@ -63,17 +66,13 @@ def compute_player_targets(
     target_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = target_value_probs.shape[-1]
 
-    heuristic_zeros = jnp.zeros_like(player_reward[..., 0])
+    terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
     combined_rewards = jnp.concatenate(
-        (player_reward, heuristic_zeros[..., None]), axis=-1
+        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
     )
 
     combined_values = jnp.concatenate(
-        (
-            target_value_probs,
-            batch.player_transitions.env_output.state_potential[..., None],
-        ),
-        axis=-1,
+        (target_value_probs, state_potential[..., None]), axis=-1
     )
     last_values = combined_values[-1:]
 
