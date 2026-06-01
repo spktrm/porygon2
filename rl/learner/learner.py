@@ -146,14 +146,24 @@ def train_step(
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
 
-        loss_forward_kl = forward_kl_loss(
+        loss_actor_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
             valid=policy_mask,
         )
-        loss_backward_kl = backward_kl_loss(
+        loss_actor_backward_kl = backward_kl_loss(
             policy_ratio=learner_actor_ratio,
             log_policy_ratio=learner_actor_log_ratio,
+            valid=policy_mask,
+        )
+        loss_target_forward_kl = forward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
+            valid=policy_mask,
+        )
+        loss_target_backward_kl = backward_kl_loss(
+            policy_ratio=learner_target_ratio,
+            log_policy_ratio=learner_target_log_ratio,
             valid=policy_mask,
         )
 
@@ -162,7 +172,7 @@ def train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
-            + config.player_kl_loss_coef * loss_backward_kl
+            + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
         )
 
@@ -170,15 +180,18 @@ def train_step(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
-            player_loss_kl=loss_backward_kl,
+            player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
-            # Approx KL values
-            player_learner_actor_approx_kl=loss_forward_kl,
+            # KL values
+            player_learner_actor_forward_kl=loss_actor_forward_kl,
+            player_learner_actor_backward_kl=loss_actor_backward_kl,
+            player_learner_target_forward_kl=loss_target_forward_kl,
+            player_learner_target_backward_kl=loss_target_backward_kl,
             # Extra stats
             player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
@@ -201,6 +214,8 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            player_advantage_mixing_alpha=player_advantage_mixing_alpha,
+            player_entropy_mult=player_entropy_mult,
             player_action_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["action_head"]
             ),

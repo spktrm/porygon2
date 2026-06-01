@@ -1110,9 +1110,12 @@ class Encoder(nn.Module):
             axis=0,
         )
         contextualised_input_mask = jnp.concatenate(
-            private_entity_mask,
-            revealed_entity_mask,
-            jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
+            (
+                private_entity_mask,
+                revealed_entity_mask,
+                jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
+            ),
+            axis=-1,
         )
         contextualised_input = self.context_encoder(
             qkv=contextualised_input,
@@ -1189,6 +1192,7 @@ class Encoder(nn.Module):
         output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
             axis=1
         )
+        output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
         output_state_mask = output_state_mask.at[VALUE_EMBEDDING_INDICES].set(True)
 
         latent_queries = self.query_decoder(
