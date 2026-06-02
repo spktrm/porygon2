@@ -19,6 +19,7 @@ class HeadParams(NamedTuple):
 
 
 class PolicyMetrics(NamedTuple):
+    policy: jax.Array
     log_policy: jax.Array
     entropy: jax.Array
     normalized_entropy: jax.Array
@@ -60,6 +61,7 @@ def compute_policy_metrics(
     magnet_kl = jnp.where(valid_mask, magnet_kl, 0.0).sum(axis=-1)
 
     return PolicyMetrics(
+        policy=policy,
         log_policy=log_policy,
         entropy=entropy,
         normalized_entropy=normalized_entropy,
