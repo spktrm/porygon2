@@ -225,14 +225,14 @@ def train_step(
             player_gradient_norm=optax.global_norm(player_grads),
             player_advantage_mixing_alpha=player_advantage_mixing_alpha,
             player_entropy_mult=player_entropy_mult,
-            player_action_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["action_head"]
+            player_pi_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["pi_head"]
             ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["winloss_head"]
             ),
-            player_q_value_head_gradient_norm=optax.global_norm(
-                player_grads["params"]["q_value_head"]
+            player_q_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["q_head"]
             ),
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]

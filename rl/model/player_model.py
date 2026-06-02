@@ -60,7 +60,6 @@ class Porygon2PlayerModel(nn.Module):
 
         q_logits = self.q_head(action_embeddings, action_embeddings)
         q_logits = q_logits.squeeze(-1).reshape(-1)
-        q_values = jnp.where(flat_valid_mask, q_values, -1e9)
 
         policy_metrics = compute_policy_metrics(
             logits=pi_logits, valid_mask=flat_valid_mask, prior=None
@@ -74,7 +73,7 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
-        q_value = jnp.take(q_values, action_index, axis=-1)
+        q_value = jnp.take(q_logits, action_index, axis=-1)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width

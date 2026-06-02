@@ -136,9 +136,13 @@ def compute_player_targets(
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
     policy_mask = value_mask & jnp.logical_not(batch.player_transitions.env_output.done)
 
+    chosen_q_value = target_pred.action_head.q_value
+    q_target = combined_advantage + target_pred.value_head.expectation
+
     return PlayerTargets(
         win_returns=win_returns,
         advantages=combined_advantage,
+        q_target=q_target,
         win_returns_norm_factor=norm_factor,
         policy_mask=policy_mask,
         value_mask=value_mask,
