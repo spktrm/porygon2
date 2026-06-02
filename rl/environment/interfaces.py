@@ -71,6 +71,7 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
+    q_value: ArrayLike = ()
 
 
 @dataclass
