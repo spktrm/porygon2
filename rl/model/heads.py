@@ -151,22 +151,3 @@ class RegressionValueLogitHead(nn.Module):
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
 
 
-class QValueHead(nn.Module):
-    """
-    Q-value head that computes per-action Q-values from action embeddings.
-    Projects each action embedding to a scalar Q-value estimate.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(self, action_embeddings: jax.Array, valid_mask: jax.Array):
-        # action_embeddings: (num_actions, embed_dim)
-        # valid_mask: (num_actions,)
-        x = nn.Dense(**self.cfg.dense.to_dict(), dtype=action_embeddings.dtype)(
-            action_embeddings
-        )
-        q_values = x.squeeze(-1)  # (num_actions,)
-        # Mask invalid actions with large negative value
-        q_values = jnp.where(valid_mask, q_values, -1e9)
-        return q_values
