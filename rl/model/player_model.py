@@ -93,7 +93,7 @@ class Porygon2PlayerModel(nn.Module):
             q_value=q_value,
         )
 
-        return action_head_output, q_values
+        return action_head_output
 
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
@@ -107,7 +107,7 @@ class Porygon2PlayerModel(nn.Module):
         head_params: HeadParams,
     ):
 
-        action_head, q_values = self._forward_action_head(
+        action_head = self._forward_action_head(
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
@@ -117,7 +117,7 @@ class Porygon2PlayerModel(nn.Module):
         value_head = self._forward_value_head(value_embedding)
 
         return PlayerActorOutput(
-            action_head=action_head, value_head=value_head, q_values=q_values
+            action_head=action_head, value_head=value_head
         )
 
     def __call__(
