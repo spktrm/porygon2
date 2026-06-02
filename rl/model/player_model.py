@@ -27,7 +27,6 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
-    QValueHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -44,7 +43,7 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
-        self.q_value_head = QValueHead(self.cfg.q_value_head)
+        self.q_value_head = PointerLogits(**self.cfg.q_value_head.qk_logits.to_dict())
 
     def _forward_action_head(
         self,
@@ -76,7 +75,12 @@ class Porygon2PlayerModel(nn.Module):
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
 
-        return PlayerPolicyHeadOutput(
+        # Compute q_values using the same PointerLogits structure as policy logits
+        q_logits = self.q_value_head(action_embeddings, action_embeddings)
+        q_values = q_logits.squeeze(-1).reshape(-1)
+        q_values = jnp.where(flat_valid_mask, q_values, -1e9)
+
+        action_head_output = PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
             entropy=policy_metrics.entropy,
@@ -86,16 +90,10 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
         )
 
+        return action_head_output, q_values
+
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
-
-    def _forward_q_value_head(
-        self, action_embeddings: jax.Array, valid_mask: jax.Array
-    ):
-        flat_valid_mask = valid_mask.reshape(-1)
-        # Reshape action embeddings to (num_actions, embed_dim)
-        flat_action_embeddings = action_embeddings.reshape(-1, action_embeddings.shape[-1])
-        return self.q_value_head(flat_action_embeddings, flat_valid_mask)
 
     def get_head_outputs(
         self,
@@ -106,7 +104,7 @@ class Porygon2PlayerModel(nn.Module):
         head_params: HeadParams,
     ):
 
-        action_head = self._forward_action_head(
+        action_head, q_values = self._forward_action_head(
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
@@ -114,7 +112,6 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
         value_head = self._forward_value_head(value_embedding)
-        q_values = self._forward_q_value_head(action_embeddings, env_step.action_mask)
 
         return PlayerActorOutput(
             action_head=action_head, value_head=value_head, q_values=q_values
