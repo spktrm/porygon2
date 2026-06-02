@@ -29,7 +29,6 @@ from rl.environment.data import (
     PASS_INDICES,
     RESERVE_ENTITY_INDICES,
     TARGET_INDICES,
-    VALUE_EMBEDDING_INDICES,
 )
 from rl.environment.interfaces import (
     PlayerEnvOutput,
@@ -334,8 +333,8 @@ class Encoder(nn.Module):
         self.context_encoder = TransformerEncoder(
             **self.cfg.context_encoder.to_dict(),
         )
-        self.query_decoder = TransformerDecoder(
-            **self.cfg.query_decoder.to_dict(),
+        self.entity_decoder = TransformerDecoder(
+            **self.cfg.entity_decoder.to_dict(),
         )
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
@@ -346,8 +345,11 @@ class Encoder(nn.Module):
         self.latent_encoder = TransformerEncoder(
             **self.cfg.latent_encoder.to_dict(),
         )
-        self.output_decoder = TransformerDecoder(
-            **self.cfg.output_decoder.to_dict(),
+        self.action_decoder = TransformerDecoder(
+            **self.cfg.action_decoder.to_dict(),
+        )
+        self.value_decoder = TransformerDecoder(
+            **self.cfg.value_decoder.to_dict(),
         )
 
     def _embed_species(self, token: jax.Array):
@@ -1141,7 +1143,6 @@ class Encoder(nn.Module):
             (ENEMY_TARGET_INDICES, contextualised_input[12:14]),
             (PASS_INDICES, pass_embeddings),
             (TARGET_INDICES, target_embeddings),
-            (VALUE_EMBEDDING_INDICES, value_embedding),
         ]:
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
 
@@ -1193,9 +1194,8 @@ class Encoder(nn.Module):
             axis=1
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
-        output_state_mask = output_state_mask.at[VALUE_EMBEDDING_INDICES].set(True)
 
-        latent_queries = self.query_decoder(
+        latent_queries = self.entity_decoder(
             q=self.latent_queries.astype(self.cfg.dtype),
             kv=input_state_sequence,
             attn_mask=create_attention_mask(latent_query_mask, input_state_mask),
@@ -1220,14 +1220,14 @@ class Encoder(nn.Module):
         )
 
         # project to action embeddings
-        output_state_embeddings = self.output_decoder(
+        action_embeddings = self.action_decoder(
             q=output_state_sequence,
             kv=latent_queries,
             attn_mask=create_attention_mask(output_state_mask, latent_query_mask),
         )
-
-        value_embedding = output_state_embeddings[VALUE_EMBEDDING_INDICES].reshape(-1)
-        action_embeddings = output_state_embeddings
+        value_embedding = self.value_decoder(
+            q=self.value_embedding.astype(self.cfg.dtype), kv=latent_queries
+        ).squeeze()
 
         return value_embedding, action_embeddings
 

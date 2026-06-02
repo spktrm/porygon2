@@ -225,8 +225,8 @@ def train_step(
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]
             ),
-            player_query_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["query_decoder"]
+            player_entity_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["entity_decoder"]
             ),
             player_input_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["input_decoder"]
@@ -237,8 +237,11 @@ def train_step(
             player_latent_encoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["latent_encoder"]
             ),
-            player_output_decoder_gradient_norm=optax.global_norm(
-                player_grads["params"]["encoder"]["output_decoder"]
+            player_action_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["action_decoder"]
+            ),
+            player_value_decoder_gradient_norm=optax.global_norm(
+                player_grads["params"]["encoder"]["value_decoder"]
             ),
         )
     )
