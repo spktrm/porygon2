@@ -27,6 +27,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
+    QValueHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -38,11 +39,12 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         """
-        Initializes the encoder, policy head, and value head using the configuration.
+        Initializes the encoder, policy head, value head, and Q-value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
+        self.q_value_head = QValueHead(self.cfg.q_value_head)
 
     def _forward_action_head(
         self,
@@ -87,6 +89,14 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
 
+    def _forward_q_value_head(
+        self, action_embeddings: jax.Array, valid_mask: jax.Array
+    ):
+        flat_valid_mask = valid_mask.reshape(-1)
+        # Reshape action embeddings to (num_actions, embed_dim)
+        flat_action_embeddings = action_embeddings.reshape(-1, action_embeddings.shape[-1])
+        return self.q_value_head(flat_action_embeddings, flat_valid_mask)
+
     def get_head_outputs(
         self,
         value_embedding: jax.Array,
@@ -104,8 +114,11 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
         value_head = self._forward_value_head(value_embedding)
+        q_values = self._forward_q_value_head(action_embeddings, env_step.action_mask)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head, value_head=value_head, q_values=q_values
+        )
 
     def __call__(
         self,

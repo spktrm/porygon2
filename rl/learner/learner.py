@@ -100,6 +100,7 @@ def train_step(
         learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
         learner_log_prob = learner_action_head.log_prob
+        learner_q_values = learner_player_pred.q_values
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
@@ -169,17 +170,29 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
+        # Q-value loss: MSE between Q(s,a) for chosen action and advantage + V(s)
+        chosen_action_index = player_actor_action_head.action_index
+        chosen_q_value = jnp.take_along_axis(
+            learner_q_values, chosen_action_index[..., None], axis=-1
+        ).squeeze(-1)
+        q_target = jax.lax.stop_gradient(
+            player_targets.advantages + learner_value_head.expectation
+        )
+        loss_q = mse_value_loss(pred=chosen_q_value, target=q_target, valid=policy_mask)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
+            + config.player_q_value_loss_coef * loss_q
         )
 
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v=loss_v,
+            player_loss_q=loss_q,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies
@@ -221,6 +234,9 @@ def train_step(
             ),
             player_winloss_value_head_gradient_norm=optax.global_norm(
                 player_grads["params"]["winloss_head"]
+            ),
+            player_q_value_head_gradient_norm=optax.global_norm(
+                player_grads["params"]["q_value_head"]
             ),
             player_local_timestep_decoder_gradient_norm=optax.global_norm(
                 player_grads["params"]["encoder"]["local_timestep_decoder"]
