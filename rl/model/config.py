@@ -89,12 +89,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     )
 
     cfg.encoder.local_timestep_decoder = ConfigDict()
-    cfg.encoder.query_decoder = ConfigDict()
+    cfg.encoder.entity_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.context_encoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
-    cfg.encoder.output_decoder = ConfigDict()
+    cfg.encoder.action_decoder = ConfigDict()
+    cfg.encoder.value_decoder = ConfigDict()
 
     for encoder in [cfg.encoder.context_encoder, cfg.encoder.latent_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
@@ -102,20 +103,22 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     for decoder in [
         cfg.encoder.local_timestep_decoder,
         cfg.encoder.input_decoder,
-        cfg.encoder.query_decoder,
+        cfg.encoder.entity_decoder,
         cfg.encoder.history_decoder,
-        cfg.encoder.output_decoder,
+        cfg.encoder.action_decoder,
+        cfg.encoder.value_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     cfg.encoder.local_timestep_decoder.need_pos = False
     cfg.encoder.context_encoder.need_pos = False
-    cfg.encoder.query_decoder.need_pos = False
+    cfg.encoder.entity_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.latent_encoder.num_layers = 4
-    cfg.encoder.output_decoder.need_pos = False
+    cfg.encoder.action_decoder.need_pos = False
+    cfg.encoder.value_decoder.need_pos = False
 
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_logits = ConfigDict()

@@ -41,7 +41,8 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, and value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.action_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+        self.pi_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
+        self.q_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
 
     def _forward_action_head(
@@ -52,23 +53,27 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
     ):
-        head_logits = self.action_head(action_embeddings, action_embeddings)
-        logits = head_logits.squeeze(-1).reshape(-1) / temp
+        pi_logits = self.pi_head(action_embeddings, action_embeddings)
+        pi_logits = pi_logits.squeeze(-1).reshape(-1) / temp
+
+        q_logits = self.q_head(action_embeddings, action_embeddings)
+        q_logits = q_logits.squeeze(-1).reshape(-1)
 
         flat_valid_mask = valid_mask.reshape(-1)
 
         policy_metrics = compute_policy_metrics(
-            logits=logits, valid_mask=flat_valid_mask, prior=None
+            logits=pi_logits, valid_mask=flat_valid_mask, prior=None
         )
 
         if train:
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(flat_valid_mask, logits, -1e9), self.make_rng("sampling")
+                jnp.where(flat_valid_mask, pi_logits, -1e9), self.make_rng("sampling")
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
+        q_value = jnp.take(q_logits, action_index, axis=-1)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -77,6 +82,7 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
+            q_value=q_value,
             entropy=policy_metrics.entropy,
             normalized_entropy=policy_metrics.normalized_entropy,
             src_index=src_index,

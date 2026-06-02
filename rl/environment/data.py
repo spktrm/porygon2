@@ -245,7 +245,6 @@ TARGET_INDICES = np.array(
         ActionEnum.ACTION_ENUM__TARGET_ALLIES,
     ]
 )
-VALUE_EMBEDDING_INDICES = np.array([ActionEnum.ACTION_ENUM__VALUE_EMBEDDING])
 ALLY_1_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
@@ -280,7 +279,6 @@ for indices in [
     ENEMY_TARGET_INDICES,
     PASS_INDICES,
     TARGET_INDICES,
-    VALUE_EMBEDDING_INDICES,
     ALLY_1_INDICES,
     ALLY_2_INDICES,
 ]:

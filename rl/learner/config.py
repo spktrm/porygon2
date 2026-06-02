@@ -93,9 +93,10 @@ class Porygon2LearnerConfig:
     player_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_advantage_mixing_alpha_fn: Callable[[int], float] = (
-        lambda step: (step <= 200_000) * 2.5e-11 * (step - 200_000.0) ** 2
-    )
+    player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
+    # player_advantage_mixing_alpha_fn: Callable[[int], float] = (
+    #     lambda step: (step <= 200_000) * 2.5e-11 * (step - 200_000.0) ** 2
+    # )
     player_entropy_mult: Callable[[int], float] = (
         lambda step, scale=gradient_accumulation_steps: 1
         / (jnp.floor((step + 1) / scale)) ** 0.4

@@ -435,7 +435,6 @@ export interface ActionEnumMap {
   ACTION_ENUM__RESERVE_4_SWITCH_IN: 36;
   ACTION_ENUM__RESERVE_5_SWITCH_IN: 37;
   ACTION_ENUM__RESERVE_6_SWITCH_IN: 38;
-  ACTION_ENUM__VALUE_EMBEDDING: 39;
 }
 
 export const ActionEnum: ActionEnumMap;
