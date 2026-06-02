@@ -149,3 +149,5 @@ class RegressionValueLogitHead(nn.Module):
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
+
+

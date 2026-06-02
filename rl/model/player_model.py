@@ -38,12 +38,13 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         """
-        Initializes the encoder, policy head, and value head using the configuration.
+        Initializes the encoder, policy head, value head, and Q-value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.pi_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.q_head = PointerLogits(**self.cfg.action_head.qk_logits.to_dict())
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
+        self.q_value_head = PointerLogits(**self.cfg.q_value_head.qk_logits.to_dict())
 
     def _forward_action_head(
         self,
@@ -79,7 +80,14 @@ class Porygon2PlayerModel(nn.Module):
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
 
-        return PlayerPolicyHeadOutput(
+        # Compute q_values using the same PointerLogits structure as policy logits
+        q_logits = self.q_value_head(action_embeddings, action_embeddings)
+        q_values = q_logits.squeeze(-1).reshape(-1)
+        q_values = jnp.where(flat_valid_mask, q_values, -1e9)
+
+        q_value = jnp.take(q_values, action_index, axis=-1)
+
+        action_head_output = PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
             q_value=q_value,
@@ -88,7 +96,10 @@ class Porygon2PlayerModel(nn.Module):
             src_index=src_index,
             tgt_index=tgt_index,
             magnet_kl=policy_metrics.magnet_kl,
+            q_value=q_value,
         )
+
+        return action_head_output
 
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
@@ -111,7 +122,9 @@ class Porygon2PlayerModel(nn.Module):
         )
         value_head = self._forward_value_head(value_embedding)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head, value_head=value_head
+        )
 
     def __call__(
         self,
