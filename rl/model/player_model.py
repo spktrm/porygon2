@@ -80,6 +80,8 @@ class Porygon2PlayerModel(nn.Module):
         q_values = q_logits.squeeze(-1).reshape(-1)
         q_values = jnp.where(flat_valid_mask, q_values, -1e9)
 
+        q_value = jnp.take(q_values, action_index, axis=-1)
+
         action_head_output = PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
@@ -88,6 +90,7 @@ class Porygon2PlayerModel(nn.Module):
             src_index=src_index,
             tgt_index=tgt_index,
             magnet_kl=policy_metrics.magnet_kl,
+            q_value=q_value,
         )
 
         return action_head_output, q_values
