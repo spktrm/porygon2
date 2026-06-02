@@ -120,10 +120,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.action_decoder.need_pos = False
     cfg.encoder.value_decoder.need_pos = False
 
-    cfg.action_head = ConfigDict()
-    cfg.action_head.qk_logits = ConfigDict()
-    cfg.action_head.qk_logits.num_heads = 1
-    cfg.action_head.qk_logits.use_bias = True
+    cfg.pi_head = ConfigDict()
+    cfg.pi_head.qk_logits = ConfigDict()
+    cfg.pi_head.qk_logits.num_heads = 1
+    cfg.pi_head.qk_logits.use_bias = True
+
+    cfg.q_head = ConfigDict()
+    cfg.q_head.qk_logits = ConfigDict()
+    cfg.q_head.qk_logits.num_heads = 1
+    cfg.q_head.qk_logits.use_bias = True
 
     cfg.winloss_head = ConfigDict()
     cfg.winloss_head.dense = ConfigDict()
@@ -136,12 +141,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
 
-    cfg.q_value_head = ConfigDict()
-    cfg.q_value_head.qk_logits = ConfigDict()
-    cfg.q_value_head.qk_logits.num_heads = 1
-    cfg.q_value_head.qk_logits.use_bias = True
-
-    for head in [cfg.action_head]:
+    for head in [cfg.pi_head, cfg.q_head]:
         head.train = train
 
     return cfg
