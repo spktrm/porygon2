@@ -91,6 +91,9 @@ class Porygon2LearnerConfig:
     builder_alpha: float = 1.0
     builder_lambda: float = 1.0
     player_ppo_clip_threshold: float = 0.3
+    # Mix between TD-bootstrapped Q and learned Q-values for advantages
+    # 0.0 = fully TD-bootstrapped, 1.0 = fully learned Q-values
+    player_q_mixing_alpha: float = 0.5
 
     # Regularised reward params
     player_advantage_mixing_alpha_fn: Callable[[int], float] = (
