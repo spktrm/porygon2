@@ -136,6 +136,11 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entropy_head.dense.features = 1
     cfg.entropy_head.dense.use_bias = True
 
+    cfg.q_value_head = ConfigDict()
+    cfg.q_value_head.qk_logits = ConfigDict()
+    cfg.q_value_head.qk_logits.num_heads = 1
+    cfg.q_value_head.qk_logits.use_bias = True
+
     for head in [cfg.action_head]:
         head.train = train
 
