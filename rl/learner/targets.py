@@ -99,13 +99,7 @@ def compute_player_targets(
     td_q_estimate = combined_rewards + discounts * q_bootstrap
 
     # Mix TD-bootstrapped Q-estimate with learned Q-values from target network
-    target_q_values = target_pred.q_values
-    chosen_action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.action_index
-    )
-    chosen_q_value = jnp.take_along_axis(
-        target_q_values, chosen_action_index[..., None], axis=-1
-    ).squeeze(-1)
+    chosen_q_value = target_pred.action_head.q_value
 
     # The learned Q-value is a scalar estimate of Q(s,a); expand to match combined shape
     # Use it as the "win" component of q_estimate (first n_bins dims summed via support)

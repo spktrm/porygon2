@@ -100,7 +100,6 @@ def train_step(
         learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
         learner_log_prob = learner_action_head.log_prob
-        learner_q_values = learner_player_pred.q_values
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
@@ -171,10 +170,7 @@ def train_step(
         loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
         # Q-value loss: MSE between Q(s,a) for chosen action and advantage + V(s)
-        chosen_action_index = player_actor_action_head.action_index
-        chosen_q_value = jnp.take_along_axis(
-            learner_q_values, chosen_action_index[..., None], axis=-1
-        ).squeeze(-1)
+        chosen_q_value = learner_action_head.q_value
         q_target = jax.lax.stop_gradient(
             player_targets.advantages + learner_value_head.expectation
         )
