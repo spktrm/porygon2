@@ -226,10 +226,15 @@ let _sampleTeams: { [format: string]: string[] } | null = null;
 
 export function getSampleTeams(): { [format: string]: string[] } {
     if (!_sampleTeams) {
-        const teamsPath = path.resolve(__dirname, "sampleTeams.json");
+        // Try __dirname first (works for both compiled dist/ and ts-node src/)
+        let teamsPath = path.resolve(__dirname, "sampleTeams.json");
+        if (!fs.existsSync(teamsPath)) {
+            // Fallback: look in the source directory
+            teamsPath = path.resolve(__dirname, "../../src/server/sampleTeams.json");
+        }
         _sampleTeams = JSON.parse(fs.readFileSync(teamsPath, "utf-8"));
     }
-    return _sampleTeams!;
+    return _sampleTeams as { [format: string]: string[] };
 }
 
 /** @deprecated Use getSampleTeams() for lazy loading. Kept for backward compatibility. */
