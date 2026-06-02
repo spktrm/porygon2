@@ -96,12 +96,34 @@ def compute_player_targets(
         ],
         axis=0,
     )
-    q_estimate = combined_rewards + discounts * q_bootstrap
-    pg_advantages = mask_expanded * rho_expanded * (q_estimate - combined_values)
+    td_q_estimate = combined_rewards + discounts * q_bootstrap
+
+    # Mix TD-bootstrapped Q-estimate with learned Q-values from target network
+    chosen_q_value = target_pred.action_head.q_value
+
+    # The learned Q-value is a scalar estimate of Q(s,a); expand to match combined shape
+    # Use it as the "win" component of q_estimate (first n_bins dims summed via support)
+    q_mix_alpha = config.player_q_mixing_alpha
+    td_q_win = td_q_estimate[..., :n_bins] @ cat_vf_support
+    td_q_heuristic = td_q_estimate[..., n_bins]
+
+    # Mix learned Q-value with TD Q-estimate for the win component
+    mixed_q_win = (1 - q_mix_alpha) * td_q_win + q_mix_alpha * chosen_q_value
+
+    # Compute advantages using mixed Q-estimates
+    td_v_win = combined_values[..., :n_bins] @ cat_vf_support
+    td_v_heuristic = combined_values[..., n_bins]
+
+    pg_advantages_win = mask_expanded.squeeze(-1) * rho_expanded.squeeze(-1) * (
+        mixed_q_win - td_v_win
+    )
+    pg_advantages_heuristic = mask_expanded.squeeze(-1) * rho_expanded.squeeze(-1) * (
+        td_q_heuristic - td_v_heuristic
+    )
 
     combined_advantage = (
-        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
-        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
+        advantage_mixing_alpha * pg_advantages_win
+        + (1 - advantage_mixing_alpha) * pg_advantages_heuristic
     )
 
     win_returns = returns[..., :n_bins]
