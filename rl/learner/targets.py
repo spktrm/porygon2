@@ -114,11 +114,13 @@ def compute_player_targets(
     td_v_win = combined_values[..., :n_bins] @ cat_vf_support
     td_v_heuristic = combined_values[..., n_bins]
 
-    pg_advantages_win = mask_expanded.squeeze(-1) * rho_expanded.squeeze(-1) * (
-        mixed_q_win - td_v_win
+    pg_advantages_win = (
+        mask_expanded.squeeze(-1) * rho_expanded.squeeze(-1) * (mixed_q_win - td_v_win)
     )
-    pg_advantages_heuristic = mask_expanded.squeeze(-1) * rho_expanded.squeeze(-1) * (
-        td_q_heuristic - td_v_heuristic
+    pg_advantages_heuristic = (
+        mask_expanded.squeeze(-1)
+        * rho_expanded.squeeze(-1)
+        * (td_q_heuristic - td_v_heuristic)
     )
 
     combined_advantage = (
