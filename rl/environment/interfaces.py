@@ -71,7 +71,6 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
-    q_value: ArrayLike = ()
 
 
 @dataclass
@@ -172,7 +171,6 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     advantages: ArrayLike = ()
-    q_target: ArrayLike = ()
     win_returns_norm_factor: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()

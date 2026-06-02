@@ -42,12 +42,12 @@ class Porygon2PlayerModel(nn.Module):
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
-        self.q_head = PointerLogits(**self.cfg.q_head.qk_logits.to_dict())
         self.winloss_head = CategoricalValueLogitHead(self.cfg.winloss_head)
 
     def _forward_action_head(
         self,
-        action_embeddings: jax.Array,
+        src_embeddings: jax.Array,
+        tgt_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -55,11 +55,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        pi_logits = self.pi_head(action_embeddings, action_embeddings)
+        pi_logits = self.pi_head(src_embeddings, tgt_embeddings)
         pi_logits = pi_logits.squeeze(-1).reshape(-1) / temp
-
-        q_logits = self.q_head(action_embeddings, action_embeddings)
-        q_logits = q_logits.squeeze(-1).reshape(-1)
 
         policy_metrics = compute_policy_metrics(
             logits=pi_logits, valid_mask=flat_valid_mask, prior=None
@@ -73,16 +70,14 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
-        q_value = jnp.take(q_logits, action_index, axis=-1)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
 
-        action_head_output = PlayerPolicyHeadOutput(
+        return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            q_value=q_value,
             entropy=policy_metrics.entropy,
             normalized_entropy=policy_metrics.normalized_entropy,
             src_index=src_index,
@@ -90,22 +85,22 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
         )
 
-        return action_head_output
-
     def _forward_value_head(self, state_embedding: jax.Array):
         return self.winloss_head(state_embedding)
 
     def get_head_outputs(
         self,
+        src_embeddings: jax.Array,
+        tgt_embeddings: jax.Array,
         value_embedding: jax.Array,
-        action_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
 
         action_head = self._forward_action_head(
-            action_embeddings,
+            src_embeddings,
+            tgt_embeddings,
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
@@ -125,13 +120,19 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        value_embedding, action_embeddings = self.encoder(
+        action_src_embeddings, action_tgt_embeddings, value_embedding = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(value_embedding, action_embeddings, actor_input.env, actor_output)
+        )(
+            action_src_embeddings,
+            action_tgt_embeddings,
+            value_embedding,
+            actor_input.env,
+            actor_output,
+        )
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

@@ -125,23 +125,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True
 
-    cfg.q_head = ConfigDict()
-    cfg.q_head.qk_logits = ConfigDict()
-    cfg.q_head.qk_logits.num_heads = 1
-    cfg.q_head.qk_logits.use_bias = True
-
     cfg.winloss_head = ConfigDict()
     cfg.winloss_head.dense = ConfigDict()
     cfg.winloss_head.dense.features = 3
     cfg.winloss_head.dense.use_bias = True
     cfg.winloss_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
-    cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.dense = ConfigDict()
-    cfg.entropy_head.dense.features = 1
-    cfg.entropy_head.dense.use_bias = True
-
-    for head in [cfg.pi_head, cfg.q_head]:
+    for head in [cfg.pi_head]:
         head.train = train
 
     return cfg

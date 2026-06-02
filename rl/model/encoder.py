@@ -345,7 +345,10 @@ class Encoder(nn.Module):
         self.latent_encoder = TransformerEncoder(
             **self.cfg.latent_encoder.to_dict(),
         )
-        self.action_decoder = TransformerDecoder(
+        self.action_src_decoder = TransformerDecoder(
+            **self.cfg.action_decoder.to_dict(),
+        )
+        self.action_tgt_decoder = TransformerDecoder(
             **self.cfg.action_decoder.to_dict(),
         )
         self.value_decoder = TransformerDecoder(
@@ -1133,7 +1136,7 @@ class Encoder(nn.Module):
         # define positional biases
         pass_embeddings = self.pass_embeddings.astype(self.cfg.dtype)
         target_embeddings = self.target_embeddings.astype(self.cfg.dtype)
-        value_embedding = self.value_embedding.astype(self.cfg.dtype)
+        self.value_embedding.astype(self.cfg.dtype)
 
         # set/accumulate ally embeddings and positional biases
         for indices, accumulator in [
@@ -1219,17 +1222,25 @@ class Encoder(nn.Module):
             attn_mask=create_attention_mask(latent_query_mask, latent_query_mask),
         )
 
-        # project to action embeddings
-        action_embeddings = self.action_decoder(
+        action_src_embeddings = self.action_src_decoder(
+            q=output_state_sequence,
+            kv=latent_queries,
+            attn_mask=create_attention_mask(output_state_mask, latent_query_mask),
+        )
+        action_tgt_embeddings = self.action_tgt_decoder(
             q=output_state_sequence,
             kv=latent_queries,
             attn_mask=create_attention_mask(output_state_mask, latent_query_mask),
         )
         value_embedding = self.value_decoder(
-            q=self.value_embedding.astype(self.cfg.dtype), kv=latent_queries
-        ).squeeze()
+            q=self.value_embedding.astype(self.cfg.dtype),
+            kv=latent_queries,
+            attn_mask=create_attention_mask(
+                jnp.ones(1, dtype=jnp.bool), latent_query_mask
+            ),
+        ).squeeze(0)
 
-        return value_embedding, action_embeddings
+        return action_src_embeddings, action_tgt_embeddings, value_embedding
 
     def __call__(
         self,
@@ -1251,7 +1262,7 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        value_embedding, action_embeddings = jax.vmap(
+        action_src_embeddings, action_tgt_embeddings, value_embedding = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1262,4 +1273,4 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return value_embedding, action_embeddings
+        return action_src_embeddings, action_tgt_embeddings, value_embedding
