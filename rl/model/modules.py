@@ -428,12 +428,17 @@ class TransformerEncoder(nn.Module):
     def __call__(
         self,
         qkv: jax.Array,
+        qkv_mask: jax.Array | None = None,
         attn_mask: jax.Array | None = None,
         qkv_positions: jax.Array | None = None,
     ) -> jax.Array:
-        if attn_mask is None:
+        if qkv_mask is None:
             qkv_mask = jnp.ones_like(qkv[..., 0], dtype=jnp.bool)
+
+        if attn_mask is None:
             attn_mask = create_attention_mask(qkv_mask, qkv_mask)
+        else:
+            attn_mask = attn_mask & create_attention_mask(qkv_mask, qkv_mask)
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(0)
 
@@ -553,14 +558,22 @@ class TransformerDecoder(nn.Module):
         self,
         q: jax.Array,
         kv: jax.Array,
+        q_mask: jax.Array | None = None,
+        kv_mask: jax.Array | None = None,
         attn_mask: jax.Array | None = None,
         q_positions: jax.Array | None = None,
         kv_positions: jax.Array | None = None,
     ) -> jax.Array:
-        if attn_mask is None:
+        if q_mask is None:
             q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
+
+        if kv_mask is None:
             kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
+
+        if attn_mask is None:
             attn_mask = create_attention_mask(q_mask, kv_mask)
+        else:
+            attn_mask = attn_mask & create_attention_mask(q_mask, kv_mask)
 
         positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(-3)
 
@@ -773,7 +786,7 @@ class PointerLogits(nn.Module):
     qk_size: int = None
     num_heads: int = 1
     use_bias: bool = True
-    qk_layer_norm: bool = True
+    qk_layer_norm: bool = False
     inverse_sqrt_normalisation: bool = True
 
     @nn.compact
