@@ -289,7 +289,9 @@ class Porygon2BuilderModel(nn.Module):
         causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))[None]
 
         packed_set_embeddings = self.input_norm(packed_set_embeddings)
-        packed_set_embeddings = self.encoder(packed_set_embeddings, causal_mask)
+        packed_set_embeddings = self.encoder(
+            packed_set_embeddings, attn_mask=causal_mask
+        )
         return self.output_norm(packed_set_embeddings)
 
     def _forward(

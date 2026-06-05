@@ -99,7 +99,7 @@ class Porygon2LearnerConfig:
     # )
     player_entropy_mult: Callable[[int], float] = (
         lambda step, scale=gradient_accumulation_steps: 1
-        / (jnp.floor((step + 1) / scale)) ** 0.4
+        / ((step + 1.0) / scale) ** 0.4
     )
 
     # Loss coefficients
