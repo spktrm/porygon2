@@ -395,6 +395,16 @@ export namespace WorkerResponse {
   }
 }
 
+export interface ModalityEnumMap {
+  MODALITY_ENUM___UNSPECIFIED: 0;
+  MODALITY_ENUM__MOVE: 1;
+  MODALITY_ENUM__SWITCH: 2;
+  MODALITY_ENUM__WILDCARD: 3;
+  MODALITY_ENUM__OTHER: 4;
+}
+
+export const ModalityEnum: ModalityEnumMap;
+
 export interface ActionEnumMap {
   ACTION_ENUM___UNSPECIFIED: 0;
   ACTION_ENUM__DEFAULT: 1;

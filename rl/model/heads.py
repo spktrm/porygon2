@@ -51,6 +51,7 @@ def compute_policy_metrics(
     if prior is None:
         valid_sum_expanded = jnp.maximum(valid_sum[..., None], 1)
         prior = jnp.where(valid_mask, 1.0 / valid_sum_expanded, 0.0)
+    prior = prior.astype(log_policy.dtype)
 
     # Safe log calculation
     safe_prior = jnp.where(valid_mask, prior, 1e-9)

@@ -69,7 +69,7 @@ class Porygon2LearnerConfig:
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = 1_000_000
+    minimum_historical_player_steps: int = int(1e5)
     league_size: int = 16
     manage_league_interval: int = 10
 
@@ -359,13 +359,17 @@ def load_from_checkpoint(
 
     # Debug prints (excluding heavy arrays)
     pprint(
-        {k: v for k, v in ckpt_player_state.items() if k not in ["opt_state", "params"]}
+        {
+            k: v
+            for k, v in ckpt_player_state.items()
+            if k != "opt_state" and not k.endswith("params")
+        }
     )
     pprint(
         {
             k: v
             for k, v in ckpt_builder_state.items()
-            if k not in ["opt_state", "params"]
+            if k != "opt_state" and not k.endswith("params")
         }
     )
 

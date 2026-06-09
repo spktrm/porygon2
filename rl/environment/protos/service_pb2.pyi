@@ -7,6 +7,14 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class ModalityEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MODALITY_ENUM___UNSPECIFIED: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__MOVE: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__SWITCH: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__WILDCARD: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__OTHER: _ClassVar[ModalityEnum]
+
 class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_ENUM___UNSPECIFIED: _ClassVar[ActionEnum]
@@ -48,6 +56,11 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__RESERVE_4_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__RESERVE_5_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
+MODALITY_ENUM___UNSPECIFIED: ModalityEnum
+MODALITY_ENUM__MOVE: ModalityEnum
+MODALITY_ENUM__SWITCH: ModalityEnum
+MODALITY_ENUM__WILDCARD: ModalityEnum
+MODALITY_ENUM__OTHER: ModalityEnum
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
 ACTION_ENUM__ALLY_1_TARGET: ActionEnum

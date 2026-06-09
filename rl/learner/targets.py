@@ -52,61 +52,52 @@ def compute_player_targets(
 
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
-    discounts = (1 - dones_expanded) * config.player_gamma * mask_expanded
+    discount_t = (1 - dones_expanded) * config.player_gamma * mask_expanded
 
     alpha = config.player_alpha
 
-    rho_expanded = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
-    rho_expanded = jnp.expand_dims(rho_expanded, axis=-1)
+    rho_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    rho_t = jnp.expand_dims(rho_t, axis=-1)
 
-    c_expanded = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
-    c_expanded = jnp.expand_dims(c_expanded, axis=-1)
+    c_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    c_t = jnp.expand_dims(c_t, axis=-1)
 
     player_reward = batch.player_transitions.env_output.win_reward
     target_value_probs = jnp.exp(target_pred.value_head.log_probs)
     n_bins = target_value_probs.shape[-1]
 
     terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
-    combined_rewards = jnp.concatenate(
+    r_t = jnp.concatenate(
         (player_reward, terminal_heuristic_reward[..., None]), axis=-1
     )
 
-    combined_values = jnp.concatenate(
-        (target_value_probs, state_potential[..., None]), axis=-1
-    )
-    last_values = combined_values[-1:]
+    v_tm1 = jnp.concatenate((target_value_probs, state_potential[..., None]), axis=-1)
+    last_values = v_tm1[-1:]
 
-    combined_next_values = jnp.concatenate([combined_values[1:], last_values], axis=0)
-    combined_td_errors = (
-        rho_expanded
-        * mask_expanded
-        * (combined_rewards + discounts * combined_next_values - combined_values)
-    )
+    v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
+    td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    vtrace_errors = vtrace(
-        combined_td_errors, discounts, c_expanded * config.player_lambda
-    )
+    errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
 
-    returns = (vtrace_errors + combined_values) * mask_expanded
+    targets_tm1 = (errors + v_tm1) * mask_expanded
     q_bootstrap = jnp.concatenate(
         [
-            config.player_lambda * returns[1:]
-            + (1 - config.player_lambda) * combined_values[1:],
-            combined_values[-1:],
+            config.player_lambda * targets_tm1[1:]
+            + (1 - config.player_lambda) * v_tm1[1:],
+            v_t[-1:],
         ],
         axis=0,
     )
-    q_estimate = combined_rewards + discounts * q_bootstrap
+    q_estimate = r_t + discount_t * q_bootstrap
+
+    pg_advantages = rho_t * (q_estimate - v_tm1)
 
     combined_advantage = (
-        advantage_mixing_alpha * q_estimate[..., :n_bins] @ cat_vf_support
-        + (1 - advantage_mixing_alpha) * q_estimate[..., n_bins]
+        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
+        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
     )
 
-    win_returns = returns[..., :n_bins]
-    win_returns = jnp.maximum(win_returns, 0.0)
-    norm_factor = win_returns.sum(axis=-1, keepdims=True)
-    win_returns = win_returns / norm_factor.clip(min=1e-8)
+    win_returns = targets_tm1[..., :n_bins]
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
     policy_mask = value_mask & jnp.logical_not(batch.player_transitions.env_output.done)
@@ -114,7 +105,6 @@ def compute_player_targets(
     return PlayerTargets(
         win_returns=win_returns,
         advantages=combined_advantage,
-        win_returns_norm_factor=norm_factor,
         policy_mask=policy_mask,
         value_mask=value_mask,
     )
