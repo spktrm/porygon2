@@ -38,7 +38,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch, ModalityEnum
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -71,6 +71,7 @@ NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
+NUM_MODALITY_FEATURES = len(ModalityEnum.keys())
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
@@ -271,6 +272,40 @@ ALLY_2_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_PASS,
     ]
 )
+
+
+def calculate_flat_modality_mask():
+    action_indices = np.arange(NUM_ACTION_FEATURES**2)
+    src_indices = action_indices // NUM_ACTION_FEATURES
+    action_indices % NUM_ACTION_FEATURES
+
+    is_move = (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4)
+    ) | (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4)
+    )
+    is_wildcard = (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
+    ) | (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+    )
+    is_switch = (src_indices >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN) & (
+        src_indices <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
+    )
+    is_other = ~(is_move | is_wildcard | is_switch)
+    return (
+        ModalityEnum.MODALITY_ENUM__MOVE * is_move
+        + ModalityEnum.MODALITY_ENUM__WILDCARD * is_wildcard
+        + ModalityEnum.MODALITY_ENUM__SWITCH * is_switch
+        + ModalityEnum.MODALITY_ENUM__OTHER * is_other
+    )
+
+
+FLAT_MODALITY_MASK = calculate_flat_modality_mask()
 
 for indices in [
     MOVE_INDICES,

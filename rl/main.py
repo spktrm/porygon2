@@ -120,11 +120,16 @@ def run_eval_heuristic(
                     @ CAT_VF_SUPPORT
                 )
 
+                if actor._agent.player_head_params.temp < 0.1:
+                    temp_str = "low_temp"
+                else:
+                    temp_str = "high_temp"
+
                 wandb_run.log(
                     {
                         "training_step": step_count,
                         f"{prefix}-payoff-{session_id}": payoff,
-                        f"{prefix}-wr-{session_id}": payoff > 0,
+                        f"{prefix}-wr-{session_id}-{temp_str}": payoff > 0,
                     }
                 )
 
@@ -192,13 +197,22 @@ def main(args: argparse.Namespace):
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
     )
-    eval_agent = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
-        gpu_lock=gpu_lock,
-        player_head_params=HeadParams(temp=0.8),
-        builder_head_params=HeadParams(temp=1.0),
-    )
+    eval_agents = [
+        Agent(
+            actor_player_network.apply,
+            actor_builder_network.apply,
+            gpu_lock=gpu_lock,
+            player_head_params=HeadParams(temp=0.8),
+            builder_head_params=HeadParams(temp=1.0),
+        ),
+        Agent(
+            actor_player_network.apply,
+            actor_builder_network.apply,
+            gpu_lock=gpu_lock,
+            player_head_params=HeadParams(temp=0.05),
+            builder_head_params=HeadParams(temp=1.0),
+        ),
+    ]
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
@@ -290,19 +304,22 @@ def main(args: argparse.Namespace):
             f"Initializing {learner_config.num_eval_actors} evaluation actors..."
         )
         for eval_id in range(learner_config.num_eval_actors):
-            actor = PlayerActor(
-                agent=eval_agent,
-                env=env_func(f"eval-heuristic:{eval_id:04d}"),
-                unroll_length=learner_config.unroll_length,
-                learner=learner,
-                rng_seed=len(actor_threads) + salt,
-            )
-            args = (actor, executor, stop_signal, wandb_run)
-            actor_threads.append(
-                threading.Thread(
-                    target=run_eval_heuristic, args=args, name=f"EvalActor-{eval_id}"
+            for agent_idx, eval_agent in enumerate(eval_agents):
+                actor = PlayerActor(
+                    agent=eval_agent,
+                    env=env_func(f"eval-heuristic:{eval_id:04d}"),
+                    unroll_length=learner_config.unroll_length,
+                    learner=learner,
+                    rng_seed=len(actor_threads) + salt,
                 )
-            )
+                args = (actor, executor, stop_signal, wandb_run)
+                actor_threads.append(
+                    threading.Thread(
+                        target=run_eval_heuristic,
+                        args=args,
+                        name=f"EvalActor-{agent_idx}-{eval_id}",
+                    )
+                )
 
         # Start the actors and learner.
         for t in actor_threads:

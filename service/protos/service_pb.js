@@ -30,6 +30,7 @@ goog.exportSymbol('proto.servicev2.EnvironmentResponse', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentState', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentTrajectory', null, global);
 goog.exportSymbol('proto.servicev2.ErrorResponse', null, global);
+goog.exportSymbol('proto.servicev2.ModalityEnum', null, global);
 goog.exportSymbol('proto.servicev2.ResetRequest', null, global);
 goog.exportSymbol('proto.servicev2.StepRequest', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest', null, global);
@@ -3131,6 +3132,17 @@ proto.servicev2.WorkerResponse.prototype.hasErrorResponse = function() {
   return jspb.Message.getField(this, 3) != null;
 };
 
+
+/**
+ * @enum {number}
+ */
+proto.servicev2.ModalityEnum = {
+  MODALITY_ENUM___UNSPECIFIED: 0,
+  MODALITY_ENUM__MOVE: 1,
+  MODALITY_ENUM__SWITCH: 2,
+  MODALITY_ENUM__WILDCARD: 3,
+  MODALITY_ENUM__OTHER: 4
+};
 
 /**
  * @enum {number}

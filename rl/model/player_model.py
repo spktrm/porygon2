@@ -13,6 +13,7 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PlayerActorInput,
@@ -21,6 +22,7 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import CategoricalValueHeadOutput, get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
@@ -33,6 +35,46 @@ from rl.model.heads import (
 from rl.model.utils import get_most_recent_file, get_num_params
 
 
+def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
+
+    valid_moves = valid_mask & (FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
+    valid_switches = valid_mask & (
+        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+    )
+    valid_wildcard = valid_mask & (
+        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__WILDCARD
+    )
+    valid_other = valid_mask & (FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__OTHER)
+
+    num_valid_moves = jnp.maximum(valid_moves.sum(), 1)
+    num_valid_switches = jnp.maximum(valid_switches.sum(), 1)
+    num_valid_wildcard = jnp.maximum(valid_wildcard.sum(), 1)
+    num_valid_other = jnp.maximum(valid_other.sum(), 1)
+
+    has_moves = valid_moves.any()
+    has_switches = valid_switches.any()
+    has_wildcard = valid_wildcard.any()
+    has_other = valid_other.any()
+
+    # Distribute probability mass equally among the *available* categories
+    total_active_categories = (
+        has_moves.astype(jnp.float32)
+        + has_switches.astype(jnp.float32)
+        + has_wildcard.astype(jnp.float32)
+        + has_other.astype(jnp.float32)
+    )
+
+    category_mass = 1.0 / jnp.maximum(total_active_categories, 1.0)
+
+    # Distribute the category mass evenly among the valid options inside it
+    move_prior = jnp.where(valid_moves, category_mass / num_valid_moves, 0.0)
+    switch_prior = jnp.where(valid_switches, category_mass / num_valid_switches, 0.0)
+    wildcard_prior = jnp.where(valid_wildcard, category_mass / num_valid_wildcard, 0.0)
+    other_prior = jnp.where(valid_other, category_mass / num_valid_other, 0.0)
+
+    return move_prior + switch_prior + wildcard_prior + other_prior
+
+
 class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
@@ -41,13 +83,28 @@ class Porygon2PlayerModel(nn.Module):
         Initializes the encoder, policy head, value head, and Q-value head using the configuration.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
+        self.macro_weights = self.param(
+            "macro_weights",
+            nn.initializers.truncated_normal(stddev=0.02),
+            (self.cfg.entity_size,),
+        )
+        self.micro_pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
+
+    def _forward_macro_head(self, macro_action_embeddings: jax.Array):
+        embedding_dtype = macro_action_embeddings.dtype
+        macro_pi_logits = macro_action_embeddings @ self.macro_weights.astype(
+            embedding_dtype
+        )
+        modality_mask_oh = jax.nn.one_hot(
+            FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
+        )
+        return modality_mask_oh @ macro_pi_logits
 
     def _forward_action_head(
         self,
-        src_embeddings: jax.Array,
-        tgt_embeddings: jax.Array,
+        macro_action_embeddings: jax.Array,
+        micro_action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -55,11 +112,18 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        pi_logits = self.pi_head(src_embeddings, tgt_embeddings)
-        pi_logits = pi_logits.squeeze(-1).reshape(-1) / temp
+        macro_pi_logits = self._forward_macro_head(macro_action_embeddings)
+        micro_pi_logits = (
+            self.micro_pi_head(micro_action_embeddings, micro_action_embeddings)
+            .squeeze(-1)
+            .reshape(-1)
+        )
 
+        pi_logits = (macro_pi_logits + micro_pi_logits) / temp
+
+        hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask, prior=None
+            logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
         )
 
         if train:
@@ -106,8 +170,8 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        src_embeddings: jax.Array,
-        tgt_embeddings: jax.Array,
+        macro_action_embeddings: jax.Array,
+        micro_action_embeddings: jax.Array,
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -115,8 +179,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
 
         action_head = self._forward_action_head(
-            src_embeddings,
-            tgt_embeddings,
+            macro_action_embeddings,
+            micro_action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
@@ -136,15 +200,17 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        action_src_embeddings, action_tgt_embeddings, value_embeddings = self.encoder(
-            actor_input.env, actor_input.packed_history, actor_input.history
+        macro_action_embeddings, micro_action_embeddings, value_embeddings = (
+            self.encoder(
+                actor_input.env, actor_input.packed_history, actor_input.history
+            )
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(
-            action_src_embeddings,
-            action_tgt_embeddings,
+            macro_action_embeddings,
+            micro_action_embeddings,
             value_embeddings,
             actor_input.env,
             actor_output,
