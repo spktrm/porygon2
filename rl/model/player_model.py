@@ -93,9 +93,10 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_macro_head(self, macro_action_embeddings: jax.Array):
         embedding_dtype = macro_action_embeddings.dtype
-        macro_pi_logits = macro_action_embeddings @ self.macro_weights.astype(
-            embedding_dtype
-        )
+        scale = jnp.sqrt(self.cfg.entity_size).astype(embedding_dtype)
+        macro_pi_logits = (
+            macro_action_embeddings @ self.macro_weights.astype(embedding_dtype)
+        ) / scale
         modality_mask_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
         )
