@@ -79,9 +79,6 @@ class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        """
-        Initializes the encoder, policy head, value head, and Q-value head using the configuration.
-        """
         self.encoder = Encoder(self.cfg.encoder)
         self.macro_weights = self.param(
             "macro_weights",
@@ -91,7 +88,7 @@ class Porygon2PlayerModel(nn.Module):
         self.micro_pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
 
-    def _forward_macro_head(self, macro_action_embeddings: jax.Array):
+    def _forward_macro_head(self, macro_action_embeddings: jax.Array, temp: float):
         embedding_dtype = macro_action_embeddings.dtype
         scale = jnp.sqrt(self.cfg.entity_size).astype(embedding_dtype)
         macro_pi_logits = (
@@ -100,7 +97,34 @@ class Porygon2PlayerModel(nn.Module):
         modality_mask_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
         )
-        return modality_mask_oh @ macro_pi_logits
+        return modality_mask_oh @ macro_pi_logits / temp
+
+    def _forwad_micro_head(
+        self,
+        micro_action_embeddings: jax.Array,
+        flat_valid_mask: jax.Array,
+        temp: float,
+    ):
+        micro_pi_logits = (
+            self.micro_pi_head(micro_action_embeddings, micro_action_embeddings)
+            .squeeze(-1)
+            .reshape(-1)
+        ) / temp
+
+        # 2. Normalize micro logits per modality using the `b` parameter trick
+        modality_oh = jax.nn.one_hot(
+            FLAT_MODALITY_MASK,
+            num_classes=NUM_MODALITY_FEATURES,
+            dtype=micro_pi_logits.dtype,
+        )
+
+        lse_per_mod = jax.nn.logsumexp(
+            micro_pi_logits[:, None], axis=0, b=flat_valid_mask[:, None] * modality_oh
+        )
+
+        return jnp.where(
+            flat_valid_mask, micro_pi_logits - lse_per_mod[FLAT_MODALITY_MASK], -1e9
+        )
 
     def _forward_action_head(
         self,
@@ -113,14 +137,12 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        macro_pi_logits = self._forward_macro_head(macro_action_embeddings)
-        micro_pi_logits = (
-            self.micro_pi_head(micro_action_embeddings, micro_action_embeddings)
-            .squeeze(-1)
-            .reshape(-1)
+        macro_pi_logits = self._forward_macro_head(macro_action_embeddings, temp)
+        normalized_micro = self._forwad_micro_head(
+            micro_action_embeddings, flat_valid_mask, temp
         )
 
-        pi_logits = (macro_pi_logits + micro_pi_logits) / temp
+        pi_logits = macro_pi_logits + normalized_micro
 
         hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
         policy_metrics = compute_policy_metrics(
@@ -234,11 +256,6 @@ def create_attention_graph(path, value):
         if getattr(value, "val", None) is not None:
             value = value.val
 
-        # axes_to_mean = tuple(range(value.ndim - 2))
-        # avg_attn = jnp.sum(value, axis=axes_to_mean) / jnp.sum(
-        #     value != 0, axis=axes_to_mean
-        # ).clip(min=1)
-
         avg_attn = value[:, -1]  # Shape: (H, S, S)
         if avg_attn.ndim > 3:
             avg_attn = jnp.mean(avg_attn, 0)
@@ -252,32 +269,27 @@ def create_attention_graph(path, value):
         # Use Plotly Express to facet the 3D array along the 0th dimension (Heads)
         fig = px.imshow(
             avg_attn_np,
-            facet_col=0,  # Creates subplots for each index in the first dimension (H)
-            facet_col_wrap=4,  # Wraps to a new row after 4 heads (great for 8 or 12 heads)
-            text_auto=True,  # Tip: Set to False if your sequence length (S) is large
+            facet_col=0,
+            facet_col_wrap=4,
+            text_auto=True,
             aspect="auto",
             labels=dict(color="Attn Prob", facet_col="Head"),
             title=path_str,
         )
 
-        # Clean up the subplot titles (Changes default "facet_col=0" to "Head 0")
         fig.for_each_annotation(
             lambda a: a.update(text=a.text.replace("facet_col=", "Head "))
         )
 
         # --- File Saving Logic ---
-        # 1. Ensure the base directory exists
         base_dir = "attn_weights"
         os.makedirs(base_dir, exist_ok=True)
 
-        # 2. Create a safe file name from the path (excluding 'attn_weights')
         module_name = "_".join(str(k) for k in path_keys[:-1])
 
-        # 3. Save to disk
         save_path = os.path.join(base_dir, f"{module_name}.html")
         fig.write_html(save_path)
 
-        # Optional print to track progress during execution
         print(f"Saved concatenated attention maps to {save_path}")
         # -------------------------
 

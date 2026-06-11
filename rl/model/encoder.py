@@ -328,7 +328,7 @@ class Encoder(nn.Module):
 
         self.macro_action_queries = self.param(
             "macro_action_queries",
-            learnable_query_init,
+            nn.initializers.orthogonal(scale=1.0),
             (NUM_MODALITY_FEATURES, entity_size),
         )
 
