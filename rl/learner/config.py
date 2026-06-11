@@ -69,7 +69,7 @@ class Porygon2LearnerConfig:
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e6)
     add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = int(1e5)
+    minimum_historical_player_steps: int = int(1e6)
     league_size: int = 16
     manage_league_interval: int = 10
 

@@ -15,7 +15,7 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
-COLLECT_INTERMEDIATES = True
+COLLECT_INTERMEDIATES = False
 DO_CHECKPOINT = False
 
 
