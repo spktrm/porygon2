@@ -82,18 +82,20 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
         self.macro_weights = self.param(
             "macro_weights",
-            nn.initializers.truncated_normal(stddev=0.02),
-            (self.cfg.entity_size,),
+            nn.initializers.orthogonal(scale=1.0),
+            (NUM_MODALITY_FEATURES, self.cfg.entity_size),
         )
         self.micro_pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
 
     def _forward_macro_head(self, macro_action_embeddings: jax.Array, temp: float):
         embedding_dtype = macro_action_embeddings.dtype
+        raw_logits = jnp.sum(
+            macro_action_embeddings * self.macro_weights.astype(embedding_dtype),
+            axis=-1,
+        )
         scale = jnp.sqrt(self.cfg.entity_size).astype(embedding_dtype)
-        macro_pi_logits = (
-            macro_action_embeddings @ self.macro_weights.astype(embedding_dtype)
-        ) / scale
+        macro_pi_logits = raw_logits / scale
         modality_mask_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
         )
@@ -118,9 +120,14 @@ class Porygon2PlayerModel(nn.Module):
             dtype=micro_pi_logits.dtype,
         )
 
-        lse_per_mod = jax.nn.logsumexp(
-            micro_pi_logits[:, None], axis=0, b=flat_valid_mask[:, None] * modality_oh
+        # Broadcast micro_logits to shape (N_actions, M_modalities)
+        # Mask invalid actions with -1e9 BEFORE logsumexp
+        masked_micro_logits = jnp.where(
+            flat_valid_mask[:, None] & (modality_oh > 0), micro_pi_logits[:, None], -1e9
         )
+
+        # Compute logsumexp safely. Empty modalities will return ~ -1e9, preventing 0/0 NaNs.
+        lse_per_mod = jax.nn.logsumexp(masked_micro_logits, axis=0)
 
         return jnp.where(
             flat_valid_mask, micro_pi_logits - lse_per_mod[FLAT_MODALITY_MASK], -1e9
@@ -165,11 +172,12 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            entropy=policy_metrics.entropy,
-            normalized_entropy=policy_metrics.normalized_entropy,
             src_index=src_index,
             tgt_index=tgt_index,
+            entropy=policy_metrics.entropy,
+            normalized_entropy=policy_metrics.normalized_entropy,
             magnet_kl=policy_metrics.magnet_kl,
+            logit_l2_norm=policy_metrics.logit_l2_norm,
         )
 
     def _forward_value_head(self, value_embeddings: jax.Array):

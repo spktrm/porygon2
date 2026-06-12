@@ -169,11 +169,14 @@ def train_step(
 
         loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
 
+        loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
+            + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
         return loss, dict(
@@ -182,6 +185,7 @@ def train_step(
             player_loss_v=loss_v,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
+            player_loss_logit_l2_norm=loss_logit_l2_norm,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             # Ratios

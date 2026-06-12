@@ -3,13 +3,9 @@ from typing import Optional
 
 import flax.linen as nn
 import jax
-import jax.nn.initializers as initjax
 import jax.numpy as jnp
 import numpy as np
 from flax import linen as nn
-from flax.linen.dtypes import promote_dtype
-from flax.linen.module import compact
-from jax import lax
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -30,87 +26,6 @@ class RMSNorm(nn.Module):
 
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1)).astype(x.dtype)
         return normed_inputs * (1 + scale)
-
-
-class SNDense(nn.Module):
-    """A linear transformation applied over the last dimension of the input with sigmaReparam.
-    Attributes:
-        features: the number of output features.
-        use_bias: whether to add a bias to the output (default: True).
-        dtype: the dtype of the computation (default: infer from input and params).
-        param_dtype: the dtype passed to parameter initializers (default: float32).
-        precision: numerical precision of the computation see `jax.lax.Precision`
-        for details.
-        kernel_init: initializer function for the weight matrix.
-        bias_init: initializer function for the bias.
-    """
-
-    features: int
-    use_bias: bool = True
-    dtype: jnp.dtype | None = None
-    std_init: float = 0.1
-    denom_backward: bool = True
-
-    @compact
-    def __call__(self, inputs: jax.Array) -> jax.Array:
-        """Applies a linear transformation to the inputs along the last dimension.
-        Args:
-            inputs: The nd-array to be transformed.
-        Returns:
-            The transformed input.
-        """
-        initializing = self.is_mutable_collection("params")
-
-        kernel = self.param(
-            "kernel",
-            initjax.normal(self.std_init),
-            (jnp.shape(inputs)[-1], self.features),
-        )
-
-        if self.use_bias:
-            bias = self.param("bias", nn.initializers.zeros_init(), (self.features,))
-        else:
-            bias = None
-
-        # fake init
-        s = jnp.ones((1, 1))
-        vh = jnp.ones((1))
-        if initializing:
-            _, s, vh = lax.stop_gradient(jnp.linalg.svd(kernel, full_matrices=False))
-        sigma_param = self.param("sigma", nn.initializers.ones_init(), (1,))
-        spectral_u_var = self.variable(
-            "spectral", "u", lambda shape: jnp.ones(shape) * vh[0], vh[0].shape
-        )
-        spectral_norm_var = self.variable(
-            "spectral", "norm", lambda shape: jnp.ones(shape) * s[0], (1,)
-        )
-        inputs, kernel, bias = promote_dtype(inputs, kernel, bias, dtype=self.dtype)
-        # power method to compute spectral norm
-        u = spectral_u_var.value
-        v = lax.stop_gradient(jnp.matmul(kernel, u))
-        # l2 norm
-        v = lax.stop_gradient(v / jnp.linalg.norm(v, ord=2))
-        u = lax.stop_gradient(jnp.matmul(jnp.transpose(kernel), v))
-        # l2 norm
-        u = lax.stop_gradient(u / jnp.linalg.norm(u, ord=2))
-        if spectral_u_var.is_mutable() and not initializing:
-            spectral_u_var.value = u
-        sigma = jnp.einsum("c,cd,d->", v, kernel, u)
-
-        if spectral_norm_var.is_mutable() and not initializing:
-            spectral_norm_var.value = sigma
-
-        inputs, sigma_param, sigma = promote_dtype(
-            inputs, sigma_param, sigma, dtype=self.dtype
-        )
-        y = lax.dot_general(
-            inputs,
-            (sigma_param / sigma) * kernel,
-            (((inputs.ndim - 1,), (0,)), ((), ())),
-        )
-        if bias is not None:
-            y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
-        return y
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
@@ -423,6 +338,7 @@ class TransformerEncoder(nn.Module):
     init_residual_scale: float = 1.0
     do_checkpoint: bool = DO_CHECKPOINT
     collect_intermediates: bool = COLLECT_INTERMEDIATES
+    norm_output: bool = False
 
     @nn.compact
     def __call__(
@@ -478,6 +394,9 @@ class TransformerEncoder(nn.Module):
             init_residual_scale=self.init_residual_scale,
             collect_intermediates=self.collect_intermediates,
         )(qkv, attn_mask, positionwise_mask, qkv_positions)
+
+        if self.norm_output:
+            qkv = layer_norm(qkv)
 
         return qkv
 
@@ -552,6 +471,7 @@ class TransformerDecoder(nn.Module):
     init_residual_scale: float = 1.0
     do_checkpoint: bool = DO_CHECKPOINT
     collect_intermediates: bool = COLLECT_INTERMEDIATES
+    norm_output: bool = False
 
     @nn.compact
     def __call__(
@@ -616,6 +536,9 @@ class TransformerDecoder(nn.Module):
             init_residual_scale=self.init_residual_scale,
             collect_intermediates=self.collect_intermediates,
         )(q, kv, attn_mask, positionwise_mask, q_positions, kv_positions)
+
+        if self.norm_output:
+            q = layer_norm(q)
 
         return q
 
