@@ -22,6 +22,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner.league import MAIN_KEY, League
+from rl.learner.loss import power_schedule
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
@@ -97,9 +98,8 @@ class Porygon2LearnerConfig:
     # player_advantage_mixing_alpha_fn: Callable[[int], float] = (
     #     lambda step: (step <= 200_000) * 2.5e-11 * (step - 200_000.0) ** 2
     # )
-    player_entropy_mult: Callable[[int], float] = (
-        lambda step, scale=gradient_accumulation_steps: 1
-        / ((step + 1.0) / scale) ** 0.4
+    player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
+        coef=1.0, step=step, decay=0.4, floor=0.01, ceil=1.0
     )
 
     # Loss coefficients
@@ -108,7 +108,7 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.1
     player_entropy_loss_coef: float = 1.0
     player_value_head_loss_coef: float = 1.0
-
+    player_logit_norm_loss_coef: float = 0.0
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

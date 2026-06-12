@@ -120,6 +120,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.action_decoder.need_pos = False
     cfg.encoder.value_decoder.need_pos = False
 
+    for decoder in [
+        cfg.encoder.action_decoder,
+        cfg.encoder.value_decoder,
+    ]:
+        decoder.norm_output = True
+
     cfg.pi_head = ConfigDict()
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1

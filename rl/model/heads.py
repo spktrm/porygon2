@@ -24,6 +24,14 @@ class PolicyMetrics(NamedTuple):
     entropy: jax.Array
     normalized_entropy: jax.Array
     magnet_kl: jax.Array
+    logit_l2_norm: jax.Array
+
+
+def masked_mean_squared_penalty(logits: jax.Array, valid_mask: jax.Array) -> jax.Array:
+    masked_logits = jnp.where(valid_mask, logits, 0.0)
+    sum_of_squares = jnp.sum(jnp.square(masked_logits), axis=-1)
+    valid_count = jnp.maximum(jnp.sum(valid_mask, axis=-1), 1.0)
+    return sum_of_squares / valid_count
 
 
 def compute_policy_metrics(
@@ -67,6 +75,7 @@ def compute_policy_metrics(
         entropy=entropy,
         normalized_entropy=normalized_entropy,
         magnet_kl=magnet_kl,
+        logit_l2_norm=masked_mean_squared_penalty(logits, valid_mask),
     )
 
 

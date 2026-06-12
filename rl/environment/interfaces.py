@@ -65,6 +65,7 @@ class PolicyHeadOutput:
     normalized_entropy: ArrayLike = ()
     log_policy: ArrayLike = ()
     magnet_kl: ArrayLike = ()
+    logit_l2_norm: ArrayLike = ()
 
 
 @dataclass
