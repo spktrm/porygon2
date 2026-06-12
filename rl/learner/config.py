@@ -99,7 +99,7 @@ class Porygon2LearnerConfig:
     #     lambda step: (step <= 200_000) * 2.5e-11 * (step - 200_000.0) ** 2
     # )
     player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
-        coef=1.0, step=step, decay=0.4, floor=0.01, ceil=1.0
+        coef=1.0, step=step, decay=0.35, floor=0.01, ceil=1.0
     )
 
     # Loss coefficients
