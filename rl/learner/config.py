@@ -87,17 +87,17 @@ class Porygon2LearnerConfig:
     # Advantage estimation params
     player_gamma: float = 1.0
     player_alpha: float = 1.0
-    player_gamma: float = 1.0
-    player_lambda: float = 1.0
+    player_lambda: float = 0.95
+
+    builder_gamma: float = 1.0
     builder_alpha: float = 1.0
-    builder_lambda: float = 1.0
+    builder_lambda: float = 0.95
+
     player_ppo_clip_threshold: float = 0.3
+    builder_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
     player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
-    # player_advantage_mixing_alpha_fn: Callable[[int], float] = (
-    #     lambda step: (step <= 200_000) * 2.5e-11 * (step - 200_000.0) ** 2
-    # )
     player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
         coef=1.0, step=step, decay=0.35, floor=0.01, ceil=1.0
     )

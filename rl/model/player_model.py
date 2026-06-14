@@ -88,7 +88,7 @@ class Porygon2PlayerModel(nn.Module):
         self.micro_pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
 
-    def _forward_macro_head(self, macro_action_embeddings: jax.Array, temp: float):
+    def _forward_macro_head(self, macro_action_embeddings: jax.Array):
         embedding_dtype = macro_action_embeddings.dtype
         raw_logits = jnp.sum(
             macro_action_embeddings * self.macro_weights.astype(embedding_dtype),
@@ -99,38 +99,13 @@ class Porygon2PlayerModel(nn.Module):
         modality_mask_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
         )
-        return modality_mask_oh @ macro_pi_logits / temp
+        return modality_mask_oh @ macro_pi_logits
 
-    def _forwad_micro_head(
-        self,
-        micro_action_embeddings: jax.Array,
-        flat_valid_mask: jax.Array,
-        temp: float,
-    ):
-        micro_pi_logits = (
+    def _forwad_micro_head(self, micro_action_embeddings: jax.Array):
+        return (
             self.micro_pi_head(micro_action_embeddings, micro_action_embeddings)
             .squeeze(-1)
             .reshape(-1)
-        ) / temp
-
-        # 2. Normalize micro logits per modality using the `b` parameter trick
-        modality_oh = jax.nn.one_hot(
-            FLAT_MODALITY_MASK,
-            num_classes=NUM_MODALITY_FEATURES,
-            dtype=micro_pi_logits.dtype,
-        )
-
-        # Broadcast micro_logits to shape (N_actions, M_modalities)
-        # Mask invalid actions with -1e9 BEFORE logsumexp
-        masked_micro_logits = jnp.where(
-            flat_valid_mask[:, None] & (modality_oh > 0), micro_pi_logits[:, None], -1e9
-        )
-
-        # Compute logsumexp safely. Empty modalities will return ~ -1e9, preventing 0/0 NaNs.
-        lse_per_mod = jax.nn.logsumexp(masked_micro_logits, axis=0)
-
-        return jnp.where(
-            flat_valid_mask, micro_pi_logits - lse_per_mod[FLAT_MODALITY_MASK], -1e9
         )
 
     def _forward_action_head(
@@ -144,12 +119,10 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        macro_pi_logits = self._forward_macro_head(macro_action_embeddings, temp)
-        normalized_micro = self._forwad_micro_head(
-            micro_action_embeddings, flat_valid_mask, temp
-        )
+        macro_pi_logits = self._forward_macro_head(macro_action_embeddings)
+        micro_logits = self._forwad_micro_head(micro_action_embeddings)
 
-        pi_logits = macro_pi_logits + normalized_micro
+        pi_logits = (macro_pi_logits + micro_logits) / temp
 
         hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
         policy_metrics = compute_policy_metrics(
