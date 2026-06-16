@@ -205,6 +205,30 @@ MOVE_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
     ]
 )
+REGULAR_MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+    ]
+)
+WILDCARD_MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+    ]
+)
 RESERVE_ENTITY_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,

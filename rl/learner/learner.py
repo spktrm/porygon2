@@ -145,6 +145,9 @@ def train_step(
         )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
+        action_head_normalized_entropy = average(
+            learner_action_head.entropy, policy_mask
+        )
 
         loss_actor_forward_kl = forward_kl_loss(
             policy_ratio=learner_actor_ratio,
@@ -188,6 +191,7 @@ def train_step(
             player_loss_logit_l2_norm=loss_logit_l2_norm,
             # Per head entropies
             player_action_entropy=action_head_entropy,
+            player_action_normalized_entropy=action_head_normalized_entropy,
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),

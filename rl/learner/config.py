@@ -46,7 +46,7 @@ class Porygon2LearnerConfig:
     num_steps = 5_000_000
     num_player_actors: int = 12
     num_builder_actors: int = 4
-    num_eval_actors: int = 2
+    num_eval_actors: int = 3
     unroll_length: int = 128
 
     # Batch iteration params

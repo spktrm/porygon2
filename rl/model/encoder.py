@@ -28,8 +28,10 @@ from rl.environment.data import (
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
     PASS_INDICES,
+    REGULAR_MOVE_INDICES,
     RESERVE_ENTITY_INDICES,
     TARGET_INDICES,
+    WILDCARD_MOVE_INDICES,
 )
 from rl.environment.interfaces import (
     PlayerEnvOutput,
@@ -264,6 +266,21 @@ class Encoder(nn.Module):
         )
         self.prev_action_tgt_bias = self.param(
             "prev_action_tgt_bias", embedding_init, (1, entity_size)
+        )
+        self.regular_move_bias = self.param(
+            "regular_move_bias", embedding_init, (1, entity_size)
+        )
+        self.wildcard_move_bias = self.param(
+            "wildcard_move_bias", embedding_init, (1, entity_size)
+        )
+        self.switch_src_bias = self.param(
+            "switch_src_bias", embedding_init, (1, entity_size)
+        )
+        self.ally_target_bias = self.param(
+            "ally_target_bias", embedding_init, (1, entity_size)
+        )
+        self.enemy_target_bias = self.param(
+            "enemy_target_bias", embedding_init, (1, entity_size)
         )
 
         self.latent_queries = self.param(
@@ -1154,6 +1171,16 @@ class Encoder(nn.Module):
             output_state_sequence = output_state_sequence.at[indices].mul(
                 jax.nn.sigmoid(context), unique_indices=True, indices_are_sorted=True
             )
+
+        # Add modality biases
+        for indices, accumulator in [
+            (REGULAR_MOVE_INDICES, self.regular_move_bias.astype(self.cfg.dtype)),
+            (WILDCARD_MOVE_INDICES, self.wildcard_move_bias.astype(self.cfg.dtype)),
+            (RESERVE_ENTITY_INDICES, self.switch_src_bias.astype(self.cfg.dtype)),
+            (ALLY_TARGET_INDICES, self.ally_target_bias.astype(self.cfg.dtype)),
+            (ENEMY_TARGET_INDICES, self.enemy_target_bias.astype(self.cfg.dtype)),
+        ]:
+            output_state_sequence = output_state_sequence.at[indices].add(accumulator)
 
         prev_action_src = jnp.take(
             output_state_sequence,
