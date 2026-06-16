@@ -302,6 +302,7 @@ def main(args: argparse.Namespace):
                 unroll_length=learner_config.unroll_length,
                 learner=learner,
                 rng_seed=len(actor_threads) + salt,
+                is_eval=True,
             )
             args = (actor, executor, stop_signal, wandb_run)
             actor_threads.append(
