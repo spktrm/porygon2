@@ -13,7 +13,7 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
+from rl.environment.data import FLAT_MODALITY_MASK, ModalityEnum
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PlayerActorInput,
@@ -80,38 +80,17 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
-        self.macro_weights = self.param(
-            "macro_weights",
-            nn.initializers.orthogonal(scale=1.0),
-            (NUM_MODALITY_FEATURES, self.cfg.entity_size),
-        )
-        self.micro_pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
+        self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
 
-    def _forward_macro_head(self, macro_action_embeddings: jax.Array):
-        embedding_dtype = macro_action_embeddings.dtype
-        raw_logits = jnp.sum(
-            macro_action_embeddings * self.macro_weights.astype(embedding_dtype),
-            axis=-1,
-        )
-        scale = jnp.sqrt(self.cfg.entity_size).astype(embedding_dtype)
-        macro_pi_logits = raw_logits / scale
-        modality_mask_oh = jax.nn.one_hot(
-            FLAT_MODALITY_MASK, num_classes=NUM_MODALITY_FEATURES, dtype=embedding_dtype
-        )
-        return modality_mask_oh @ macro_pi_logits
-
-    def _forwad_micro_head(self, micro_action_embeddings: jax.Array):
+    def _forward_pi_head(self, action_embeddings: jax.Array):
         return (
-            self.micro_pi_head(micro_action_embeddings, micro_action_embeddings)
-            .squeeze(-1)
-            .reshape(-1)
+            self.pi_head(action_embeddings, action_embeddings).squeeze(-1).reshape(-1)
         )
 
     def _forward_action_head(
         self,
-        macro_action_embeddings: jax.Array,
-        micro_action_embeddings: jax.Array,
+        action_embeddings: jax.Array,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -119,10 +98,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        macro_pi_logits = self._forward_macro_head(macro_action_embeddings)
-        micro_logits = self._forwad_micro_head(micro_action_embeddings)
-
-        pi_logits = (macro_pi_logits + micro_logits) / temp
+        pi_logits = self._forward_pi_head(action_embeddings)
+        pi_logits = pi_logits / temp
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -178,8 +155,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def get_head_outputs(
         self,
-        macro_action_embeddings: jax.Array,
-        micro_action_embeddings: jax.Array,
+        action_embeddings: jax.Array,
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -187,8 +163,7 @@ class Porygon2PlayerModel(nn.Module):
     ):
 
         action_head = self._forward_action_head(
-            macro_action_embeddings,
-            micro_action_embeddings,
+            action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
@@ -208,21 +183,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        macro_action_embeddings, micro_action_embeddings, value_embeddings = (
-            self.encoder(
-                actor_input.env, actor_input.packed_history, actor_input.history
-            )
+        action_embeddings, value_embeddings = self.encoder(
+            actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(
-            macro_action_embeddings,
-            micro_action_embeddings,
-            value_embeddings,
-            actor_input.env,
-            actor_output,
-        )
+        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

@@ -343,12 +343,6 @@ class Encoder(nn.Module):
         # History cls token
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
-        self.macro_action_queries = self.param(
-            "macro_action_queries",
-            nn.initializers.orthogonal(scale=1.0),
-            (NUM_MODALITY_FEATURES, entity_size),
-        )
-
         # Transformer Decoders
         self.context_encoder = TransformerEncoder(
             **self.cfg.context_encoder.to_dict(),
@@ -365,10 +359,7 @@ class Encoder(nn.Module):
         self.latent_encoder = TransformerEncoder(
             **self.cfg.latent_encoder.to_dict(),
         )
-        self.macro_action_decoder = TransformerDecoder(
-            **self.cfg.action_decoder.to_dict(),
-        )
-        self.micro_action_decoder = TransformerDecoder(
+        self.action_decoder = TransformerDecoder(
             **self.cfg.action_decoder.to_dict(),
         )
         self.value_decoder = TransformerDecoder(
@@ -1248,12 +1239,7 @@ class Encoder(nn.Module):
             qkv=latent_queries, qkv_mask=latent_query_mask
         )
 
-        macro_action_embeddings = self.macro_action_decoder(
-            q=self.macro_action_queries.astype(self.cfg.dtype),
-            kv=latent_queries,
-            kv_mask=latent_query_mask,
-        )
-        micro_action_embeddings = self.micro_action_decoder(
+        action_embeddings = self.action_decoder(
             q=output_state_sequence,
             kv=latent_queries,
             q_mask=output_state_mask,
@@ -1263,7 +1249,7 @@ class Encoder(nn.Module):
             q=contextualised_input[6:], kv=latent_queries, kv_mask=latent_query_mask
         )
 
-        return macro_action_embeddings, micro_action_embeddings, value_embeddings
+        return action_embeddings, value_embeddings
 
     def __call__(
         self,
@@ -1285,7 +1271,7 @@ class Encoder(nn.Module):
             jnp.iinfo(request_count.dtype).max,
         )
 
-        macro_action_embeddings, micro_action_embeddings, value_embeddings = jax.vmap(
+        action_embeddings, value_embeddings = jax.vmap(
             self._batched_forward, in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1296,4 +1282,4 @@ class Encoder(nn.Module):
             env_step.private_team[0],
         )
 
-        return macro_action_embeddings, micro_action_embeddings, value_embeddings
+        return action_embeddings, value_embeddings
