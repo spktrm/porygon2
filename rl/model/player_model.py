@@ -124,9 +124,13 @@ class Porygon2PlayerModel(nn.Module):
 
         pi_logits = (macro_pi_logits + micro_logits) / temp
 
-        hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
+        # --- Hierarchical Prior & Metrics ---
+        # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
+        # policy_metrics = compute_policy_metrics(
+        #     logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
+        # )
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
+            logits=pi_logits, valid_mask=flat_valid_mask
         )
 
         if train:

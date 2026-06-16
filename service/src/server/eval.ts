@@ -1,7 +1,5 @@
 import { GetRandomAction } from "./baselines/random";
-// import { GetMaxDamageAction } from "./baselines/max_dmg";
-// import { GetHeuristicAction } from "./baselines/heuristic";
-// import { GetKaizoPlusAction } from "./baselines/kaizo_plus";
+import { GetSimpleHeuristicAction } from "./baselines/simple_heuristic";
 import { TrainablePlayerAI } from "./runner";
 import { Action, ActionEnum } from "../../protos/service_pb";
 
@@ -25,10 +23,7 @@ export const evalActionMapping: EvalActionFnType[] = [
 
         return action;
     }, // Default - 1
-    // GetMaxDamageAction,
-    // GetHeuristicAction,
-    // GetSearchAction,
-    // GetKaizoPlusAction,
+    GetSimpleHeuristicAction, // Type-aware max-damage + switching - 2
 ];
 
 export const numEvals = evalActionMapping.length;

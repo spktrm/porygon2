@@ -10,6 +10,7 @@ import {
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
+import { numEvals } from "../server/eval";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -113,9 +114,10 @@ async function runBattle() {
         teamGenerationStrategies.push(Teams.pack(Teams.generate(smogonFormat)));
     }
 
+    const evalIndex = Math.floor(Math.random() * numEvals);
     const battleOptions = {
         p1Name: "Bot1",
-        p2Name: `baseline-eval-heuristic:0`,
+        p2Name: `baseline-eval-heuristic:${evalIndex}`,
         p1team:
             Math.random() < 0.75 && smogonFormat.includes("randombattle")
                 ? Teams.pack(Teams.generate(smogonFormat))
