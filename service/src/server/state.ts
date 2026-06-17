@@ -1,4 +1,4 @@
-import { AnyObject, PokemonSet, Teams, TeamValidator, toID } from "@pkmn/sim";
+import { AnyObject, toID } from "@pkmn/sim";
 import {
     Args,
     BattleInitArgName,
@@ -19,7 +19,6 @@ import {
     ItemeffecttypesEnum,
     ItemsEnum,
     MovesEnum,
-    NaturesEnum,
     SideconditionEnum,
     SpeciesEnum,
     StatusEnum,
@@ -65,7 +64,6 @@ import {
     MovesetHasPP,
     PackedSetFeature,
     RequestType,
-    RewardFeature,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
@@ -386,6 +384,7 @@ const entityEdgeArrayToObject = (array: Int16Array) => {
         move: jsonDatum["moves"][
             array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
         ],
+        entityIdx: array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX],
         damage:
             array[EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO] /
             MAX_RATIO_TOKEN,
@@ -751,6 +750,7 @@ function getArrayFromPrivatePokemon(
 
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES] =
         tryFindIndex(SpeciesEnum, [
+            pokemonSet.speciesForme,
             pokemon.baseSpecies.id,
             pokemon.baseSpecies.baseSpecies.toLowerCase(),
         ]);
@@ -802,6 +802,13 @@ function getArrayFromPrivatePokemon(
 
     return dataArr;
 }
+
+const scoreOrder = (pokemon: Pokemon) => {
+    if (!pokemon.isActive()) {
+        return 0;
+    }
+    return 2 - pokemon.slot;
+};
 
 function getArrayFromPublicPokemon(
     candidate: Pokemon | null,
@@ -957,21 +964,8 @@ function getArrayFromPublicPokemon(
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER] =
         IndexValueFromEnum(GendernameEnum, pokemon.gender);
 
-    const position = candidate.ident.at(2);
-    if (candidate.isActive()) {
-        if (position === "a") {
-            publicData[
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ] = 1;
-        } else if (position === "b") {
-            publicData[
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ] = 2;
-        }
-    } else {
-        publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
-            0;
-    }
+    publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] =
+        scoreOrder(candidate);
 
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED] =
         +candidate.fainted;
@@ -1195,6 +1189,15 @@ class DynamicArray {
 
     size() {
         return this.currentCursor / this.increment;
+    }
+
+    getColumn(index: number): Int16Array {
+        const numEdges = this.currentCursor / this.increment;
+        const column = new Int16Array(numEdges);
+        for (let i = 0; i < numEdges; i++) {
+            column[i] = this.buffer[i * this.increment + index];
+        }
+        return column;
     }
 }
 
@@ -1859,7 +1862,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent as PokemonIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent as PokemonIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -1870,6 +1873,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
             value: IndexValueFromEnum(MovesEnum, move.id),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
         this.latestEdge.setEntityEdgeFeature({
             pokemon,
@@ -1934,7 +1942,10 @@ export class EventHandler implements Protocol.Handler {
             pokeIdent,
             pokeDetails,
         );
-        const { pokemon: switchedIn } = this.getPokemon(
+        const { index: switchedOutIndex } = this.getPokemon(
+            switchedOut?.ident as PokemonIdent,
+        );
+        const { pokemon: switchedIn, index: switchedInIndex } = this.getPokemon(
             pokeIdent as PokemonIdent,
         );
 
@@ -1951,6 +1962,11 @@ export class EventHandler implements Protocol.Handler {
                 pokemon: switchedOut,
                 featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
                 value: MovesEnum.MOVES_ENUM___SWITCH_OUT,
+            });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon: switchedOut,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: switchedOutIndex,
             });
             if (argName !== "switch") {
                 const from = (kwArgs as KWArgs["|switch|"]).from;
@@ -1969,6 +1985,11 @@ export class EventHandler implements Protocol.Handler {
                 featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
                 value: MovesEnum.MOVES_ENUM___SWITCH_IN,
             });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon: switchedIn,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: switchedInIndex,
+            });
         }
     }
 
@@ -1982,7 +2003,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -2000,6 +2021,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.addMajorArg({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect: condition, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|faint|"(args: Args["|faint|"]) {
@@ -2012,12 +2038,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
 
         this.latestEdge.addMajorArg({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-fail|"(args: Args["|-fail|"], kwArgs: KWArgs["|-fail|"]) {
@@ -2028,7 +2059,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -2040,6 +2071,11 @@ export class EventHandler implements Protocol.Handler {
             effect,
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-block|"(args: Args["|-block|"], kwArgs: KWArgs["|-block|"]) {
@@ -2050,7 +2086,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon not found for ident ${pokeIdent}`);
         }
@@ -2059,6 +2095,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-notarget|"(args: Args["|-notarget|"]) {
@@ -2070,11 +2111,16 @@ export class EventHandler implements Protocol.Handler {
         }
 
         if (pokeIdent !== undefined) {
-            const { pokemon } = this.getPokemon(pokeIdent)!;
+            const { pokemon, index } = this.getPokemon(pokeIdent)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon not found for ident ${pokeIdent}`);
             }
             this.latestEdge.updateMinorArgs({ argName, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         } else {
             throw new Error(
                 `Pokemon identifier is required for |-notarget| event: ${args}`,
@@ -2095,7 +2141,7 @@ export class EventHandler implements Protocol.Handler {
             idents.push(poke2Ident);
         }
         for (const ident of idents) {
-            const { pokemon } = this.getPokemon(ident)!;
+            const { pokemon, index } = this.getPokemon(ident)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon not found for ident ${ident}`);
             }
@@ -2104,6 +2150,11 @@ export class EventHandler implements Protocol.Handler {
             this.latestEdge.updateEdgeFromOf({
                 effect,
                 pokemon,
+            });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
             });
         }
     }
@@ -2119,7 +2170,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2153,6 +2204,11 @@ export class EventHandler implements Protocol.Handler {
                 currentDamageToken + addedDamageToken,
             ),
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-heal|"(
@@ -2166,7 +2222,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2198,6 +2254,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: Math.min(MAX_RATIO_TOKEN, currentHealToken + addedHealToken),
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-sethp|"(args: Args["|-sethp|"], kwArgs: KWArgs["|-sethp|"]) {
@@ -2206,7 +2267,7 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2226,6 +2287,11 @@ export class EventHandler implements Protocol.Handler {
             );
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-status|"(args: Args["|-status|"], kwArgs: KWArgs["|-status|"]) {
@@ -2236,7 +2302,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2254,6 +2320,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: statusToken,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-curestatus|"(args: Args["|-curestatus|"]) {
@@ -2264,7 +2335,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             console.warn(`${args} Pokemon ${pokeIdent} not found`);
             return;
@@ -2279,6 +2350,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: statusToken,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-cureteam|"(args: Args["|-cureteam|"]) {
@@ -2289,12 +2365,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     static getStatBoostEdgeFeatureIndex(stat: BoostID) {
@@ -2313,7 +2394,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2323,6 +2404,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex,
             pokemon,
             value: parseInt(value),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2336,7 +2422,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2346,6 +2432,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex,
             pokemon,
             value: -parseInt(value),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2360,7 +2451,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2372,6 +2463,11 @@ export class EventHandler implements Protocol.Handler {
             value: parseInt(value),
         });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-swapboost|"(args: Args["|-swapboost|"], kwArgs: KWArgs["|-swapboost|"]) {
@@ -2382,7 +2478,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2391,6 +2487,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-invertboost|"(
@@ -2404,7 +2505,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2413,6 +2514,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-clearboost|"(
@@ -2426,7 +2532,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2435,6 +2541,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-clearnegativeboost|"(
@@ -2448,7 +2559,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2457,6 +2568,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-copyboost|"() {}
@@ -2500,8 +2616,16 @@ export class EventHandler implements Protocol.Handler {
             if (!pokemon) {
                 continue;
             }
+            const { index } = this.getPokemon(
+                pokemon.originalIdent as PokemonIdent,
+            );
             this.latestEdge.updateMinorArgs({ argName, pokemon });
             this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2520,8 +2644,16 @@ export class EventHandler implements Protocol.Handler {
             if (!pokemon) {
                 continue;
             }
+            const { index } = this.getPokemon(
+                pokemon.originalIdent as PokemonIdent,
+            );
             this.latestEdge.updateMinorArgs({ argName, pokemon });
             this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2535,7 +2667,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2551,6 +2683,11 @@ export class EventHandler implements Protocol.Handler {
             ),
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-end|"(args: Args["|-end|"], kwArgs: KWArgs["|-end|"]) {
@@ -2561,7 +2698,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2574,6 +2711,11 @@ export class EventHandler implements Protocol.Handler {
         this.latestEdge.updateEdgeFromOf({
             effect: this.getCondition(conditionId),
             pokemon,
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2585,11 +2727,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-supereffective|"(args: Args["|-supereffective|"]) {
@@ -2600,11 +2747,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-resisted|"(args: Args["|-resisted|"]) {
@@ -2615,11 +2767,16 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-immune|"(args: Args["|-immune|"], kwArgs: KWArgs["|-immune|"]) {
@@ -2630,7 +2787,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2643,6 +2800,11 @@ export class EventHandler implements Protocol.Handler {
             effect: this.getCondition(conditionId),
             pokemon,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-item|"(args: Args["|-item|"], kwArgs: KWArgs["|-item|"]) {
@@ -2653,7 +2815,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent as PokemonIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent as PokemonIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2667,6 +2829,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN,
             pokemon,
             value: itemIndex,
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -2681,7 +2848,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2696,6 +2863,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: itemIndex,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-ability|"(args: Args["|-ability|"], kwArgs: KWArgs["|-ability|"]) {
@@ -2706,7 +2878,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2724,6 +2896,11 @@ export class EventHandler implements Protocol.Handler {
             pokemon,
             value: abilityIndex,
         });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-endability|"(
@@ -2737,7 +2914,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2746,6 +2923,11 @@ export class EventHandler implements Protocol.Handler {
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.latestEdge.updateEdgeFromOf({ effect, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     rememberTransformed(
@@ -2781,13 +2963,18 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
         this.rememberTransformed(pokeIdent, poke2Ident);
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-mega|"() {}
@@ -2808,11 +2995,16 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-activate|"(args: Args["|-activate|"], kwArgs: KWArgs["|-activate|"]) {
@@ -2824,7 +3016,7 @@ export class EventHandler implements Protocol.Handler {
                 throw new Error();
             }
 
-            const { pokemon } = this.getPokemon(pokeIdent)!;
+            const { pokemon, index } = this.getPokemon(pokeIdent)!;
             if (pokemon === null) {
                 throw new Error(`Pokemon ${pokeIdent} not found`);
             }
@@ -2837,6 +3029,11 @@ export class EventHandler implements Protocol.Handler {
             ]) {
                 this.latestEdge.updateEdgeFromOf({ effect, pokemon });
             }
+            this.latestEdge.setEntityEdgeFeature({
+                pokemon,
+                featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+                value: index,
+            });
         }
     }
 
@@ -2848,12 +3045,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-prepare|"(args: Args["|-prepare|"]) {
@@ -2864,12 +3066,17 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent)!;
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
 
         this.latestEdge.updateMinorArgs({ argName, pokemon });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
+        });
     }
 
     "|-hitcount|"(args: Args["|-hitcount|"]) {
@@ -2880,7 +3087,7 @@ export class EventHandler implements Protocol.Handler {
             throw new Error();
         }
 
-        const { pokemon } = this.getPokemon(pokeIdent);
+        const { pokemon, index } = this.getPokemon(pokeIdent)!;
         if (pokemon === null) {
             throw new Error(`Pokemon ${pokeIdent} not found`);
         }
@@ -2890,6 +3097,11 @@ export class EventHandler implements Protocol.Handler {
             featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__HIT_COUNT,
             pokemon,
             value: parseInt(numHits),
+        });
+        this.latestEdge.setEntityEdgeFeature({
+            pokemon,
+            featureIndex: EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+            value: index,
         });
     }
 
@@ -3282,10 +3494,18 @@ class PublicActionHandler {
                     });
                     actionOffset += numMoveFeatures;
                 }
-                addTokenRows(
-                    4 - wildcardMoves.length,
-                    MovesEnum.MOVES_ENUM___UNK,
-                );
+
+                if (hasTera) {
+                    addTokenRows(
+                        4 - wildcardMoves.length,
+                        MovesEnum.MOVES_ENUM___PAD,
+                    );
+                } else {
+                    addTokenRows(
+                        4 - wildcardMoves.length,
+                        MovesEnum.MOVES_ENUM___UNK,
+                    );
+                }
             } else {
                 addTokenRows(8, MovesEnum.MOVES_ENUM___PAD);
             }
@@ -3319,19 +3539,71 @@ export class StateHandler {
         this.player = player;
     }
 
-    getActionMask(args: { request?: AnyObject | null; format?: string }): {
+    getActionMask(args: {
+        request?: AnyObject | null;
+        format?: string;
+        allyActive: (Pokemon | null)[];
+        enemyActive: (Pokemon | null)[];
+    }): {
         actionMask: OneDBoolean;
         isStruggling: boolean;
     } {
-        const { request, format } = args;
+        const { request, format, allyActive, enemyActive } = args;
 
-        const arrLength = numActionFeatures ** 2;
-        const actionMask = new OneDBoolean(
-            arrLength,
-            Uint8Array,
-            numActionFeatures,
-        );
+        const arrWidth = numActionFeatures;
+        const arrLength = arrWidth ** 2;
+        const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
         let isStruggling = false;
+
+        const moveIndices = [
+            [
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+            ],
+            [
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+            ],
+        ];
+        const wildCardIndices = [
+            [
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+            ],
+            [
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+            ],
+        ];
+        const reserveIndices = [
+            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+        ];
+        const allyTargets = [
+            !!allyActive[0] ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET : undefined,
+            !!allyActive[1] ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET : undefined,
+        ];
+
+        const enemyTargets = [
+            !!enemyActive[0]
+                ? ActionEnum.ACTION_ENUM__ENEMY_1_TARGET
+                : undefined,
+            !!enemyActive[1]
+                ? ActionEnum.ACTION_ENUM__ENEMY_2_TARGET
+                : undefined,
+        ];
 
         const setAll = (val: boolean) => {
             for (let i = 0; i < arrLength; i++) {
@@ -3354,12 +3626,11 @@ export class StateHandler {
                         continue;
                     }
 
-                    const rowColValPassValue =
-                        ActionEnum[
-                            `ACTION_ENUM__ALLY_${
-                                i + 1
-                            }_PASS` as keyof typeof ActionEnum
-                        ];
+                    const rowColValPassValue = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                    ][i];
+
                     if (!mustSwitch) {
                         actionMask.setRowCol(
                             rowColValPassValue,
@@ -3393,12 +3664,11 @@ export class StateHandler {
 
                     for (const [j, _] of canSwitch) {
                         actionMask.setRowCol(
-                            ActionEnum[
-                                `ACTION_ENUM__RESERVE_${
-                                    j + 1
-                                }` as keyof typeof ActionEnum
-                            ],
-                            ActionEnum.ACTION_ENUM__ALLY_1 + i,
+                            reserveIndices[j],
+                            [
+                                ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                                ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
+                            ][i],
                             true,
                         );
                     }
@@ -3420,12 +3690,10 @@ export class StateHandler {
                         continue;
                     }
 
-                    const rowColValPassValue =
-                        ActionEnum[
-                            `ACTION_ENUM__ALLY_${
-                                i + 1
-                            }_PASS` as keyof typeof ActionEnum
-                        ];
+                    const rowColValPassValue = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                    ][i];
                     if (
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
@@ -3467,77 +3735,120 @@ export class StateHandler {
                     canMove = filtered.length ? filtered : canMove;
 
                     for (const [j, move] of canMove) {
-                        const actionIndices: number[] = [];
-                        if (
-                            this.player.privateBattle.gameType === "doubles" &&
-                            "target" in move
-                        ) {
+                        const tgtIndices: number[] = [];
+                        const selfTarget = allyTargets[i];
+                        const allyTarget = allyTargets[1 - i];
+                        if ("target" in move) {
                             switch (move.target) {
                                 case "any":
                                 case "normal":
-                                    actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__ALLY_${
-                                                2 - i
-                                            }` as keyof typeof ActionEnum
-                                        ],
-                                        ActionEnum.ACTION_ENUM__ENEMY_1,
-                                        ActionEnum.ACTION_ENUM__ENEMY_2,
-                                    );
+                                    for (const target of enemyTargets) {
+                                        if (target !== undefined) {
+                                            tgtIndices.push(target);
+                                        }
+                                    }
+                                    if (allyTarget !== undefined) {
+                                        tgtIndices.push(allyTarget);
+                                    }
                                     break;
 
                                 case "adjacentAlly":
-                                    actionIndices.push(
-                                        ActionEnum[
-                                            `ACTION_ENUM__ALLY_${
-                                                2 - i
-                                            }` as keyof typeof ActionEnum
-                                        ],
-                                    );
+                                    if (allyTarget !== undefined) {
+                                        tgtIndices.push(allyTarget);
+                                    }
                                     break;
 
                                 case "adjacentFoe":
-                                    actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__ENEMY_1,
-                                        ActionEnum.ACTION_ENUM__ENEMY_2,
-                                    );
+                                    for (const target of enemyTargets) {
+                                        if (target !== undefined) {
+                                            tgtIndices.push(target);
+                                        }
+                                    }
                                     break;
 
                                 case "adjacentAllyOrSelf":
-                                    actionIndices.push(
-                                        ActionEnum.ACTION_ENUM__ALLY_1,
-                                        ActionEnum.ACTION_ENUM__ALLY_2,
-                                    );
+                                    for (const target of allyTargets) {
+                                        if (target !== undefined) {
+                                            tgtIndices.push(target);
+                                        }
+                                    }
                                     break;
 
                                 case "self":
+                                    if (selfTarget !== undefined) {
+                                        tgtIndices.push(selfTarget);
+                                    }
+                                    break;
                                 case "all":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL,
+                                    );
+                                    break;
                                 case "allySide":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE,
+                                    );
+                                    break;
                                 case "foeSide":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE,
+                                    );
+                                    break;
                                 case "allyTeam":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM,
+                                    );
+                                    break;
                                 case "randomNormal":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                    );
+                                    break;
                                 case "allAdjacent":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT,
+                                    );
+                                    break;
                                 case "allAdjacentFoes":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES,
+                                    );
+                                    break;
                                 case "allies":
+                                    tgtIndices.push(
+                                        ActionEnum.ACTION_ENUM__TARGET_ALLIES,
+                                    );
+                                    break;
                                 case "scripted":
-                                    actionIndices.push(
+                                    tgtIndices.push(
                                         ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
 
                                 default:
-                                    actionIndices.push(
+                                    tgtIndices.push(
                                         ActionEnum.ACTION_ENUM__TARGET_AUTO,
                                     );
                                     break;
                             }
                         } else {
-                            actionIndices.push(
-                                ActionEnum.ACTION_ENUM__TARGET_AUTO,
-                            );
+                            if (["recharge"].includes(move.id)) {
+                                if (selfTarget !== undefined) {
+                                    tgtIndices.push(selfTarget);
+                                }
+                            } else if (["outrage"].includes(move.id)) {
+                                tgtIndices.push(
+                                    ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                );
+                            } else {
+                                tgtIndices.push(
+                                    ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                );
+                            }
                         }
-                        for (const actionIndex of actionIndices) {
-                            if (actionIndex === undefined) {
+
+                        for (const tgtIndex of tgtIndices) {
+                            if (tgtIndex === undefined) {
                                 throw new Error(
                                     `Undefined action index for move ${
                                         move.name
@@ -3546,20 +3857,10 @@ export class StateHandler {
                                     }`,
                                 );
                             }
-                            const rowIndex =
-                                ActionEnum[
-                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
-                                        j + 1
-                                    }` as keyof typeof ActionEnum
-                                ];
-                            actionMask.setRowCol(rowIndex, actionIndex, true);
-                            const wildCardRowIndex =
-                                ActionEnum[
-                                    `ACTION_ENUM__ALLY_${i + 1}_MOVE_${
-                                        j + 1
-                                    }_WILDCARD` as keyof typeof ActionEnum
-                                ];
+                            const srcIndex = moveIndices[i][j];
+                            actionMask.setRowCol(srcIndex, tgtIndex, true);
 
+                            const wildCardSrcIndex = wildCardIndices[i][j];
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
                                     WILDCARDS.map((wildcard) =>
@@ -3575,8 +3876,8 @@ export class StateHandler {
                                 !wildCardChosenAlready;
 
                             actionMask.setRowCol(
-                                wildCardRowIndex,
-                                actionIndex,
+                                wildCardSrcIndex,
+                                tgtIndex,
                                 canWildCard,
                             );
                         }
@@ -3596,12 +3897,16 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchToIndex = ActionEnum.ACTION_ENUM__ALLY_1 + i;
+                    const switchToIndex =
+                        allyTargets[i] ??
+                        [
+                            ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                            ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
+                        ][i];
 
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            const switchFromIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+                            const switchFromIndex = reserveIndices[j];
 
                             actionMask.setRowCol(
                                 switchFromIndex,
@@ -3612,25 +3917,66 @@ export class StateHandler {
                     }
                 }
             } else if (request.teamPreview) {
-                const pokemon = request.side.pokemon;
+                const reserveSources = [
+                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+                ];
 
-                for (let i = this.player.choices.length; i < 6; i++) {
-                    for (let j = this.player.choices.length; j < 6; j++) {
-                        const poke_i = pokemon[i];
-                        const poke_j = pokemon[j];
+                const activeTargets: number[] = [
+                    ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+                ];
 
-                        if (poke_i && poke_j) {
-                            const switchFromIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + i;
-                            const switchToIndex =
-                                ActionEnum.ACTION_ENUM__RESERVE_1 + j;
+                if (this.player.privateBattle.gameType === "doubles") {
+                    activeTargets.push(ActionEnum.ACTION_ENUM__ALLY_2_TARGET);
+                }
 
-                            actionMask.setRowCol(
-                                switchFromIndex,
-                                switchToIndex,
-                                true,
-                            );
+                const reserveTargets: number[] = [
+                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+                ];
+
+                if (!this.player.privateBattle.tier.includes("VGC")) {
+                    // Both 6v6 Singles and 6v6 Doubles need at least Reserve 3 and 4
+                    reserveTargets.push(
+                        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+                        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+                    );
+
+                    // ONLY 6v6 Singles needs Reserve 5 (1 Active + 5 Reserves = 6 Total)
+                    if (this.player.privateBattle.gameType !== "doubles") {
+                        reserveTargets.push(
+                            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+                        );
+                    }
+                }
+
+                const allTargets = [...activeTargets, ...reserveTargets].slice(
+                    this.player.choices.length,
+                );
+                const alreadyChosenSources = this.player.choices.map(
+                    (choice) => {
+                        if (choice.startsWith("switch ")) {
+                            const idx = parseInt(choice.split(" ")[1]) - 1;
+                            return reserveSources[idx];
                         }
+                        return null;
+                    },
+                );
+                const filteredSources = reserveSources.filter(
+                    (value, index) => {
+                        return (
+                            value !== null &&
+                            !alreadyChosenSources.includes(value)
+                        );
+                    },
+                );
+                for (const src of filteredSources) {
+                    for (const target of allTargets) {
+                        actionMask.setRowCol(src, target, true);
                     }
                 }
             }
@@ -3674,19 +4020,12 @@ export class StateHandler {
 
         const relativeSide = isMySide(side.n, this.player.getPlayerIndex());
 
-        const scoreOrder = (pokemon: Pokemon) => {
-            let score = 0;
-            if (pokemon.isActive()) {
-                score += 1;
-            }
-            score += pokemon.slot;
-            return score;
-        };
+        const sortedTeam = [...team].sort(
+            (a, b) => scoreOrder(b) - scoreOrder(a),
+        );
 
         try {
-            for (const member of [...team].sort(
-                (a, b) => scoreOrder(b) - scoreOrder(a),
-            )) {
+            for (const member of sortedTeam) {
                 const { publicData, revealedData } = getArrayFromPublicPokemon(
                     member,
                     relativeSide,
@@ -3784,6 +4123,7 @@ export class StateHandler {
                         name.includes(setSpecies)
                     );
                 });
+
                 buffer.set(
                     getArrayFromPrivatePokemon(matchedTeamMate, member),
                     offset,
@@ -3853,10 +4193,15 @@ export class StateHandler {
     getStatePotential() {
         let p1Total = 0;
         let p2Total = 0;
+
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
         }
+
+        const aliveCoef = 1;
+        const hpCoef = 0.1;
+        const maxValue = 6 * (aliveCoef + hpCoef);
 
         for (const [i, side] of [
             this.player.publicBattle.sides[playerIndex],
@@ -3882,7 +4227,9 @@ export class StateHandler {
             }
 
             const unknownHp = side.totalPokemon - side.team.length;
-            const total = knownAlive + unknownHp + (knownHp + unknownHp) / 10;
+            const total =
+                aliveCoef * (knownAlive + unknownHp) +
+                hpCoef * (knownHp + unknownHp);
 
             if (i === 0) {
                 p1Total = total;
@@ -3891,10 +4238,11 @@ export class StateHandler {
             }
         }
 
-        return Math.floor(((p1Total - p2Total) / 6) * MAX_RATIO_TOKEN);
+        const frac = (p1Total - p2Total) / maxValue;
+        return Math.floor(frac * MAX_RATIO_TOKEN);
     }
 
-    getInfo() {
+    getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
@@ -3908,6 +4256,8 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__DONE] = +this.player.done;
         infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_COUNT] =
             this.player.requestCount;
+        infoBuffer[InfoFeature.INFO_FEATURE__HISTORY_STEP_COUNT] =
+            historyLength;
 
         const { winReward, lossReward, tieReward } = this.getWinReward();
         infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] =
@@ -4101,16 +4451,10 @@ export class StateHandler {
         if (!this.player.done && request === undefined) {
             throw new Error("Need Request");
         }
-
-        const state = new EnvironmentState();
-        const info = this.getInfo();
-        state.setInfo(info);
-
-        const { actionMask } = this.getActionMask({
-            request,
-            format: this.player.privateBattle.gameType,
-        });
-        state.setActionMask(actionMask.buffer);
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
 
         const {
             historyEntityPublic,
@@ -4120,17 +4464,28 @@ export class StateHandler {
             historyLength,
             historyPackedLength,
         } = this.getHistory(NUM_HISTORY);
+
+        const state = new EnvironmentState();
+        const info = this.getInfo(historyLength);
+        state.setInfo(info);
+
+        const allyActive = this.player.publicBattle.sides[playerIndex].active;
+        const enemyActive =
+            this.player.publicBattle.sides[1 - playerIndex].active;
+        const { actionMask } = this.getActionMask({
+            request,
+            format: this.player.privateBattle.gameType,
+            allyActive,
+            enemyActive,
+        });
+        state.setActionMask(actionMask.buffer);
+
         state.setHistoryEntityPublic(historyEntityPublic);
         state.setHistoryEntityRevealed(historyEntityRevealed);
         state.setHistoryEntityEdges(historyEntityEdges);
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
-
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error("Player index is undefined");
-        }
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));

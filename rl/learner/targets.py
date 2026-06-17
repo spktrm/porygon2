@@ -3,155 +3,110 @@ import jax.numpy as jnp
 
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.interfaces import (
+    Batch,
     BuilderActorOutput,
     BuilderTargets,
     PlayerActorOutput,
     PlayerTargets,
     Trajectory,
 )
+from rl.learner.config import Porygon2LearnerConfig
 
 
-def segmented_cumsum(x: jax.Array, discount: jax.Array) -> jax.Array:
+def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax.Array:
     """
     Backward cumulative sum using parallel associative scan.
     Best for very long sequence lengths on GPU/TPU.
     """
 
-    def combine(acc, new_elem):
-        # acc: values from the "future" (because we reverse the array)
-        # new_elem: the current step's values
-        v_acc, g_acc = acc
-        v_new, g_new = new_elem
+    discount_t = discount_t.astype(td_errors.dtype)
+    c_tm1 = c_tm1.astype(td_errors.dtype)
 
-        # Combine the values and the cumulative discounts
-        v_combined = v_new + g_new * v_acc
-        g_combined = g_acc * g_new
-        return v_combined, g_combined
+    def _body(acc, xs):
+        td_error, discount, c = xs
+        acc = td_error + discount * c * acc
+        return acc, acc
 
-    # 1. Reverse the arrays to compute backward
-    rev_x = jnp.flip(x, axis=0)
-    rev_discount = jnp.flip(discount, axis=0)
+    _, errors = jax.lax.scan(
+        _body,
+        jnp.zeros_like(td_errors[0]),
+        (td_errors, discount_t, c_tm1),
+        reverse=True,
+    )
 
-    # 2. Perform the parallel associative scan
-    # associative_scan returns a tuple matching the inputs; we only need the values (idx 0)
-    rev_result, _ = jax.lax.associative_scan(combine, (rev_x, rev_discount))
-
-    # 3. Flip back to original temporal order
-    return jnp.flip(rev_result, axis=0)
+    return errors
 
 
 def compute_player_targets(
-    traj: Trajectory,
+    batch: Batch,
+    learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
-    importance_sampling_ratios: jax.Array,
-    td_lambda: float,
-    gae_lambda: float,
-    entropy_normalising_constant: float,
+    isr: jax.Array,
+    advantage_mixing_alpha: float,
+    config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
-    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
-    player_valid = jnp.logical_not(traj.player_transitions.env_output.done)  # (T, B)
+    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
-    # --- V-Trace IMPALA Variables ---
-    rho_t = jnp.minimum(1.0, importance_sampling_ratios)
-    c_t = jnp.minimum(1.0, importance_sampling_ratios)
+    dones = batch.player_transitions.env_output.done
+    state_potential = batch.player_transitions.env_output.state_potential
 
-    # --- 1. Extract and Scale Base Values & Rewards ---
-    # Value
-    player_reward = traj.player_transitions.env_output.win_reward  # (T, B, 3)
-    player_value_probs = jnp.exp(target_pred.value_head.log_probs)
-    n_bins = player_value_probs.shape[-1]
+    dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
+    mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
+    discount_t = (1 - dones_expanded) * config.player_gamma * mask_expanded
 
-    # Entropy
-    num_valid_actions = traj.player_transitions.env_output.action_mask.sum((-2, -1))
-    kl_reward = target_pred.action_head.entropy - jnp.log(num_valid_actions + 1e-8)
-    player_ent_scaled = (
-        target_pred.conditional_entropy_head.logits * entropy_normalising_constant
+    alpha = config.player_alpha
+
+    rho_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    rho_t = jnp.expand_dims(rho_t, axis=-1)
+
+    c_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    c_t = jnp.expand_dims(c_t, axis=-1)
+
+    player_reward = batch.player_transitions.env_output.win_reward
+    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
+    n_bins = target_value_probs.shape[-1]
+
+    terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
+    r_t = jnp.concatenate(
+        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
     )
 
-    # Potential
-    state_pot = traj.player_transitions.env_output.state_potential
-    player_state_potential = jnp.concatenate(
-        [jnp.zeros_like(state_pot[:1]), state_pot], axis=0
-    )
-    potential_reward = player_state_potential[1:] - player_state_potential[:-1]
-    player_potential_value = target_pred.potential_value_head.logits
+    v_tm1 = jnp.concatenate((target_value_probs, state_potential[..., None]), axis=-1)
+    last_values = v_tm1[-1:]
 
-    # --- 2. Concatenate Rewards, Values, and Next Values ---
-    # Shape: (T, B, n_bins + 2)
-    combined_rewards = jnp.concatenate(
-        [player_reward, kl_reward[..., None], potential_reward[..., None]], axis=-1
-    )
+    v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
+    td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    combined_values = jnp.concatenate(
+    errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
+
+    targets_tm1 = (errors + v_tm1) * mask_expanded
+    q_bootstrap = jnp.concatenate(
         [
-            player_value_probs,
-            player_ent_scaled[..., None],
-            player_potential_value[..., None],
+            config.player_lambda * targets_tm1[1:]
+            + (1 - config.player_lambda) * v_tm1[1:],
+            v_t[-1:],
         ],
-        axis=-1,
+        axis=0,
+    )
+    q_estimate = r_t + discount_t * q_bootstrap
+
+    pg_advantages = rho_t * (q_estimate - v_tm1)
+
+    combined_advantage = (
+        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
+        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
     )
 
-    # Construct the offset for next values, maintaining the zero-padding logic for entropy
-    last_values = jnp.concatenate(
-        [
-            player_value_probs[-1:],
-            player_ent_scaled[-1:][..., None],
-            player_potential_value[-1:][..., None],
-        ],
-        axis=-1,
-    )
+    win_returns = targets_tm1[..., :n_bins]
 
-    combined_next_values = (
-        jnp.concatenate([combined_values[1:], last_values], axis=0)
-        * player_valid[..., None]
-    )
-
-    # --- 3. Compute Combined Deltas in one batched operation ---
-    combined_deltas = (
-        rho_t[..., None] * (combined_rewards + combined_next_values - combined_values)
-    ).astype(jnp.float32)
-
-    # --- 4. Compute Advantages Deltas ---
-    # Transform the n_bins categorical value deltas back into a scalar for advantages
-    player_scalar_delta = (combined_deltas[..., :n_bins] @ cat_vf_support)[..., None]
-
-    combined_adv_deltas = jnp.concatenate(
-        [
-            player_scalar_delta,  # (T, B, 1)
-            combined_deltas[..., n_bins:],  # (T, B, 2) - Entropy and Potential deltas
-        ],
-        axis=-1,
-    )
-
-    # --- 5. Discounts & Batched Segmented Cumsum ---
-    returns_discounts = (c_t * td_lambda * player_valid).astype(jnp.float32)
-    policy_discounts = (c_t * gae_lambda * player_valid).astype(jnp.float32)
-
-    combined_ret_cumsum = segmented_cumsum(
-        combined_deltas, returns_discounts[..., None]
-    )
-    combined_adv_cumsum = segmented_cumsum(
-        combined_adv_deltas, policy_discounts[..., None]
-    )
-
-    # --- 6. Split Outputs ---
-    win_returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
-
-    ent_returns = (
-        combined_ret_cumsum[..., n_bins] + combined_values[..., n_bins]
-    ) / entropy_normalising_constant
-
-    potential_returns = (
-        combined_ret_cumsum[..., n_bins + 1] + combined_values[..., n_bins + 1]
-    )
+    value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
+    policy_mask = value_mask & jnp.logical_not(batch.player_transitions.env_output.done)
 
     return PlayerTargets(
         win_returns=win_returns,
-        win_advantages=combined_adv_cumsum[..., 0],
-        ent_returns=ent_returns,
-        ent_advantages=combined_adv_cumsum[..., 1],
-        potential_returns=potential_returns,
-        potential_advantages=combined_adv_cumsum[..., 2],
+        advantages=combined_advantage,
+        policy_mask=policy_mask,
+        value_mask=value_mask,
     )
 
 
@@ -159,11 +114,12 @@ def compute_builder_targets(
     traj: Trajectory,
     target_pred: BuilderActorOutput,
     importance_sampling_ratios: jax.Array,
-    td_lambda: float,
-    gae_lambda: float,
+    lambda_: float,
     entropy_normalising_constant: float,
 ) -> BuilderTargets:
-    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
+    cat_vf_support = jnp.asarray(
+        CAT_VF_SUPPORT, dtype=target_pred.value_head.log_probs.dtype
+    )
     builder_transitions = traj.builder_transitions
 
     builder_valid = jnp.logical_not(builder_transitions.env_output.done)  # (T_b, B)
@@ -184,7 +140,7 @@ def compute_builder_targets(
     num_valid_steps = builder_valid.astype(jnp.int32).sum(axis=0)  # (B,)
 
     # Use n_bins directly instead of hardcoding 3 for safety/scalability
-    builder_reward = jnp.zeros((T_b, B, n_bins), dtype=jnp.float32)
+    builder_reward = jnp.zeros((T_b, B, n_bins), dtype=builder_value_probs.dtype)
     safe_idx = jnp.clip(num_valid_steps, 0, T_b - 1)
     batch_idx = jnp.arange(B)
     has_terminal = num_valid_steps < T_b
@@ -222,39 +178,32 @@ def compute_builder_targets(
     )
 
     # --- 3. Compute Combined Deltas in one batched operation ---
-    combined_deltas = (
-        rho_t[..., None] * (combined_rewards + combined_next_values - combined_values)
-    ).astype(jnp.float32)
-
-    # --- 4. Compute Advantages Deltas ---
-    # Transform the n_bins categorical value deltas back into a scalar for advantages
-    builder_scalar_delta = (combined_deltas[..., :n_bins] @ cat_vf_support)[..., None]
-
-    combined_adv_deltas = jnp.concatenate(
-        [
-            builder_scalar_delta,  # (T_b, B, 1)
-            combined_deltas[..., n_bins:],  # (T_b, B, 1) - Entropy deltas
-        ],
-        axis=-1,
+    combined_td_errors = rho_t[..., None] * (
+        combined_rewards + combined_next_values - combined_values
     )
 
     # --- 5. Discounts & Batched Segmented Cumsum ---
-    td_lambdas = (c_t * td_lambda * builder_valid).astype(jnp.float32)
-    gae_lambdas = (c_t * gae_lambda * builder_valid).astype(jnp.float32)
-
-    combined_ret_cumsum = segmented_cumsum(combined_deltas, td_lambdas[..., None])
-    combined_adv_cumsum = segmented_cumsum(combined_adv_deltas, gae_lambdas[..., None])
+    vtrace_errors = vtrace(
+        combined_td_errors, builder_valid[..., None], c_t[..., None] * lambda_
+    )
+    returns = vtrace_errors + combined_values
+    q_bootstrap = jnp.concatenate(
+        [
+            lambda_ * returns[1:] + (1 - lambda_) * combined_values[1:],
+            combined_values[-1:],
+        ],
+        axis=0,
+    )
+    q_estimate = combined_rewards + builder_valid[..., None] * q_bootstrap
+    pg_advantages = rho_t[..., None] * (q_estimate - combined_values)
 
     # --- 6. Split Outputs ---
-    win_returns = combined_ret_cumsum[..., :n_bins] + combined_values[..., :n_bins]
-
-    ent_returns = (
-        combined_ret_cumsum[..., n_bins] + combined_values[..., n_bins]
-    ) / entropy_normalising_constant
+    win_returns = returns[..., :n_bins]
+    ent_returns = returns[..., n_bins]
 
     return BuilderTargets(
         win_returns=win_returns,
-        win_advantages=combined_adv_cumsum[..., 0],
+        win_advantages=pg_advantages[..., :n_bins] @ cat_vf_support,
         ent_returns=ent_returns,
-        ent_advantages=combined_adv_cumsum[..., 1],
+        ent_advantages=pg_advantages[..., n_bins],
     )

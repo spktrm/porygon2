@@ -7,7 +7,7 @@ class ResetResponse(BaseModel):
 
 
 class StepResponse(BaseModel):
-    v: float
+    v_win: float
     log_prob: float
     entropy: float
     src: int

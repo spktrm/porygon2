@@ -252,6 +252,32 @@ export namespace EnvironmentTrajectory {
   }
 }
 
+export class EnvironmentBatch extends jspb.Message {
+  clearTrajectoriesList(): void;
+  getTrajectoriesList(): Array<EnvironmentTrajectory>;
+  setTrajectoriesList(value: Array<EnvironmentTrajectory>): void;
+  addTrajectories(value?: EnvironmentTrajectory, index?: number): EnvironmentTrajectory;
+
+  getMaxTrajectoryLength(): number;
+  setMaxTrajectoryLength(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): EnvironmentBatch.AsObject;
+  static toObject(includeInstance: boolean, msg: EnvironmentBatch): EnvironmentBatch.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: EnvironmentBatch, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): EnvironmentBatch;
+  static deserializeBinaryFromReader(message: EnvironmentBatch, reader: jspb.BinaryReader): EnvironmentBatch;
+}
+
+export namespace EnvironmentBatch {
+  export type AsObject = {
+    trajectoriesList: Array<EnvironmentTrajectory.AsObject>,
+    maxTrajectoryLength: number,
+  }
+}
+
 export class EnvironmentResponse extends jspb.Message {
   getUsername(): string;
   setUsername(value: string): void;
@@ -369,38 +395,56 @@ export namespace WorkerResponse {
   }
 }
 
+export interface ModalityEnumMap {
+  MODALITY_ENUM___UNSPECIFIED: 0;
+  MODALITY_ENUM__MOVE: 1;
+  MODALITY_ENUM__SWITCH: 2;
+  MODALITY_ENUM__WILDCARD: 3;
+  MODALITY_ENUM__OTHER: 4;
+}
+
+export const ModalityEnum: ModalityEnumMap;
+
 export interface ActionEnumMap {
   ACTION_ENUM___UNSPECIFIED: 0;
   ACTION_ENUM__DEFAULT: 1;
-  ACTION_ENUM__ALLY_1_MOVE_1: 2;
-  ACTION_ENUM__ALLY_1_MOVE_2: 3;
-  ACTION_ENUM__ALLY_1_MOVE_3: 4;
-  ACTION_ENUM__ALLY_1_MOVE_4: 5;
-  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: 6;
-  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: 7;
-  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: 8;
-  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: 9;
-  ACTION_ENUM__ALLY_2_MOVE_1: 10;
-  ACTION_ENUM__ALLY_2_MOVE_2: 11;
-  ACTION_ENUM__ALLY_2_MOVE_3: 12;
-  ACTION_ENUM__ALLY_2_MOVE_4: 13;
-  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: 14;
-  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: 15;
-  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: 16;
-  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: 17;
-  ACTION_ENUM__RESERVE_1: 18;
-  ACTION_ENUM__RESERVE_2: 19;
-  ACTION_ENUM__RESERVE_3: 20;
-  ACTION_ENUM__RESERVE_4: 21;
-  ACTION_ENUM__RESERVE_5: 22;
-  ACTION_ENUM__RESERVE_6: 23;
-  ACTION_ENUM__ALLY_1: 24;
-  ACTION_ENUM__ALLY_2: 25;
-  ACTION_ENUM__ENEMY_1: 26;
-  ACTION_ENUM__ENEMY_2: 27;
-  ACTION_ENUM__TARGET_AUTO: 28;
-  ACTION_ENUM__ALLY_1_PASS: 29;
-  ACTION_ENUM__ALLY_2_PASS: 30;
+  ACTION_ENUM__ALLY_1_TARGET: 2;
+  ACTION_ENUM__ALLY_1_PASS: 3;
+  ACTION_ENUM__ALLY_1_MOVE_1: 4;
+  ACTION_ENUM__ALLY_1_MOVE_2: 5;
+  ACTION_ENUM__ALLY_1_MOVE_3: 6;
+  ACTION_ENUM__ALLY_1_MOVE_4: 7;
+  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: 8;
+  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: 9;
+  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: 10;
+  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: 11;
+  ACTION_ENUM__ALLY_2_TARGET: 12;
+  ACTION_ENUM__ALLY_2_PASS: 13;
+  ACTION_ENUM__ALLY_2_MOVE_1: 14;
+  ACTION_ENUM__ALLY_2_MOVE_2: 15;
+  ACTION_ENUM__ALLY_2_MOVE_3: 16;
+  ACTION_ENUM__ALLY_2_MOVE_4: 17;
+  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: 18;
+  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: 19;
+  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: 20;
+  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: 21;
+  ACTION_ENUM__ENEMY_1_TARGET: 22;
+  ACTION_ENUM__ENEMY_2_TARGET: 23;
+  ACTION_ENUM__TARGET_AUTO: 24;
+  ACTION_ENUM__TARGET_ALL: 25;
+  ACTION_ENUM__TARGET_ALLY_SIDE: 26;
+  ACTION_ENUM__TARGET_FOE_SIDE: 27;
+  ACTION_ENUM__TARGET_ALLY_TEAM: 28;
+  ACTION_ENUM__TARGET_RANDOM_NORMAL: 29;
+  ACTION_ENUM__TARGET_ALL_ADJACENT: 30;
+  ACTION_ENUM__TARGET_ALL_ADJACENT_FOES: 31;
+  ACTION_ENUM__TARGET_ALLIES: 32;
+  ACTION_ENUM__RESERVE_1_SWITCH_IN: 33;
+  ACTION_ENUM__RESERVE_2_SWITCH_IN: 34;
+  ACTION_ENUM__RESERVE_3_SWITCH_IN: 35;
+  ACTION_ENUM__RESERVE_4_SWITCH_IN: 36;
+  ACTION_ENUM__RESERVE_5_SWITCH_IN: 37;
+  ACTION_ENUM__RESERVE_6_SWITCH_IN: 38;
 }
 
 export const ActionEnum: ActionEnumMap;

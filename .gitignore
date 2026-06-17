@@ -13,8 +13,7 @@ data/data/
 **/*.ipynb
 
 # rlenv ignores
-rlenv/ex
-rlenv/ex_batch
+rl/environment/ex*
 
 # server ignores
 

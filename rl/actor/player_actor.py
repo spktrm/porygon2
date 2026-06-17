@@ -2,6 +2,7 @@ import jax
 import numpy as np
 
 from rl.actor.agent import Agent
+from rl.actor.guards import should_push_trajectory
 from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
@@ -34,18 +35,24 @@ class PlayerActor:
         unroll_length: int,
         learner: Learner,
         rng_seed: int = 42,
+        is_eval: bool = False,
     ):
         self._agent = agent
         self._env = env
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
+        # Eval actors must never contribute to training data, nor consume the
+        # builder replay buffer's reuse budget. This flag gates both.
+        self._is_eval = is_eval
 
-    def clip_actor_history(self, timestep: PlayerActorInput):
+    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 64):
         return PlayerActorInput(
             env=timestep.env,
-            packed_history=clip_packed_history(timestep.packed_history, resolution=128),
-            history=clip_history(timestep.history, resolution=128),
+            packed_history=clip_packed_history(
+                timestep.packed_history, resolution=resolution
+            ),
+            history=clip_history(timestep.history, resolution=resolution),
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
@@ -68,8 +75,13 @@ class PlayerActor:
             sample_cond = self._learner.builder_replay._sample_cv
             with sample_cond:
                 sample_cond.wait_for(self._learner.builder_replay.ready_to_sample)
+                # Eval samples teams read-only: it doesn't increment reuse
+                # counts, so it can't evict builder trajectories that training
+                # would otherwise consume.
                 builder_trajectory, builder_history = (
-                    self._learner.builder_replay.sample_trajectory()
+                    self._learner.builder_replay.sample_trajectory(
+                        increment=not self._is_eval
+                    )
                 )
 
             add_cond = self._learner.builder_replay._add_cv
@@ -110,9 +122,13 @@ class PlayerActor:
             player_actor_input = self._env.step(action)
 
         if len(player_traj) < self._unroll_length:
-            player_traj += [player_transition] * (
-                self._unroll_length - len(player_traj)
+            padding_step = PlayerTransition(
+                env_output=player_actor_input_clipped.env.replace(
+                    done=np.zeros_like(player_actor_input_clipped.env.done)
+                ),
+                agent_output=player_agent_output,
             )
+            player_traj += [padding_step] * (self._unroll_length - len(player_traj))
 
         # Pack the trajectory and reset parent state.
         player_trajectory = jax.device_get(player_traj)
@@ -146,7 +162,8 @@ class PlayerActor:
         act_out = self.unroll(rng_key=subkey, player_params=player_params)
         self.reset_game_id()
 
-        if self._env.username.startswith("train") and do_push:
+        if should_push_trajectory(self._is_eval, do_push, self._env.username):
+            act_out = jax.device_get(act_out)
             self._learner.enqueue_traj(act_out)
         return act_out
 
