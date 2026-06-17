@@ -99,7 +99,7 @@ class Porygon2LearnerConfig:
     # Regularised reward params
     player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
     player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
-        coef=1.0, step=step, decay=0.35, floor=0.01, ceil=1.0
+        coef=1.0, step=step, decay=0.25, floor=0.05, ceil=1.0
     )
 
     # Loss coefficients
