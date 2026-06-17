@@ -10,6 +10,7 @@ import {
 import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
+import { numEvals } from "../server/eval";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -82,10 +83,9 @@ async function playerController(player: TrainablePlayerAI) {
 
 const testFormats = [
     "gen9randomdoublesbattle",
-    // "gen9vgc2025regibo3",
-    // "gen9ou",
-    // "gen9randombattle",
-    // "gen9vgc2026",
+    "gen9vgc2026regf",
+    "gen9ou",
+    "gen9randombattle",
 ];
 const testPackedTeamArray = [
     0, 397, 40, 289, 850, 364, 857, 639, 11, 5, 58, 2, 0, 23, 23, 17, 4, 23, 0,
@@ -114,10 +114,14 @@ async function runBattle() {
         teamGenerationStrategies.push(Teams.pack(Teams.generate(smogonFormat)));
     }
 
+    const evalIndex = Math.floor(Math.random() * numEvals);
     const battleOptions = {
         p1Name: "Bot1",
-        p2Name: `baseline-eval-heuristic:0`,
-        p1team: getSampleTeam("gen9ou", "Zoroark"),
+        p2Name: `baseline-eval-heuristic:${evalIndex}`,
+        p1team:
+            Math.random() < 0.75 && smogonFormat.includes("randombattle")
+                ? Teams.pack(Teams.generate(smogonFormat))
+                : getSampleTeam("gen9ou", "Zoroark"),
         p2team: generateTeamFromStratgies(teamGenerationStrategies),
         smogonFormat,
     };

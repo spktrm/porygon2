@@ -7,10 +7,20 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class ModalityEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MODALITY_ENUM___UNSPECIFIED: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__MOVE: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__SWITCH: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__WILDCARD: _ClassVar[ModalityEnum]
+    MODALITY_ENUM__OTHER: _ClassVar[ModalityEnum]
+
 class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     ACTION_ENUM___UNSPECIFIED: _ClassVar[ActionEnum]
     ACTION_ENUM__DEFAULT: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_TARGET: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_1: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_2: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_3: _ClassVar[ActionEnum]
@@ -19,6 +29,8 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_TARGET: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_1: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_2: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_3: _ClassVar[ActionEnum]
@@ -27,21 +39,32 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_3: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_4: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_5: _ClassVar[ActionEnum]
-    ACTION_ENUM__RESERVE_6: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_2: _ClassVar[ActionEnum]
-    ACTION_ENUM__ENEMY_1: _ClassVar[ActionEnum]
-    ACTION_ENUM__ENEMY_2: _ClassVar[ActionEnum]
+    ACTION_ENUM__ENEMY_1_TARGET: _ClassVar[ActionEnum]
+    ACTION_ENUM__ENEMY_2_TARGET: _ClassVar[ActionEnum]
     ACTION_ENUM__TARGET_AUTO: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_1_PASS: _ClassVar[ActionEnum]
-    ACTION_ENUM__ALLY_2_PASS: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALL: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALLY_SIDE: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_FOE_SIDE: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALLY_TEAM: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_RANDOM_NORMAL: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALL_ADJACENT: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALL_ADJACENT_FOES: _ClassVar[ActionEnum]
+    ACTION_ENUM__TARGET_ALLIES: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_1_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_2_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_3_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_4_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_5_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
+MODALITY_ENUM___UNSPECIFIED: ModalityEnum
+MODALITY_ENUM__MOVE: ModalityEnum
+MODALITY_ENUM__SWITCH: ModalityEnum
+MODALITY_ENUM__WILDCARD: ModalityEnum
+MODALITY_ENUM__OTHER: ModalityEnum
 ACTION_ENUM___UNSPECIFIED: ActionEnum
 ACTION_ENUM__DEFAULT: ActionEnum
+ACTION_ENUM__ALLY_1_TARGET: ActionEnum
+ACTION_ENUM__ALLY_1_PASS: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_1: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_2: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_3: ActionEnum
@@ -50,6 +73,8 @@ ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: ActionEnum
+ACTION_ENUM__ALLY_2_TARGET: ActionEnum
+ACTION_ENUM__ALLY_2_PASS: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_1: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_2: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_3: ActionEnum
@@ -58,19 +83,23 @@ ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: ActionEnum
 ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: ActionEnum
-ACTION_ENUM__RESERVE_1: ActionEnum
-ACTION_ENUM__RESERVE_2: ActionEnum
-ACTION_ENUM__RESERVE_3: ActionEnum
-ACTION_ENUM__RESERVE_4: ActionEnum
-ACTION_ENUM__RESERVE_5: ActionEnum
-ACTION_ENUM__RESERVE_6: ActionEnum
-ACTION_ENUM__ALLY_1: ActionEnum
-ACTION_ENUM__ALLY_2: ActionEnum
-ACTION_ENUM__ENEMY_1: ActionEnum
-ACTION_ENUM__ENEMY_2: ActionEnum
+ACTION_ENUM__ENEMY_1_TARGET: ActionEnum
+ACTION_ENUM__ENEMY_2_TARGET: ActionEnum
 ACTION_ENUM__TARGET_AUTO: ActionEnum
-ACTION_ENUM__ALLY_1_PASS: ActionEnum
-ACTION_ENUM__ALLY_2_PASS: ActionEnum
+ACTION_ENUM__TARGET_ALL: ActionEnum
+ACTION_ENUM__TARGET_ALLY_SIDE: ActionEnum
+ACTION_ENUM__TARGET_FOE_SIDE: ActionEnum
+ACTION_ENUM__TARGET_ALLY_TEAM: ActionEnum
+ACTION_ENUM__TARGET_RANDOM_NORMAL: ActionEnum
+ACTION_ENUM__TARGET_ALL_ADJACENT: ActionEnum
+ACTION_ENUM__TARGET_ALL_ADJACENT_FOES: ActionEnum
+ACTION_ENUM__TARGET_ALLIES: ActionEnum
+ACTION_ENUM__RESERVE_1_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_2_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_3_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_4_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_5_SWITCH_IN: ActionEnum
+ACTION_ENUM__RESERVE_6_SWITCH_IN: ActionEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")
@@ -151,6 +180,14 @@ class EnvironmentTrajectory(_message.Message):
     STATES_FIELD_NUMBER: _ClassVar[int]
     states: _containers.RepeatedCompositeFieldContainer[EnvironmentState]
     def __init__(self, states: _Optional[_Iterable[_Union[EnvironmentState, _Mapping]]] = ...) -> None: ...
+
+class EnvironmentBatch(_message.Message):
+    __slots__ = ("trajectories", "max_trajectory_length")
+    TRAJECTORIES_FIELD_NUMBER: _ClassVar[int]
+    MAX_TRAJECTORY_LENGTH_FIELD_NUMBER: _ClassVar[int]
+    trajectories: _containers.RepeatedCompositeFieldContainer[EnvironmentTrajectory]
+    max_trajectory_length: int
+    def __init__(self, trajectories: _Optional[_Iterable[_Union[EnvironmentTrajectory, _Mapping]]] = ..., max_trajectory_length: _Optional[int] = ...) -> None: ...
 
 class EnvironmentResponse(_message.Message):
     __slots__ = ("username", "state")

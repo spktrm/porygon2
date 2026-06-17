@@ -33,8 +33,13 @@ export function actionMaskToRandomAction(actionMask: OneDBoolean): Action {
 
     const randomAction = getRandomOneIndex(actionBinary);
 
-    const srcIndex = Math.floor(randomAction / numActionFeatures);
-    const tgtIndex = randomAction % numActionFeatures;
+    const actionMaskWidth = actionMask.width;
+    if (actionMaskWidth === undefined) {
+        throw new Error("Action mask width is undefined");
+    }
+
+    const srcIndex = Math.floor(randomAction / actionMaskWidth);
+    const tgtIndex = randomAction % actionMaskWidth;
 
     action.setSrc(srcIndex as ActionEnumMap[keyof typeof ActionEnum]);
     action.setTgt(tgtIndex as ActionEnumMap[keyof typeof ActionEnum]);
@@ -48,10 +53,18 @@ export const GetRandomAction: EvalActionFnType = ({ player }) => {
         | null
         | undefined;
 
+    const playerIndex = player.getPlayerIndex();
+    if (playerIndex === undefined) {
+        throw new Error("Player index is undefined");
+    }
     const stateHandler = new StateHandler(player);
+    const allyActive = player.publicBattle.sides[playerIndex].active;
+    const enemyActive = player.publicBattle.sides[1 - playerIndex].active;
     const { actionMask } = stateHandler.getActionMask({
         request,
         format: player.privateBattle.gameType,
+        allyActive,
+        enemyActive,
     });
 
     return actionMaskToRandomAction(actionMask);

@@ -38,7 +38,7 @@ from rl.environment.protos.features_pb2 import (
     MovesetHasPP,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentTrajectory
+from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch, ModalityEnum
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -71,6 +71,7 @@ NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
 NUM_ACTION_FEATURES = len(ActionEnum.keys())
+NUM_MODALITY_FEATURES = len(ModalityEnum.keys())
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
 TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
@@ -78,8 +79,6 @@ TOXIC_SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__TOXICSPIKES
 
 ENTITY_PUBLIC_MAX_VALUES = {
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL: 100,
-    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE: 3,
-    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE: 2,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO: MAX_RATIO_TOKEN,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER: NUM_GENDERS,
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS: NUM_STATUS,
@@ -127,6 +126,7 @@ ACTION_MAX_VALUES = {
     MovesetFeature.MOVESET_FEATURE__PP: 64,
     MovesetFeature.MOVESET_FEATURE__MAXPP: 64,
     MovesetFeature.MOVESET_FEATURE__DISABLED: 2,
+    MovesetFeature.MOVESET_FEATURE__IS_WILDCARD: 2,
 }
 
 with open("data/data/data.json", "r") as f:
@@ -182,4 +182,164 @@ with open(os.path.join(os.path.dirname(__file__), "ex.bin"), "rb") as f:
     EX_BUFFER = f.read()
 
 
-EX_TRAJECTORY = EnvironmentTrajectory.FromString(EX_BUFFER)
+EX_BATCH = EnvironmentBatch.FromString(EX_BUFFER)
+
+
+MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+    ]
+)
+REGULAR_MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+    ]
+)
+WILDCARD_MOVE_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+    ]
+)
+RESERVE_ENTITY_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+        ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+        ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+        ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+    ]
+)
+ALLY_TARGET_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
+        ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
+    ]
+)
+ENEMY_TARGET_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ENEMY_1_TARGET,
+        ActionEnum.ACTION_ENUM__ENEMY_2_TARGET,
+    ]
+)
+PASS_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+    ]
+)
+TARGET_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__TARGET_AUTO,
+        ActionEnum.ACTION_ENUM__TARGET_ALL,
+        ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE,
+        ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE,
+        ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM,
+        ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT,
+        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES,
+        ActionEnum.ACTION_ENUM__TARGET_ALLIES,
+    ]
+)
+ALLY_1_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+    ]
+)
+ALLY_2_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+    ]
+)
+
+
+def calculate_flat_modality_mask():
+    action_indices = np.arange(NUM_ACTION_FEATURES**2)
+    src_indices = action_indices // NUM_ACTION_FEATURES
+    action_indices % NUM_ACTION_FEATURES
+
+    is_move = (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4)
+    ) | (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4)
+    )
+    is_wildcard = (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
+    ) | (
+        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
+        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
+    )
+    is_switch = (src_indices >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN) & (
+        src_indices <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
+    )
+    is_other = ~(is_move | is_wildcard | is_switch)
+    return (
+        ModalityEnum.MODALITY_ENUM__MOVE * is_move
+        + ModalityEnum.MODALITY_ENUM__WILDCARD * is_wildcard
+        + ModalityEnum.MODALITY_ENUM__SWITCH * is_switch
+        + ModalityEnum.MODALITY_ENUM__OTHER * is_other
+    )
+
+
+FLAT_MODALITY_MASK = calculate_flat_modality_mask()
+
+for indices in [
+    MOVE_INDICES,
+    RESERVE_ENTITY_INDICES,
+    ALLY_TARGET_INDICES,
+    ENEMY_TARGET_INDICES,
+    PASS_INDICES,
+    TARGET_INDICES,
+    ALLY_1_INDICES,
+    ALLY_2_INDICES,
+]:
+    assert len(indices) == len(set(indices)), "Duplicate indices found"
+    indices.sort()

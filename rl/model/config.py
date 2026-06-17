@@ -43,7 +43,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     # Params for scaling
     cfg.encoder.num_latent_embeddings = 32
-    cfg.encoder.num_thinking_steps = 1
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -53,17 +52,17 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_use_bias = True
     encoder_qk_layer_norm = True
-    encoder_init_residual_scale = 0.0
+    encoder_init_residual_scale = 1.0
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 4
+    decoder_hidden_size_scale = 1
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
     decoder_use_bias = True
     decoder_qk_layer_norm = True
-    decoder_init_residual_scale = 0.0
+    decoder_init_residual_scale = 1.0
 
     transformer_encoder_kwargs = dict(
         num_layers=encoder_num_layers,
@@ -89,52 +88,56 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         init_residual_scale=decoder_init_residual_scale,
     )
 
-    cfg.encoder.timestep_encoder = ConfigDict()
+    cfg.encoder.local_timestep_decoder = ConfigDict()
+    cfg.encoder.entity_decoder = ConfigDict()
     cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
-    cfg.encoder.state_transformer = ConfigDict()
-    cfg.encoder.output_decoder = ConfigDict()
+    cfg.encoder.context_encoder = ConfigDict()
+    cfg.encoder.latent_encoder = ConfigDict()
+    cfg.encoder.action_decoder = ConfigDict()
+    cfg.encoder.value_decoder = ConfigDict()
 
-    for encoder in [cfg.encoder.timestep_encoder]:
+    for encoder in [cfg.encoder.context_encoder, cfg.encoder.latent_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
+        cfg.encoder.local_timestep_decoder,
         cfg.encoder.input_decoder,
+        cfg.encoder.entity_decoder,
         cfg.encoder.history_decoder,
-        cfg.encoder.output_decoder,
+        cfg.encoder.action_decoder,
+        cfg.encoder.value_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
-    set_attributes(cfg.encoder.state_transformer, **transformer_decoder_kwargs)
-
-    cfg.encoder.timestep_encoder.need_pos = True
+    cfg.encoder.local_timestep_decoder.need_pos = False
+    cfg.encoder.context_encoder.need_pos = False
+    cfg.encoder.entity_decoder.need_pos = False
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
-    cfg.encoder.state_transformer.num_layers = 4
-    cfg.encoder.state_transformer.need_pos = False
-    cfg.encoder.output_decoder.need_pos = False
+    cfg.encoder.latent_encoder.need_pos = False
+    cfg.encoder.latent_encoder.num_layers = 4
+    cfg.encoder.action_decoder.need_pos = False
+    cfg.encoder.value_decoder.need_pos = False
 
-    cfg.action_head = ConfigDict()
-    cfg.action_head.qk_logits = ConfigDict()
-    cfg.action_head.qk_logits.use_bias = True
+    for decoder in [
+        cfg.encoder.action_decoder,
+        cfg.encoder.value_decoder,
+    ]:
+        decoder.norm_output = True
 
-    cfg.winloss_head = ConfigDict()
-    cfg.winloss_head.dense = ConfigDict()
-    cfg.winloss_head.dense.features = 3
-    cfg.winloss_head.dense.use_bias = True
-    cfg.winloss_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    cfg.pi_head = ConfigDict()
+    cfg.pi_head.qk_logits = ConfigDict()
+    cfg.pi_head.qk_logits.num_heads = 1
+    cfg.pi_head.qk_logits.use_bias = True
 
-    cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.dense = ConfigDict()
-    cfg.entropy_head.dense.features = 1
-    cfg.entropy_head.dense.use_bias = True
+    cfg.v_head = ConfigDict()
+    cfg.v_head.qk_logits = ConfigDict()
+    cfg.v_head.qk_logits.num_heads = 4
+    cfg.v_head.qk_logits.use_bias = True
+    cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
-    cfg.potential_value_head = ConfigDict()
-    cfg.potential_value_head.dense = ConfigDict()
-    cfg.potential_value_head.dense.features = 1
-    cfg.potential_value_head.dense.use_bias = True
-
-    for head in [cfg.action_head]:
+    for head in [cfg.pi_head]:
         head.train = train
 
     return cfg

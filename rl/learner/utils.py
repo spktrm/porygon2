@@ -4,13 +4,16 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
+from rl.environment.data import (
+    ALLY_TARGET_INDICES,
+    CAT_VF_SUPPORT,
+    NUM_PACKED_SET_FEATURES,
+    RESERVE_ENTITY_INDICES,
+)
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.learner.config import Porygon2LearnerConfig
-from rl.learner.targets import PlayerTargets
-from rl.utils import average
 
 T = TypeVar("T")
 
@@ -28,9 +31,10 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def collect_batch_telemetry_data(
-    batch: Trajectory, config: Porygon2LearnerConfig, player_targets: PlayerTargets
+    batch: Trajectory, config: Porygon2LearnerConfig
 ) -> Dict[str, Any]:
-    player_valid = jnp.bitwise_not(batch.player_transitions.env_output.done)
+    done = batch.player_transitions.env_output.done
+    player_valid = 1 - (jnp.cumsum(done, axis=0) - done)
     player_lengths = player_valid.sum(0)
 
     history_lengths = batch.player_history.field[
@@ -60,7 +64,7 @@ def collect_batch_telemetry_data(
     )
     can_switch = batch.player_transitions.env_output.action_mask[
         ...,
-        ActionEnum.ACTION_ENUM__RESERVE_1 : ActionEnum.ACTION_ENUM__RESERVE_6 + 1,
+        RESERVE_ENTITY_INDICES,
         :,
     ].any((-2, -1))
     can_act = can_move & can_switch & player_valid
@@ -87,10 +91,8 @@ def collect_batch_telemetry_data(
         )
     ) & can_move
     did_switch = (
-        (src_action_index >= ActionEnum.ACTION_ENUM__RESERVE_1)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__RESERVE_6)
-        & (tgt_action_index >= ActionEnum.ACTION_ENUM__ALLY_1)
-        & (tgt_action_index <= ActionEnum.ACTION_ENUM__ALLY_2)
+        (src_action_index[..., None] == RESERVE_ENTITY_INDICES[None, None]).any(axis=-1)
+        & (tgt_action_index[..., None] == ALLY_TARGET_INDICES[None, None]).any(axis=-1)
         & can_switch
     )
     move_ratio = renormalize(did_move, can_act)
@@ -103,26 +105,26 @@ def collect_batch_telemetry_data(
     ).min(axis=0)
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
+    player_value_expectation = (
+        batch.player_transitions.agent_output.actor_output.value_head.expectation
+    )
+    early_valid_length = 5
 
     telemetry = dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
         player_trajectory_length_max=player_lengths.max(),
+        player_trajectory_shape=player_valid.shape[0],
         history_lengths_mean=history_lengths.mean(),
-        player_proactive_switch_advantange=average(
-            player_targets.win_advantages, player_valid & did_switch & can_move
-        ),
-        player_passive_switch_advantange=average(
-            player_targets.win_advantages, player_valid & did_switch & ~can_move
-        ),
-        player_wildcard_hold_advantange=average(
-            player_targets.win_advantages,
-            player_valid & did_move & ~did_wildcard & can_wildcard,
-        ),
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
         reward_mean=(final_reward @ CAT_VF_SUPPORT).mean(),
+        value_expectation_mean=renormalize(player_value_expectation, player_valid),
+        value_expectation_early_mean=renormalize(
+            player_value_expectation[:early_valid_length],
+            player_valid[:early_valid_length],
+        ),
         early_finish_rate=(jnp.abs(final_reward @ CAT_VF_SUPPORT) < 1)
         .astype(jnp.float32)
         .mean(),

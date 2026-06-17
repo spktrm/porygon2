@@ -6,7 +6,7 @@ import numpy as np
 
 from constants import MAX_RATIO_TOKEN, NUM_HISTORY
 from rl.environment.data import (
-    EX_TRAJECTORY,
+    EX_BATCH,
     NUM_ABILITIES,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
@@ -190,12 +190,15 @@ def process_state(
                 info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
                 info[InfoFeature.INFO_FEATURE__TIE_REWARD],
                 info[InfoFeature.INFO_FEATURE__WIN_REWARD],
-            ]
+            ],
+            dtype=np.float32,
         )
         / MAX_RATIO_TOKEN
     )
 
-    state_potential = info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+    state_potential = (
+        info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+    ).astype(np.float32)
 
     env_step = PlayerEnvOutput(
         info=info,
@@ -222,9 +225,43 @@ def process_state(
     )
 
 
+def get_ex_batch(resolution: int = 64) -> PlayerActorInput:
+    processed_states = []
+    for i, unprocessed_states in enumerate(EX_BATCH.trajectories):
+        states = []
+        for state in unprocessed_states.states:
+            processed_state = process_state(state)
+            states.append(processed_state.env)
+
+        done_state = processed_state.env.replace(
+            done=np.ones_like(processed_state.env.done)
+        )
+        states += [done_state] * (EX_BATCH.max_trajectory_length - len(states))
+
+        processed_states.append(
+            PlayerActorInput(
+                env=jax.tree.map(lambda *xs: np.stack(xs), *states),
+                packed_history=processed_state.packed_history,
+                history=processed_state.history,
+            )
+        )
+
+    ex_batch: PlayerActorInput = jax.tree.map(
+        lambda *xs: np.stack(xs, axis=1), *processed_states
+    )
+    ex_batch = ex_batch.replace(
+        packed_history=clip_packed_history(
+            ex_batch.packed_history, resolution=resolution
+        ),
+        history=clip_history(ex_batch.history, resolution=resolution),
+    )
+
+    return ex_batch
+
+
 def get_ex_trajectory() -> PlayerActorInput:
     states = []
-    for state in EX_TRAJECTORY.states:
+    for state in EX_BATCH.trajectories[0].states:
         processed_state = process_state(state)
         states.append(processed_state.env)
     return PlayerActorInput(

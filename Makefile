@@ -17,3 +17,6 @@ kill:
 	-tmux kill-server 2>/dev/null
 	-killall -9 python 2>/dev/null
 	-killall -9 node 2>/dev/null
+
+attach:
+	tmux attach -t train

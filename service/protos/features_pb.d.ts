@@ -47,7 +47,6 @@ export interface EntityPublicNodeFeatureMap {
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1: 40;
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2: 41;
   ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3: 42;
-  ENTITY_PUBLIC_NODE_FEATURE__POSITION: 43;
 }
 
 export const EntityPublicNodeFeature: EntityPublicNodeFeatureMap;
@@ -143,6 +142,7 @@ export interface EntityEdgeFeatureMap {
   ENTITY_EDGE_FEATURE__STATUS_TOKEN: 30;
   ENTITY_EDGE_FEATURE__MOVE_TOKEN: 31;
   ENTITY_EDGE_FEATURE__HIT_COUNT: 32;
+  ENTITY_EDGE_FEATURE__ENTITY_IDX: 33;
 }
 
 export const EntityEdgeFeature: EntityEdgeFeatureMap;
@@ -215,6 +215,7 @@ export interface InfoFeatureMap {
   INFO_FEATURE__PREV_ACTION_SRC: 17;
   INFO_FEATURE__PREV_ACTION_TGT: 18;
   INFO_FEATURE__STATE_POTENTIAL: 19;
+  INFO_FEATURE__HISTORY_STEP_COUNT: 20;
 }
 
 export const InfoFeature: InfoFeatureMap;

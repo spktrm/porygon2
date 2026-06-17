@@ -33,10 +33,12 @@ def policy_gradient_loss(
     policy_ratios: jax.Array,
     advantages: jax.Array,
     valid: jax.Array,
-    clip_ppo: float,
+    threshold: float,
 ):
     pg_loss = spo_objective(
-        policy_ratios=policy_ratios, advantages=advantages, clip_ppo=clip_ppo
+        policy_ratios=policy_ratios,
+        advantages=advantages,
+        clip_ppo=threshold,
     )
     return -average(pg_loss, valid)
 
@@ -119,5 +121,5 @@ def forward_kl_loss(
 def power_schedule(
     coef: float, step: int, decay: float, floor: float, ceil: float
 ) -> jax.Array:
-    x = coef / ((step + 1) ** decay)
+    x = coef / ((step + 1.0) ** decay)
     return jnp.clip(x, min=floor, max=ceil)

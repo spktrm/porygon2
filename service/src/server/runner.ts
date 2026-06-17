@@ -17,11 +17,12 @@ import { Protocol } from "@pkmn/protocol";
 import {
     Action,
     EnvironmentState,
-    ActionEnum,
     StepRequest,
+    ActionEnum,
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
+import { numActionFeatures } from "./data";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -141,15 +142,13 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
-function targetIdxToShowdownFormat(targetIndex: number): string {
-    if (0 <= targetIndex && targetIndex < 2) {
-        return `-` + (targetIndex + 1).toString();
-    } else if (2 <= targetIndex && targetIndex < 4) {
-        return "+" + (targetIndex - 1).toString();
-    } else {
-        return "";
-    }
-}
+const CHOOSABLE_TARGETS = new Set([
+    "normal",
+    "any",
+    "adjacentAlly",
+    "adjacentAllyOrSelf",
+    "adjacentFoe",
+]);
 
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
@@ -277,18 +276,74 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
+    getShowdownTargetFormat(
+        allyIndex: number,
+        moveIndex: number,
+        tgtIndex: number,
+    ): string {
+        const targetLookup = {
+            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
+            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
+            [ActionEnum.ACTION_ENUM__ENEMY_1_TARGET]: "+1",
+            [ActionEnum.ACTION_ENUM__ENEMY_2_TARGET]: "+2",
+            [ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES]: "",
+            [ActionEnum.ACTION_ENUM__TARGET_ALLIES]: "",
+        };
+
+        const request = this.getRequest()! as AnyObject;
+        const allyMoves = request?.active?.[allyIndex]?.moves;
+        const chosenMove = allyMoves?.[moveIndex];
+        const moveTarget = chosenMove?.target;
+
+        if (!CHOOSABLE_TARGETS.has(moveTarget)) {
+            return "";
+        }
+
+        const showdownFormat =
+            targetLookup[tgtIndex as keyof typeof targetLookup];
+
+        if (showdownFormat === undefined) {
+            throw new Error(`Invalid target index: ${tgtIndex}`);
+        }
+
+        return showdownFormat;
+    }
+
     choiceFromAction(action: Action): string {
         const srcIndex = action.getSrc();
         const tgtIndex = action.getTgt();
 
-        const targetIndex = tgtIndex - ActionEnum.ACTION_ENUM__ALLY_1;
-        const showdownFormat = targetIdxToShowdownFormat(targetIndex);
+        // Safe mapping for switch-ins since they are interleaved with RESERVE_MOVEs in V2
+        const reserveSwitchIndices: number[] = [
+            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+        ];
 
         if (
             ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
+            const showdownFormat = this.getShowdownTargetFormat(
+                0,
+                moveIndex,
+                tgtIndex,
+            );
+
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return `move ${moveIndex + 1} ${showdownFormat}`.trim();
         } else if (
@@ -297,6 +352,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
+            const showdownFormat = this.getShowdownTargetFormat(
+                0,
+                moveIndex,
+                tgtIndex,
+            );
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return (
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
@@ -307,6 +370,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
         ) {
             const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
+            const showdownFormat = this.getShowdownTargetFormat(
+                1,
+                moveIndex,
+                tgtIndex,
+            );
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return `move ${moveIndex + 1} ${showdownFormat}`.trim();
         } else if (
@@ -315,16 +386,22 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         ) {
             const moveIndex =
                 srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
+            const showdownFormat = this.getShowdownTargetFormat(
+                1,
+                moveIndex,
+                tgtIndex,
+            );
+            if (showdownFormat === undefined) {
+                throw new Error(`Invalid target index: ${tgtIndex}`);
+            }
 
             return (
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
                 " terastallize"
             );
-        } else if (
-            ActionEnum.ACTION_ENUM__RESERVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__RESERVE_6
-        ) {
-            const switchIndex = srcIndex - ActionEnum.ACTION_ENUM__RESERVE_1;
+        } else if (reserveSwitchIndices.includes(srcIndex)) {
+            const switchIndex = reserveSwitchIndices.indexOf(srcIndex);
+
             return `switch ${switchIndex + 1}`;
         } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
             return "default";
@@ -466,7 +543,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 const fromIdx = parseInt(choice.split(" ")[1]) - 1;
                 [order[toIdx], order[fromIdx]] = [order[fromIdx], order[toIdx]];
             }
-            return "team " + order.join("");
+            const slicedOrder = order.slice(0, request.maxChosenTeamSize ?? 6);
+            return "team " + slicedOrder.join("");
         };
 
         const choice =
@@ -483,8 +561,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     override async start() {
         const choices = [];
         for await (const chunk of this.stream) {
-            if (chunk.includes("error|")) {
-                console.log(`Error in stream: ${chunk}`);
+            if (chunk.startsWith("|error|")) {
+                if (chunk.includes("Invalid choice")) {
+                    console.error(`Invalid choice error in stream: ${chunk}`);
+                } else if (chunk.includes("Unavailable choice")) {
+                    console.log(`Unavailable move error in stream: ${chunk}`);
+                } else {
+                    console.error(`Error in stream: ${chunk}`);
+                }
             }
 
             if (this.done || this.finishedEarly) {
@@ -623,13 +707,13 @@ export function createBattle(
     (async () => {
         const spectator = new Battle(new Generations(Dex), null);
 
-        const windowSize = 20;
+        // Replace your tracking variables with this:
+        const windowSize = 40;
         const maxChange = 0.01;
 
-        // Track strictly what we need. No arrays!
-        let lastHpDiff = 0;
-        let stagnantTurns = 0;
-        let isFirstTurn = true;
+        const hpHistory = new Float32Array(windowSize);
+        let historyIndex = 0;
+        let turnsLogged = 0;
 
         for await (const chunk of streams.omniscient) {
             for (const line of chunk.split("\n")) {
@@ -638,34 +722,39 @@ export function createBattle(
                 if (line.startsWith("|turn")) {
                     const currentHpDiff = hpDiff(spectator);
 
-                    if (isFirstTurn) {
-                        lastHpDiff = currentHpDiff;
-                        isFirstTurn = false;
-                        continue;
-                    }
+                    // Log the current HP diff into our circular buffer
+                    hpHistory[historyIndex] = currentHpDiff;
+                    historyIndex = (historyIndex + 1) % windowSize;
+                    turnsLogged++;
 
-                    // Calculate absolute change
-                    const change = Math.abs(currentHpDiff - lastHpDiff);
-                    lastHpDiff = currentHpDiff;
+                    // Only check for stagnation if we've filled the window
+                    if (turnsLogged >= windowSize) {
+                        let maxDiff = -Infinity;
+                        let minDiff = Infinity;
 
-                    // O(1) Stalling check: just update a counter
-                    if (change <= maxChange) {
-                        stagnantTurns++;
-                    } else {
-                        stagnantTurns = 0; // Reset momentum
+                        // Find the highest and lowest HP diffs in the last 40 turns
+                        for (let i = 0; i < windowSize; i++) {
+                            if (hpHistory[i] > maxDiff) maxDiff = hpHistory[i];
+                            if (hpHistory[i] < minDiff) minDiff = hpHistory[i];
+                        }
+
+                        // If the total fluctuation over 40 turns is tiny, it's a stall
+                        if (maxDiff - minDiff <= maxChange) {
+                            p1.finishEarly();
+                            p2.finishEarly();
+                            break;
+                        }
                     }
                 }
             }
 
+            // Check request count fallback
             if (
                 p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount ||
-                stagnantTurns >= windowSize
+                p2.requestCount >= maxRequestCount
             ) {
                 p1.finishEarly();
                 p2.finishEarly();
-                // Optional: You might want to break the stream here
-                // depending on how your simulator handles early termination.
                 break;
             }
         }

@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 
+from constants import NUM_HISTORY
+
 load_dotenv()
 import secrets
 from typing import Literal
@@ -24,8 +26,8 @@ app = FastAPI()
 model = InferenceModel(
     generation=9,
     seed=secrets.randbits(32),
-    player_head_params=HeadParams(temp=0.8),
-    builder_head_params=HeadParams(temp=0.8),
+    player_head_params=HeadParams(temp=1.0),
+    builder_head_params=HeadParams(temp=1.0),
 )
 
 
@@ -54,7 +56,7 @@ async def step(request: Request) -> StepResponse:
     data = await request.body()
     state = EnvironmentState.FromString(data)
 
-    ts = process_state(state, max_history=512)
+    ts = process_state(state, max_history=NUM_HISTORY)
     response = await run_in_threadpool(model.step, ts)
     pprint(response)
 
