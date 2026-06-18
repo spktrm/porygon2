@@ -119,7 +119,7 @@ def forward_kl_loss(
 
 
 def power_schedule(
-    coef: float, step: int, decay: float, floor: float, ceil: float
+    coef: float, step: int, decay: float, floor: float, ceil: float, scale: float = 1.0
 ) -> jax.Array:
-    x = coef / ((step + 1.0) ** decay)
+    x = coef / (((step + 1.0) * scale) ** decay)
     return jnp.clip(x, min=floor, max=ceil)

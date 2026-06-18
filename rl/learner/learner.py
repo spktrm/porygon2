@@ -84,9 +84,28 @@ def train_step(
     player_advantage_mixing_alpha = config.player_advantage_mixing_alpha_fn(
         player_state.step_count
     )
-    player_entropy_mult = config.player_entropy_mult(player_state.step_count)
 
     training_logs = {}
+    player_entropy_alpha = jnp.exp(player_state.log_alpha).astype(float_dtype)
+
+    target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
+    target_actor_ratio = jnp.exp(target_actor_log_ratio)
+    actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
+
+    player_targets = compute_player_targets(
+        batch,
+        player_target_pred,
+        isr=target_actor_ratio,
+        advantage_mixing_alpha=player_advantage_mixing_alpha,
+        config=config,
+    )
+    policy_mask = player_targets.policy_mask
+    value_mask = player_targets.value_mask
+
+    player_targets = promote_map(player_targets, float_dtype)
+
+    player_policy_mask_sum = policy_mask.sum()
+    player_value_mask_sum = value_mask.sum()
 
     def player_loss_fn(params: Params):
 
@@ -107,26 +126,6 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
-        target_actor_ratio = jnp.exp(target_actor_log_ratio)
-        actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(
-            min=0.0, max=2.0
-        )
-
-        player_targets = compute_player_targets(
-            batch,
-            learner_player_pred,
-            player_target_pred,
-            isr=target_actor_ratio,
-            advantage_mixing_alpha=player_advantage_mixing_alpha,
-            config=config,
-        )
-        policy_mask = player_targets.policy_mask
-        value_mask = player_targets.value_mask
-
-        player_targets = promote_map(player_targets, float_dtype)
-        player_targets = jax.lax.stop_gradient(player_targets)
-
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
@@ -146,7 +145,7 @@ def train_step(
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
-            learner_action_head.entropy, policy_mask
+            learner_action_head.normalized_entropy, policy_mask
         )
 
         loss_actor_forward_kl = forward_kl_loss(
@@ -178,7 +177,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
+            + player_entropy_alpha * loss_magnet_kl
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
@@ -216,6 +215,20 @@ def train_step(
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
+
+    def player_alpha_loss_fn(log_alpha_param):
+        # player_action_entropy from the logs is already masked and averaged scalar
+        current_entropy = player_logs["player_action_normalized_entropy"]
+        # Stop gradient on the difference to only flow gradients to log_alpha
+        loss = log_alpha_param * jax.lax.stop_gradient(
+            current_entropy - config.player_target_normalized_entropy
+        )
+        return loss
+
+    alpha_grad_fn = jax.value_and_grad(player_alpha_loss_fn)
+    alpha_loss_val, alpha_grads = alpha_grad_fn(player_state.log_alpha)
+    player_state = player_state.apply_alpha_gradients(grads=alpha_grads)
+
     training_logs.update(player_logs)
     training_logs.update(
         dict(
@@ -223,7 +236,13 @@ def train_step(
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_advantage_mixing_alpha=player_advantage_mixing_alpha,
-            player_entropy_mult=player_entropy_mult,
+            player_loss_entropy_alpha=alpha_loss_val,
+            player_entropy_alpha=player_entropy_alpha.reshape(-1),
+            # Mask sums
+            player_policy_mask_sum=player_policy_mask_sum,
+            player_value_mask_sum=player_value_mask_sum,
+            player_policy_value_mask_ratio=player_policy_mask_sum
+            / (player_value_mask_sum + 1e-8),
         )
     )
     training_logs.update(
