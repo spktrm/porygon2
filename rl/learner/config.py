@@ -22,7 +22,6 @@ from rl.environment.interfaces import (
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner.league import MAIN_KEY, League
-from rl.learner.loss import power_schedule
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
@@ -74,12 +73,17 @@ class Porygon2LearnerConfig:
     league_size: int = 16
     manage_league_interval: int = 10
 
+    # Player automatic entropy tuning params
+    player_alpha_learning_rate: float = 1e-4
+    player_initial_alpha: float = 0.1
+    player_target_normalized_entropy: float = 0.15
+
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
-    player_clip_gradient: float = 10.0
-    builder_clip_gradient: float = 10.0
+    player_clip_gradient: float = 1.0
+    builder_clip_gradient: float = 1.0
     gradient_accumulation_steps: int = 1
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
@@ -98,17 +102,14 @@ class Porygon2LearnerConfig:
 
     # Regularised reward params
     player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
-    player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
-        coef=1.0, step=step, decay=0.25, floor=0.05, ceil=1.0
-    )
 
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 1.0
-    player_value_head_loss_coef: float = 1.0
+    player_kl_loss_coef: float = 0.05
+    player_value_head_loss_coef: float = 0.5
     player_logit_norm_loss_coef: float = 0.0
+
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -118,6 +119,7 @@ class Porygon2LearnerConfig:
     builder_entropy_coef: float = 0.01
     builder_entropy_prediction_normalising_constant: float = 100
     builder_entropy_advantage_scale: float = 1e-3
+
     # Human
     builder_human_loss_coef: float = 1e-2
 
@@ -142,8 +144,20 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
+    log_alpha: jax.Array = struct.field(pytree_node=True)
+    alpha_tx: optax.GradientTransformation = struct.field(pytree_node=False)
+    alpha_opt_state: optax.OptState = struct.field(pytree_node=True)
+
     step_count: int = 0
     frame_count: int = 0
+
+    def apply_alpha_gradients(self, grads, **kwargs):
+        """Applies gradients specifically to the log_alpha parameter."""
+        updates, new_opt_state = self.alpha_tx.update(
+            grads, self.alpha_opt_state, self.log_alpha
+        )
+        new_log_alpha = optax.apply_updates(self.log_alpha, updates)
+        return self.replace(log_alpha=new_log_alpha, alpha_opt_state=new_opt_state)
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -193,12 +207,17 @@ def create_train_state(
             player_optimizer, config.gradient_accumulation_steps
         )
     initial_player_params = player_params_init_fn(rng)
+    log_alpha_init = jnp.log(jnp.array(config.player_initial_alpha, dtype=jnp.float32))
+    alpha_tx = optax.adam(config.player_alpha_learning_rate)
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
         tx=player_optimizer,
+        log_alpha=log_alpha_init,
+        alpha_opt_state=alpha_tx.init(log_alpha_init),
+        alpha_tx=alpha_tx,
     )
 
     builder_params_init_fn = functools.partial(
@@ -285,6 +304,8 @@ def save_state(
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
         target_params=player_state.target_params,
+        log_alpha=player_state.log_alpha,
+        alpha_opt_state=player_state.alpha_opt_state,
     )
     data["builder_state"] = dict(
         params=builder_state.params,
@@ -387,6 +408,8 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
+        log_alpha=ckpt_player_state["log_alpha"],
+        alpha_opt_state=ckpt_player_state["alpha_opt_state"],
     )
 
     # Fully replace builder state
