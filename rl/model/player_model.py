@@ -13,11 +13,12 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, ModalityEnum
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
+    PlayerAlphasOutput,
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
@@ -29,6 +30,7 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     HeadParams,
     PointerLogits,
+    PolicyMetrics,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -75,6 +77,52 @@ def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
     return move_prior + switch_prior + wildcard_prior + other_prior
 
 
+class Porygon2PlayerAlphas(nn.Module):
+    alphas_init: float = 0.1
+
+    def setup(self):
+        self.log_alpha = self.param(
+            "log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.modality_log_alpha = self.param(
+            "modality_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.move_log_alpha = self.param(
+            "move_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.switch_log_alpha = self.param(
+            "switch_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.wildcard_log_alpha = self.param(
+            "wildcard_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.other_log_alpha = self.param(
+            "other_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+
+    def __call__(self):
+        return PlayerAlphasOutput(
+            log_alpha=self.log_alpha.squeeze(),
+            modality_log_alpha=self.modality_log_alpha.squeeze(),
+            move_log_alpha=self.move_log_alpha.squeeze(),
+            switch_log_alpha=self.switch_log_alpha.squeeze(),
+            other_log_alpha=self.other_log_alpha.squeeze(),
+            wildcard_log_alpha=self.wildcard_log_alpha.squeeze(),
+        )
+
+
 class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
@@ -88,6 +136,102 @@ class Porygon2PlayerModel(nn.Module):
             self.pi_head(action_embeddings, action_embeddings).squeeze(-1).reshape(-1)
         )
 
+    def _calculate_entropy_metrics(
+        self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
+    ):
+        modality_oh = jax.nn.one_hot(
+            FLAT_MODALITY_MASK,
+            NUM_MODALITY_FEATURES,
+            dtype=policy_metrics.log_policy.dtype,
+        )
+        valid_modality_mask = flat_valid_mask[..., None] * modality_oh
+
+        modality_log_probs = nn.logsumexp(
+            jnp.where(
+                valid_modality_mask,
+                policy_metrics.log_policy[..., None],
+                -1e9,
+            ),
+            axis=0,
+        )
+        modality_probs = jnp.exp(modality_log_probs)
+
+        # Count valid actions per modality
+        valid_actions_per_modality = valid_modality_mask.sum(axis=0)
+
+        # --- THE FIX ---
+
+        # 1. Count how many total modalities actually have valid options
+        num_valid_modalities = (valid_actions_per_modality > 0).sum(
+            dtype=modality_probs.dtype
+        )
+
+        # 2. Calculate the raw entropy safely
+        raw_modality_entropy = -jnp.sum(
+            jnp.where(
+                valid_actions_per_modality > 0, modality_probs * modality_log_probs, 0.0
+            )
+        )
+
+        # 3. Calculate max possible entropy
+        max_modality_entropy = jnp.log(jnp.maximum(num_valid_modalities, 1.0))
+
+        # --- THE FIX ---
+        # Create a safe denominator that is never 0.0, even when the mask is False
+        safe_max_modality_entropy = jnp.where(
+            num_valid_modalities > 1, max_modality_entropy, 1.0
+        )
+
+        # 4. Safely normalize using the safe denominator
+        normalized_modality_entropy = jnp.where(
+            num_valid_modalities > 1,
+            raw_modality_entropy / safe_max_modality_entropy,
+            0.0,
+        )
+
+        normalized_condition_entropy = self._calculate_conditional_entropy(
+            policy_metrics,
+            modality_log_probs,
+            flat_valid_mask,
+            valid_actions_per_modality,
+        )
+
+        return normalized_modality_entropy, normalized_condition_entropy
+
+    def _calculate_conditional_entropy(
+        self,
+        policy_metrics: PolicyMetrics,
+        modality_log_probs: jax.Array,
+        flat_valid_mask: jax.Array,
+        valid_actions_per_modality: jax.Array,
+    ):
+
+        # 1. Broadcast the parent modality's log probability down to every individual action
+        parent_log_probs = modality_log_probs[FLAT_MODALITY_MASK]
+
+        # 2. Calculate the conditional probability: log P(a|m) = log P(a) - log P(m)
+        log_p_a_given_m = policy_metrics.log_policy - parent_log_probs
+        p_a_given_m = jnp.exp(log_p_a_given_m)
+
+        # 3. Calculate the entropy contribution of each action: -P(a|m) * log P(a|m)
+        action_cond_entropies = jnp.where(
+            flat_valid_mask, -p_a_given_m * log_p_a_given_m, 0.0
+        )
+
+        # 4. Sum the action entropies back into their respective modality buckets
+        per_modality_entropy = jax.ops.segment_sum(
+            action_cond_entropies,
+            FLAT_MODALITY_MASK,
+            num_segments=NUM_MODALITY_FEATURES,
+        )
+
+        per_modality_entropy = per_modality_entropy / jnp.maximum(
+            valid_actions_per_modality, 1
+        )
+
+        # 5. Mask out modalities with 1 or 0 valid actions (their internal entropy is strictly 0)
+        return jnp.where(valid_actions_per_modality > 1, per_modality_entropy, 0.0)
+
     def _forward_action_head(
         self,
         action_embeddings: jax.Array,
@@ -98,8 +242,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        pi_logits = self._forward_pi_head(action_embeddings)
-        pi_logits = pi_logits / temp
+        micro_logits = self._forward_pi_head(action_embeddings)
+        micro_logits = micro_logits / temp
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -107,14 +251,15 @@ class Porygon2PlayerModel(nn.Module):
         #     logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
         # )
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask
+            logits=micro_logits, valid_mask=flat_valid_mask
         )
 
         if train:
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(flat_valid_mask, pi_logits, -1e9), self.make_rng("sampling")
+                jnp.where(flat_valid_mask, micro_logits, -1e9),
+                self.make_rng("sampling"),
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
@@ -122,6 +267,10 @@ class Porygon2PlayerModel(nn.Module):
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
+
+        normalized_modality_entropy, normalized_conditional_entropy = (
+            self._calculate_entropy_metrics(policy_metrics, flat_valid_mask)
+        )
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
@@ -132,6 +281,19 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=policy_metrics.normalized_entropy,
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
+            normalized_modality_entropy=normalized_modality_entropy,
+            normalized_conditional_move_entropy=normalized_conditional_entropy[
+                ..., ModalityEnum.MODALITY_ENUM__MOVE
+            ],
+            normalized_conditional_switch_entropy=normalized_conditional_entropy[
+                ..., ModalityEnum.MODALITY_ENUM__SWITCH
+            ],
+            normalized_conditional_other_entropy=normalized_conditional_entropy[
+                ..., ModalityEnum.MODALITY_ENUM__OTHER
+            ],
+            normalized_conditional_wildcard_entropy=normalized_conditional_entropy[
+                ..., ModalityEnum.MODALITY_ENUM__WILDCARD
+            ],
         )
 
     def _forward_value_head(self, value_embeddings: jax.Array):
