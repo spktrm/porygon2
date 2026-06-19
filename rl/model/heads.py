@@ -28,7 +28,10 @@ class PolicyMetrics(NamedTuple):
 
 
 def masked_mean_squared_penalty(logits: jax.Array, valid_mask: jax.Array) -> jax.Array:
-    masked_logits = jnp.where(valid_mask, logits, 0.0)
+    mean_centered_logits = logits - jnp.mean(
+        logits, axis=-1, keepdims=True, where=valid_mask
+    )
+    masked_logits = jnp.where(valid_mask, mean_centered_logits, 0.0)
     sum_of_squares = jnp.sum(jnp.square(masked_logits), axis=-1)
     valid_count = jnp.maximum(jnp.sum(valid_mask, axis=-1), 1.0)
     return sum_of_squares / valid_count

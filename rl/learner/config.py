@@ -14,15 +14,18 @@ import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 
+from rl.environment.data import NUM_MODALITY_FEATURES
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
+    PlayerAlphasOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
+from rl.model.player_model import Porygon2PlayerAlphas
 from rl.model.utils import Params, ParamsContainer, get_most_recent_file
 
 
@@ -77,6 +80,11 @@ class Porygon2LearnerConfig:
     player_alpha_learning_rate: float = 1e-4
     player_initial_alpha: float = 0.1
     player_target_normalized_entropy: float = 0.15
+    player_target_normalized_modality_entropy: float = 0.15
+    player_target_normalized_conditional_move_entropy: float = 0.15
+    player_target_normalized_conditional_switch_entropy: float = 0.15
+    player_target_normalized_conditional_other_entropy: float = 0.15
+    player_target_normalized_conditional_wildcard_entropy: float = 0.15
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
@@ -144,7 +152,10 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    log_alpha: jax.Array = struct.field(pytree_node=True)
+    alpha_params: jax.Array = struct.field(pytree_node=True)
+    alpha_apply_fn: Callable[[Params], PlayerAlphasOutput] = struct.field(
+        pytree_node=False
+    )
     alpha_tx: optax.GradientTransformation = struct.field(pytree_node=False)
     alpha_opt_state: optax.OptState = struct.field(pytree_node=True)
 
@@ -154,10 +165,12 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     def apply_alpha_gradients(self, grads, **kwargs):
         """Applies gradients specifically to the log_alpha parameter."""
         updates, new_opt_state = self.alpha_tx.update(
-            grads, self.alpha_opt_state, self.log_alpha
+            grads, self.alpha_opt_state, self.alpha_params
         )
-        new_log_alpha = optax.apply_updates(self.log_alpha, updates)
-        return self.replace(log_alpha=new_log_alpha, alpha_opt_state=new_opt_state)
+        new_alpha_params = optax.apply_updates(self.alpha_params, updates)
+        return self.replace(
+            alpha_params=new_alpha_params, alpha_opt_state=new_opt_state
+        )
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -207,16 +220,20 @@ def create_train_state(
             player_optimizer, config.gradient_accumulation_steps
         )
     initial_player_params = player_params_init_fn(rng)
-    log_alpha_init = jnp.log(jnp.array(config.player_initial_alpha, dtype=jnp.float32))
+
+    player_alpha_mod = Porygon2PlayerAlphas(config.player_initial_alpha)
+    init_player_alpha_params = player_alpha_mod.init(rng)
     alpha_tx = optax.adam(config.player_alpha_learning_rate)
+
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
         tx=player_optimizer,
-        log_alpha=log_alpha_init,
-        alpha_opt_state=alpha_tx.init(log_alpha_init),
+        alpha_params=init_player_alpha_params,
+        alpha_apply_fn=player_alpha_mod.apply,
+        alpha_opt_state=alpha_tx.init(init_player_alpha_params),
         alpha_tx=alpha_tx,
     )
 
