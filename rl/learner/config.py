@@ -14,7 +14,6 @@ import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 
-from rl.environment.data import NUM_MODALITY_FEATURES
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
@@ -80,7 +79,7 @@ class Porygon2LearnerConfig:
     player_alpha_learning_rate: float = 1e-4
     player_initial_alpha: float = 0.1
     player_target_normalized_entropy: float = 0.15
-    player_target_normalized_modality_entropy: float = 0.15
+    player_target_normalized_modality_entropy: float = 0.50
     player_target_normalized_conditional_move_entropy: float = 0.15
     player_target_normalized_conditional_switch_entropy: float = 0.15
     player_target_normalized_conditional_other_entropy: float = 0.15
@@ -163,7 +162,7 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     frame_count: int = 0
 
     def apply_alpha_gradients(self, grads, **kwargs):
-        """Applies gradients specifically to the log_alpha parameter."""
+        """Applies gradients specifically to the alpha_params."""
         updates, new_opt_state = self.alpha_tx.update(
             grads, self.alpha_opt_state, self.alpha_params
         )
@@ -321,7 +320,7 @@ def save_state(
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
         target_params=player_state.target_params,
-        log_alpha=player_state.log_alpha,
+        alpha_params=player_state.alpha_params,
         alpha_opt_state=player_state.alpha_opt_state,
     )
     data["builder_state"] = dict(
@@ -425,7 +424,7 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=ckpt_player_state["step_count"],
         frame_count=ckpt_player_state["frame_count"],
-        log_alpha=ckpt_player_state["log_alpha"],
+        alpha_params=ckpt_player_state["alpha_params"],
         alpha_opt_state=ckpt_player_state["alpha_opt_state"],
     )
 
