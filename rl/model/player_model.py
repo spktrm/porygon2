@@ -15,7 +15,6 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
-    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAlphasOutput,
@@ -24,10 +23,11 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
-from rl.environment.utils import CategoricalValueHeadOutput, get_ex_player_step
+from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
+    CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
     PolicyMetrics,
@@ -129,7 +129,7 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
-        self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
+        self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         return (
@@ -303,29 +303,13 @@ class Porygon2PlayerModel(nn.Module):
             ],
         )
 
-    def _forward_value_head(self, value_embeddings: jax.Array):
-        v_heads = self.v_head(value_embeddings, value_embeddings)
-
-        value_gate = v_heads[..., 0].reshape(-1)
-        value_gate_probs = nn.softmax(value_gate)
-
-        value_logits = jax.lax.collapse(v_heads[..., 1:], 0, -1)
-
-        agg_value_logits = value_gate_probs @ value_logits
-        agg_value_log_probs = nn.log_softmax(agg_value_logits, axis=-1)
-        agg_value_probs = jnp.exp(agg_value_log_probs)
-
-        return CategoricalValueHeadOutput(
-            logits=agg_value_logits,
-            log_probs=agg_value_log_probs,
-            entropy=-jnp.sum(agg_value_probs * agg_value_log_probs, axis=-1),
-            expectation=agg_value_probs @ self.cfg.v_head.category_values,
-        )
+    def _forward_value_head(self, value_embedding: jax.Array):
+        return self.v_head(value_embedding)
 
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
-        value_embeddings: jax.Array,
+        value_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -338,7 +322,7 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
         )
-        value_head = self._forward_value_head(value_embeddings)
+        value_head = self._forward_value_head(value_embedding)
 
         return PlayerActorOutput(action_head=action_head, value_head=value_head)
 
@@ -352,13 +336,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        action_embeddings, value_embeddings = self.encoder(
+        action_embeddings, value_embedding = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+        )(action_embeddings, value_embedding, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
