@@ -225,12 +225,19 @@ class Porygon2PlayerModel(nn.Module):
             num_segments=NUM_MODALITY_FEATURES,
         )
 
-        per_modality_entropy = per_modality_entropy / jnp.maximum(
-            valid_actions_per_modality, 1
+        # 5. Calculate max possible conditional entropy ( log(N) )
+        max_cond_entropy = jnp.log(jnp.maximum(valid_actions_per_modality, 1.0))
+
+        # Create a safe denominator to prevent division by zero
+        safe_max_cond_entropy = jnp.where(
+            valid_actions_per_modality > 1, max_cond_entropy, 1.0
         )
 
-        # 5. Mask out modalities with 1 or 0 valid actions (their internal entropy is strictly 0)
-        return jnp.where(valid_actions_per_modality > 1, per_modality_entropy, 0.0)
+        # Normalize
+        normalized_cond_entropy = per_modality_entropy / safe_max_cond_entropy
+
+        # 6. Mask out modalities with 1 or 0 valid actions (their internal entropy is strictly 0)
+        return jnp.where(valid_actions_per_modality > 1, normalized_cond_entropy, 0.0)
 
     def _forward_action_head(
         self,

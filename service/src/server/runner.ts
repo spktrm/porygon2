@@ -150,6 +150,8 @@ const CHOOSABLE_TARGETS = new Set([
     "adjacentFoe",
 ]);
 
+const globalGens = new Generations(Dex);
+
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
@@ -187,8 +189,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.userName = userName;
 
-        this.privateBattle = new Battle(new Generations(Dex), null);
-        this.publicBattle = new Battle(new Generations(Dex), null);
+        this.privateBattle = new Battle(globalGens, null);
+        this.publicBattle = new Battle(globalGens, null);
         this.eventHandler = new EventHandler(this);
         this.done = false;
         this.choices = [];
@@ -705,7 +707,7 @@ export function createBattle(
 >player p2 ${JSON.stringify(p2spec)}`);
 
     (async () => {
-        const spectator = new Battle(new Generations(Dex), null);
+        const spectator = new Battle(globalGens, null);
 
         // Replace your tracking variables with this:
         const windowSize = 40;
@@ -758,6 +760,7 @@ export function createBattle(
                 break;
             }
         }
+        spectator.destroy();
     })();
 
     return { p1, p2 };
