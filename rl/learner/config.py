@@ -78,7 +78,6 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-4
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.5
     player_target_normalized_modality_entropy: float = 0.65
     player_target_normalized_conditional_move_entropy: float = 0.15
     player_target_normalized_conditional_switch_entropy: float = 0.15
@@ -114,7 +113,7 @@ class Porygon2LearnerConfig:
     ## Player
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.05
-    player_value_head_loss_coef: float = 0.5
+    player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
 
     ## Builder

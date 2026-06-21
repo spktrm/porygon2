@@ -89,7 +89,6 @@ def train_step(
     player_log_alphas = player_state.alpha_apply_fn(player_state.alpha_params)
     player_log_alphas = promote_map(player_log_alphas, float_dtype)
 
-    player_alpha = jnp.exp(player_log_alphas.log_alpha)
     player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
     player_move_alpha = jnp.exp(player_log_alphas.move_log_alpha)
     player_switch_alpha = jnp.exp(player_log_alphas.switch_log_alpha)
@@ -222,8 +221,7 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
-                player_alpha * normalized_entropy
-                + player_modality_alpha * normalized_modality_entropy
+                +player_modality_alpha * normalized_modality_entropy
                 + player_move_alpha * normalized_conditional_move_entropy
                 + player_switch_alpha * normalized_conditional_switch_entropy
                 + player_wildcard_alpha * normalized_conditional_wildcard_entropy
@@ -284,7 +282,6 @@ def train_step(
         player_log_alphas = player_state.alpha_apply_fn(player_alpha_params)
         player_log_alphas = promote_map(player_log_alphas, float_dtype)
 
-        player_alpha = jnp.exp(player_log_alphas.log_alpha)
         player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
         player_move_alpha = jnp.exp(player_log_alphas.move_log_alpha)
         player_switch_alpha = jnp.exp(player_log_alphas.switch_log_alpha)
@@ -294,13 +291,7 @@ def train_step(
         # Stop gradient on the difference to only flow gradients to log_alpha
         # Multiply by the 'has_*' flag to zero out the loss if the batch lacked these states
         loss = (
-            player_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_entropy"]
-                - config.player_target_normalized_entropy
-            )
-            * player_logs["player_has_entropy"]
-            + player_modality_alpha
+            +player_modality_alpha
             * jax.lax.stop_gradient(
                 player_logs["player_normalized_modality_entropy"]
                 - config.player_target_normalized_modality_entropy
@@ -347,7 +338,6 @@ def train_step(
             player_advantage_mixing_alpha=player_advantage_mixing_alpha,
             player_loss_entropy_alpha=alpha_loss_val,
             # Alphas
-            player_alpha=player_alpha,
             player_modality_alpha=player_modality_alpha,
             player_move_alpha=player_move_alpha,
             player_switch_alpha=player_switch_alpha,

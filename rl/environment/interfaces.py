@@ -81,7 +81,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 @dataclass
 class PlayerAlphasOutput(PolicyHeadOutput):
-    log_alpha: ArrayLike = ()
     modality_log_alpha: ArrayLike = ()
     move_log_alpha: ArrayLike = ()
     switch_log_alpha: ArrayLike = ()
