@@ -70,7 +70,6 @@ import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
 import { getStatePotential } from "./statePotential";
 
-
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames =
     | RemovePipes<BattleMajorArgName>
