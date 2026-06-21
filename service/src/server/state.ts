@@ -68,6 +68,8 @@ import {
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
+import { getStatePotential } from "./statePotential";
+
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames =
@@ -4191,55 +4193,18 @@ export class StateHandler {
     }
 
     getStatePotential() {
-        let p1Total = 0;
-        let p2Total = 0;
-
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
         }
 
-        const aliveCoef = 1;
-        const hpCoef = 0.1;
-        const maxValue = 6 * (aliveCoef + hpCoef);
-
-        for (const [i, side] of [
-            this.player.publicBattle.sides[playerIndex],
-            this.player.publicBattle.sides[1 - playerIndex],
-        ].entries()) {
-            let knownHp = 0;
-            let knownAlive = 0;
-
-            // Use a standard for-loop instead of .reduce
-            for (let j = 0; j < side.team.length; j++) {
-                const pkmn = side.team[j];
-                if (pkmn.fainted) {
-                    continue;
-                } else {
-                    knownAlive += 1;
-                }
-
-                if (pkmn.maxhp === 0) {
-                    knownHp += 1;
-                } else {
-                    knownHp += pkmn.hp / pkmn.maxhp;
-                }
-            }
-
-            const unknownHp = side.totalPokemon - side.team.length;
-            const total =
-                aliveCoef * (knownAlive + unknownHp) +
-                hpCoef * (knownHp + unknownHp);
-
-            if (i === 0) {
-                p1Total = total;
-            } else {
-                p2Total = total;
-            }
-        }
-
-        const frac = (p1Total - p2Total) / maxValue;
-        return Math.floor(frac * MAX_RATIO_TOKEN);
+        const battle = this.player.publicBattle;
+        const sides = battle.sides;
+        return getStatePotential(
+            sides[playerIndex],
+            sides[1 - playerIndex],
+            battle.gen.num,
+        );
     }
 
     getInfo(historyLength: number): Uint8Array {

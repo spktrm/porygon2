@@ -81,11 +81,6 @@ class Porygon2PlayerAlphas(nn.Module):
     alphas_init: float = 0.1
 
     def setup(self):
-        self.log_alpha = self.param(
-            "log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
         self.modality_log_alpha = self.param(
             "modality_log_alpha",
             nn.initializers.constant(jnp.log(self.alphas_init)),
@@ -114,7 +109,6 @@ class Porygon2PlayerAlphas(nn.Module):
 
     def __call__(self):
         return PlayerAlphasOutput(
-            log_alpha=self.log_alpha.squeeze(),
             modality_log_alpha=self.modality_log_alpha.squeeze(),
             move_log_alpha=self.move_log_alpha.squeeze(),
             switch_log_alpha=self.switch_log_alpha.squeeze(),

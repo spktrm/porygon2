@@ -197,7 +197,7 @@ def process_state(
     )
 
     state_potential = (
-        info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
+        info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] 
     ).astype(np.float32)
 
     env_step = PlayerEnvOutput(
