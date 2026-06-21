@@ -107,7 +107,7 @@ class Porygon2LearnerConfig:
     builder_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
+    player_advantage_coef_fn: Callable[[int], float] = lambda step: 0.1
 
     # Loss coefficients
     ## Player

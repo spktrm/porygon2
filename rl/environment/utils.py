@@ -196,7 +196,7 @@ def process_state(
         / MAX_RATIO_TOKEN
     )
 
-    state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL]).astype(
+    state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / 1000).astype(
         np.float32
     )
 

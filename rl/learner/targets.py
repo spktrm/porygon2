@@ -92,8 +92,8 @@ def compute_player_targets(
     pg_advantages = rho_t * (q_estimate - v_tm1)
 
     combined_advantage = (
-        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
-        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
+        pg_advantages[..., :n_bins] @ cat_vf_support
+        + advantage_mixing_alpha * pg_advantages[..., n_bins]
     )
 
     win_returns = targets_tm1[..., :n_bins]
