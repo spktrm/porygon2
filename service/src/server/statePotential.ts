@@ -333,5 +333,7 @@ export function getStatePotential(
     const g = (VALID_GENS.has(gen) ? gen : 9) as Gen;
     const rules = rulesForGen(g);
     const score = evaluateSide(mySide, rules) - evaluateSide(oppSide, rules);
-    return Math.floor(Math.min(Math.max(score, -MAX_RATIO_TOKEN), MAX_RATIO_TOKEN));
+    return Math.floor(
+        Math.min(Math.max(score, -MAX_RATIO_TOKEN), MAX_RATIO_TOKEN),
+    );
 }
