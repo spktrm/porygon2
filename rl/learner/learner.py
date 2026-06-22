@@ -221,7 +221,7 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
-                +player_modality_alpha * normalized_modality_entropy
+                player_modality_alpha * normalized_modality_entropy
                 + player_move_alpha * normalized_conditional_move_entropy
                 + player_switch_alpha * normalized_conditional_switch_entropy
                 + player_wildcard_alpha * normalized_conditional_wildcard_entropy
