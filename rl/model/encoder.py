@@ -55,6 +55,8 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
 )
 from rl.model.modules import (
+    MLP,
+    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
@@ -266,20 +268,23 @@ class Encoder(nn.Module):
         self.prev_action_tgt_bias = self.param(
             "prev_action_tgt_bias", embedding_init, (1, entity_size)
         )
+
+        # Action biases
+        bias_init = nn.initializers.zeros_init()
         self.regular_move_bias = self.param(
-            "regular_move_bias", embedding_init, (1, entity_size)
+            "regular_move_bias", bias_init, (1, entity_size)
         )
         self.wildcard_move_bias = self.param(
-            "wildcard_move_bias", embedding_init, (1, entity_size)
+            "wildcard_move_bias", bias_init, (1, entity_size)
         )
         self.switch_src_bias = self.param(
-            "switch_src_bias", embedding_init, (1, entity_size)
+            "switch_src_bias", bias_init, (1, entity_size)
         )
         self.ally_target_bias = self.param(
-            "ally_target_bias", embedding_init, (1, entity_size)
+            "ally_target_bias", bias_init, (1, entity_size)
         )
         self.enemy_target_bias = self.param(
-            "enemy_target_bias", embedding_init, (1, entity_size)
+            "enemy_target_bias", bias_init, (1, entity_size)
         )
 
         self.value_embedding = self.param(
@@ -339,6 +344,11 @@ class Encoder(nn.Module):
 
         # History cls token
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
+
+        # RMS norms
+        rms_norm_kernel_init = nn.initializers.truncated_normal()
+        self.input_seq_mlp = MLP(kernel_init=rms_norm_kernel_init)
+        self.output_seq_mlp = MLP(kernel_init=rms_norm_kernel_init)
 
         # Transformer Decoders
         self.input_decoder = TransformerDecoder(
@@ -1195,6 +1205,9 @@ class Encoder(nn.Module):
             axis=1
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
+
+        input_state_sequence = self.input_seq_mlp(input_state_sequence)
+        output_state_sequence = self.output_seq_mlp(output_state_sequence)
 
         latent_queries = self.input_decoder(
             q=input_state_sequence,
