@@ -1180,17 +1180,19 @@ info: msg.getInfo_asB64(),
 actionMask: msg.getActionMask_asB64(),
 historyEntityPublic: msg.getHistoryEntityPublic_asB64(),
 historyEntityRevealed: msg.getHistoryEntityRevealed_asB64(),
-historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
+historyEntityPublicCache: msg.getHistoryEntityPublicCache_asB64(),
+historyEntityRevealedCache: msg.getHistoryEntityRevealedCache_asB64(),
+historyEntityEdgeCache: msg.getHistoryEntityEdgeCache_asB64(),
 historyField: msg.getHistoryField_asB64(),
-historyLength: jspb.Message.getFieldWithDefault(msg, 7, 0),
+historyLength: jspb.Message.getFieldWithDefault(msg, 10, 0),
 myMoveset: msg.getMyMoveset_asB64(),
 oppMoveset: msg.getOppMoveset_asB64(),
 publicTeam: msg.getPublicTeam_asB64(),
 revealedTeam: msg.getRevealedTeam_asB64(),
 privateTeam: msg.getPrivateTeam_asB64(),
 field: msg.getField_asB64(),
-rqid: jspb.Message.getFieldWithDefault(msg, 14, 0),
-historyPackedLength: jspb.Message.getFieldWithDefault(msg, 15, 0)
+rqid: jspb.Message.getFieldWithDefault(msg, 17, 0),
+historyPackedLength: jspb.Message.getFieldWithDefault(msg, 18, 0)
   };
 
   if (includeInstance) {
@@ -1235,55 +1237,63 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setActionMask(value);
       break;
-    case 3:
+    case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setHistoryEntityPublic(value);
       break;
-    case 4:
+    case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setHistoryEntityRevealed(value);
       break;
-    case 5:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityEdges(value);
-      break;
     case 6:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryField(value);
+      msg.setHistoryEntityPublicCache(value);
       break;
     case 7:
-      var value = /** @type {number} */ (reader.readInt32());
-      msg.setHistoryLength(value);
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setHistoryEntityRevealedCache(value);
       break;
     case 8:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setMyMoveset(value);
+      msg.setHistoryEntityEdgeCache(value);
       break;
     case 9:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setOppMoveset(value);
+      msg.setHistoryField(value);
       break;
     case 10:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setPublicTeam(value);
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setHistoryLength(value);
       break;
     case 11:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setRevealedTeam(value);
+      msg.setMyMoveset(value);
       break;
     case 12:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setPrivateTeam(value);
+      msg.setOppMoveset(value);
       break;
     case 13:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setField(value);
+      msg.setPublicTeam(value);
       break;
     case 14:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setRevealedTeam(value);
+      break;
+    case 15:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setPrivateTeam(value);
+      break;
+    case 16:
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setField(value);
+      break;
+    case 17:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setRqid(value);
       break;
-    case 15:
+    case 18:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setHistoryPackedLength(value);
       break;
@@ -1333,91 +1343,105 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
   f = message.getHistoryEntityPublic_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      3,
+      4,
       f
     );
   }
   f = message.getHistoryEntityRevealed_asU8();
   if (f.length > 0) {
     writer.writeBytes(
-      4,
-      f
-    );
-  }
-  f = message.getHistoryEntityEdges_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
       5,
       f
     );
   }
-  f = message.getHistoryField_asU8();
+  f = message.getHistoryEntityPublicCache_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       6,
       f
     );
   }
-  f = message.getHistoryLength();
-  if (f !== 0) {
-    writer.writeInt32(
+  f = message.getHistoryEntityRevealedCache_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
       7,
       f
     );
   }
-  f = message.getMyMoveset_asU8();
+  f = message.getHistoryEntityEdgeCache_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       8,
       f
     );
   }
-  f = message.getOppMoveset_asU8();
+  f = message.getHistoryField_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       9,
       f
     );
   }
-  f = message.getPublicTeam_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
+  f = message.getHistoryLength();
+  if (f !== 0) {
+    writer.writeInt32(
       10,
       f
     );
   }
-  f = message.getRevealedTeam_asU8();
+  f = message.getMyMoveset_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       11,
       f
     );
   }
-  f = message.getPrivateTeam_asU8();
+  f = message.getOppMoveset_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       12,
       f
     );
   }
-  f = message.getField_asU8();
+  f = message.getPublicTeam_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       13,
       f
     );
   }
+  f = message.getRevealedTeam_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      14,
+      f
+    );
+  }
+  f = message.getPrivateTeam_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      15,
+      f
+    );
+  }
+  f = message.getField_asU8();
+  if (f.length > 0) {
+    writer.writeBytes(
+      16,
+      f
+    );
+  }
   f = message.getRqid();
   if (f !== 0) {
     writer.writeInt32(
-      14,
+      17,
       f
     );
   }
   f = message.getHistoryPackedLength();
   if (f !== 0) {
     writer.writeInt32(
-      15,
+      18,
       f
     );
   }
@@ -1509,16 +1533,16 @@ proto.servicev2.EnvironmentState.prototype.setActionMask = function(value) {
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public = 4;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
 };
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public = 4;
  * This is a type-conversion wrapper around `getHistoryEntityPublic()`
  * @return {string}
  */
@@ -1529,7 +1553,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asB64 = functi
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public = 4;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryEntityPublic()`
@@ -1546,21 +1570,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asU8 = functio
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryEntityPublic = function(value) {
-  return jspb.Message.setProto3BytesField(this, 3, value);
+  return jspb.Message.setProto3BytesField(this, 4, value);
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
  * @return {string}
  */
@@ -1571,7 +1595,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asB64 = func
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
@@ -1588,40 +1612,40 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asU8 = funct
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryEntityRevealed = function(value) {
-  return jspb.Message.setProto3BytesField(this, 4, value);
+  return jspb.Message.setProto3BytesField(this, 5, value);
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_public_cache = 6;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
- * This is a type-conversion wrapper around `getHistoryEntityEdges()`
+ * optional bytes history_entity_public_cache = 6;
+ * This is a type-conversion wrapper around `getHistoryEntityPublicCache()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryEntityEdges()));
+      this.getHistoryEntityPublicCache()));
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_public_cache = 6;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryEntityEdges()`
+ * This is a type-conversion wrapper around `getHistoryEntityPublicCache()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryEntityEdges()));
+      this.getHistoryEntityPublicCache()));
 };
 
 
@@ -1629,22 +1653,106 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdges = function(value) {
-  return jspb.Message.setProto3BytesField(this, 5, value);
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityPublicCache = function(value) {
+  return jspb.Message.setProto3BytesField(this, 6, value);
 };
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_entity_revealed_cache = 7;
+ * @return {!(string|Uint8Array)}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
+};
+
+
+/**
+ * optional bytes history_entity_revealed_cache = 7;
+ * This is a type-conversion wrapper around `getHistoryEntityRevealedCache()`
+ * @return {string}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getHistoryEntityRevealedCache()));
+};
+
+
+/**
+ * optional bytes history_entity_revealed_cache = 7;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getHistoryEntityRevealedCache()`
+ * @return {!Uint8Array}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getHistoryEntityRevealedCache()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.servicev2.EnvironmentState} returns this
+ */
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityRevealedCache = function(value) {
+  return jspb.Message.setProto3BytesField(this, 7, value);
+};
+
+
+/**
+ * optional bytes history_entity_edge_cache = 8;
+ * @return {!(string|Uint8Array)}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
+};
+
+
+/**
+ * optional bytes history_entity_edge_cache = 8;
+ * This is a type-conversion wrapper around `getHistoryEntityEdgeCache()`
+ * @return {string}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getHistoryEntityEdgeCache()));
+};
+
+
+/**
+ * optional bytes history_entity_edge_cache = 8;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getHistoryEntityEdgeCache()`
+ * @return {!Uint8Array}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getHistoryEntityEdgeCache()));
+};
+
+
+/**
+ * @param {!(string|Uint8Array)} value
+ * @return {!proto.servicev2.EnvironmentState} returns this
+ */
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdgeCache = function(value) {
+  return jspb.Message.setProto3BytesField(this, 8, value);
+};
+
+
+/**
+ * optional bytes history_field = 9;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
 };
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_field = 9;
  * This is a type-conversion wrapper around `getHistoryField()`
  * @return {string}
  */
@@ -1655,7 +1763,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryField_asB64 = function() {
 
 
 /**
- * optional bytes history_field = 6;
+ * optional bytes history_field = 9;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getHistoryField()`
@@ -1672,16 +1780,16 @@ proto.servicev2.EnvironmentState.prototype.getHistoryField_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 6, value);
+  return jspb.Message.setProto3BytesField(this, 9, value);
 };
 
 
 /**
- * optional int32 history_length = 7;
+ * optional int32 history_length = 10;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryLength = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 7, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 10, 0));
 };
 
 
@@ -1690,21 +1798,21 @@ proto.servicev2.EnvironmentState.prototype.getHistoryLength = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryLength = function(value) {
-  return jspb.Message.setProto3IntField(this, 7, value);
+  return jspb.Message.setProto3IntField(this, 10, value);
 };
 
 
 /**
- * optional bytes my_moveset = 8;
+ * optional bytes my_moveset = 11;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getMyMoveset = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 8, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
 };
 
 
 /**
- * optional bytes my_moveset = 8;
+ * optional bytes my_moveset = 11;
  * This is a type-conversion wrapper around `getMyMoveset()`
  * @return {string}
  */
@@ -1715,7 +1823,7 @@ proto.servicev2.EnvironmentState.prototype.getMyMoveset_asB64 = function() {
 
 
 /**
- * optional bytes my_moveset = 8;
+ * optional bytes my_moveset = 11;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getMyMoveset()`
@@ -1732,21 +1840,21 @@ proto.servicev2.EnvironmentState.prototype.getMyMoveset_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setMyMoveset = function(value) {
-  return jspb.Message.setProto3BytesField(this, 8, value);
+  return jspb.Message.setProto3BytesField(this, 11, value);
 };
 
 
 /**
- * optional bytes opp_moveset = 9;
+ * optional bytes opp_moveset = 12;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getOppMoveset = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 9, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 12, ""));
 };
 
 
 /**
- * optional bytes opp_moveset = 9;
+ * optional bytes opp_moveset = 12;
  * This is a type-conversion wrapper around `getOppMoveset()`
  * @return {string}
  */
@@ -1757,7 +1865,7 @@ proto.servicev2.EnvironmentState.prototype.getOppMoveset_asB64 = function() {
 
 
 /**
- * optional bytes opp_moveset = 9;
+ * optional bytes opp_moveset = 12;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getOppMoveset()`
@@ -1774,21 +1882,21 @@ proto.servicev2.EnvironmentState.prototype.getOppMoveset_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setOppMoveset = function(value) {
-  return jspb.Message.setProto3BytesField(this, 9, value);
+  return jspb.Message.setProto3BytesField(this, 12, value);
 };
 
 
 /**
- * optional bytes public_team = 10;
+ * optional bytes public_team = 13;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getPublicTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 13, ""));
 };
 
 
 /**
- * optional bytes public_team = 10;
+ * optional bytes public_team = 13;
  * This is a type-conversion wrapper around `getPublicTeam()`
  * @return {string}
  */
@@ -1799,7 +1907,7 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asB64 = function() {
 
 
 /**
- * optional bytes public_team = 10;
+ * optional bytes public_team = 13;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPublicTeam()`
@@ -1816,21 +1924,21 @@ proto.servicev2.EnvironmentState.prototype.getPublicTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPublicTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 10, value);
+  return jspb.Message.setProto3BytesField(this, 13, value);
 };
 
 
 /**
- * optional bytes revealed_team = 11;
+ * optional bytes revealed_team = 14;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getRevealedTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 11, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 14, ""));
 };
 
 
 /**
- * optional bytes revealed_team = 11;
+ * optional bytes revealed_team = 14;
  * This is a type-conversion wrapper around `getRevealedTeam()`
  * @return {string}
  */
@@ -1841,7 +1949,7 @@ proto.servicev2.EnvironmentState.prototype.getRevealedTeam_asB64 = function() {
 
 
 /**
- * optional bytes revealed_team = 11;
+ * optional bytes revealed_team = 14;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getRevealedTeam()`
@@ -1858,21 +1966,21 @@ proto.servicev2.EnvironmentState.prototype.getRevealedTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setRevealedTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 11, value);
+  return jspb.Message.setProto3BytesField(this, 14, value);
 };
 
 
 /**
- * optional bytes private_team = 12;
+ * optional bytes private_team = 15;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getPrivateTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 12, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 15, ""));
 };
 
 
 /**
- * optional bytes private_team = 12;
+ * optional bytes private_team = 15;
  * This is a type-conversion wrapper around `getPrivateTeam()`
  * @return {string}
  */
@@ -1883,7 +1991,7 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asB64 = function() {
 
 
 /**
- * optional bytes private_team = 12;
+ * optional bytes private_team = 15;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getPrivateTeam()`
@@ -1900,21 +2008,21 @@ proto.servicev2.EnvironmentState.prototype.getPrivateTeam_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setPrivateTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 12, value);
+  return jspb.Message.setProto3BytesField(this, 15, value);
 };
 
 
 /**
- * optional bytes field = 13;
+ * optional bytes field = 16;
  * @return {!(string|Uint8Array)}
  */
 proto.servicev2.EnvironmentState.prototype.getField = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 13, ""));
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 16, ""));
 };
 
 
 /**
- * optional bytes field = 13;
+ * optional bytes field = 16;
  * This is a type-conversion wrapper around `getField()`
  * @return {string}
  */
@@ -1925,7 +2033,7 @@ proto.servicev2.EnvironmentState.prototype.getField_asB64 = function() {
 
 
 /**
- * optional bytes field = 13;
+ * optional bytes field = 16;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
  * This is a type-conversion wrapper around `getField()`
@@ -1942,16 +2050,16 @@ proto.servicev2.EnvironmentState.prototype.getField_asU8 = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setField = function(value) {
-  return jspb.Message.setProto3BytesField(this, 13, value);
+  return jspb.Message.setProto3BytesField(this, 16, value);
 };
 
 
 /**
- * optional int32 rqid = 14;
+ * optional int32 rqid = 17;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getRqid = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 14, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 17, 0));
 };
 
 
@@ -1960,16 +2068,16 @@ proto.servicev2.EnvironmentState.prototype.getRqid = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setRqid = function(value) {
-  return jspb.Message.setProto3IntField(this, 14, value);
+  return jspb.Message.setProto3IntField(this, 17, value);
 };
 
 
 /**
- * optional int32 history_packed_length = 15;
+ * optional int32 history_packed_length = 18;
  * @return {number}
  */
 proto.servicev2.EnvironmentState.prototype.getHistoryPackedLength = function() {
-  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 15, 0));
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 18, 0));
 };
 
 
@@ -1978,7 +2086,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryPackedLength = function() {
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryPackedLength = function(value) {
-  return jspb.Message.setProto3IntField(this, 15, value);
+  return jspb.Message.setProto3IntField(this, 18, value);
 };
 
 

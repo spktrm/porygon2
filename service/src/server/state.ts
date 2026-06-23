@@ -1506,7 +1506,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -1619,16 +1619,16 @@ export class EdgeBuffer {
     }
 
     static toReadableHistory(args: {
-        historyEntityPublicBuffer: Uint8Array;
-        historyEntityRevealedBuffer: Uint8Array;
-        historyEntityEdgesBuffer: Uint8Array;
+        historyEntityPublicCacheBuffer: Uint8Array;
+        historyEntityRevealedCacheBuffer: Uint8Array;
+        historyEntityEdgeCacheBuffer: Uint8Array;
         historyFieldBuffer: Uint8Array;
         historyLength: number;
     }) {
         const {
-            historyEntityPublicBuffer,
-            historyEntityRevealedBuffer,
-            historyEntityEdgesBuffer,
+            historyEntityPublicCacheBuffer: historyEntityPublicBuffer,
+            historyEntityRevealedCacheBuffer: historyEntityRevealedBuffer,
+            historyEntityEdgeCacheBuffer: historyEntityEdgesBuffer,
             historyFieldBuffer,
             historyLength,
         } = args;
@@ -4444,9 +4444,9 @@ export class StateHandler {
         });
         state.setActionMask(actionMask.buffer);
 
-        state.setHistoryEntityPublic(historyEntityPublic);
-        state.setHistoryEntityRevealed(historyEntityRevealed);
-        state.setHistoryEntityEdges(historyEntityEdges);
+        state.setHistoryEntityPublicCache(historyEntityPublic);
+        state.setHistoryEntityRevealedCache(historyEntityRevealed);
+        state.setHistoryEntityEdgeCache(historyEntityEdges);
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
@@ -4457,6 +4457,8 @@ export class StateHandler {
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));
         state.setRevealedTeam(new Uint8Array(revealedData.buffer));
+        state.setHistoryEntityPublic(new Uint8Array(publicData.buffer));
+        state.setHistoryEntityRevealed(new Uint8Array(revealedData.buffer));
 
         state.setMyMoveset(this.getMyMoveset());
         state.setOppMoveset(this.getOppMoveset());

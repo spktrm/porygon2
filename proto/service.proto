@@ -82,19 +82,21 @@ message ResetRequest {
 message EnvironmentState {
   bytes info = 1;
   bytes action_mask = 2;
-  bytes history_entity_public = 3;
-  bytes history_entity_revealed = 4;
-  bytes history_entity_edges = 5;
-  bytes history_field = 6;
-  int32 history_length = 7;
-  bytes my_moveset = 8;
-  bytes opp_moveset = 9;
-  bytes public_team = 10;
-  bytes revealed_team = 11;
-  bytes private_team = 12;
-  bytes field = 13;
-  int32 rqid = 14;
-  int32 history_packed_length = 15;
+  bytes history_entity_public = 4;
+  bytes history_entity_revealed = 5;
+  bytes history_entity_public_cache = 6;
+  bytes history_entity_revealed_cache = 7;
+  bytes history_entity_edge_cache = 8;
+  bytes history_field = 9;
+  int32 history_length = 10;
+  bytes my_moveset = 11;
+  bytes opp_moveset = 12;
+  bytes public_team = 13;
+  bytes revealed_team = 14;
+  bytes private_team = 15;
+  bytes field = 16;
+  int32 rqid = 17;
+  int32 history_packed_length = 18;
 }
 
 message EnvironmentTrajectory {

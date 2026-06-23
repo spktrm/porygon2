@@ -29,10 +29,12 @@ async function playerController(player: TrainablePlayerAI) {
 
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableHistory = EdgeBuffer.toReadableHistory({
-                historyEntityPublicBuffer: state.getHistoryEntityPublic_asU8(),
-                historyEntityRevealedBuffer:
-                    state.getHistoryEntityRevealed_asU8(),
-                historyEntityEdgesBuffer: state.getHistoryEntityEdges_asU8(),
+                historyEntityPublicCacheBuffer:
+                    state.getHistoryEntityPublicCache_asU8(),
+                historyEntityRevealedCacheBuffer:
+                    state.getHistoryEntityRevealedCache_asU8(),
+                historyEntityEdgeCacheBuffer:
+                    state.getHistoryEntityEdgeCache_asU8(),
                 historyFieldBuffer: state.getHistoryField_asU8(),
                 historyLength: state.getHistoryLength(),
             });

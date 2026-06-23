@@ -79,10 +79,10 @@ class Porygon2LearnerConfig:
     player_alpha_learning_rate: float = 1e-4
     player_initial_alpha: float = 0.05
     player_target_normalized_modality_entropy: float = 0.65
-    player_target_normalized_conditional_move_entropy: float = 0.15
-    player_target_normalized_conditional_switch_entropy: float = 0.15
-    player_target_normalized_conditional_other_entropy: float = 0.15
-    player_target_normalized_conditional_wildcard_entropy: float = 0.15
+    player_target_normalized_conditional_move_entropy: float = 0.33
+    player_target_normalized_conditional_switch_entropy: float = 0.33
+    player_target_normalized_conditional_other_entropy: float = 0.33
+    player_target_normalized_conditional_wildcard_entropy: float = 0.33
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
@@ -107,7 +107,7 @@ class Porygon2LearnerConfig:
     builder_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_advantage_coef_fn: Callable[[int], float] = lambda step: 0.1
+    player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
 
     # Loss coefficients
     ## Player
