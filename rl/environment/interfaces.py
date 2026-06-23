@@ -25,9 +25,11 @@ class PlayerEnvOutput:
 
 @dataclass
 class PlayerPackedHistoryOutput:
+    public_cache: ArrayLike = ()
+    revealed_cache: ArrayLike = ()
     public: ArrayLike = ()
     revealed: ArrayLike = ()
-    edges: ArrayLike = ()
+    edge_cache: ArrayLike = ()
 
 
 @dataclass

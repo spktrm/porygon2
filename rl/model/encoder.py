@@ -315,6 +315,11 @@ class Encoder(nn.Module):
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
         )
+        self.history_query_embedding_entity_sum = SumEmbeddings(
+            output_size=entity_size,
+            dtype=self.cfg.dtype,
+            name="history_query_embedding_entity_sum",
+        )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
@@ -992,18 +997,36 @@ class Encoder(nn.Module):
             turn_order_value,
         )
 
+    def _embed_history_queries(self, packed_history: PlayerPackedHistoryOutput):
+
+        species_token = packed_history.revealed[
+            ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+        ]
+        side_id = packed_history.public[
+            ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
+        side_bias = self.side_bias(side_id)
+
+        history_query_embedding = jax.vmap(self.history_query_embedding_entity_sum)(
+            self._embed_species(species_token),
+            side_bias,
+        )
+
+        return history_query_embedding
+
     def _embed_global_timestep(
         self,
         env_step: PlayerEnvOutput,
         history: PlayerHistoryOutput,
         packed_history: PlayerPackedHistoryOutput,
     ):
+        history_queries = self._embed_history_queries(packed_history)
 
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
-            packed_history.public, packed_history.revealed
+            packed_history.public_cache, packed_history.revealed_cache
         )
 
-        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edges)
+        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edge_cache)
 
         (
             local_timestep_embedding,
@@ -1215,14 +1238,14 @@ class Encoder(nn.Module):
             q_mask=input_state_mask,
             kv_mask=output_state_mask,
         )
-        latent_queries = self.history_decoder(
-            q=latent_queries,
-            kv=timestep_embeddings,
-            q_mask=input_state_mask,
-            kv_mask=timestep_mask,
-            q_positions=jnp.expand_dims(current_position, axis=-1),
-            kv_positions=timestep_positions,
-        )
+        # latent_queries = self.history_decoder(
+        #     q=latent_queries,
+        #     kv=timestep_embeddings,
+        #     q_mask=input_state_mask,
+        #     kv_mask=timestep_mask,
+        #     q_positions=jnp.expand_dims(current_position, axis=-1),
+        #     kv_positions=timestep_positions,
+        # )
 
         # bulk of computation
         latent_queries = self.latent_encoder(

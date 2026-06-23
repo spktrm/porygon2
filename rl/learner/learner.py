@@ -81,7 +81,7 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    player_advantage_mixing_alpha = config.player_advantage_coef_fn(
+    heuristic_advantage_coef = config.player_heuristic_advantage_coef_fn(
         player_state.step_count
     )
 
@@ -103,7 +103,7 @@ def train_step(
         batch,
         player_target_pred,
         isr=target_actor_ratio,
-        advantage_mixing_alpha=player_advantage_mixing_alpha,
+        heuristic_advantage_coef=heuristic_advantage_coef,
         config=config,
     )
     policy_mask = player_targets.policy_mask
@@ -335,7 +335,7 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_advantage_mixing_alpha=player_advantage_mixing_alpha,
+            player_advantage_mixing_alpha=heuristic_advantage_coef,
             player_loss_entropy_alpha=alpha_loss_val,
             # Alphas
             player_modality_alpha=player_modality_alpha,

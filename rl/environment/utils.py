@@ -93,7 +93,7 @@ def clip_packed_history(
 ) -> PlayerPackedHistoryOutput:
     history_length = np.max(
         (
-            packed_history.revealed[
+            packed_history.revealed_cache[
                 ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
             ]
             != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
@@ -124,20 +124,30 @@ def process_state(
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
     max_packed_history = 2 * max_history
 
-    history_entity_public = padnstack(
-        np.frombuffer(state.history_entity_public, dtype=np.int16).reshape(
+    history_entity_public_cache = padnstack(
+        np.frombuffer(state.history_entity_public_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_PUBLIC_FEATURES)
         ),
         max_packed_history,
     ).astype(np.int32)
-    history_entity_revealed = padnstack(
-        np.frombuffer(state.history_entity_revealed, dtype=np.int16).reshape(
+    history_entity_revealed_cache = padnstack(
+        np.frombuffer(state.history_entity_revealed_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_REVEALED_FEATURES)
         ),
         max_packed_history,
     ).astype(np.int32)
-    history_entity_edges = padnstack(
-        np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
+    history_entity_public = (
+        np.frombuffer(state.history_entity_public, dtype=np.int16)
+        .reshape((6 * 2, NUM_ENTITY_PUBLIC_FEATURES))
+        .astype(np.int32)
+    )
+    history_entity_revealed = (
+        np.frombuffer(state.history_entity_revealed, dtype=np.int16)
+        .reshape((6 * 2, NUM_ENTITY_REVEALED_FEATURES))
+        .astype(np.int32)
+    )
+    history_entity_edge_cache = padnstack(
+        np.frombuffer(state.history_entity_edge_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
         ),
         max_packed_history,
@@ -214,9 +224,11 @@ def process_state(
         action_mask=get_action_mask(state),
     )
     packed_history_step = PlayerPackedHistoryOutput(
+        public_cache=history_entity_public_cache,
+        revealed_cache=history_entity_revealed_cache,
         public=history_entity_public,
         revealed=history_entity_revealed,
-        edges=history_entity_edges,
+        edge_cache=history_entity_edge_cache,
     )
     history_step = PlayerHistoryOutput(field=history_field)
 
