@@ -113,7 +113,7 @@ class Porygon2LearnerConfig:
     ## Player
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.05
-    player_value_head_loss_coef: float = 1.0
+    player_value_head_loss_coef: float = 0.1
     player_logit_norm_loss_coef: float = 0.0
 
     ## Builder
