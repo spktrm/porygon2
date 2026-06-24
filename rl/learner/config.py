@@ -76,7 +76,7 @@ class Porygon2LearnerConfig:
     manage_league_interval: int = 10
 
     # Player automatic entropy tuning params
-    player_alpha_learning_rate: float = 1e-4
+    player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
     player_target_normalized_modality_entropy: float = 0.65
     player_target_normalized_conditional_move_entropy: float = 0.33
@@ -135,7 +135,6 @@ class Porygon2LearnerConfig:
 
     # Logging params
     log_artifacts_online: bool = False
-    check_finite_loss: bool = False
 
 
 def get_learner_config():

@@ -34,7 +34,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import get_num_params
 
 
 def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
@@ -429,7 +429,7 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = None  # get_most_recent_file(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
         with open(latest_ckpt, "rb") as f:
