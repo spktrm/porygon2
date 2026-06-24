@@ -126,10 +126,14 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = False
 
-    cfg.v_head = ConfigDict()
-    cfg.v_head.dense = ConfigDict()
-    cfg.v_head.dense.features = 3
-    cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    cfg.v_win_head = ConfigDict()
+    cfg.v_win_head.dense = ConfigDict()
+    cfg.v_win_head.dense.features = 3
+    cfg.v_win_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+
+    cfg.v_knockout_head = ConfigDict()
+    cfg.v_knockout_head.dense = ConfigDict()
+    cfg.v_knockout_head.dense.features = 1
 
     for head in [cfg.pi_head]:
         head.train = train

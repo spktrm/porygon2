@@ -286,8 +286,8 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        self.value_embedding = self.param(
-            "value_embedding", embedding_init, (1, entity_size)
+        self.value_embeddings = self.param(
+            "value_embeddings", embedding_init, (3, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -1239,13 +1239,13 @@ class Encoder(nn.Module):
             q_mask=output_state_mask,
             kv_mask=input_state_mask,
         )
-        value_embedding = self.value_decoder(
-            q=self.value_embedding.astype(self.cfg.dtype),
+        value_embeddings = self.value_decoder(
+            q=self.value_embeddings.astype(self.cfg.dtype),
             kv=latent_queries,
             kv_mask=input_state_mask,
-        ).squeeze()
+        )
 
-        return action_embeddings, value_embedding
+        return action_embeddings, value_embeddings
 
     def __call__(
         self,
@@ -1267,7 +1267,7 @@ class Encoder(nn.Module):
         #     jnp.iinfo(request_count.dtype).max,
         # )
 
-        action_embeddings, value_embedding = jax.vmap(
+        action_embeddings, value_embeddings = jax.vmap(
             self._batched_forward,  # in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
@@ -1278,4 +1278,4 @@ class Encoder(nn.Module):
             # env_step.private_team[0],
         )
 
-        return action_embeddings, value_embedding
+        return action_embeddings, value_embeddings

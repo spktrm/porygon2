@@ -175,6 +175,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     isBaseline: boolean;
     baselineIndex: number;
 
+    prevMyFaintedCount: number;
+    prevOppFaintedCount: number;
+
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,
@@ -213,6 +216,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         } else {
             this.baselineIndex = -1;
         }
+
+        this.prevMyFaintedCount = 0;
+        this.prevOppFaintedCount = 0;
     }
 
     finishEarly() {

@@ -31,6 +31,7 @@ from rl.model.heads import (
     HeadParams,
     PointerLogits,
     PolicyMetrics,
+    RegressionValueLogitHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -123,7 +124,9 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
-        self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.v_win_head = CategoricalValueLogitHead(self.cfg.v_win_head)
+        self.v_my_knockout_head = RegressionValueLogitHead(self.cfg.v_knockout_head)
+        self.v_opp_knockout_head = RegressionValueLogitHead(self.cfg.v_knockout_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         return (
@@ -297,13 +300,19 @@ class Porygon2PlayerModel(nn.Module):
             ],
         )
 
-    def _forward_value_head(self, value_embedding: jax.Array):
-        return self.v_head(value_embedding)
+    def _forward_value_win_head(self, value_embedding: jax.Array):
+        return self.v_win_head(value_embedding)
+
+    def _forward_value_my_knockout_head(self, value_embedding: jax.Array):
+        return self.v_my_knockout_head(value_embedding)
+
+    def _forward_value_opp_knockout_head(self, value_embedding: jax.Array):
+        return self.v_opp_knockout_head(value_embedding)
 
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
-        value_embedding: jax.Array,
+        value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -316,9 +325,17 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
         )
-        value_head = self._forward_value_head(value_embedding)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_win_head=self._forward_value_win_head(value_embeddings[0]),
+            value_my_knockout_head=self._forward_value_my_knockout_head(
+                value_embeddings[1]
+            ),
+            value_opp_knockout_head=self._forward_value_opp_knockout_head(
+                value_embeddings[2]
+            ),
+        )
 
     def __call__(
         self,
@@ -330,13 +347,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        action_embeddings, value_embedding = self.encoder(
+        action_embeddings, value_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embedding, actor_input.env, actor_output)
+        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
