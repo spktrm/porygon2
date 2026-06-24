@@ -208,7 +208,7 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading train state...")
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state
+        learner_config, player_state, builder_state, mode="scratch"
     )
 
     player_state = jax.device_put(player_state)

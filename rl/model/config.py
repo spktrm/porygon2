@@ -50,8 +50,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
     encoder_qkv_scale = 1 / encoder_num_heads
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
-    encoder_use_bias = True
-    encoder_qk_layer_norm = True
+    encoder_use_bias = False
+    encoder_qk_layer_norm = False
     encoder_init_residual_scale = 0.1
 
     decoder_num_layers = 1
@@ -60,8 +60,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
     decoder_qkv_scale = 1 / decoder_num_heads
     decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_use_bias = True
-    decoder_qk_layer_norm = True
+    decoder_use_bias = False
+    decoder_qk_layer_norm = False
     decoder_init_residual_scale = 0.1
 
     transformer_encoder_kwargs = dict(
@@ -124,7 +124,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head = ConfigDict()
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1
-    cfg.pi_head.qk_logits.use_bias = True
+    cfg.pi_head.qk_logits.use_bias = False
 
     cfg.v_head = ConfigDict()
     cfg.v_head.dense = ConfigDict()

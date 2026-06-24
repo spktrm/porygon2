@@ -136,16 +136,6 @@ def process_state(
         ),
         max_packed_history,
     ).astype(np.int32)
-    history_entity_public = (
-        np.frombuffer(state.history_entity_public, dtype=np.int16)
-        .reshape((6 * 2, NUM_ENTITY_PUBLIC_FEATURES))
-        .astype(np.int32)
-    )
-    history_entity_revealed = (
-        np.frombuffer(state.history_entity_revealed, dtype=np.int16)
-        .reshape((6 * 2, NUM_ENTITY_REVEALED_FEATURES))
-        .astype(np.int32)
-    )
     history_entity_edge_cache = padnstack(
         np.frombuffer(state.history_entity_edge_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
@@ -226,8 +216,6 @@ def process_state(
     packed_history_step = PlayerPackedHistoryOutput(
         public_cache=history_entity_public_cache,
         revealed_cache=history_entity_revealed_cache,
-        public=history_entity_public,
-        revealed=history_entity_revealed,
         edge_cache=history_entity_edge_cache,
     )
     history_step = PlayerHistoryOutput(field=history_field)

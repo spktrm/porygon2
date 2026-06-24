@@ -1506,7 +1506,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << (index % precision));
+        const newValue = currentValue | (1 << index % precision);
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -4457,8 +4457,6 @@ export class StateHandler {
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));
         state.setRevealedTeam(new Uint8Array(revealedData.buffer));
-        state.setHistoryEntityPublic(new Uint8Array(publicData.buffer));
-        state.setHistoryEntityRevealed(new Uint8Array(revealedData.buffer));
 
         state.setMyMoveset(this.getMyMoveset());
         state.setOppMoveset(this.getOppMoveset());

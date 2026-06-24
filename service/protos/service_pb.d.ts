@@ -141,16 +141,6 @@ export class EnvironmentState extends jspb.Message {
   getActionMask_asB64(): string;
   setActionMask(value: Uint8Array | string): void;
 
-  getHistoryEntityPublic(): Uint8Array | string;
-  getHistoryEntityPublic_asU8(): Uint8Array;
-  getHistoryEntityPublic_asB64(): string;
-  setHistoryEntityPublic(value: Uint8Array | string): void;
-
-  getHistoryEntityRevealed(): Uint8Array | string;
-  getHistoryEntityRevealed_asU8(): Uint8Array;
-  getHistoryEntityRevealed_asB64(): string;
-  setHistoryEntityRevealed(value: Uint8Array | string): void;
-
   getHistoryEntityPublicCache(): Uint8Array | string;
   getHistoryEntityPublicCache_asU8(): Uint8Array;
   getHistoryEntityPublicCache_asB64(): string;
@@ -224,8 +214,6 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     actionMask: Uint8Array | string,
-    historyEntityPublic: Uint8Array | string,
-    historyEntityRevealed: Uint8Array | string,
     historyEntityPublicCache: Uint8Array | string,
     historyEntityRevealedCache: Uint8Array | string,
     historyEntityEdgeCache: Uint8Array | string,

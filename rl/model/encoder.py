@@ -56,7 +56,6 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.model.modules import (
     MLP,
-    RMSNorm,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
@@ -352,8 +351,8 @@ class Encoder(nn.Module):
 
         # RMS norms
         rms_norm_kernel_init = nn.initializers.truncated_normal()
-        self.input_seq_mlp = MLP(kernel_init=rms_norm_kernel_init)
-        self.output_seq_mlp = MLP(kernel_init=rms_norm_kernel_init)
+        self.input_seq_mlp = MLP(kernel_init=rms_norm_kernel_init, use_bias=True)
+        self.output_seq_mlp = MLP(kernel_init=rms_norm_kernel_init, use_bias=True)
 
         # Transformer Decoders
         self.input_decoder = TransformerDecoder(
@@ -997,30 +996,12 @@ class Encoder(nn.Module):
             turn_order_value,
         )
 
-    def _embed_history_queries(self, packed_history: PlayerPackedHistoryOutput):
-
-        species_token = packed_history.revealed[
-            ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
-        ]
-        side_id = packed_history.public[
-            ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
-        ]
-        side_bias = self.side_bias(side_id)
-
-        history_query_embedding = jax.vmap(self.history_query_embedding_entity_sum)(
-            self._embed_species(species_token),
-            side_bias,
-        )
-
-        return history_query_embedding
-
     def _embed_global_timestep(
         self,
         env_step: PlayerEnvOutput,
         history: PlayerHistoryOutput,
         packed_history: PlayerPackedHistoryOutput,
     ):
-        history_queries = self._embed_history_queries(packed_history)
 
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
             packed_history.public_cache, packed_history.revealed_cache
@@ -1105,11 +1086,11 @@ class Encoder(nn.Module):
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
-        timestep_mask: jax.Array,
-        current_position: jax.Array,
-        timestep_embeddings: jax.Array,
-        timestep_positions: jax.Array,
-        initial_private_team: jax.Array,
+        # timestep_mask: jax.Array,
+        # current_position: jax.Array,
+        # timestep_embeddings: jax.Array,
+        # timestep_positions: jax.Array,
+        # initial_private_team: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1272,29 +1253,29 @@ class Encoder(nn.Module):
         packed_history_step: PlayerHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        timestep_embeddings, history_valid_mask, timestep_positions = (
-            self._embed_global_timestep(env_step, history_step, packed_history_step)
-        )
+        # timestep_embeddings, history_valid_mask, timestep_positions = (
+        #     self._embed_global_timestep(env_step, history_step, packed_history_step)
+        # )
 
-        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        history_request_count = timestep_positions[..., 0]
+        # request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        # history_request_count = timestep_positions[..., 0]
 
-        # For padded timesteps, request count is 0, so we use a large bias value.
-        timestep_mask = request_count[..., None] >= jnp.where(
-            history_valid_mask,
-            history_request_count,
-            jnp.iinfo(request_count.dtype).max,
-        )
+        # # For padded timesteps, request count is 0, so we use a large bias value.
+        # timestep_mask = request_count[..., None] >= jnp.where(
+        #     history_valid_mask,
+        #     history_request_count,
+        #     jnp.iinfo(request_count.dtype).max,
+        # )
 
         action_embeddings, value_embedding = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
+            self._batched_forward,  # in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
-            timestep_mask,
-            request_count.reshape(-1, 1),
-            timestep_embeddings,
-            timestep_positions,
-            env_step.private_team[0],
+            # timestep_mask,
+            # request_count.reshape(-1, 1),
+            # timestep_embeddings,
+            # timestep_positions,
+            # env_step.private_team[0],
         )
 
         return action_embeddings, value_embedding
