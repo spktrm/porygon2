@@ -123,7 +123,9 @@ def train_step(
             HeadParams(),
         )
 
-        learner_value_head = learner_player_pred.value_head
+        learner_value_win_head = learner_player_pred.value_win_head
+        learner_value_my_knockout_head = learner_player_pred.value_my_knockout_head
+        learner_value_opp_knockout_head = learner_player_pred.value_opp_knockout_head
         learner_action_head = learner_player_pred.action_head
         learner_log_prob = learner_action_head.log_prob
 
@@ -142,10 +144,26 @@ def train_step(
         )
 
         # Softmax cross-entropy loss for value head
-        loss_v = average(
+        loss_v_win = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits,
+                logits=learner_value_win_head.logits,
                 labels=player_targets.win_returns,
+            ),
+            value_mask,
+        )
+
+        loss_v_my_knockout = average(
+            jnp.square(
+                learner_value_my_knockout_head.logits
+                - player_targets.my_knockout_returns
+            ),
+            value_mask,
+        )
+
+        loss_v_opp_knockout = average(
+            jnp.square(
+                learner_value_opp_knockout_head.logits
+                - player_targets.opp_knockout_returns
             ),
             value_mask,
         )
@@ -218,7 +236,8 @@ def train_step(
 
         loss = (
             config.player_policy_loss_coef * loss_pg
-            + config.player_value_head_loss_coef * loss_v
+            + config.player_value_head_loss_coef
+            * (loss_v_win + loss_v_my_knockout + loss_v_opp_knockout)
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
                 player_modality_alpha * normalized_modality_entropy
@@ -233,7 +252,9 @@ def train_step(
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
-            player_loss_v=loss_v,
+            player_loss_v_win=loss_v_win,
+            player_loss_v_my_knockout=loss_v_my_knockout,
+            player_loss_v_opp_knockout=loss_v_opp_knockout,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
@@ -262,9 +283,19 @@ def train_step(
             player_learner_target_forward_kl=loss_target_forward_kl,
             player_learner_target_backward_kl=loss_target_backward_kl,
             # Extra stats
-            player_value_head_r2=calculate_r2(
-                value_prediction=learner_value_head.expectation,
+            player_value_win_head_r2=calculate_r2(
+                value_prediction=learner_value_win_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            player_value_my_knockout_head_r2=calculate_r2(
+                value_prediction=learner_value_my_knockout_head.logits,
+                value_target=player_targets.my_knockout_returns,
+                mask=value_mask,
+            ),
+            player_value_opp_knockout_head_r2=calculate_r2(
+                value_prediction=learner_value_opp_knockout_head.logits,
+                value_target=player_targets.opp_knockout_returns,
                 mask=value_mask,
             ),
             player_nll_sum=(

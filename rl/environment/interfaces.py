@@ -10,6 +10,8 @@ class PlayerEnvOutput:
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()
+    my_knockout_reward: ArrayLike = ()
+    opp_knockout_reward: ArrayLike = ()
     state_potential: ArrayLike = ()
     public_team: ArrayLike = ()
     revealed_team: ArrayLike = ()
@@ -90,8 +92,14 @@ class PlayerAlphasOutput(PolicyHeadOutput):
 
 @dataclass
 class PlayerActorOutput:
-    value_head: CategoricalValueHeadOutput = field(
+    value_win_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
+    )
+    value_my_knockout_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
+    value_opp_knockout_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
 
@@ -185,6 +193,8 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
+    my_knockout_returns: ArrayLike = ()
+    opp_knockout_returns: ArrayLike = ()
     advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()

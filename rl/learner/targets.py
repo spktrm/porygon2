@@ -62,15 +62,34 @@ def compute_player_targets(
     c_t = jnp.expand_dims(c_t, axis=-1)
 
     player_reward = batch.player_transitions.env_output.win_reward
-    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
-    n_bins = target_value_probs.shape[-1]
+    player_my_knockout_reward = batch.player_transitions.env_output.my_knockout_reward
+    player_opp_knockout_reward = batch.player_transitions.env_output.opp_knockout_reward
 
     terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
     r_t = jnp.concatenate(
-        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
+        (
+            player_reward,
+            terminal_heuristic_reward[..., None],
+            player_my_knockout_reward[..., None],
+            player_opp_knockout_reward[..., None],
+        ),
+        axis=-1,
     )
 
-    v_tm1 = jnp.concatenate((target_value_probs, state_potential[..., None]), axis=-1)
+    target_value_probs = jnp.exp(target_pred.value_win_head.log_probs)
+    target_value_my_knockout = target_pred.value_my_knockout_head.logits
+    target_value_opp_knockout = target_pred.value_opp_knockout_head.logits
+
+    n_bins = target_value_probs.shape[-1]
+    v_tm1 = jnp.concatenate(
+        (
+            target_value_probs,
+            state_potential[..., None],
+            target_value_my_knockout[..., None],
+            target_value_opp_knockout[..., None],
+        ),
+        axis=-1,
+    )
     last_values = v_tm1[-1:]
 
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
@@ -94,9 +113,12 @@ def compute_player_targets(
     combined_advantage = (
         pg_advantages[..., :n_bins] @ cat_vf_support
         + heuristic_advantage_coef * pg_advantages[..., n_bins]
+        + (1 / 6) * (pg_advantages[..., -1] - pg_advantages[..., -2])
     )
 
     win_returns = targets_tm1[..., :n_bins]
+    my_knockout_returns = targets_tm1[..., -2]
+    opp_knockout_returns = targets_tm1[..., -1]
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
 
@@ -112,6 +134,8 @@ def compute_player_targets(
 
     return PlayerTargets(
         win_returns=win_returns,
+        my_knockout_returns=my_knockout_returns,
+        opp_knockout_returns=opp_knockout_returns,
         advantages=combined_advantage,
         policy_mask=policy_mask,
         value_mask=value_mask,

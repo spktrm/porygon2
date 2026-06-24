@@ -4206,6 +4206,35 @@ export class StateHandler {
         );
     }
 
+    getFaintedDiffs() {
+        const playerIndex = this.player.getPlayerIndex();
+        if (playerIndex === undefined) {
+            throw new Error("Player index is undefined");
+        }
+
+        const battle = this.player.publicBattle;
+        const sides = battle.sides;
+
+        const calcFaintedCount = (side: Side) => {
+            return side.team.reduce((count, poke) => count + +poke.fainted, 0);
+        };
+
+        const myFaintedCount = calcFaintedCount(sides[playerIndex]);
+        const oppFaintedCount = calcFaintedCount(sides[1 - playerIndex]);
+
+        const myFaintedDiff = myFaintedCount - this.player.prevMyFaintedCount;
+        const oppFaintedDiff =
+            oppFaintedCount - this.player.prevOppFaintedCount;
+
+        this.player.prevMyFaintedCount = myFaintedCount;
+        this.player.prevOppFaintedCount = oppFaintedCount;
+
+        return {
+            myFainted: myFaintedDiff,
+            oppFainted: oppFaintedDiff,
+        };
+    }
+
     getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -4224,12 +4253,9 @@ export class StateHandler {
             historyLength;
 
         const { winReward, lossReward, tieReward } = this.getWinReward();
-        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] =
-            MAX_RATIO_TOKEN * (winReward ?? 0);
-        infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] =
-            MAX_RATIO_TOKEN * (lossReward ?? 0);
-        infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] =
-            MAX_RATIO_TOKEN * (tieReward ?? 0);
+        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = winReward ?? 0;
+        infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] = lossReward ?? 0;
+        infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] = tieReward ?? 0;
 
         const mySide = this.player.privateBattle.sides[playerIndex];
         infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
@@ -4300,6 +4326,10 @@ export class StateHandler {
 
         const statePotential = this.getStatePotential();
         infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = statePotential;
+
+        const { myFainted, oppFainted } = this.getFaintedDiffs();
+        infoBuffer[InfoFeature.INFO_FEATURE__MY_FAINT_REWARD] = myFainted;
+        infoBuffer[InfoFeature.INFO_FEATURE__OPP_FAINT_REWARD] = oppFainted;
 
         return new Uint8Array(infoBuffer.buffer);
     }
