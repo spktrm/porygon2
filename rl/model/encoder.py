@@ -12,8 +12,6 @@ from ml_collections import ConfigDict
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     ACTION_MAX_VALUES,
-    ALLY_1_INDICES,
-    ALLY_2_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     ENTITY_EDGE_MAX_VALUES,
@@ -1151,15 +1149,6 @@ class Encoder(nn.Module):
             (TARGET_INDICES, target_embeddings),
         ]:
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
-
-        # Contextualise
-        for indices, context in [
-            (ALLY_1_INDICES, revealed_entity_embeddings[6][None]),
-            (ALLY_2_INDICES, revealed_entity_embeddings[7][None]),
-        ]:
-            output_state_sequence = output_state_sequence.at[indices].mul(
-                jax.nn.sigmoid(context), unique_indices=True, indices_are_sorted=True
-            )
 
         # Add modality biases
         for indices, accumulator in [
