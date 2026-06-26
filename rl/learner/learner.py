@@ -89,11 +89,8 @@ def train_step(
     player_log_alphas = player_state.alpha_apply_fn(player_state.alpha_params)
     player_log_alphas = promote_map(player_log_alphas, float_dtype)
 
+    player_alpha = jnp.exp(player_log_alphas.log_alpha)
     player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
-    player_move_alpha = jnp.exp(player_log_alphas.move_log_alpha)
-    player_switch_alpha = jnp.exp(player_log_alphas.switch_log_alpha)
-    player_other_alpha = jnp.exp(player_log_alphas.other_log_alpha)
-    player_wildcard_alpha = jnp.exp(player_log_alphas.wildcard_log_alpha)
 
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     target_actor_ratio = jnp.exp(target_actor_log_ratio)
@@ -123,9 +120,7 @@ def train_step(
             HeadParams(),
         )
 
-        learner_value_win_head = learner_player_pred.value_win_head
-        learner_value_my_knockout_head = learner_player_pred.value_my_knockout_head
-        learner_value_opp_knockout_head = learner_player_pred.value_opp_knockout_head
+        learner_value_head = learner_player_pred.value_head
         learner_action_head = learner_player_pred.action_head
         learner_log_prob = learner_action_head.log_prob
 
@@ -146,24 +141,8 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_win_head.logits,
+                logits=learner_value_head.logits,
                 labels=player_targets.win_returns,
-            ),
-            value_mask,
-        )
-
-        loss_v_my_knockout = average(
-            jnp.square(
-                learner_value_my_knockout_head.logits
-                - player_targets.my_knockout_returns
-            ),
-            value_mask,
-        )
-
-        loss_v_opp_knockout = average(
-            jnp.square(
-                learner_value_opp_knockout_head.logits
-                - player_targets.opp_knockout_returns
             ),
             value_mask,
         )
@@ -221,30 +200,14 @@ def train_step(
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, mask_modality
         )
-        normalized_conditional_move_entropy = average(
-            learner_action_head.normalized_conditional_move_entropy, mask_move
-        )
-        normalized_conditional_switch_entropy = average(
-            learner_action_head.normalized_conditional_switch_entropy, mask_switch
-        )
-        normalized_conditional_wildcard_entropy = average(
-            learner_action_head.normalized_conditional_wildcard_entropy, mask_wildcard
-        )
-        normalized_conditional_other_entropy = average(
-            learner_action_head.normalized_conditional_other_entropy, mask_other
-        )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
-            + config.player_value_head_loss_coef
-            * (loss_v_win + loss_v_my_knockout + loss_v_opp_knockout)
+            + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
-                player_modality_alpha * normalized_modality_entropy
-                + player_move_alpha * normalized_conditional_move_entropy
-                + player_switch_alpha * normalized_conditional_switch_entropy
-                + player_wildcard_alpha * normalized_conditional_wildcard_entropy
-                + player_other_alpha * normalized_conditional_other_entropy
+                player_alpha * normalized_entropy
+                + player_modality_alpha * normalized_modality_entropy
             )
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
@@ -253,8 +216,6 @@ def train_step(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
-            player_loss_v_my_knockout=loss_v_my_knockout,
-            player_loss_v_opp_knockout=loss_v_opp_knockout,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
@@ -263,10 +224,6 @@ def train_step(
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_entropy=normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
-            player_normalized_conditional_move_entropy=normalized_conditional_move_entropy,
-            player_normalized_conditional_switch_entropy=normalized_conditional_switch_entropy,
-            player_normalized_conditional_wildcard_entropy=normalized_conditional_wildcard_entropy,
-            player_normalized_conditional_other_entropy=normalized_conditional_other_entropy,
             # Entropy Valid Flags (Prevents alpha explosion)
             player_has_entropy=mask_entropy.any(),
             player_has_modality_entropy=mask_modality.any(),
@@ -283,19 +240,9 @@ def train_step(
             player_learner_target_forward_kl=loss_target_forward_kl,
             player_learner_target_backward_kl=loss_target_backward_kl,
             # Extra stats
-            player_value_win_head_r2=calculate_r2(
-                value_prediction=learner_value_win_head.expectation,
+            player_value_head_r2=calculate_r2(
+                value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
-                mask=value_mask,
-            ),
-            player_value_my_knockout_head_r2=calculate_r2(
-                value_prediction=learner_value_my_knockout_head.logits,
-                value_target=player_targets.my_knockout_returns,
-                mask=value_mask,
-            ),
-            player_value_opp_knockout_head_r2=calculate_r2(
-                value_prediction=learner_value_opp_knockout_head.logits,
-                value_target=player_targets.opp_knockout_returns,
                 mask=value_mask,
             ),
             player_nll_sum=(
@@ -313,45 +260,24 @@ def train_step(
         player_log_alphas = player_state.alpha_apply_fn(player_alpha_params)
         player_log_alphas = promote_map(player_log_alphas, float_dtype)
 
+        player_alpha = jnp.exp(player_log_alphas.log_alpha)
         player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
-        player_move_alpha = jnp.exp(player_log_alphas.move_log_alpha)
-        player_switch_alpha = jnp.exp(player_log_alphas.switch_log_alpha)
-        player_other_alpha = jnp.exp(player_log_alphas.other_log_alpha)
-        player_wildcard_alpha = jnp.exp(player_log_alphas.wildcard_log_alpha)
 
         # Stop gradient on the difference to only flow gradients to log_alpha
         # Multiply by the 'has_*' flag to zero out the loss if the batch lacked these states
         loss = (
-            +player_modality_alpha
+            player_modality_alpha
             * jax.lax.stop_gradient(
                 player_logs["player_normalized_modality_entropy"]
                 - config.player_target_normalized_modality_entropy
             )
             * player_logs["player_has_modality_entropy"]
-            + player_move_alpha
+            + player_alpha
             * jax.lax.stop_gradient(
-                player_logs["player_normalized_conditional_move_entropy"]
-                - config.player_target_normalized_conditional_move_entropy
+                player_logs["player_normalized_entropy"]
+                - config.player_target_normalized_entropy
             )
-            * player_logs["player_has_move_entropy"]
-            + player_switch_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_conditional_switch_entropy"]
-                - config.player_target_normalized_conditional_switch_entropy
-            )
-            * player_logs["player_has_switch_entropy"]
-            + player_other_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_conditional_other_entropy"]
-                - config.player_target_normalized_conditional_other_entropy
-            )
-            * player_logs["player_has_other_entropy"]
-            + player_wildcard_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_conditional_wildcard_entropy"]
-                - config.player_target_normalized_conditional_wildcard_entropy
-            )
-            * player_logs["player_has_wildcard_entropy"]
+            * player_logs["player_has_entropy"]
         )
 
         return loss.mean()
@@ -370,10 +296,6 @@ def train_step(
             player_loss_entropy_alpha=alpha_loss_val,
             # Alphas
             player_modality_alpha=player_modality_alpha,
-            player_move_alpha=player_move_alpha,
-            player_switch_alpha=player_switch_alpha,
-            player_other_alpha=player_other_alpha,
-            player_wildcard_alpha=player_wildcard_alpha,
             # Mask sums
             player_policy_mask_sum=player_policy_mask_sum,
             player_value_mask_sum=player_value_mask_sum,

@@ -30,8 +30,6 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     PointerLogits,
-    PolicyMetrics,
-    RegressionValueLogitHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -82,39 +80,21 @@ class Porygon2PlayerAlphas(nn.Module):
     alphas_init: float = 0.1
 
     def setup(self):
+        self.log_alpha = self.param(
+            "log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
         self.modality_log_alpha = self.param(
             "modality_log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-        self.move_log_alpha = self.param(
-            "move_log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-        self.switch_log_alpha = self.param(
-            "switch_log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-        self.wildcard_log_alpha = self.param(
-            "wildcard_log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-        self.other_log_alpha = self.param(
-            "other_log_alpha",
             nn.initializers.constant(jnp.log(self.alphas_init)),
             (1,),
         )
 
     def __call__(self):
         return PlayerAlphasOutput(
+            log_alpha=self.log_alpha.squeeze(),
             modality_log_alpha=self.modality_log_alpha.squeeze(),
-            move_log_alpha=self.move_log_alpha.squeeze(),
-            switch_log_alpha=self.switch_log_alpha.squeeze(),
-            other_log_alpha=self.other_log_alpha.squeeze(),
-            wildcard_log_alpha=self.wildcard_log_alpha.squeeze(),
         )
 
 
@@ -124,9 +104,7 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
-        self.v_win_head = CategoricalValueLogitHead(self.cfg.v_win_head)
-        self.v_my_knockout_head = RegressionValueLogitHead(self.cfg.v_knockout_head)
-        self.v_opp_knockout_head = RegressionValueLogitHead(self.cfg.v_knockout_head)
+        self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         return (
@@ -180,61 +158,11 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         # 4. Safely normalize using the safe denominator
-        normalized_modality_entropy = jnp.where(
+        return jnp.where(
             num_valid_modalities > 1,
             raw_modality_entropy / safe_max_modality_entropy,
             0.0,
         )
-
-        normalized_condition_entropy = self._calculate_conditional_entropy(
-            policy_metrics,
-            modality_log_probs,
-            flat_valid_mask,
-            valid_actions_per_modality,
-        )
-
-        return normalized_modality_entropy, normalized_condition_entropy
-
-    def _calculate_conditional_entropy(
-        self,
-        policy_metrics: PolicyMetrics,
-        modality_log_probs: jax.Array,
-        flat_valid_mask: jax.Array,
-        valid_actions_per_modality: jax.Array,
-    ):
-
-        # 1. Broadcast the parent modality's log probability down to every individual action
-        parent_log_probs = modality_log_probs[FLAT_MODALITY_MASK]
-
-        # 2. Calculate the conditional probability: log P(a|m) = log P(a) - log P(m)
-        log_p_a_given_m = policy_metrics.log_policy - parent_log_probs
-        p_a_given_m = jnp.exp(log_p_a_given_m)
-
-        # 3. Calculate the entropy contribution of each action: -P(a|m) * log P(a|m)
-        action_cond_entropies = jnp.where(
-            flat_valid_mask, -p_a_given_m * log_p_a_given_m, 0.0
-        )
-
-        # 4. Sum the action entropies back into their respective modality buckets
-        per_modality_entropy = jax.ops.segment_sum(
-            action_cond_entropies,
-            FLAT_MODALITY_MASK,
-            num_segments=NUM_MODALITY_FEATURES,
-        )
-
-        # 5. Calculate max possible conditional entropy ( log(N) )
-        max_cond_entropy = jnp.log(jnp.maximum(valid_actions_per_modality, 1.0))
-
-        # Create a safe denominator to prevent division by zero
-        safe_max_cond_entropy = jnp.where(
-            valid_actions_per_modality > 1, max_cond_entropy, 1.0
-        )
-
-        # Normalize
-        normalized_cond_entropy = per_modality_entropy / safe_max_cond_entropy
-
-        # 6. Mask out modalities with 1 or 0 valid actions (their internal entropy is strictly 0)
-        return jnp.where(valid_actions_per_modality > 1, normalized_cond_entropy, 0.0)
 
     def _forward_action_head(
         self,
@@ -272,8 +200,8 @@ class Porygon2PlayerModel(nn.Module):
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
 
-        normalized_modality_entropy, normalized_conditional_entropy = (
-            self._calculate_entropy_metrics(policy_metrics, flat_valid_mask)
+        normalized_modality_entropy = self._calculate_entropy_metrics(
+            policy_metrics, flat_valid_mask
         )
 
         return PlayerPolicyHeadOutput(
@@ -286,33 +214,15 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
-            normalized_conditional_move_entropy=normalized_conditional_entropy[
-                ..., ModalityEnum.MODALITY_ENUM__MOVE
-            ],
-            normalized_conditional_switch_entropy=normalized_conditional_entropy[
-                ..., ModalityEnum.MODALITY_ENUM__SWITCH
-            ],
-            normalized_conditional_other_entropy=normalized_conditional_entropy[
-                ..., ModalityEnum.MODALITY_ENUM__OTHER
-            ],
-            normalized_conditional_wildcard_entropy=normalized_conditional_entropy[
-                ..., ModalityEnum.MODALITY_ENUM__WILDCARD
-            ],
         )
 
-    def _forward_value_win_head(self, value_embedding: jax.Array):
-        return self.v_win_head(value_embedding)
-
-    def _forward_value_my_knockout_head(self, value_embedding: jax.Array):
-        return self.v_my_knockout_head(value_embedding)
-
-    def _forward_value_opp_knockout_head(self, value_embedding: jax.Array):
-        return self.v_opp_knockout_head(value_embedding)
+    def _forward_value_head(self, value_embedding: jax.Array):
+        return self.v_head(value_embedding)
 
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
-        value_embeddings: jax.Array,
+        value_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -328,13 +238,7 @@ class Porygon2PlayerModel(nn.Module):
 
         return PlayerActorOutput(
             action_head=action_head,
-            value_win_head=self._forward_value_win_head(value_embeddings[0]),
-            value_my_knockout_head=self._forward_value_my_knockout_head(
-                value_embeddings[1]
-            ),
-            value_opp_knockout_head=self._forward_value_opp_knockout_head(
-                value_embeddings[2]
-            ),
+            value_head=self._forward_value_head(value_embedding),
         )
 
     def __call__(
@@ -347,13 +251,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        action_embeddings, value_embeddings = self.encoder(
+        action_embeddings, value_embedding = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+        )(action_embeddings, value_embedding, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

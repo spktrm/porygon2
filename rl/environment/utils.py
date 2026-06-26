@@ -193,9 +193,6 @@ def process_state(
         dtype=np.float32,
     )
 
-    my_fainted_reward = info[InfoFeature.INFO_FEATURE__MY_FAINT_REWARD]
-    opp_fainted_reward = info[InfoFeature.INFO_FEATURE__OPP_FAINT_REWARD]
-
     state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / 1000).astype(
         np.float32
     )
@@ -204,8 +201,6 @@ def process_state(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
-        my_knockout_reward=my_fainted_reward.astype(np.float32),
-        opp_knockout_reward=opp_fainted_reward.astype(np.float32),
         state_potential=state_potential.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
@@ -283,16 +278,10 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
     return (
         PlayerActorInput(env=env, packed_history=packed_history, history=history),
         PlayerActorOutput(
-            value_win_head=CategoricalValueHeadOutput(
+            value_head=CategoricalValueHeadOutput(
                 logits=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
                 log_probs=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
                 expectation=np.zeros((env.done.shape[0], 1), dtype=np.float32),
-            ),
-            value_my_knockout_head=RegressionValueHeadOutput(
-                logits=np.zeros((env.done.shape[0], 1), dtype=np.float32),
-            ),
-            value_opp_knockout_head=RegressionValueHeadOutput(
-                logits=np.zeros((env.done.shape[0], 1), dtype=np.float32),
             ),
             action_head=PolicyHeadOutput(
                 action_index=env.action_mask.reshape(

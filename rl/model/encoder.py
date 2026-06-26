@@ -284,8 +284,8 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        self.value_embeddings = self.param(
-            "value_embeddings", embedding_init, (3, entity_size)
+        self.value_embedding = self.param(
+            "value_embedding", embedding_init, (1, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -348,9 +348,8 @@ class Encoder(nn.Module):
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
         # RMS norms
-        rms_norm_kernel_init = nn.initializers.truncated_normal()
-        self.input_seq_mlp = MLP(kernel_init=rms_norm_kernel_init, use_bias=True)
-        self.output_seq_mlp = MLP(kernel_init=rms_norm_kernel_init, use_bias=True)
+        self.input_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
+        self.output_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
 
         # Transformer Decoders
         self.input_decoder = TransformerDecoder(
@@ -1103,21 +1102,6 @@ class Encoder(nn.Module):
             env_step.action_mask, MOVE_INDICES, axis=0
         ).any(axis=-1)
 
-        # TODO: attempt this effiency again
-        # switch_order_indices = np.array(
-        #     [
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE1,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE2,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE3,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE4,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE5,
-        #     ]
-        # )
-        # switch_order_values = env_step.info[switch_order_indices]
-        # initial_private_team = jnp.take(
-        #     initial_private_team, switch_order_values, axis=0
-        # )
         private_entity_embeddings, private_entity_mask = self._embed_private_entities(
             env_step.private_team
         )
@@ -1227,13 +1211,16 @@ class Encoder(nn.Module):
             kv=latent_queries,
             kv_mask=input_state_mask,
         )
-        value_embeddings = self.value_decoder(
-            q=self.value_embeddings.astype(self.cfg.dtype),
+        action_embeddings = action_embeddings.at[RESERVE_ENTITY_INDICES].set(
+            latent_queries[:6]
+        )
+        value_embedding = self.value_decoder(
+            q=self.value_embedding.astype(self.cfg.dtype),
             kv=latent_queries,
             kv_mask=input_state_mask,
-        )
+        ).squeeze(0)
 
-        return action_embeddings, value_embeddings
+        return action_embeddings, value_embedding
 
     def __call__(
         self,

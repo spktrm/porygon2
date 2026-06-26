@@ -60,6 +60,7 @@ import {
     FieldFeature,
     FieldFeatureMap,
     InfoFeature,
+    InfoFeatureMap,
     MovesetFeature,
     MovesetHasPP,
     PackedSetFeature,
@@ -1508,7 +1509,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << (index % precision));
+        const newValue = currentValue | (1 << index % precision);
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -4249,6 +4250,7 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] = tieReward ?? 0;
 
         const mySide = this.player.privateBattle.sides[playerIndex];
+        const oppSide = this.player.publicBattle.sides[1 - playerIndex];
         infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
 
         const request = this.player.getRequest();
@@ -4265,44 +4267,6 @@ export class StateHandler {
         } else {
             infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
                 RequestType.REQUEST_TYPE__MOVE;
-        }
-
-        const requestPokemon = request.side?.pokemon as
-            | Protocol.Request.SideInfo["pokemon"]
-            | undefined;
-
-        if (requestPokemon) {
-            let privateOrder;
-
-            if (request.teamPreview) {
-                privateOrder = [...requestPokemon];
-                for (const [toIdx, choice] of this.player.choices.entries()) {
-                    const fromIdx = parseInt(choice.split(" ")[1]) - 1;
-                    [privateOrder[toIdx], privateOrder[fromIdx]] = [
-                        privateOrder[fromIdx],
-                        privateOrder[toIdx],
-                    ];
-                }
-            } else {
-                privateOrder = [...requestPokemon].sort((a, b) => {
-                    return a.ident.localeCompare(b.ident);
-                });
-            }
-            for (const [sortedIdx, sortedMember] of privateOrder.entries()) {
-                for (const [
-                    unsortedIdx,
-                    unsortedMember,
-                ] of requestPokemon.entries()) {
-                    if (sortedMember.ident === unsortedMember.ident) {
-                        infoBuffer[
-                            InfoFeature[
-                                `INFO_FEATURE__SWITCH_ORDER_VALUE${unsortedIdx}` as keyof typeof InfoFeature
-                            ]
-                        ] = sortedIdx;
-                        break;
-                    }
-                }
-            }
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
