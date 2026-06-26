@@ -1225,7 +1225,6 @@ class Encoder(nn.Module):
         action_embeddings = self.action_decoder(
             q=output_state_sequence,
             kv=latent_queries,
-            q_mask=output_state_mask,
             kv_mask=input_state_mask,
         )
         value_embeddings = self.value_decoder(

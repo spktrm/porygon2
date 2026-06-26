@@ -756,10 +756,12 @@ function getArrayFromPrivatePokemon(
             pokemon.baseSpecies.baseSpecies.toLowerCase(),
         ]);
 
+    const itemIndex = !!pokemonSet.item
+        ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
+        : ItemsEnum.ITEMS_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ITEM] =
-        !!pokemonSet.item
-            ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
-            : ItemsEnum.ITEMS_ENUM___NULL;
+        itemIndex;
+
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ABILITY] =
         IndexValueFromEnum(AbilitiesEnum, pokemonSet.ability);
 
@@ -1506,7 +1508,7 @@ class Edge {
             featureIndex,
             pokemon,
         })!;
-        const newValue = currentValue | (1 << index % precision);
+        const newValue = currentValue | (1 << (index % precision));
         this.setEntityEdgeFeature({
             featureIndex,
             pokemon,
@@ -2029,6 +2031,22 @@ export class EventHandler implements Protocol.Handler {
         });
     }
 
+    findLastMoveLine() {
+        const log = this.player.log;
+        // Iterate backwards starting from the very last item
+        for (let i = log.length - 1; i >= 0; i--) {
+            const line = log[i];
+
+            if (line.startsWith("|move")) {
+                return line;
+            }
+            // Stop searching if we hit the start of the turn
+            if (line.startsWith("|turn")) {
+                return undefined;
+            }
+        }
+    }
+
     "|faint|"(args: Args["|faint|"]) {
         this.addEdge();
 
@@ -2038,6 +2056,8 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
+
+        const lastMoveLine = this.findLastMoveLine();
 
         const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
@@ -4206,35 +4226,6 @@ export class StateHandler {
         );
     }
 
-    getFaintedDiffs() {
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error("Player index is undefined");
-        }
-
-        const battle = this.player.publicBattle;
-        const sides = battle.sides;
-
-        const calcFaintedCount = (side: Side) => {
-            return side.team.reduce((count, poke) => count + +poke.fainted, 0);
-        };
-
-        const myFaintedCount = calcFaintedCount(sides[playerIndex]);
-        const oppFaintedCount = calcFaintedCount(sides[1 - playerIndex]);
-
-        const myFaintedDiff = myFaintedCount - this.player.prevMyFaintedCount;
-        const oppFaintedDiff =
-            oppFaintedCount - this.player.prevOppFaintedCount;
-
-        this.player.prevMyFaintedCount = myFaintedCount;
-        this.player.prevOppFaintedCount = oppFaintedCount;
-
-        return {
-            myFainted: myFaintedDiff,
-            oppFainted: oppFaintedDiff,
-        };
-    }
-
     getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
@@ -4326,10 +4317,6 @@ export class StateHandler {
 
         const statePotential = this.getStatePotential();
         infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = statePotential;
-
-        const { myFainted, oppFainted } = this.getFaintedDiffs();
-        infoBuffer[InfoFeature.INFO_FEATURE__MY_FAINT_REWARD] = myFainted;
-        infoBuffer[InfoFeature.INFO_FEATURE__OPP_FAINT_REWARD] = oppFainted;
 
         return new Uint8Array(infoBuffer.buffer);
     }

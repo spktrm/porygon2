@@ -3,128 +3,128 @@ syntax = "proto3";
 package servicev2;
 
 message ClientRequest {
-  oneof message_type {
-    StepRequest step = 1;
-    ResetRequest reset = 2;
-  }
+    oneof message_type {
+        StepRequest step = 1;
+        ResetRequest reset = 2;
+    }
 }
 
 
 enum ModalityEnum {
-  MODALITY_ENUM___UNSPECIFIED = 0;
-  MODALITY_ENUM__MOVE = 1;
-  MODALITY_ENUM__SWITCH = 2;
-  MODALITY_ENUM__WILDCARD = 3;
-  MODALITY_ENUM__OTHER = 4;
+    MODALITY_ENUM___UNSPECIFIED = 0;
+    MODALITY_ENUM__MOVE = 1;
+    MODALITY_ENUM__SWITCH = 2;
+    MODALITY_ENUM__WILDCARD = 3;
+    MODALITY_ENUM__OTHER = 4;
 }
 
 enum ActionEnum {
-  ACTION_ENUM___UNSPECIFIED = 0;
-  ACTION_ENUM__DEFAULT = 1;
-  ACTION_ENUM__ALLY_1_TARGET = 2;
-  ACTION_ENUM__ALLY_1_PASS = 3;
-  ACTION_ENUM__ALLY_1_MOVE_1 = 4;
-  ACTION_ENUM__ALLY_1_MOVE_2 = 5;
-  ACTION_ENUM__ALLY_1_MOVE_3 = 6;
-  ACTION_ENUM__ALLY_1_MOVE_4 = 7;
-  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD = 8;
-  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD = 9;
-  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD = 10;
-  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD = 11;
-  ACTION_ENUM__ALLY_2_TARGET = 12;
-  ACTION_ENUM__ALLY_2_PASS = 13;
-  ACTION_ENUM__ALLY_2_MOVE_1 = 14;
-  ACTION_ENUM__ALLY_2_MOVE_2 = 15;
-  ACTION_ENUM__ALLY_2_MOVE_3 = 16;
-  ACTION_ENUM__ALLY_2_MOVE_4 = 17;
-  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD = 18;
-  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD = 19;
-  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD = 20;
-  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD = 21;
-  ACTION_ENUM__ENEMY_1_TARGET = 22;
-  ACTION_ENUM__ENEMY_2_TARGET = 23;
-  ACTION_ENUM__TARGET_AUTO = 24;
-  ACTION_ENUM__TARGET_ALL = 25;
-  ACTION_ENUM__TARGET_ALLY_SIDE = 26;
-  ACTION_ENUM__TARGET_FOE_SIDE = 27;
-  ACTION_ENUM__TARGET_ALLY_TEAM = 28;
-  ACTION_ENUM__TARGET_RANDOM_NORMAL = 29;
-  ACTION_ENUM__TARGET_ALL_ADJACENT = 30;
-  ACTION_ENUM__TARGET_ALL_ADJACENT_FOES = 31;
-  ACTION_ENUM__TARGET_ALLIES = 32;
-  ACTION_ENUM__RESERVE_1_SWITCH_IN = 33;
-  ACTION_ENUM__RESERVE_2_SWITCH_IN = 34;
-  ACTION_ENUM__RESERVE_3_SWITCH_IN = 35;
-  ACTION_ENUM__RESERVE_4_SWITCH_IN = 36;
-  ACTION_ENUM__RESERVE_5_SWITCH_IN = 37;
-  ACTION_ENUM__RESERVE_6_SWITCH_IN = 38;
+    ACTION_ENUM___UNSPECIFIED = 0;
+    ACTION_ENUM__DEFAULT = 1;
+    ACTION_ENUM__ALLY_1_TARGET = 2;
+    ACTION_ENUM__ALLY_1_PASS = 3;
+    ACTION_ENUM__ALLY_1_MOVE_1 = 4;
+    ACTION_ENUM__ALLY_1_MOVE_2 = 5;
+    ACTION_ENUM__ALLY_1_MOVE_3 = 6;
+    ACTION_ENUM__ALLY_1_MOVE_4 = 7;
+    ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD = 8;
+    ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD = 9;
+    ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD = 10;
+    ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD = 11;
+    ACTION_ENUM__ALLY_2_TARGET = 12;
+    ACTION_ENUM__ALLY_2_PASS = 13;
+    ACTION_ENUM__ALLY_2_MOVE_1 = 14;
+    ACTION_ENUM__ALLY_2_MOVE_2 = 15;
+    ACTION_ENUM__ALLY_2_MOVE_3 = 16;
+    ACTION_ENUM__ALLY_2_MOVE_4 = 17;
+    ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD = 18;
+    ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD = 19;
+    ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD = 20;
+    ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD = 21;
+    ACTION_ENUM__ENEMY_1_TARGET = 22;
+    ACTION_ENUM__ENEMY_2_TARGET = 23;
+    ACTION_ENUM__TARGET_AUTO = 24;
+    ACTION_ENUM__TARGET_ALL = 25;
+    ACTION_ENUM__TARGET_ALLY_SIDE = 26;
+    ACTION_ENUM__TARGET_FOE_SIDE = 27;
+    ACTION_ENUM__TARGET_ALLY_TEAM = 28;
+    ACTION_ENUM__TARGET_RANDOM_NORMAL = 29;
+    ACTION_ENUM__TARGET_ALL_ADJACENT = 30;
+    ACTION_ENUM__TARGET_ALL_ADJACENT_FOES = 31;
+    ACTION_ENUM__TARGET_ALLIES = 32;
+    ACTION_ENUM__RESERVE_1_SWITCH_IN = 33;
+    ACTION_ENUM__RESERVE_2_SWITCH_IN = 34;
+    ACTION_ENUM__RESERVE_3_SWITCH_IN = 35;
+    ACTION_ENUM__RESERVE_4_SWITCH_IN = 36;
+    ACTION_ENUM__RESERVE_5_SWITCH_IN = 37;
+    ACTION_ENUM__RESERVE_6_SWITCH_IN = 38;
 }
 
 message Action {
-  ActionEnum src = 1;
-  ActionEnum tgt = 2;
+    ActionEnum src = 1;
+    ActionEnum tgt = 2;
 }
 
 message StepRequest {
-  string username = 1;
-  Action action = 2;
-  int32 rqid = 3;
-  bool teampreview = 4;
+    string username = 1;
+    Action action = 2;
+    int32 rqid = 3;
+    bool teampreview = 4;
 }
 
 message ResetRequest {
-  string username = 1;
-  string smogon_format = 2;
-  string game_id = 3;
-  repeated int32 packed_teams = 4;
+    string username = 1;
+    string smogon_format = 2;
+    string game_id = 3;
+    repeated int32 packed_teams = 4;
 }
 
 message EnvironmentState {
-  bytes info = 1;
-  bytes action_mask = 2;
-  bytes history_entity_public_cache = 3;
-  bytes history_entity_revealed_cache = 4;
-  bytes history_entity_edge_cache = 5;
-  bytes history_field = 6;
-  int32 history_length = 7;
-  bytes my_moveset = 8;
-  bytes opp_moveset = 9;
-  bytes public_team = 10;
-  bytes revealed_team = 11;
-  bytes private_team = 12;
-  bytes field = 13;
-  int32 rqid = 14;
-  int32 history_packed_length = 15;
+    bytes info = 1;
+    bytes action_mask = 2;
+    bytes history_entity_public_cache = 3;
+    bytes history_entity_revealed_cache = 4;
+    bytes history_entity_edge_cache = 5;
+    bytes history_field = 6;
+    int32 history_length = 7;
+    bytes my_moveset = 8;
+    bytes opp_moveset = 9;
+    bytes public_team = 10;
+    bytes revealed_team = 11;
+    bytes private_team = 12;
+    bytes field = 13;
+    int32 rqid = 14;
+    int32 history_packed_length = 15;
 }
 
 message EnvironmentTrajectory {
-  repeated EnvironmentState states = 1;
+    repeated EnvironmentState states = 1;
 }
 
 message EnvironmentBatch {
-  repeated EnvironmentTrajectory trajectories = 1;
-  int32 max_trajectory_length = 2;
+    repeated EnvironmentTrajectory trajectories = 1;
+    int32 max_trajectory_length = 2;
 }
 
 message EnvironmentResponse {
-  string username = 1;
-  EnvironmentState state = 2;
+    string username = 1;
+    EnvironmentState state = 2;
 }
 
 message ErrorResponse {
-  string trace = 1;
+    string trace = 1;
 }
 
 message WorkerRequest {
-  int32 task_id = 1;
-  oneof request {
-    StepRequest step_request = 2;
-    ResetRequest reset_request = 3;
-  }
+    int32 task_id = 1;
+    oneof request {
+        StepRequest step_request = 2;
+        ResetRequest reset_request = 3;
+    }
 }
 
 message WorkerResponse {
-  int32 task_id = 1;
-  EnvironmentResponse environment_response = 2; 
-  ErrorResponse error_response = 3; 
+    int32 task_id = 1;
+    EnvironmentResponse environment_response = 2; 
+    ErrorResponse error_response = 3; 
 }
