@@ -1,5 +1,5 @@
 import math
-from typing import Optional
+from typing import Literal, Optional
 
 import flax.linen as nn
 import jax
@@ -39,7 +39,7 @@ def layer_norm(array: jax.Array) -> jax.Array:
     """
     Apply layer normalization with RMS Norm.
     """
-    return RMSNorm()(array)
+    return nn.LayerNorm(dtype=array.dtype)(array)
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
@@ -685,6 +685,7 @@ class SumEmbeddings(nn.Module):
     output_size: int
     hidden_size: int | None = None
     dtype: jnp.dtype = jnp.float32
+    aggregating_mode: Literal["simple_sum", "sum", "sum_ln"] = "simple_sum"
     use_bias: bool = True
 
     @nn.compact
@@ -702,9 +703,16 @@ class SumEmbeddings(nn.Module):
         ]
 
         # Sum and scale the variance by dividing by sqrt(N)
-        aggregated = simple_sum_embeddings(*embeddings)
+        if self.aggregating_mode == "simple_sum":
+            aggregated = simple_sum_embeddings(*embeddings)
+        elif self.aggregating_mode == "sum":
+            aggregated = sum(embeddings)
+        elif self.aggregating_mode == "sum_ln":
+            aggregated = layer_norm(sum(embeddings))
+        else:
+            raise ValueError(f"Invalid aggregation mode: {self.aggregating_mode}")
 
-        if self.use_bias:
+        if self.use_bias and self.aggregating_mode != "sum_ln":
             bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
             return aggregated + bias.astype(self.dtype)
         else:
