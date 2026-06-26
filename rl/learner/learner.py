@@ -181,18 +181,6 @@ def train_step(
         mask_modality = policy_mask & (
             learner_action_head.normalized_modality_entropy > 0
         )
-        mask_move = policy_mask & (
-            learner_action_head.normalized_conditional_move_entropy > 0
-        )
-        mask_switch = policy_mask & (
-            learner_action_head.normalized_conditional_switch_entropy > 0
-        )
-        mask_wildcard = policy_mask & (
-            learner_action_head.normalized_conditional_wildcard_entropy > 0
-        )
-        mask_other = policy_mask & (
-            learner_action_head.normalized_conditional_other_entropy > 0
-        )
 
         normalized_entropy = average(
             learner_action_head.normalized_entropy, mask_entropy
@@ -227,10 +215,6 @@ def train_step(
             # Entropy Valid Flags (Prevents alpha explosion)
             player_has_entropy=mask_entropy.any(),
             player_has_modality_entropy=mask_modality.any(),
-            player_has_move_entropy=mask_move.any(),
-            player_has_switch_entropy=mask_switch.any(),
-            player_has_wildcard_entropy=mask_wildcard.any(),
-            player_has_other_entropy=mask_other.any(),
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
@@ -295,6 +279,7 @@ def train_step(
             player_advantage_mixing_alpha=heuristic_advantage_coef,
             player_loss_entropy_alpha=alpha_loss_val,
             # Alphas
+            player_alpha=player_alpha,
             player_modality_alpha=player_modality_alpha,
             # Mask sums
             player_policy_mask_sum=player_policy_mask_sum,

@@ -73,10 +73,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
-    normalized_conditional_move_entropy: ArrayLike = ()
-    normalized_conditional_switch_entropy: ArrayLike = ()
-    normalized_conditional_wildcard_entropy: ArrayLike = ()
-    normalized_conditional_other_entropy: ArrayLike = ()
 
 
 @dataclass
