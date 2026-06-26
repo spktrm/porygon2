@@ -106,7 +106,7 @@ def collect_batch_telemetry_data(
 
     final_reward = batch.player_transitions.env_output.win_reward[-1]
     player_value_expectation = (
-        batch.player_transitions.agent_output.actor_output.value_win_head.expectation
+        batch.player_transitions.agent_output.actor_output.value_head.expectation
     )
     early_valid_length = 5
 
