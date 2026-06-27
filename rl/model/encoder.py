@@ -1211,9 +1211,6 @@ class Encoder(nn.Module):
             kv=latent_queries,
             kv_mask=input_state_mask,
         )
-        action_embeddings = action_embeddings.at[RESERVE_ENTITY_INDICES].set(
-            latent_queries[:6]
-        )
         value_embedding = self.value_decoder(
             q=self.value_embedding.astype(self.cfg.dtype),
             kv=latent_queries,
