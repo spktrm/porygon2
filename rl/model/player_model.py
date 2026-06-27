@@ -276,7 +276,7 @@ def create_attention_graph(path, value):
         if getattr(value, "val", None) is not None:
             value = value.val
 
-        avg_attn = value[:, -1]  # Shape: (H, S, S)
+        avg_attn = jnp.mean(value[:, :10], axis=1)  # Shape: (H, S, S)
         if avg_attn.ndim > 3:
             avg_attn = jnp.mean(avg_attn, 0)
 

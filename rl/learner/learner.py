@@ -103,6 +103,10 @@ def train_step(
         heuristic_advantage_coef=heuristic_advantage_coef,
         config=config,
     )
+    player_advantages = (player_targets.advantages - player_state.ema_adv_mean) / (
+        player_state.ema_adv_std + 1e-8
+    )
+
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
 
@@ -133,7 +137,7 @@ def train_step(
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-            advantages=player_targets.advantages,
+            advantages=player_advantages,
             valid=policy_mask,
             threshold=config.player_ppo_clip_threshold,
         )
@@ -268,7 +272,28 @@ def train_step(
 
     alpha_grad_fn = jax.value_and_grad(player_alpha_loss_fn)
     alpha_loss_val, alpha_grads = alpha_grad_fn(player_state.alpha_params)
+
+    player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.apply_alpha_gradients(grads=alpha_grads)
+    player_state = player_state.replace(
+        step_count=player_state.step_count + 1,
+        frame_count=player_state.frame_count + player_valid.sum(),
+        target_params=optax.incremental_update(
+            player_state.params,
+            player_state.target_params,
+            config.player_ema_update_rate,
+        ),
+        ema_adv_mean=optax.incremental_update(
+            player_targets.advantages.mean(where=policy_mask),
+            player_state.ema_adv_mean,
+            config.player_ema_update_rate,
+        ),
+        ema_adv_std=optax.incremental_update(
+            player_targets.advantages.std(where=policy_mask),
+            player_state.ema_adv_std,
+            config.player_ema_update_rate,
+        ),
+    )
 
     training_logs.update(player_logs)
     training_logs.update(
@@ -286,6 +311,8 @@ def train_step(
             player_value_mask_sum=player_value_mask_sum,
             player_policy_value_mask_ratio=player_policy_mask_sum
             / (player_value_mask_sum + 1e-8),
+            player_state_adv_mean=player_state.ema_adv_mean,
+            player_state_adv_std=player_state.ema_adv_std,
         )
     )
     training_logs.update(
@@ -302,17 +329,6 @@ def train_step(
             for k in player_grads["params"]["encoder"]
             if k.endswith("decoder") or k.endswith("encoder")
         }
-    )
-
-    player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.replace(
-        step_count=player_state.step_count + 1,
-        frame_count=player_state.frame_count + player_valid.sum(),
-        target_params=optax.incremental_update(
-            player_state.params,
-            player_state.target_params,
-            config.player_ema_update_rate,
-        ),
     )
 
     # --- Builder ---

@@ -153,8 +153,20 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     alpha_tx: optax.GradientTransformation = struct.field(pytree_node=False)
     alpha_opt_state: optax.OptState = struct.field(pytree_node=True)
 
-    step_count: int = 0
-    frame_count: int = 0
+    # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
+    step_count: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
+    )
+    frame_count: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
+    )
+
+    ema_adv_mean: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0.0, dtype=jnp.float32), pytree_node=True
+    )
+    ema_adv_std: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
+    )
 
     def apply_alpha_gradients(self, grads, **kwargs):
         """Applies gradients specifically to the alpha_params."""
@@ -317,6 +329,8 @@ def save_state(
         target_params=player_state.target_params,
         alpha_params=player_state.alpha_params,
         alpha_opt_state=player_state.alpha_opt_state,
+        ema_adv_mean=player_state.ema_adv_mean,
+        ema_adv_std=player_state.ema_adv_std,
     )
     data["builder_state"] = dict(
         params=builder_state.params,
@@ -421,6 +435,8 @@ def load_from_checkpoint(
         frame_count=ckpt_player_state["frame_count"],
         alpha_params=ckpt_player_state["alpha_params"],
         alpha_opt_state=ckpt_player_state["alpha_opt_state"],
+        ema_adv_mean=ckpt_player_state["ema_adv_mean"],
+        ema_adv_std=ckpt_player_state["ema_adv_std"],
     )
 
     # Fully replace builder state
