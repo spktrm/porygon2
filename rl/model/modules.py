@@ -538,7 +538,7 @@ class TransformerDecoder(nn.Module):
         )(q, kv, attn_mask, positionwise_mask, q_positions, kv_positions)
 
         if self.norm_output:
-            q = layer_norm(q)
+            q = MLP()(q)
 
         return q
 

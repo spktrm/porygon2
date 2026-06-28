@@ -113,6 +113,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.latent_encoder.num_layers = 4
     cfg.encoder.action_decoder.need_pos = False
+    # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size
     cfg.encoder.value_decoder.need_pos = False
 
     for decoder in [
