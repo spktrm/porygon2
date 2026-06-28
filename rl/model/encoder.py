@@ -60,6 +60,25 @@ from rl.model.modules import (
     one_hot_concat_jax,
 )
 
+# Action-decoder slot groups, segregated by input provenance rather than by
+# behavioural modality. Move slots (regular + wildcard) are move-feature-derived
+# and share a decoder; switch slots are entity-derived; the remaining target and
+# structural slots (ally/enemy targets, TARGET_*, pass, default) only ever act as
+# bilinear keys. These three groups partition all NUM_ACTION_FEATURES slots.
+_MOVE_SLOTS = np.asarray(MOVE_INDICES)
+_SWITCH_SLOTS = np.asarray(RESERVE_ENTITY_INDICES)
+_TARGET_STATIC_SLOTS = np.setdiff1d(
+    np.arange(NUM_ACTION_FEATURES),
+    np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
+)
+
+# (name, static slot indices) per decoder, used to gather/scatter action embeddings.
+ACTION_DECODER_SLOT_GROUPS = (
+    ("move", _MOVE_SLOTS),
+    ("switch", _SWITCH_SLOTS),
+    ("target", _TARGET_STATIC_SLOTS),
+)
+
 
 def _binary_scale_encoding(
     to_encode: jax.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
@@ -248,7 +267,6 @@ class Encoder(nn.Module):
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
         )
-        learnable_query_init = nn.initializers.truncated_normal(stddev=0.02)
 
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
         self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
@@ -361,9 +379,16 @@ class Encoder(nn.Module):
         self.latent_encoder = TransformerEncoder(
             **self.cfg.latent_encoder.to_dict(),
         )
-        self.action_decoder = TransformerDecoder(
-            **self.cfg.action_decoder.to_dict(),
-        )
+        # Per-provenance action decoders: each group decodes only its own action
+        # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
+        # no longer share decoder parameters with move embeddings.
+        self.action_decoders = [
+            TransformerDecoder(
+                name=f"action_decoder_{group_name}",
+                **self.cfg.action_decoder.to_dict(),
+            )
+            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+        ]
         self.value_decoder = TransformerDecoder(
             **self.cfg.value_decoder.to_dict(),
         )
@@ -1206,11 +1231,24 @@ class Encoder(nn.Module):
             qkv=latent_queries, qkv_mask=input_state_mask
         )
 
-        action_embeddings = self.action_decoder(
-            q=output_state_sequence,
-            kv=latent_queries,
-            kv_mask=input_state_mask,
-        )
+        # Decode each provenance group's action slots with its own decoder, then
+        # scatter the results back into a single (NUM_ACTION_FEATURES, entity_size)
+        # sequence. The decoder only cross-attends queries to the latents (no query
+        # self-attention), so decoding a group's slots in isolation matches decoding
+        # them jointly.
+        action_embeddings = jnp.zeros_like(output_state_sequence)
+        for decoder, (_, slot_indices) in zip(
+            self.action_decoders, ACTION_DECODER_SLOT_GROUPS
+        ):
+            group_action_embeddings = decoder(
+                q=output_state_sequence[slot_indices],
+                kv=latent_queries,
+                kv_mask=input_state_mask,
+            )
+            action_embeddings = action_embeddings.at[slot_indices].set(
+                group_action_embeddings
+            )
+
         value_embedding = self.value_decoder(
             q=self.value_embedding.astype(self.cfg.dtype),
             kv=latent_queries,

@@ -29,7 +29,6 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
-    PointerLogits,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -103,13 +102,13 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
-        self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
-        return (
-            self.pi_head(action_embeddings, action_embeddings).squeeze(-1).reshape(-1)
+        square_logits = (action_embeddings @ action_embeddings.T) / np.array(
+            action_embeddings.shape[-1] ** 0.5
         )
+        return square_logits.reshape(-1)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
