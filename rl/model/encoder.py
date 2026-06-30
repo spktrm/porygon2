@@ -302,8 +302,8 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        self.value_embedding = self.param(
-            "value_embedding", embedding_init, (1, entity_size)
+        self.value_embeddings = self.param(
+            "value_embeddings", embedding_init, (1, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -1250,10 +1250,10 @@ class Encoder(nn.Module):
             )
 
         value_embedding = self.value_decoder(
-            q=self.value_embedding.astype(self.cfg.dtype),
+            q=self.value_embeddings.astype(self.cfg.dtype),
             kv=latent_queries,
             kv_mask=input_state_mask,
-        ).squeeze(0)
+        ).reshape(-1)
 
         return action_embeddings, value_embedding
 
