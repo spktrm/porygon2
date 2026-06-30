@@ -253,18 +253,24 @@ def train_step(
 
         # Stop gradient on the difference to only flow gradients to log_alpha
         # Multiply by the 'has_*' flag to zero out the loss if the batch lacked these states
+        ent_err = jnp.clip(
+            player_logs["player_normalized_entropy"]
+            - config.player_target_normalized_entropy,
+            -0.25,
+            0.25,
+        )
+        mod_err = jnp.clip(
+            player_logs["player_normalized_modality_entropy"]
+            - config.player_target_normalized_modality_entropy,
+            -0.25,
+            0.25,
+        )
         loss = (
             player_modality_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_modality_entropy"]
-                - config.player_target_normalized_modality_entropy
-            )
+            * jax.lax.stop_gradient(mod_err)
             * player_logs["player_has_modality_entropy"]
             + player_alpha
-            * jax.lax.stop_gradient(
-                player_logs["player_normalized_entropy"]
-                - config.player_target_normalized_entropy
-            )
+            * jax.lax.stop_gradient(ent_err)
             * player_logs["player_has_entropy"]
         )
 
@@ -307,6 +313,12 @@ def train_step(
             player_alpha=player_alpha,
             player_modality_alpha=player_modality_alpha,
             # Mask sums
+            player_win_returns_sum=average(
+                player_targets.win_returns.sum(axis=-1), value_mask
+            ),
+            player_win_returns_min=jnp.min(
+                jnp.where(value_mask[..., None], player_targets.win_returns, 1000.0)
+            ),
             player_policy_mask_sum=player_policy_mask_sum,
             player_value_mask_sum=player_value_mask_sum,
             player_policy_value_mask_ratio=player_policy_mask_sum
@@ -327,7 +339,7 @@ def train_step(
                 player_grads["params"]["encoder"][k]
             )
             for k in player_grads["params"]["encoder"]
-            if k.endswith("decoder") or k.endswith("encoder")
+            if any(substring in k for substring in ("decoder", "encoder"))
         }
     )
 

@@ -140,18 +140,25 @@ class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.dense.to_dict(), dtype=x.dtype)(x)
+    def __call__(self, embedding: jax.Array):
+        logits = nn.Dense(**self.cfg.dense.to_dict(), dtype=embedding.dtype)(embedding)
 
-        log_probs = nn.log_softmax(x, axis=-1)
+        log_probs = nn.log_softmax(logits, axis=-1)
         probs = jnp.exp(log_probs)
         entropy = -jnp.sum(probs * log_probs, axis=-1)
 
-        values = self.cfg.category_values.astype(x.dtype)
+        values = self.cfg.category_values.astype(logits.dtype)
         expectation = probs @ values
 
+        mean_logit = jnp.mean(logits, axis=-1, keepdims=True)
+        l2_norm = jnp.linalg.norm(logits - mean_logit, axis=-1)
+
         return CategoricalValueHeadOutput(
-            logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
+            logits=logits,
+            log_probs=log_probs,
+            entropy=entropy,
+            expectation=expectation,
+            l2_norm=l2_norm,
         )
 
 
