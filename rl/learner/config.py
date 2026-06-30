@@ -5,7 +5,6 @@ from pprint import pprint
 from typing import Any, Callable, Literal
 
 import chex
-import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -23,10 +22,11 @@ from rl.environment.interfaces import (
     PlayerAlphasOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
+from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
 from rl.model.player_model import Porygon2PlayerAlphas
-from rl.model.utils import Params, ParamsContainer, get_most_recent_file
+from rl.model.utils import Params, ParamsContainer
 
 
 @chex.dataclass(frozen=True)
@@ -70,11 +70,15 @@ class Porygon2LearnerConfig:
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
     main_player_update_steps: int = 10
-    add_player_min_frames: int = int(2e6)
-    add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = int(1e6)
+    add_player_min_frames: int = int(2e5)
+    add_player_max_frames: int = int(3e6)
+    minimum_historical_player_steps: int = int(1e4)
     league_size: int = 16
     manage_league_interval: int = 10
+    # Disk-backed league: max materialised opponents held in RAM at once, and
+    # the UCB exploration coefficient governing which stay hot.
+    league_cache_size: int = 16
+    league_ucb_c: float = 1.0
 
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
@@ -322,39 +326,44 @@ def save_state(
     builder_state: Porygon2BuilderTrainState,
     league: League,
 ):
-    if not os.path.exists(os.path.dirname(save_path)):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    data = dict(learner_config=learner_config)
-    data["player_state"] = dict(
+    os.makedirs(save_path, exist_ok=True)
+    player_components = dict(
         params=player_state.params,
-        opt_state=player_state.opt_state,
-        step_count=player_state.step_count,
-        frame_count=player_state.frame_count,
         target_params=player_state.target_params,
+        opt_state=player_state.opt_state,
         alpha_params=player_state.alpha_params,
         alpha_opt_state=player_state.alpha_opt_state,
-        ema_adv_mean=player_state.ema_adv_mean,
-        ema_adv_std=player_state.ema_adv_std,
+        scalars=dict(
+            step_count=player_state.step_count,
+            frame_count=player_state.frame_count,
+            ema_adv_mean=player_state.ema_adv_mean,
+            ema_adv_std=player_state.ema_adv_std,
+        ),
     )
-    data["builder_state"] = dict(
+    builder_components = dict(
         params=builder_state.params,
-        opt_state=builder_state.opt_state,
-        step_count=builder_state.step_count,
-        frame_count=builder_state.frame_count,
         target_params=builder_state.target_params,
+        opt_state=builder_state.opt_state,
+        scalars=dict(
+            step_count=builder_state.step_count,
+            frame_count=builder_state.frame_count,
+        ),
     )
-    data["league"] = league.serialize()
-    with open(save_path, "wb") as f:
-        pickle.dump(data, f)
+    checkpoint.save_train_state(
+        save_path,
+        learner_config,
+        player_components,
+        builder_components,
+        league.serialize(),
+    )
     return save_path
 
 
 def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
-    """Finds the most recent checkpoint file."""
+    """Finds the most recent checkpoint folder."""
     save_path = f"./ckpts/gen{learner_config.generation}/"
-    if not os.path.exists(os.path.dirname(save_path)):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    return get_most_recent_file(save_path)
+    os.makedirs(save_path, exist_ok=True)
+    return checkpoint.most_recent_ckpt_dir(save_path)
 
 
 def _init_league(
@@ -373,6 +382,8 @@ def _init_league(
         ),
         players=[],
         league_size=learner_config.league_size,
+        cache_size=learner_config.league_cache_size,
+        ucb_c=learner_config.league_ucb_c,
     )
 
 
@@ -399,29 +410,18 @@ def load_from_checkpoint(
     Full restoration: loads params, opt_state, step counts, and league.
     """
     print(f"Loading checkpoint from {ckpt_path}")
-    with open(ckpt_path, "rb") as f:
-        ckpt_data = pickle.load(f)
+    ckpt_data = checkpoint.load_full(ckpt_path)
 
     print("Checkpoint data:")
-    ckpt_player_state = ckpt_data.get("player_state")
-    ckpt_builder_state = ckpt_data.get("builder_state")
-    ckpt_league_bytes = ckpt_data.get("league")
+    ckpt_player_state = ckpt_data["player_state"]
+    ckpt_builder_state = ckpt_data["builder_state"]
+    ckpt_league_bytes = ckpt_data["league"]
+    player_scalars = ckpt_player_state["scalars"]
+    builder_scalars = ckpt_builder_state["scalars"]
 
-    # Debug prints (excluding heavy arrays)
-    pprint(
-        {
-            k: v
-            for k, v in ckpt_player_state.items()
-            if k != "opt_state" and not k.endswith("params")
-        }
-    )
-    pprint(
-        {
-            k: v
-            for k, v in ckpt_builder_state.items()
-            if k != "opt_state" and not k.endswith("params")
-        }
-    )
+    # Debug prints (scalars only — heavy arrays excluded)
+    pprint(player_scalars)
+    pprint(builder_scalars)
 
     # Restore League
     if ckpt_league_bytes is not None:
@@ -435,12 +435,12 @@ def load_from_checkpoint(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
-        step_count=ckpt_player_state["step_count"],
-        frame_count=ckpt_player_state["frame_count"],
+        step_count=player_scalars["step_count"],
+        frame_count=player_scalars["frame_count"],
         alpha_params=ckpt_player_state["alpha_params"],
         alpha_opt_state=ckpt_player_state["alpha_opt_state"],
-        ema_adv_mean=ckpt_player_state["ema_adv_mean"],
-        ema_adv_std=ckpt_player_state["ema_adv_std"],
+        ema_adv_mean=player_scalars["ema_adv_mean"],
+        ema_adv_std=player_scalars["ema_adv_std"],
     )
 
     # Fully replace builder state
@@ -448,8 +448,20 @@ def load_from_checkpoint(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
-        step_count=ckpt_builder_state["step_count"],
-        frame_count=ckpt_builder_state["frame_count"],
+        step_count=builder_scalars["step_count"],
+        frame_count=builder_scalars["frame_count"],
+    )
+
+    # The league file holds only refs + stats; install the live main player
+    # from the restored state so opponents have someone to be ranked against.
+    league.update_main_player(
+        ParamsContainer(
+            step_count=MAIN_KEY,
+            player_frame_count=int(player_scalars["frame_count"]),
+            builder_frame_count=int(builder_scalars["frame_count"]),
+            player_params=jax.device_get(player_state.target_params),
+            builder_params=jax.device_get(builder_state.target_params),
+        )
     )
 
     return player_state, builder_state, league
@@ -466,16 +478,13 @@ def load_from_params(
     Resets opt_state and counts (by keeping the input state's version of those).
     """
     print(f"Loading params only from {ckpt_path}")
-    with open(ckpt_path, "rb") as f:
-        ckpt_data = pickle.load(f)
+    # Load only the params components — opt_state stays the input state's
+    # (fresh), effectively resetting training progress.
+    player_params = checkpoint.load_component(ckpt_path, "player", "params")
+    builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    ckpt_player_state = ckpt_data.get("player_state")
-    ckpt_builder_state = ckpt_data.get("builder_state")
-
-    # Replace params with the checkpoint's params
-    # We do NOT replace opt_state or frame_counts, effectively resetting training progress
-    player_state = player_state.replace(params=ckpt_player_state["params"])
-    builder_state = builder_state.replace(params=ckpt_builder_state["params"])
+    player_state = player_state.replace(params=player_params)
+    builder_state = builder_state.replace(params=builder_params)
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)
