@@ -95,11 +95,11 @@ class Porygon2LearnerConfig:
     # Advantage estimation params
     player_gamma: float = 1.0
     player_alpha: float = 1.0
-    player_lambda: float = 0.95
+    player_lambda: float = 0.99
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0
-    builder_lambda: float = 0.95
+    builder_lambda: float = 0.99
 
     player_ppo_clip_threshold: float = 0.3
     builder_ppo_clip_threshold: float = 0.3
