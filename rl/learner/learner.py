@@ -1,4 +1,5 @@
 import logging
+import os
 import queue
 import random
 import threading
@@ -22,6 +23,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history
+from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -29,7 +31,7 @@ from rl.learner.config import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import MAIN_KEY, League, PlayerRef
 from rl.learner.loss import (
     backward_kl_loss,
     forward_kl_loss,
@@ -808,15 +810,15 @@ class Learner:
         """Checks if a new player should be added to the league."""
         if self._should_add_new_player():
             print(f"Adding new player to league @ {step}")
-            self.league.add_player(self._create_params_container(step))
+            self._add_player_to_league(step)
             self.player_replay.reset_usage_counts()
 
     def _should_add_new_player(self) -> bool:
         latest = self.league.get_latest_player()
         current = self.league.get_main_player()
 
-        # Calculate frames passed
-        latest_frames = 0 if latest == current else latest.player_frame_count
+        # Calculate frames passed since the last added player
+        latest_frames = latest.player_frame_count if latest is not None else 0
         frames_passed = int(current.player_frame_count - latest_frames)
 
         # Basic gate: minimum frames
@@ -852,6 +854,40 @@ class Learner:
             step_count=step_key,
             player_params=jax.device_get(self.player_state.params),
             builder_params=jax.device_get(self.builder_state.params),
+        )
+
+    def _add_player_to_league(self, step: int):
+        """Persist the current params as an opponent snapshot and register a ref.
+
+        Only the params files are written (no optimiser state); the league holds
+        the lightweight ref and materialises the params lazily when this player
+        is actually drawn as an opponent.
+        """
+        snapshot_dir = os.path.abspath(
+            f"./ckpts/gen{self.config.generation}/players/p_{step:08}"
+        )
+        checkpoint.save_param_snapshot(
+            snapshot_dir,
+            player_components=dict(
+                params=jax.device_get(self.player_state.params),
+                target_params=jax.device_get(self.player_state.target_params),
+            ),
+            builder_components=dict(
+                params=jax.device_get(self.builder_state.params),
+                target_params=jax.device_get(self.builder_state.target_params),
+            ),
+        )
+        self.league.add_player(
+            PlayerRef(
+                step_count=step,
+                snapshot_dir=snapshot_dir,
+                player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+                builder_frame_count=jax.device_get(
+                    self.builder_state.frame_count
+                ).item(),
+                player_key="params",
+                builder_key="params",
+            )
         )
 
     def _get_usage_counts(self):

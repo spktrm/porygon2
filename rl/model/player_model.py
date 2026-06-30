@@ -5,7 +5,6 @@ import functools
 import os
 from pprint import pprint
 
-import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -24,6 +23,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
+from rl.learner import checkpoint
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
@@ -32,7 +32,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import get_num_params
 
 
 def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
@@ -349,12 +349,10 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
-        with open(latest_ckpt, "rb") as f:
-            step = pickle.load(f)
-        params = step["player_state"]["params"]
+        params = checkpoint.load_component(latest_ckpt, "player", "params")
     else:
         params = learner_network.init(
             key, ex_actor_input, ex_actor_output, HeadParams()
