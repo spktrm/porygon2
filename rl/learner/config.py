@@ -1,4 +1,5 @@
 import functools
+import math
 import os
 from pprint import pprint
 from typing import Any, Callable, Literal
@@ -78,15 +79,15 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.5
-    player_target_normalized_modality_entropy: float = 0.5
+    player_target_normalized_entropy: float = 0.25
+    player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
-    player_clip_gradient: float = 1.0
-    builder_clip_gradient: float = 1.0
+    player_clip_gradient: float = 10.0
+    builder_clip_gradient: float = 10.0
     gradient_accumulation_steps: int = 1
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
@@ -174,6 +175,9 @@ class Porygon2PlayerTrainState(train_state.TrainState):
             grads, self.alpha_opt_state, self.alpha_params
         )
         new_alpha_params = optax.apply_updates(self.alpha_params, updates)
+        new_alpha_params = jax.tree.map(
+            lambda x: jnp.clip(x, math.log(1e-3), math.log(5)), new_alpha_params
+        )
         return self.replace(
             alpha_params=new_alpha_params, alpha_opt_state=new_opt_state
         )

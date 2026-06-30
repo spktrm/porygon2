@@ -55,6 +55,7 @@ class CategoricalValueHeadOutput:
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
     expectation: ArrayLike = ()
+    l2_norm: ArrayLike = ()
 
 
 @dataclass
