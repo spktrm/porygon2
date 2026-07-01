@@ -38,6 +38,11 @@ from rl.learner.loss import (
     mse_value_loss,
     policy_gradient_loss,
 )
+from rl.learner.plasticity import (
+    AddReason,
+    PlasticityController,
+    shrink_and_perturb_player_state,
+)
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.model.heads import HeadParams
@@ -608,6 +613,13 @@ class Learner:
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
 
+        self.plasticity = PlasticityController(
+            enabled=config.plasticity_enabled,
+            overdue_trigger=config.plasticity_overdue_trigger,
+            recovery_winrate=config.plasticity_recovery_winrate,
+            cooldown_frames=config.plasticity_cooldown_frames,
+        )
+
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
             max_size=self.config.builder_replay_buffer_capacity,
@@ -787,6 +799,7 @@ class Learner:
 
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
+            logs.update(self.plasticity.logs())
 
         self.wandb_run.log(logs)
 
@@ -808,12 +821,22 @@ class Learner:
 
     def _manage_league(self, step: int):
         """Checks if a new player should be added to the league."""
-        if self._should_add_new_player():
-            print(f"Adding new player to league @ {step}")
+        reason = self._should_add_new_player()
+        if reason is not None:
+            print(f"Adding new player to league @ {step} ({reason})")
             self._add_player_to_league(step)
             self.player_replay.reset_usage_counts()
+            self.plasticity.on_player_added(reason)
 
-    def _should_add_new_player(self) -> bool:
+        self._update_plasticity(step)
+
+    def _should_add_new_player(self) -> AddReason | None:
+        """Returns why a snapshot should join the league, or None to skip.
+
+        The reason doubles as a bias-free stagnation signal: "dominant" adds
+        mean the main player keeps outgrowing its history, while consecutive
+        "overdue" adds mean it has stopped making progress against itself.
+        """
         latest = self.league.get_latest_player()
         current = self.league.get_main_player()
 
@@ -823,7 +846,7 @@ class Learner:
 
         # Basic gate: minimum frames
         if frames_passed < self.config.add_player_min_frames:
-            return False
+            return None
 
         historical_players = [
             v for k, v in self.league.players.items() if k != MAIN_KEY
@@ -831,18 +854,65 @@ class Learner:
 
         # Initial population check
         if not historical_players:
-            return (
+            if (
                 int(self.player_state.step_count)
                 > self.config.minimum_historical_player_steps
-            )
+            ):
+                return "initial"
+            return None
 
         # Winrate check
         win_rates = self.league.get_winrate((current, historical_players))
 
-        is_dominant = win_rates.min() > 0.7
-        is_overdue = frames_passed >= self.config.add_player_max_frames
+        if win_rates.min() > 0.7:
+            return "dominant"
+        if frames_passed >= self.config.add_player_max_frames:
+            return "overdue"
+        return None
 
-        return is_dominant or is_overdue
+    def _update_plasticity(self, step: int):
+        """Tracks recovery from the last perturbation and fires new ones."""
+        frame_count = int(jax.device_get(self.player_state.frame_count))
+
+        if self.plasticity.recovering:
+            ref = self.league.players.get(self.plasticity.recovery_ref_step)
+            if ref is None:
+                # Reference snapshot left the league; nothing to measure
+                # recovery against, so unblock the controller.
+                self.plasticity.check_recovery(1.0, frame_count)
+            else:
+                main = self.league.get_main_player()
+                winrate = float(self.league.get_winrate((main, ref)).item())
+                self.plasticity.check_recovery(winrate, frame_count)
+
+        if self.plasticity.should_perturb(frame_count):
+            self._apply_plasticity_update(step, frame_count)
+
+    def _apply_plasticity_update(self, step: int, frame_count: int):
+        """Shrink-and-perturb the player params to restore plasticity.
+
+        The pre-perturbation self must be in the league first — both to keep
+        its strength as a training signal and to serve as the recovery
+        benchmark. The trigger path usually just added it (the overdue add);
+        if not, snapshot now.
+        """
+        latest = self.league.get_latest_player()
+        if latest is None or latest.step_count != step:
+            self._add_player_to_league(step)
+            latest = self.league.get_latest_player()
+
+        print(
+            f"Applying shrink-and-perturb plasticity update @ {step} "
+            f"(recovery ref: player {latest.step_count})"
+        )
+        rng = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
+        self.player_state = shrink_and_perturb_player_state(
+            self.player_state,
+            rng,
+            default_shrink=self.config.plasticity_default_shrink,
+            module_shrink=self.config.plasticity_module_shrink,
+        )
+        self.plasticity.on_perturbation(latest.step_count, frame_count)
 
     def _update_main_player_in_league(self):
         self.league.update_main_player(self._create_params_container(MAIN_KEY))

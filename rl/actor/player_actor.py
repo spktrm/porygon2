@@ -185,7 +185,8 @@ class PlayerActor:
         pick_idx = np.random.choice(
             len(historical), p=pfsp(win_rates, weighting="squared")
         )
-        return historical[pick_idx]
+        # Selection above is metadata-only; load params for just the chosen ref.
+        return self._learner.league.materialize(historical[pick_idx])
 
     def get_match(self) -> tuple[ParamsContainer, bool]:
         coin_toss = np.random.random()
