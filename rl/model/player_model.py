@@ -5,7 +5,6 @@ import functools
 import os
 from pprint import pprint
 
-import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -13,26 +12,27 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, ModalityEnum
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
-    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
+    PlayerAlphasOutput,
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
-from rl.environment.utils import CategoricalValueHeadOutput, get_ex_player_step
+from rl.environment.utils import get_ex_player_step
+from rl.learner import checkpoint
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
+    CategoricalValueLogitHead,
     HeadParams,
-    PointerLogits,
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import get_num_params
 
 
 def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
@@ -75,17 +75,92 @@ def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
     return move_prior + switch_prior + wildcard_prior + other_prior
 
 
+class Porygon2PlayerAlphas(nn.Module):
+    alphas_init: float = 0.1
+
+    def setup(self):
+        self.log_alpha = self.param(
+            "log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+        self.modality_log_alpha = self.param(
+            "modality_log_alpha",
+            nn.initializers.constant(jnp.log(self.alphas_init)),
+            (1,),
+        )
+
+    def __call__(self):
+        return PlayerAlphasOutput(
+            log_alpha=self.log_alpha.squeeze(),
+            modality_log_alpha=self.modality_log_alpha.squeeze(),
+        )
+
+
 class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
-        self.pi_head = PointerLogits(**self.cfg.pi_head.qk_logits.to_dict())
-        self.v_head = PointerLogits(**self.cfg.v_head.qk_logits.to_dict())
+        self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
-        return (
-            self.pi_head(action_embeddings, action_embeddings).squeeze(-1).reshape(-1)
+        square_logits = (action_embeddings @ action_embeddings.T) / np.array(
+            action_embeddings.shape[-1] ** 0.5
+        )
+        return square_logits.reshape(-1)
+
+    def _calculate_entropy_metrics(
+        self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
+    ):
+        modality_oh = jax.nn.one_hot(
+            FLAT_MODALITY_MASK,
+            NUM_MODALITY_FEATURES,
+            dtype=policy_metrics.log_policy.dtype,
+        )
+        valid_modality_mask = flat_valid_mask[..., None] * modality_oh
+
+        modality_log_probs = nn.logsumexp(
+            jnp.where(
+                valid_modality_mask,
+                policy_metrics.log_policy[..., None],
+                -1e9,
+            ),
+            axis=0,
+        )
+        modality_probs = jnp.exp(modality_log_probs)
+
+        # Count valid actions per modality
+        valid_actions_per_modality = valid_modality_mask.sum(axis=0)
+
+        # --- THE FIX ---
+
+        # 1. Count how many total modalities actually have valid options
+        num_valid_modalities = (valid_actions_per_modality > 0).sum(
+            dtype=modality_probs.dtype
+        )
+
+        # 2. Calculate the raw entropy safely
+        raw_modality_entropy = -jnp.sum(
+            jnp.where(
+                valid_actions_per_modality > 0, modality_probs * modality_log_probs, 0.0
+            )
+        )
+
+        # 3. Calculate max possible entropy
+        max_modality_entropy = jnp.log(jnp.maximum(num_valid_modalities, 1.0))
+
+        # --- THE FIX ---
+        # Create a safe denominator that is never 0.0, even when the mask is False
+        safe_max_modality_entropy = jnp.where(
+            num_valid_modalities > 1, max_modality_entropy, 1.0
+        )
+
+        # 4. Safely normalize using the safe denominator
+        return jnp.where(
+            num_valid_modalities > 1,
+            raw_modality_entropy / safe_max_modality_entropy,
+            0.0,
         )
 
     def _forward_action_head(
@@ -98,8 +173,8 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        pi_logits = self._forward_pi_head(action_embeddings)
-        pi_logits = pi_logits / temp
+        micro_logits = self._forward_pi_head(action_embeddings)
+        micro_logits = micro_logits / temp
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -107,14 +182,15 @@ class Porygon2PlayerModel(nn.Module):
         #     logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
         # )
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask
+            logits=micro_logits, valid_mask=flat_valid_mask
         )
 
         if train:
             action_index = head.action_index
         else:
             action_index = sample_categorical(
-                jnp.where(flat_valid_mask, pi_logits, -1e9), self.make_rng("sampling")
+                jnp.where(flat_valid_mask, micro_logits, -1e9),
+                self.make_rng("sampling"),
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
@@ -122,6 +198,10 @@ class Porygon2PlayerModel(nn.Module):
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
+
+        normalized_modality_entropy = self._calculate_entropy_metrics(
+            policy_metrics, flat_valid_mask
+        )
 
         return PlayerPolicyHeadOutput(
             action_index=action_index,
@@ -132,31 +212,16 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=policy_metrics.normalized_entropy,
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
+            normalized_modality_entropy=normalized_modality_entropy,
         )
 
-    def _forward_value_head(self, value_embeddings: jax.Array):
-        v_heads = self.v_head(value_embeddings, value_embeddings)
-
-        value_gate = v_heads[..., 0].reshape(-1)
-        value_gate_probs = nn.softmax(value_gate)
-
-        value_logits = jax.lax.collapse(v_heads[..., 1:], 0, -1)
-
-        agg_value_logits = value_gate_probs @ value_logits
-        agg_value_log_probs = nn.log_softmax(agg_value_logits, axis=-1)
-        agg_value_probs = jnp.exp(agg_value_log_probs)
-
-        return CategoricalValueHeadOutput(
-            logits=agg_value_logits,
-            log_probs=agg_value_log_probs,
-            entropy=-jnp.sum(agg_value_probs * agg_value_log_probs, axis=-1),
-            expectation=agg_value_probs @ self.cfg.v_head.category_values,
-        )
+    def _forward_value_head(self, value_embedding: jax.Array):
+        return self.v_head(value_embedding)
 
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
-        value_embeddings: jax.Array,
+        value_embedding: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -169,9 +234,11 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
         )
-        value_head = self._forward_value_head(value_embeddings)
 
-        return PlayerActorOutput(action_head=action_head, value_head=value_head)
+        return PlayerActorOutput(
+            action_head=action_head,
+            value_head=self._forward_value_head(value_embedding),
+        )
 
     def __call__(
         self,
@@ -183,13 +250,13 @@ class Porygon2PlayerModel(nn.Module):
         Shared forward pass for encoder and policy head.
         """
         # Get current state and action embeddings from the encoder
-        action_embeddings, value_embeddings = self.encoder(
+        action_embeddings, value_embedding = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+        )(action_embeddings, value_embedding, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
@@ -208,7 +275,7 @@ def create_attention_graph(path, value):
         if getattr(value, "val", None) is not None:
             value = value.val
 
-        avg_attn = value[:, -1]  # Shape: (H, S, S)
+        avg_attn = jnp.mean(value[:, :10], axis=1)  # Shape: (H, S, S)
         if avg_attn.ndim > 3:
             avg_attn = jnp.mean(avg_attn, 0)
 
@@ -282,12 +349,10 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
-        with open(latest_ckpt, "rb") as f:
-            step = pickle.load(f)
-        params = step["player_state"]["params"]
+        params = checkpoint.load_component(latest_ckpt, "player", "params")
     else:
         params = learner_network.init(
             key, ex_actor_input, ex_actor_output, HeadParams()

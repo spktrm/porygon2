@@ -1,10 +1,10 @@
 import functools
+import math
 import os
 from pprint import pprint
 from typing import Any, Callable, Literal
 
 import chex
-import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -19,12 +19,14 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
+    PlayerAlphasOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
+from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
-from rl.learner.loss import power_schedule
 from rl.model.heads import HeadParams
-from rl.model.utils import Params, ParamsContainer, get_most_recent_file
+from rl.model.player_model import Porygon2PlayerAlphas
+from rl.model.utils import Params, ParamsContainer
 
 
 @chex.dataclass(frozen=True)
@@ -68,11 +70,37 @@ class Porygon2LearnerConfig:
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
     main_player_update_steps: int = 10
-    add_player_min_frames: int = int(2e6)
-    add_player_max_frames: int = int(3e7)
-    minimum_historical_player_steps: int = int(1e6)
+    add_player_min_frames: int = int(2e5)
+    add_player_max_frames: int = int(3e6)
+    minimum_historical_player_steps: int = int(1e4)
     league_size: int = 16
     manage_league_interval: int = 10
+    # Disk-backed league: max materialised opponents held in RAM at once, and
+    # the UCB exploration coefficient governing which stay hot.
+    league_cache_size: int = 16
+    league_ucb_c: float = 1.0
+
+    # Plasticity (shrink-and-perturb) params. Triggered when the main player
+    # keeps failing to dominate its own league history: after
+    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
+    # player params are interpolated toward a fresh init draw.
+    plasticity_enabled: bool = True
+    plasticity_overdue_trigger: int = 2
+    # Fraction of the old weights kept (lambda). Higher = milder perturbation.
+    plasticity_default_shrink: float = 0.7
+    # Per top-level module overrides; the encoder holds expensive
+    # representations, so it is perturbed more gently than the heads.
+    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.9),)
+    # Recovery gate: no further perturbations until the main player beats the
+    # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
+    plasticity_recovery_winrate: float = 0.6
+    plasticity_cooldown_frames: int = int(1e6)
+
+    # Player automatic entropy tuning params
+    player_alpha_learning_rate: float = 1e-3
+    player_initial_alpha: float = 0.05
+    player_target_normalized_entropy: float = 0.25
+    player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -87,28 +115,25 @@ class Porygon2LearnerConfig:
     # Advantage estimation params
     player_gamma: float = 1.0
     player_alpha: float = 1.0
-    player_lambda: float = 0.95
+    player_lambda: float = 0.99
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0
-    builder_lambda: float = 0.95
+    builder_lambda: float = 0.99
 
     player_ppo_clip_threshold: float = 0.3
     builder_ppo_clip_threshold: float = 0.3
 
     # Regularised reward params
-    player_advantage_mixing_alpha_fn: Callable[[int], float] = lambda step: 1.0
-    player_entropy_mult: Callable[[int], float] = lambda step: power_schedule(
-        coef=1.0, step=step, decay=0.25, floor=0.05, ceil=1.0
-    )
+    player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
 
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.1
-    player_entropy_loss_coef: float = 1.0
+    player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
+
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -118,6 +143,7 @@ class Porygon2LearnerConfig:
     builder_entropy_coef: float = 0.01
     builder_entropy_prediction_normalising_constant: float = 100
     builder_entropy_advantage_scale: float = 1e-3
+
     # Human
     builder_human_loss_coef: float = 1e-2
 
@@ -127,7 +153,6 @@ class Porygon2LearnerConfig:
 
     # Logging params
     log_artifacts_online: bool = False
-    check_finite_loss: bool = False
 
 
 def get_learner_config():
@@ -142,8 +167,40 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    step_count: int = 0
-    frame_count: int = 0
+    alpha_params: jax.Array = struct.field(pytree_node=True)
+    alpha_apply_fn: Callable[[Params], PlayerAlphasOutput] = struct.field(
+        pytree_node=False
+    )
+    alpha_tx: optax.GradientTransformation = struct.field(pytree_node=False)
+    alpha_opt_state: optax.OptState = struct.field(pytree_node=True)
+
+    # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
+    step_count: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
+    )
+    frame_count: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
+    )
+
+    ema_adv_mean: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0.0, dtype=jnp.float32), pytree_node=True
+    )
+    ema_adv_std: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
+    )
+
+    def apply_alpha_gradients(self, grads, **kwargs):
+        """Applies gradients specifically to the alpha_params."""
+        updates, new_opt_state = self.alpha_tx.update(
+            grads, self.alpha_opt_state, self.alpha_params
+        )
+        new_alpha_params = optax.apply_updates(self.alpha_params, updates)
+        new_alpha_params = jax.tree.map(
+            lambda x: jnp.clip(x, math.log(1e-3), math.log(5)), new_alpha_params
+        )
+        return self.replace(
+            alpha_params=new_alpha_params, alpha_opt_state=new_opt_state
+        )
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -193,12 +250,21 @@ def create_train_state(
             player_optimizer, config.gradient_accumulation_steps
         )
     initial_player_params = player_params_init_fn(rng)
+
+    player_alpha_mod = Porygon2PlayerAlphas(config.player_initial_alpha)
+    init_player_alpha_params = player_alpha_mod.init(rng)
+    alpha_tx = optax.adam(config.player_alpha_learning_rate)
+
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
         tx=player_optimizer,
+        alpha_params=init_player_alpha_params,
+        alpha_apply_fn=player_alpha_mod.apply,
+        alpha_opt_state=alpha_tx.init(init_player_alpha_params),
+        alpha_tx=alpha_tx,
     )
 
     builder_params_init_fn = functools.partial(
@@ -276,35 +342,44 @@ def save_state(
     builder_state: Porygon2BuilderTrainState,
     league: League,
 ):
-    if not os.path.exists(os.path.dirname(save_path)):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    data = dict(learner_config=learner_config)
-    data["player_state"] = dict(
+    os.makedirs(save_path, exist_ok=True)
+    player_components = dict(
         params=player_state.params,
-        opt_state=player_state.opt_state,
-        step_count=player_state.step_count,
-        frame_count=player_state.frame_count,
         target_params=player_state.target_params,
+        opt_state=player_state.opt_state,
+        alpha_params=player_state.alpha_params,
+        alpha_opt_state=player_state.alpha_opt_state,
+        scalars=dict(
+            step_count=player_state.step_count,
+            frame_count=player_state.frame_count,
+            ema_adv_mean=player_state.ema_adv_mean,
+            ema_adv_std=player_state.ema_adv_std,
+        ),
     )
-    data["builder_state"] = dict(
+    builder_components = dict(
         params=builder_state.params,
-        opt_state=builder_state.opt_state,
-        step_count=builder_state.step_count,
-        frame_count=builder_state.frame_count,
         target_params=builder_state.target_params,
+        opt_state=builder_state.opt_state,
+        scalars=dict(
+            step_count=builder_state.step_count,
+            frame_count=builder_state.frame_count,
+        ),
     )
-    data["league"] = league.serialize()
-    with open(save_path, "wb") as f:
-        pickle.dump(data, f)
+    checkpoint.save_train_state(
+        save_path,
+        learner_config,
+        player_components,
+        builder_components,
+        league.serialize(),
+    )
     return save_path
 
 
 def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
-    """Finds the most recent checkpoint file."""
+    """Finds the most recent checkpoint folder."""
     save_path = f"./ckpts/gen{learner_config.generation}/"
-    if not os.path.exists(os.path.dirname(save_path)):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    return get_most_recent_file(save_path)
+    os.makedirs(save_path, exist_ok=True)
+    return checkpoint.most_recent_ckpt_dir(save_path)
 
 
 def _init_league(
@@ -323,6 +398,8 @@ def _init_league(
         ),
         players=[],
         league_size=learner_config.league_size,
+        cache_size=learner_config.league_cache_size,
+        ucb_c=learner_config.league_ucb_c,
     )
 
 
@@ -349,29 +426,18 @@ def load_from_checkpoint(
     Full restoration: loads params, opt_state, step counts, and league.
     """
     print(f"Loading checkpoint from {ckpt_path}")
-    with open(ckpt_path, "rb") as f:
-        ckpt_data = pickle.load(f)
+    ckpt_data = checkpoint.load_full(ckpt_path)
 
     print("Checkpoint data:")
-    ckpt_player_state = ckpt_data.get("player_state")
-    ckpt_builder_state = ckpt_data.get("builder_state")
-    ckpt_league_bytes = ckpt_data.get("league")
+    ckpt_player_state = ckpt_data["player_state"]
+    ckpt_builder_state = ckpt_data["builder_state"]
+    ckpt_league_bytes = ckpt_data["league"]
+    player_scalars = ckpt_player_state["scalars"]
+    builder_scalars = ckpt_builder_state["scalars"]
 
-    # Debug prints (excluding heavy arrays)
-    pprint(
-        {
-            k: v
-            for k, v in ckpt_player_state.items()
-            if k != "opt_state" and not k.endswith("params")
-        }
-    )
-    pprint(
-        {
-            k: v
-            for k, v in ckpt_builder_state.items()
-            if k != "opt_state" and not k.endswith("params")
-        }
-    )
+    # Debug prints (scalars only — heavy arrays excluded)
+    pprint(player_scalars)
+    pprint(builder_scalars)
 
     # Restore League
     if ckpt_league_bytes is not None:
@@ -385,8 +451,12 @@ def load_from_checkpoint(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
         opt_state=ckpt_player_state["opt_state"],
-        step_count=ckpt_player_state["step_count"],
-        frame_count=ckpt_player_state["frame_count"],
+        step_count=player_scalars["step_count"],
+        frame_count=player_scalars["frame_count"],
+        alpha_params=ckpt_player_state["alpha_params"],
+        alpha_opt_state=ckpt_player_state["alpha_opt_state"],
+        ema_adv_mean=player_scalars["ema_adv_mean"],
+        ema_adv_std=player_scalars["ema_adv_std"],
     )
 
     # Fully replace builder state
@@ -394,8 +464,20 @@ def load_from_checkpoint(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],
         opt_state=ckpt_builder_state["opt_state"],
-        step_count=ckpt_builder_state["step_count"],
-        frame_count=ckpt_builder_state["frame_count"],
+        step_count=builder_scalars["step_count"],
+        frame_count=builder_scalars["frame_count"],
+    )
+
+    # The league file holds only refs + stats; install the live main player
+    # from the restored state so opponents have someone to be ranked against.
+    league.update_main_player(
+        ParamsContainer(
+            step_count=MAIN_KEY,
+            player_frame_count=int(player_scalars["frame_count"]),
+            builder_frame_count=int(builder_scalars["frame_count"]),
+            player_params=jax.device_get(player_state.target_params),
+            builder_params=jax.device_get(builder_state.target_params),
+        )
     )
 
     return player_state, builder_state, league
@@ -412,16 +494,13 @@ def load_from_params(
     Resets opt_state and counts (by keeping the input state's version of those).
     """
     print(f"Loading params only from {ckpt_path}")
-    with open(ckpt_path, "rb") as f:
-        ckpt_data = pickle.load(f)
+    # Load only the params components — opt_state stays the input state's
+    # (fresh), effectively resetting training progress.
+    player_params = checkpoint.load_component(ckpt_path, "player", "params")
+    builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    ckpt_player_state = ckpt_data.get("player_state")
-    ckpt_builder_state = ckpt_data.get("builder_state")
-
-    # Replace params with the checkpoint's params
-    # We do NOT replace opt_state or frame_counts, effectively resetting training progress
-    player_state = player_state.replace(params=ckpt_player_state["params"])
-    builder_state = builder_state.replace(params=ckpt_builder_state["params"])
+    player_state = player_state.replace(params=player_params)
+    builder_state = builder_state.replace(params=builder_params)
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)

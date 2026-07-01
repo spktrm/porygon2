@@ -1,4 +1,5 @@
 import logging
+import os
 import queue
 import random
 import threading
@@ -22,6 +23,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history
+from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
     Porygon2BuilderTrainState,
@@ -29,12 +31,17 @@ from rl.learner.config import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League
+from rl.learner.league import MAIN_KEY, League, PlayerRef
 from rl.learner.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
+)
+from rl.learner.plasticity import (
+    AddReason,
+    PlasticityController,
+    shrink_and_perturb_player_state,
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
@@ -81,12 +88,39 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    player_advantage_mixing_alpha = config.player_advantage_mixing_alpha_fn(
+    heuristic_advantage_coef = config.player_heuristic_advantage_coef_fn(
         player_state.step_count
     )
-    player_entropy_mult = config.player_entropy_mult(player_state.step_count)
 
     training_logs = {}
+    player_log_alphas = player_state.alpha_apply_fn(player_state.alpha_params)
+    player_log_alphas = promote_map(player_log_alphas, float_dtype)
+
+    player_alpha = jnp.exp(player_log_alphas.log_alpha)
+    player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
+
+    target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
+    target_actor_ratio = jnp.exp(target_actor_log_ratio)
+    actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
+
+    player_targets = compute_player_targets(
+        batch,
+        player_target_pred,
+        isr=target_actor_ratio,
+        heuristic_advantage_coef=heuristic_advantage_coef,
+        config=config,
+    )
+    player_advantages = (player_targets.advantages - player_state.ema_adv_mean) / (
+        player_state.ema_adv_std + 1e-8
+    )
+
+    policy_mask = player_targets.policy_mask
+    value_mask = player_targets.value_mask
+
+    player_targets = promote_map(player_targets, float_dtype)
+
+    player_policy_mask_sum = policy_mask.sum()
+    player_value_mask_sum = value_mask.sum()
 
     def player_loss_fn(params: Params):
 
@@ -107,36 +141,16 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
-        target_actor_ratio = jnp.exp(target_actor_log_ratio)
-        actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(
-            min=0.0, max=2.0
-        )
-
-        player_targets = compute_player_targets(
-            batch,
-            learner_player_pred,
-            player_target_pred,
-            isr=target_actor_ratio,
-            advantage_mixing_alpha=player_advantage_mixing_alpha,
-            config=config,
-        )
-        policy_mask = player_targets.policy_mask
-        value_mask = player_targets.value_mask
-
-        player_targets = promote_map(player_targets, float_dtype)
-        player_targets = jax.lax.stop_gradient(player_targets)
-
         # Calculate losses.
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-            advantages=player_targets.advantages,
+            advantages=player_advantages,
             valid=policy_mask,
             threshold=config.player_ppo_clip_threshold,
         )
 
         # Softmax cross-entropy loss for value head
-        loss_v = average(
+        loss_v_win = average(
             optax.softmax_cross_entropy(
                 logits=learner_value_head.logits,
                 labels=player_targets.win_returns,
@@ -146,7 +160,7 @@ def train_step(
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
-            learner_action_head.entropy, policy_mask
+            learner_action_head.normalized_entropy, policy_mask
         )
 
         loss_actor_forward_kl = forward_kl_loss(
@@ -174,24 +188,44 @@ def train_step(
 
         loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
 
+        mask_entropy = policy_mask & (learner_action_head.normalized_entropy > 0)
+        mask_modality = policy_mask & (
+            learner_action_head.normalized_modality_entropy > 0
+        )
+
+        normalized_entropy = average(
+            learner_action_head.normalized_entropy, mask_entropy
+        )
+        normalized_modality_entropy = average(
+            learner_action_head.normalized_modality_entropy, mask_modality
+        )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
-            + config.player_value_head_loss_coef * loss_v
+            + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + config.player_entropy_loss_coef * player_entropy_mult * loss_magnet_kl
+            - (
+                player_alpha * normalized_entropy
+                + player_modality_alpha * normalized_modality_entropy
+            )
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
-            player_loss_v=loss_v,
+            player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
+            player_normalized_entropy=normalized_entropy,
+            player_normalized_modality_entropy=normalized_modality_entropy,
+            # Entropy Valid Flags (Prevents alpha explosion)
+            player_has_entropy=mask_entropy.any(),
+            player_has_modality_entropy=mask_modality.any(),
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
@@ -216,14 +250,88 @@ def train_step(
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
+
+    def player_alpha_loss_fn(player_alpha_params):
+        player_log_alphas = player_state.alpha_apply_fn(player_alpha_params)
+        player_log_alphas = promote_map(player_log_alphas, float_dtype)
+
+        player_alpha = jnp.exp(player_log_alphas.log_alpha)
+        player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
+
+        # Stop gradient on the difference to only flow gradients to log_alpha
+        # Multiply by the 'has_*' flag to zero out the loss if the batch lacked these states
+        ent_err = jnp.clip(
+            player_logs["player_normalized_entropy"]
+            - config.player_target_normalized_entropy,
+            -0.25,
+            0.25,
+        )
+        mod_err = jnp.clip(
+            player_logs["player_normalized_modality_entropy"]
+            - config.player_target_normalized_modality_entropy,
+            -0.25,
+            0.25,
+        )
+        loss = (
+            player_modality_alpha
+            * jax.lax.stop_gradient(mod_err)
+            * player_logs["player_has_modality_entropy"]
+            + player_alpha
+            * jax.lax.stop_gradient(ent_err)
+            * player_logs["player_has_entropy"]
+        )
+
+        return loss.mean()
+
+    alpha_grad_fn = jax.value_and_grad(player_alpha_loss_fn)
+    alpha_loss_val, alpha_grads = alpha_grad_fn(player_state.alpha_params)
+
+    player_state = player_state.apply_gradients(grads=player_grads)
+    player_state = player_state.apply_alpha_gradients(grads=alpha_grads)
+    player_state = player_state.replace(
+        step_count=player_state.step_count + 1,
+        frame_count=player_state.frame_count + player_valid.sum(),
+        target_params=optax.incremental_update(
+            player_state.params,
+            player_state.target_params,
+            config.player_ema_update_rate,
+        ),
+        ema_adv_mean=optax.incremental_update(
+            player_targets.advantages.mean(where=policy_mask),
+            player_state.ema_adv_mean,
+            config.player_ema_update_rate,
+        ),
+        ema_adv_std=optax.incremental_update(
+            player_targets.advantages.std(where=policy_mask),
+            player_state.ema_adv_std,
+            config.player_ema_update_rate,
+        ),
+    )
+
     training_logs.update(player_logs)
     training_logs.update(
         dict(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_advantage_mixing_alpha=player_advantage_mixing_alpha,
-            player_entropy_mult=player_entropy_mult,
+            player_advantage_mixing_alpha=heuristic_advantage_coef,
+            player_loss_entropy_alpha=alpha_loss_val,
+            # Alphas
+            player_alpha=player_alpha,
+            player_modality_alpha=player_modality_alpha,
+            # Mask sums
+            player_win_returns_sum=average(
+                player_targets.win_returns.sum(axis=-1), value_mask
+            ),
+            player_win_returns_min=jnp.min(
+                jnp.where(value_mask[..., None], player_targets.win_returns, 1000.0)
+            ),
+            player_policy_mask_sum=player_policy_mask_sum,
+            player_value_mask_sum=player_value_mask_sum,
+            player_policy_value_mask_ratio=player_policy_mask_sum
+            / (player_value_mask_sum + 1e-8),
+            player_state_adv_mean=player_state.ema_adv_mean,
+            player_state_adv_std=player_state.ema_adv_std,
         )
     )
     training_logs.update(
@@ -238,19 +346,8 @@ def train_step(
                 player_grads["params"]["encoder"][k]
             )
             for k in player_grads["params"]["encoder"]
-            if k.endswith("decoder") or k.endswith("encoder")
+            if any(substring in k for substring in ("decoder", "encoder"))
         }
-    )
-
-    player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.replace(
-        step_count=player_state.step_count + 1,
-        frame_count=player_state.frame_count + player_valid.sum(),
-        target_params=optax.incremental_update(
-            player_state.params,
-            player_state.target_params,
-            config.player_ema_update_rate,
-        ),
     )
 
     # --- Builder ---
@@ -516,6 +613,13 @@ class Learner:
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
 
+        self.plasticity = PlasticityController(
+            enabled=config.plasticity_enabled,
+            overdue_trigger=config.plasticity_overdue_trigger,
+            recovery_winrate=config.plasticity_recovery_winrate,
+            cooldown_frames=config.plasticity_cooldown_frames,
+        )
+
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
             max_size=self.config.builder_replay_buffer_capacity,
@@ -695,6 +799,7 @@ class Learner:
 
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
+            logs.update(self.plasticity.logs())
 
         self.wandb_run.log(logs)
 
@@ -716,22 +821,32 @@ class Learner:
 
     def _manage_league(self, step: int):
         """Checks if a new player should be added to the league."""
-        if self._should_add_new_player():
-            print(f"Adding new player to league @ {step}")
-            self.league.add_player(self._create_params_container(step))
+        reason = self._should_add_new_player()
+        if reason is not None:
+            print(f"Adding new player to league @ {step} ({reason})")
+            self._add_player_to_league(step)
             self.player_replay.reset_usage_counts()
+            self.plasticity.on_player_added(reason)
 
-    def _should_add_new_player(self) -> bool:
+        self._update_plasticity(step)
+
+    def _should_add_new_player(self) -> AddReason | None:
+        """Returns why a snapshot should join the league, or None to skip.
+
+        The reason doubles as a bias-free stagnation signal: "dominant" adds
+        mean the main player keeps outgrowing its history, while consecutive
+        "overdue" adds mean it has stopped making progress against itself.
+        """
         latest = self.league.get_latest_player()
         current = self.league.get_main_player()
 
-        # Calculate frames passed
-        latest_frames = 0 if latest == current else latest.player_frame_count
+        # Calculate frames passed since the last added player
+        latest_frames = latest.player_frame_count if latest is not None else 0
         frames_passed = int(current.player_frame_count - latest_frames)
 
         # Basic gate: minimum frames
         if frames_passed < self.config.add_player_min_frames:
-            return False
+            return None
 
         historical_players = [
             v for k, v in self.league.players.items() if k != MAIN_KEY
@@ -739,18 +854,65 @@ class Learner:
 
         # Initial population check
         if not historical_players:
-            return (
+            if (
                 int(self.player_state.step_count)
                 > self.config.minimum_historical_player_steps
-            )
+            ):
+                return "initial"
+            return None
 
         # Winrate check
         win_rates = self.league.get_winrate((current, historical_players))
 
-        is_dominant = win_rates.min() > 0.7
-        is_overdue = frames_passed >= self.config.add_player_max_frames
+        if win_rates.min() > 0.7:
+            return "dominant"
+        if frames_passed >= self.config.add_player_max_frames:
+            return "overdue"
+        return None
 
-        return is_dominant or is_overdue
+    def _update_plasticity(self, step: int):
+        """Tracks recovery from the last perturbation and fires new ones."""
+        frame_count = int(jax.device_get(self.player_state.frame_count))
+
+        if self.plasticity.recovering:
+            ref = self.league.players.get(self.plasticity.recovery_ref_step)
+            if ref is None:
+                # Reference snapshot left the league; nothing to measure
+                # recovery against, so unblock the controller.
+                self.plasticity.check_recovery(1.0, frame_count)
+            else:
+                main = self.league.get_main_player()
+                winrate = float(self.league.get_winrate((main, ref)).item())
+                self.plasticity.check_recovery(winrate, frame_count)
+
+        if self.plasticity.should_perturb(frame_count):
+            self._apply_plasticity_update(step, frame_count)
+
+    def _apply_plasticity_update(self, step: int, frame_count: int):
+        """Shrink-and-perturb the player params to restore plasticity.
+
+        The pre-perturbation self must be in the league first — both to keep
+        its strength as a training signal and to serve as the recovery
+        benchmark. The trigger path usually just added it (the overdue add);
+        if not, snapshot now.
+        """
+        latest = self.league.get_latest_player()
+        if latest is None or latest.step_count != step:
+            self._add_player_to_league(step)
+            latest = self.league.get_latest_player()
+
+        print(
+            f"Applying shrink-and-perturb plasticity update @ {step} "
+            f"(recovery ref: player {latest.step_count})"
+        )
+        rng = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
+        self.player_state = shrink_and_perturb_player_state(
+            self.player_state,
+            rng,
+            default_shrink=self.config.plasticity_default_shrink,
+            module_shrink=self.config.plasticity_module_shrink,
+        )
+        self.plasticity.on_perturbation(latest.step_count, frame_count)
 
     def _update_main_player_in_league(self):
         self.league.update_main_player(self._create_params_container(MAIN_KEY))
@@ -762,6 +924,40 @@ class Learner:
             step_count=step_key,
             player_params=jax.device_get(self.player_state.params),
             builder_params=jax.device_get(self.builder_state.params),
+        )
+
+    def _add_player_to_league(self, step: int):
+        """Persist the current params as an opponent snapshot and register a ref.
+
+        Only the params files are written (no optimiser state); the league holds
+        the lightweight ref and materialises the params lazily when this player
+        is actually drawn as an opponent.
+        """
+        snapshot_dir = os.path.abspath(
+            f"./ckpts/gen{self.config.generation}/players/p_{step:08}"
+        )
+        checkpoint.save_param_snapshot(
+            snapshot_dir,
+            player_components=dict(
+                params=jax.device_get(self.player_state.params),
+                target_params=jax.device_get(self.player_state.target_params),
+            ),
+            builder_components=dict(
+                params=jax.device_get(self.builder_state.params),
+                target_params=jax.device_get(self.builder_state.target_params),
+            ),
+        )
+        self.league.add_player(
+            PlayerRef(
+                step_count=step,
+                snapshot_dir=snapshot_dir,
+                player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+                builder_frame_count=jax.device_get(
+                    self.builder_state.frame_count
+                ).item(),
+                player_key="params",
+                builder_key="params",
+            )
         )
 
     def _get_usage_counts(self):

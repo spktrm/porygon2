@@ -25,9 +25,9 @@ class PlayerEnvOutput:
 
 @dataclass
 class PlayerPackedHistoryOutput:
-    public: ArrayLike = ()
-    revealed: ArrayLike = ()
-    edges: ArrayLike = ()
+    public_cache: ArrayLike = ()
+    revealed_cache: ArrayLike = ()
+    edge_cache: ArrayLike = ()
 
 
 @dataclass
@@ -55,6 +55,7 @@ class CategoricalValueHeadOutput:
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
     expectation: ArrayLike = ()
+    l2_norm: ArrayLike = ()
 
 
 @dataclass
@@ -72,6 +73,13 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
+    normalized_modality_entropy: ArrayLike = ()
+
+
+@dataclass
+class PlayerAlphasOutput(PolicyHeadOutput):
+    log_alpha: ArrayLike = ()
+    modality_log_alpha: ArrayLike = ()
 
 
 @dataclass

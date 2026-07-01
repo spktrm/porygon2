@@ -141,20 +141,20 @@ export class EnvironmentState extends jspb.Message {
   getActionMask_asB64(): string;
   setActionMask(value: Uint8Array | string): void;
 
-  getHistoryEntityPublic(): Uint8Array | string;
-  getHistoryEntityPublic_asU8(): Uint8Array;
-  getHistoryEntityPublic_asB64(): string;
-  setHistoryEntityPublic(value: Uint8Array | string): void;
+  getHistoryEntityPublicCache(): Uint8Array | string;
+  getHistoryEntityPublicCache_asU8(): Uint8Array;
+  getHistoryEntityPublicCache_asB64(): string;
+  setHistoryEntityPublicCache(value: Uint8Array | string): void;
 
-  getHistoryEntityRevealed(): Uint8Array | string;
-  getHistoryEntityRevealed_asU8(): Uint8Array;
-  getHistoryEntityRevealed_asB64(): string;
-  setHistoryEntityRevealed(value: Uint8Array | string): void;
+  getHistoryEntityRevealedCache(): Uint8Array | string;
+  getHistoryEntityRevealedCache_asU8(): Uint8Array;
+  getHistoryEntityRevealedCache_asB64(): string;
+  setHistoryEntityRevealedCache(value: Uint8Array | string): void;
 
-  getHistoryEntityEdges(): Uint8Array | string;
-  getHistoryEntityEdges_asU8(): Uint8Array;
-  getHistoryEntityEdges_asB64(): string;
-  setHistoryEntityEdges(value: Uint8Array | string): void;
+  getHistoryEntityEdgeCache(): Uint8Array | string;
+  getHistoryEntityEdgeCache_asU8(): Uint8Array;
+  getHistoryEntityEdgeCache_asB64(): string;
+  setHistoryEntityEdgeCache(value: Uint8Array | string): void;
 
   getHistoryField(): Uint8Array | string;
   getHistoryField_asU8(): Uint8Array;
@@ -214,9 +214,9 @@ export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
     actionMask: Uint8Array | string,
-    historyEntityPublic: Uint8Array | string,
-    historyEntityRevealed: Uint8Array | string,
-    historyEntityEdges: Uint8Array | string,
+    historyEntityPublicCache: Uint8Array | string,
+    historyEntityRevealedCache: Uint8Array | string,
+    historyEntityEdgeCache: Uint8Array | string,
     historyField: Uint8Array | string,
     historyLength: number,
     myMoveset: Uint8Array | string,

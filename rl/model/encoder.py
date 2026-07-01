@@ -12,8 +12,6 @@ from ml_collections import ConfigDict
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     ACTION_MAX_VALUES,
-    ALLY_1_INDICES,
-    ALLY_2_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     ENTITY_EDGE_MAX_VALUES,
@@ -23,7 +21,6 @@ from rl.environment.data import (
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
-    NUM_MODALITY_FEATURES,
     NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
@@ -56,10 +53,30 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
 )
 from rl.model.modules import (
+    MLP,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
     one_hot_concat_jax,
+)
+
+# Action-decoder slot groups, segregated by input provenance rather than by
+# behavioural modality. Move slots (regular + wildcard) are move-feature-derived
+# and share a decoder; switch slots are entity-derived; the remaining target and
+# structural slots (ally/enemy targets, TARGET_*, pass, default) only ever act as
+# bilinear keys. These three groups partition all NUM_ACTION_FEATURES slots.
+_MOVE_SLOTS = np.asarray(MOVE_INDICES)
+_SWITCH_SLOTS = np.asarray(RESERVE_ENTITY_INDICES)
+_TARGET_STATIC_SLOTS = np.setdiff1d(
+    np.arange(NUM_ACTION_FEATURES),
+    np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
+)
+
+# (name, static slot indices) per decoder, used to gather/scatter action embeddings.
+ACTION_DECODER_SLOT_GROUPS = (
+    ("move", _MOVE_SLOTS),
+    ("switch", _SWITCH_SLOTS),
+    ("target", _TARGET_STATIC_SLOTS),
 )
 
 
@@ -250,7 +267,6 @@ class Encoder(nn.Module):
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
         )
-        learnable_query_init = nn.initializers.truncated_normal(stddev=0.02)
 
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
         self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
@@ -267,26 +283,27 @@ class Encoder(nn.Module):
         self.prev_action_tgt_bias = self.param(
             "prev_action_tgt_bias", embedding_init, (1, entity_size)
         )
+
+        # Action biases
+        bias_init = nn.initializers.zeros_init()
         self.regular_move_bias = self.param(
-            "regular_move_bias", embedding_init, (1, entity_size)
+            "regular_move_bias", bias_init, (1, entity_size)
         )
         self.wildcard_move_bias = self.param(
-            "wildcard_move_bias", embedding_init, (1, entity_size)
+            "wildcard_move_bias", bias_init, (1, entity_size)
         )
         self.switch_src_bias = self.param(
-            "switch_src_bias", embedding_init, (1, entity_size)
+            "switch_src_bias", bias_init, (1, entity_size)
         )
         self.ally_target_bias = self.param(
-            "ally_target_bias", embedding_init, (1, entity_size)
+            "ally_target_bias", bias_init, (1, entity_size)
         )
         self.enemy_target_bias = self.param(
-            "enemy_target_bias", embedding_init, (1, entity_size)
+            "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        self.latent_queries = self.param(
-            "latent_queries",
-            learnable_query_init,
-            (self.cfg.num_latent_embeddings, entity_size),
+        self.value_embeddings = self.param(
+            "value_embeddings", embedding_init, (1, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -312,6 +329,11 @@ class Encoder(nn.Module):
         )
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
+        )
+        self.history_query_embedding_entity_sum = SumEmbeddings(
+            output_size=entity_size,
+            dtype=self.cfg.dtype,
+            name="history_query_embedding_entity_sum",
         )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
@@ -343,13 +365,11 @@ class Encoder(nn.Module):
         # History cls token
         self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
+        # RMS norms
+        self.input_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
+        self.output_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
+
         # Transformer Decoders
-        self.context_encoder = TransformerEncoder(
-            **self.cfg.context_encoder.to_dict(),
-        )
-        self.entity_decoder = TransformerDecoder(
-            **self.cfg.entity_decoder.to_dict(),
-        )
         self.input_decoder = TransformerDecoder(
             **self.cfg.input_decoder.to_dict(),
         )
@@ -359,9 +379,16 @@ class Encoder(nn.Module):
         self.latent_encoder = TransformerEncoder(
             **self.cfg.latent_encoder.to_dict(),
         )
-        self.action_decoder = TransformerDecoder(
-            **self.cfg.action_decoder.to_dict(),
-        )
+        # Per-provenance action decoders: each group decodes only its own action
+        # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
+        # no longer share decoder parameters with move embeddings.
+        self.action_decoders = [
+            TransformerDecoder(
+                name=f"action_decoder_{group_name}",
+                **self.cfg.action_decoder.to_dict(),
+            )
+            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+        ]
         self.value_decoder = TransformerDecoder(
             **self.cfg.value_decoder.to_dict(),
         )
@@ -598,7 +625,7 @@ class Encoder(nn.Module):
 
         return revealed_embedding, mask
 
-    def _embed_private_entity(self, private: jax.Array):
+    def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
         move_indices = np.array(
             [
                 EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
@@ -643,34 +670,22 @@ class Encoder(nn.Module):
                 ]
             )
         ].astype(self.cfg.dtype)
-        stat_norm = jnp.linalg.norm(stat_features) + 1e-6
-        stat_mean = jnp.mean(stat_features)
-        stat_std = jnp.std(stat_features)
-        hp, atk, def_, spa, spd, spe = jnp.split(stat_features, 6)
 
-        private_encoding = jnp.concatenate(
-            [
-                boolean_code,
-                stat_features / stat_norm,
-                (stat_features - stat_mean) / (stat_std + 1e-6),
-                # log1p(200) is approximately 5.3, which scales the log features to a reasonable range given the max stats in Pokemon.
-                jnp.log1p(stat_features[1:]) - 5.3,
-                atk / (atk + spa + 1e-6),
-                spa / (atk + spa + 1e-6),
-                (hp * def_) / (hp * (def_ + spd) + 1e-6),
-                (hp * spd) / (hp * (def_ + spd) + 1e-6),
-                spe / (hp + def_ + spe + 1e-6),
-                # log1p(364) is approximately 5.9, which scales the log features to a reasonable range given the max stats in Pokemon.
-                jnp.log1p(stat_features[:1]) - 5.9,
-            ],
+        stat_encoding = stat_features / np.array([714, 526, 658, 535, 658, 548])
+        freqs = 2.0 ** np.arange(num_stat_bands) * np.pi
+        stat_encoding = (stat_encoding[..., None] * freqs[None]).astype(self.cfg.dtype)
+        stat_encoding = jnp.concatenate(
+            (jnp.sin(stat_encoding), jnp.cos(stat_encoding)),
             axis=-1,
-        )
+        ).reshape(-1)
+
         private_embedding = self.private_entity_sum(
             self._embed_species(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             move_embeddings.mean(axis=0),
-            private_encoding,
+            boolean_code,
+            stat_encoding,
         )
 
         # Apply mask to filter out invalid entities.
@@ -999,10 +1014,10 @@ class Encoder(nn.Module):
     ):
 
         entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
-            packed_history.public, packed_history.revealed
+            packed_history.public_cache, packed_history.revealed_cache
         )
 
-        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edges)
+        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edge_cache)
 
         (
             local_timestep_embedding,
@@ -1081,11 +1096,11 @@ class Encoder(nn.Module):
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
-        timestep_mask: jax.Array,
-        current_position: jax.Array,
-        timestep_embeddings: jax.Array,
-        timestep_positions: jax.Array,
-        initial_private_team: jax.Array,
+        # timestep_mask: jax.Array,
+        # current_position: jax.Array,
+        # timestep_embeddings: jax.Array,
+        # timestep_positions: jax.Array,
+        # initial_private_team: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1100,39 +1115,17 @@ class Encoder(nn.Module):
             env_step.action_mask, MOVE_INDICES, axis=0
         ).any(axis=-1)
 
-        # TODO: attempt this effiency again
-        # switch_order_indices = np.array(
-        #     [
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE0,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE1,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE2,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE3,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE4,
-        #         InfoFeature.INFO_FEATURE__SWITCH_ORDER_VALUE5,
-        #     ]
-        # )
-        # switch_order_values = env_step.info[switch_order_indices]
-        # initial_private_team = jnp.take(
-        #     initial_private_team, switch_order_values, axis=0
-        # )
         private_entity_embeddings, private_entity_mask = self._embed_private_entities(
             env_step.private_team
         )
 
-        contextualised_input = jnp.concatenate(
-            (private_entity_embeddings, revealed_entity_embeddings, field_embeddings),
-            axis=0,
-        )
-        contextualised_input_mask = jnp.concatenate(
+        input_mask = jnp.concatenate(
             (
                 private_entity_mask,
                 revealed_entity_mask,
                 jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
             ),
             axis=-1,
-        )
-        contextualised_input = self.context_encoder(
-            qkv=contextualised_input, qkv_mask=contextualised_input_mask
         )
 
         output_state_sequence = jnp.zeros(
@@ -1146,22 +1139,13 @@ class Encoder(nn.Module):
         # set/accumulate ally embeddings and positional biases
         for indices, accumulator in [
             (MOVE_INDICES, my_move_embeddings),
-            (RESERVE_ENTITY_INDICES, contextualised_input[:6]),
-            (ALLY_TARGET_INDICES, contextualised_input[6:8]),
-            (ENEMY_TARGET_INDICES, contextualised_input[12:14]),
+            (RESERVE_ENTITY_INDICES, private_entity_embeddings[:6]),
+            (ALLY_TARGET_INDICES, revealed_entity_embeddings[:2]),
+            (ENEMY_TARGET_INDICES, revealed_entity_embeddings[6:8]),
             (PASS_INDICES, pass_embeddings),
             (TARGET_INDICES, target_embeddings),
         ]:
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
-
-        # Contextualise
-        for indices, context in [
-            (ALLY_1_INDICES, contextualised_input[6][None]),
-            (ALLY_2_INDICES, contextualised_input[7][None]),
-        ]:
-            output_state_sequence = output_state_sequence.at[indices].mul(
-                jax.nn.sigmoid(context), unique_indices=True, indices_are_sorted=True
-            )
 
         # Add modality biases
         for indices, accumulator in [
@@ -1186,7 +1170,9 @@ class Encoder(nn.Module):
 
         input_state_sequence = jnp.concatenate(
             (
-                contextualised_input,
+                private_entity_embeddings,
+                revealed_entity_embeddings,
+                field_embeddings,
                 prev_action_src + self.prev_action_src_bias.astype(self.cfg.dtype),
                 prev_action_tgt + self.prev_action_tgt_bias.astype(self.cfg.dtype),
             ),
@@ -1201,55 +1187,63 @@ class Encoder(nn.Module):
             dtype=jnp.bool,
         )
 
-        modality_masks = (
-            contextualised_input_mask,
-            prev_action_doubles_mask,
+        input_state_mask = jnp.concatenate(
+            (input_mask, prev_action_doubles_mask), axis=0
         )
-        input_state_mask = jnp.concatenate(modality_masks, axis=0)
-        latent_query_mask = jnp.ones_like(self.latent_queries[..., 0], dtype=jnp.bool)
 
         output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
             axis=1
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        latent_queries = self.entity_decoder(
-            q=self.latent_queries.astype(self.cfg.dtype),
-            kv=input_state_sequence,
-            q_mask=latent_query_mask,
-            kv_mask=input_state_mask,
-        )
+        input_state_sequence = self.input_seq_mlp(input_state_sequence)
+        output_state_sequence = self.output_seq_mlp(output_state_sequence)
+
         latent_queries = self.input_decoder(
-            q=latent_queries,
+            q=input_state_sequence,
             kv=output_state_sequence,
-            q_mask=latent_query_mask,
+            q_mask=input_state_mask,
             kv_mask=output_state_mask,
         )
-        latent_queries = self.history_decoder(
-            q=latent_queries,
-            kv=timestep_embeddings,
-            q_mask=latent_query_mask,
-            kv_mask=timestep_mask,
-            q_positions=jnp.expand_dims(current_position, axis=-1),
-            kv_positions=timestep_positions,
-        )
+        # latent_queries = self.history_decoder(
+        #     q=latent_queries,
+        #     kv=timestep_embeddings,
+        #     q_mask=input_state_mask,
+        #     kv_mask=timestep_mask,
+        #     q_positions=jnp.expand_dims(current_position, axis=-1),
+        #     kv_positions=timestep_positions,
+        # )
 
         # bulk of computation
         latent_queries = self.latent_encoder(
-            qkv=latent_queries, qkv_mask=latent_query_mask
+            qkv=latent_queries, qkv_mask=input_state_mask
         )
 
-        action_embeddings = self.action_decoder(
-            q=output_state_sequence,
+        # Decode each provenance group's action slots with its own decoder, then
+        # scatter the results back into a single (NUM_ACTION_FEATURES, entity_size)
+        # sequence. The decoder only cross-attends queries to the latents (no query
+        # self-attention), so decoding a group's slots in isolation matches decoding
+        # them jointly.
+        action_embeddings = jnp.zeros_like(output_state_sequence)
+        for decoder, (_, slot_indices) in zip(
+            self.action_decoders, ACTION_DECODER_SLOT_GROUPS
+        ):
+            group_action_embeddings = decoder(
+                q=output_state_sequence[slot_indices],
+                kv=latent_queries,
+                kv_mask=input_state_mask,
+            )
+            action_embeddings = action_embeddings.at[slot_indices].set(
+                group_action_embeddings
+            )
+
+        value_embedding = self.value_decoder(
+            q=self.value_embeddings.astype(self.cfg.dtype),
             kv=latent_queries,
-            q_mask=output_state_mask,
-            kv_mask=latent_query_mask,
-        )
-        value_embeddings = self.value_decoder(
-            q=contextualised_input[6:], kv=latent_queries, kv_mask=latent_query_mask
-        )
+            kv_mask=input_state_mask,
+        ).reshape(-1)
 
-        return action_embeddings, value_embeddings
+        return action_embeddings, value_embedding
 
     def __call__(
         self,
@@ -1257,29 +1251,29 @@ class Encoder(nn.Module):
         packed_history_step: PlayerHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        timestep_embeddings, history_valid_mask, timestep_positions = (
-            self._embed_global_timestep(env_step, history_step, packed_history_step)
-        )
+        # timestep_embeddings, history_valid_mask, timestep_positions = (
+        #     self._embed_global_timestep(env_step, history_step, packed_history_step)
+        # )
 
-        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        history_request_count = timestep_positions[..., 0]
+        # request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        # history_request_count = timestep_positions[..., 0]
 
-        # For padded timesteps, request count is 0, so we use a large bias value.
-        timestep_mask = request_count[..., None] >= jnp.where(
-            history_valid_mask,
-            history_request_count,
-            jnp.iinfo(request_count.dtype).max,
-        )
+        # # For padded timesteps, request count is 0, so we use a large bias value.
+        # timestep_mask = request_count[..., None] >= jnp.where(
+        #     history_valid_mask,
+        #     history_request_count,
+        #     jnp.iinfo(request_count.dtype).max,
+        # )
 
         action_embeddings, value_embeddings = jax.vmap(
-            self._batched_forward, in_axes=(0, 0, 0, None, None, None)
+            self._batched_forward,  # in_axes=(0, 0, 0, None, None, None)
         )(
             env_step,
-            timestep_mask,
-            request_count.reshape(-1, 1),
-            timestep_embeddings,
-            timestep_positions,
-            env_step.private_team[0],
+            # timestep_mask,
+            # request_count.reshape(-1, 1),
+            # timestep_embeddings,
+            # timestep_positions,
+            # env_step.private_team[0],
         )
 
         return action_embeddings, value_embeddings

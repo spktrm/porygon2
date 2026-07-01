@@ -60,6 +60,7 @@ import {
     FieldFeature,
     FieldFeatureMap,
     InfoFeature,
+    InfoFeatureMap,
     MovesetFeature,
     MovesetHasPP,
     PackedSetFeature,
@@ -68,6 +69,7 @@ import {
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
+import { getStatePotential } from "./statePotential";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames =
@@ -727,11 +729,12 @@ function getArrayFromPrivatePokemon(
     candidate: Pokemon | null | undefined,
     // pokemonSet: PokemonSet,
     pokemonSet: Protocol.Request.Pokemon,
+    firstPokemonSet: Protocol.Request.Pokemon,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
     if (candidate === null || candidate === undefined) {
-        return dataArr;
+        throw new Error("candidate must be defined");
     }
 
     let pokemon: Pokemon;
@@ -755,10 +758,12 @@ function getArrayFromPrivatePokemon(
             pokemon.baseSpecies.baseSpecies.toLowerCase(),
         ]);
 
+    const itemIndex = !!pokemonSet.item
+        ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
+        : ItemsEnum.ITEMS_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ITEM] =
-        !!pokemonSet.item
-            ? IndexValueFromEnum(ItemsEnum, pokemonSet.item)
-            : ItemsEnum.ITEMS_ENUM___NULL;
+        itemIndex;
+
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ABILITY] =
         IndexValueFromEnum(AbilitiesEnum, pokemonSet.ability);
 
@@ -782,7 +787,7 @@ function getArrayFromPrivatePokemon(
 
     const stats = pokemonSet.stats ?? {};
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT] =
-        pokemonSet.maxhp;
+        firstPokemonSet.maxhp;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT] =
         stats.atk ?? 0;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT] =
@@ -1618,16 +1623,16 @@ export class EdgeBuffer {
     }
 
     static toReadableHistory(args: {
-        historyEntityPublicBuffer: Uint8Array;
-        historyEntityRevealedBuffer: Uint8Array;
-        historyEntityEdgesBuffer: Uint8Array;
+        historyEntityPublicCacheBuffer: Uint8Array;
+        historyEntityRevealedCacheBuffer: Uint8Array;
+        historyEntityEdgeCacheBuffer: Uint8Array;
         historyFieldBuffer: Uint8Array;
         historyLength: number;
     }) {
         const {
-            historyEntityPublicBuffer,
-            historyEntityRevealedBuffer,
-            historyEntityEdgesBuffer,
+            historyEntityPublicCacheBuffer: historyEntityPublicBuffer,
+            historyEntityRevealedCacheBuffer: historyEntityRevealedBuffer,
+            historyEntityEdgeCacheBuffer: historyEntityEdgesBuffer,
             historyFieldBuffer,
             historyLength,
         } = args;
@@ -2028,6 +2033,22 @@ export class EventHandler implements Protocol.Handler {
         });
     }
 
+    findLastMoveLine() {
+        const log = this.player.log;
+        // Iterate backwards starting from the very last item
+        for (let i = log.length - 1; i >= 0; i--) {
+            const line = log[i];
+
+            if (line.startsWith("|move")) {
+                return line;
+            }
+            // Stop searching if we hit the start of the turn
+            if (line.startsWith("|turn")) {
+                return undefined;
+            }
+        }
+    }
+
     "|faint|"(args: Args["|faint|"]) {
         this.addEdge();
 
@@ -2037,6 +2058,8 @@ export class EventHandler implements Protocol.Handler {
         if (playerIndex === undefined) {
             throw new Error();
         }
+
+        const lastMoveLine = this.findLastMoveLine();
 
         const { pokemon, index } = this.getPokemon(pokeIdent);
         if (pokemon === null) {
@@ -4076,10 +4099,14 @@ export class StateHandler {
 
     getPrivateTeam(playerIndex: number): Int16Array {
         const request = this.player.getRequest();
+        const firstRequest = this.player.firstRequest!;
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
         const requestPokemon = request.side?.pokemon as
+            | Protocol.Request.SideInfo["pokemon"]
+            | undefined;
+        const firstRequestPokemon = firstRequest.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
 
@@ -4124,8 +4151,21 @@ export class StateHandler {
                     );
                 });
 
+                const firstRequestValue = firstRequestPokemon!.find(
+                    (teamMate) => {
+                        return teamMate.ident === member.ident;
+                    },
+                );
+                if (firstRequestValue === undefined) {
+                    throw new Error("cannot find first instance of pokemon");
+                }
+
                 buffer.set(
-                    getArrayFromPrivatePokemon(matchedTeamMate, member),
+                    getArrayFromPrivatePokemon(
+                        matchedTeamMate,
+                        member,
+                        firstRequestValue,
+                    ),
                     offset,
                 );
                 offset += numPrivateEntityNodeFeatures;
@@ -4191,55 +4231,18 @@ export class StateHandler {
     }
 
     getStatePotential() {
-        let p1Total = 0;
-        let p2Total = 0;
-
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
         }
 
-        const aliveCoef = 1;
-        const hpCoef = 0.1;
-        const maxValue = 6 * (aliveCoef + hpCoef);
-
-        for (const [i, side] of [
-            this.player.publicBattle.sides[playerIndex],
-            this.player.publicBattle.sides[1 - playerIndex],
-        ].entries()) {
-            let knownHp = 0;
-            let knownAlive = 0;
-
-            // Use a standard for-loop instead of .reduce
-            for (let j = 0; j < side.team.length; j++) {
-                const pkmn = side.team[j];
-                if (pkmn.fainted) {
-                    continue;
-                } else {
-                    knownAlive += 1;
-                }
-
-                if (pkmn.maxhp === 0) {
-                    knownHp += 1;
-                } else {
-                    knownHp += pkmn.hp / pkmn.maxhp;
-                }
-            }
-
-            const unknownHp = side.totalPokemon - side.team.length;
-            const total =
-                aliveCoef * (knownAlive + unknownHp) +
-                hpCoef * (knownHp + unknownHp);
-
-            if (i === 0) {
-                p1Total = total;
-            } else {
-                p2Total = total;
-            }
-        }
-
-        const frac = (p1Total - p2Total) / maxValue;
-        return Math.floor(frac * MAX_RATIO_TOKEN);
+        const battle = this.player.publicBattle;
+        const sides = battle.sides;
+        return getStatePotential(
+            sides[playerIndex],
+            sides[1 - playerIndex],
+            battle.gen.num,
+        );
     }
 
     getInfo(historyLength: number): Uint8Array {
@@ -4260,14 +4263,12 @@ export class StateHandler {
             historyLength;
 
         const { winReward, lossReward, tieReward } = this.getWinReward();
-        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] =
-            MAX_RATIO_TOKEN * (winReward ?? 0);
-        infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] =
-            MAX_RATIO_TOKEN * (lossReward ?? 0);
-        infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] =
-            MAX_RATIO_TOKEN * (tieReward ?? 0);
+        infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = winReward ?? 0;
+        infoBuffer[InfoFeature.INFO_FEATURE__LOSS_REWARD] = lossReward ?? 0;
+        infoBuffer[InfoFeature.INFO_FEATURE__TIE_REWARD] = tieReward ?? 0;
 
         const mySide = this.player.privateBattle.sides[playerIndex];
+        const oppSide = this.player.publicBattle.sides[1 - playerIndex];
         infoBuffer[InfoFeature.INFO_FEATURE__NUM_ACTIVE] = mySide.active.length;
 
         const request = this.player.getRequest();
@@ -4284,44 +4285,6 @@ export class StateHandler {
         } else {
             infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
                 RequestType.REQUEST_TYPE__MOVE;
-        }
-
-        const requestPokemon = request.side?.pokemon as
-            | Protocol.Request.SideInfo["pokemon"]
-            | undefined;
-
-        if (requestPokemon) {
-            let privateOrder;
-
-            if (request.teamPreview) {
-                privateOrder = [...requestPokemon];
-                for (const [toIdx, choice] of this.player.choices.entries()) {
-                    const fromIdx = parseInt(choice.split(" ")[1]) - 1;
-                    [privateOrder[toIdx], privateOrder[fromIdx]] = [
-                        privateOrder[fromIdx],
-                        privateOrder[toIdx],
-                    ];
-                }
-            } else {
-                privateOrder = [...requestPokemon].sort((a, b) => {
-                    return a.ident.localeCompare(b.ident);
-                });
-            }
-            for (const [sortedIdx, sortedMember] of privateOrder.entries()) {
-                for (const [
-                    unsortedIdx,
-                    unsortedMember,
-                ] of requestPokemon.entries()) {
-                    if (sortedMember.ident === unsortedMember.ident) {
-                        infoBuffer[
-                            InfoFeature[
-                                `INFO_FEATURE__SWITCH_ORDER_VALUE${unsortedIdx}` as keyof typeof InfoFeature
-                            ]
-                        ] = sortedIdx;
-                        break;
-                    }
-                }
-            }
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
@@ -4480,9 +4443,9 @@ export class StateHandler {
         });
         state.setActionMask(actionMask.buffer);
 
-        state.setHistoryEntityPublic(historyEntityPublic);
-        state.setHistoryEntityRevealed(historyEntityRevealed);
-        state.setHistoryEntityEdges(historyEntityEdges);
+        state.setHistoryEntityPublicCache(historyEntityPublic);
+        state.setHistoryEntityRevealedCache(historyEntityRevealed);
+        state.setHistoryEntityEdgeCache(historyEntityEdges);
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);

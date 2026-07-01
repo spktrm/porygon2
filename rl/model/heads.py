@@ -28,7 +28,10 @@ class PolicyMetrics(NamedTuple):
 
 
 def masked_mean_squared_penalty(logits: jax.Array, valid_mask: jax.Array) -> jax.Array:
-    masked_logits = jnp.where(valid_mask, logits, 0.0)
+    mean_centered_logits = logits - jnp.mean(
+        logits, axis=-1, keepdims=True, where=valid_mask
+    )
+    masked_logits = jnp.where(valid_mask, mean_centered_logits, 0.0)
     sum_of_squares = jnp.sum(jnp.square(masked_logits), axis=-1)
     valid_count = jnp.maximum(jnp.sum(valid_mask, axis=-1), 1.0)
     return sum_of_squares / valid_count
@@ -137,18 +140,25 @@ class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, x: jax.Array):
-        x = nn.Dense(**self.cfg.dense.to_dict(), dtype=x.dtype)(x)
+    def __call__(self, embedding: jax.Array):
+        logits = nn.Dense(**self.cfg.dense.to_dict(), dtype=embedding.dtype)(embedding)
 
-        log_probs = nn.log_softmax(x, axis=-1)
+        log_probs = nn.log_softmax(logits, axis=-1)
         probs = jnp.exp(log_probs)
         entropy = -jnp.sum(probs * log_probs, axis=-1)
 
-        values = self.cfg.category_values.astype(x.dtype)
+        values = self.cfg.category_values.astype(logits.dtype)
         expectation = probs @ values
 
+        mean_logit = jnp.mean(logits, axis=-1, keepdims=True)
+        l2_norm = jnp.linalg.norm(logits - mean_logit, axis=-1)
+
         return CategoricalValueHeadOutput(
-            logits=x, log_probs=log_probs, entropy=entropy, expectation=expectation
+            logits=logits,
+            log_probs=log_probs,
+            entropy=entropy,
+            expectation=expectation,
+            l2_norm=l2_norm,
         )
 
 

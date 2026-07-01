@@ -39,10 +39,9 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
 
 def compute_player_targets(
     batch: Batch,
-    learner_pred: PlayerActorOutput,
     target_pred: PlayerActorOutput,
     isr: jax.Array,
-    advantage_mixing_alpha: float,
+    heuristic_advantage_coef: float,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
@@ -63,14 +62,15 @@ def compute_player_targets(
     c_t = jnp.expand_dims(c_t, axis=-1)
 
     player_reward = batch.player_transitions.env_output.win_reward
-    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
-    n_bins = target_value_probs.shape[-1]
 
     terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
     r_t = jnp.concatenate(
         (player_reward, terminal_heuristic_reward[..., None]), axis=-1
     )
 
+    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
+
+    n_bins = target_value_probs.shape[-1]
     v_tm1 = jnp.concatenate((target_value_probs, state_potential[..., None]), axis=-1)
     last_values = v_tm1[-1:]
 
@@ -93,14 +93,23 @@ def compute_player_targets(
     pg_advantages = rho_t * (q_estimate - v_tm1)
 
     combined_advantage = (
-        advantage_mixing_alpha * pg_advantages[..., :n_bins] @ cat_vf_support
-        + (1 - advantage_mixing_alpha) * pg_advantages[..., n_bins]
+        pg_advantages[..., :n_bins] @ cat_vf_support
+        + heuristic_advantage_coef * pg_advantages[..., n_bins]
     )
 
     win_returns = targets_tm1[..., :n_bins]
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
-    policy_mask = value_mask & jnp.logical_not(batch.player_transitions.env_output.done)
+
+    t_length, batch_size, *_ = batch.player_transitions.env_output.action_mask.shape
+    num_actions = batch.player_transitions.env_output.action_mask.reshape(
+        t_length, batch_size, -1
+    ).sum(axis=-1)
+    policy_mask = (
+        value_mask
+        & jnp.logical_not(batch.player_transitions.env_output.done)
+        & (num_actions > 1)
+    )
 
     return PlayerTargets(
         win_returns=win_returns,

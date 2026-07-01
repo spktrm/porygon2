@@ -1,4 +1,3 @@
-import cloudpickle as pickle
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -8,12 +7,12 @@ from rl.actor.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
+from rl.learner import checkpoint
 from rl.learner.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
-from rl.model.utils import get_most_recent_file
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
@@ -56,13 +55,10 @@ class InferenceModel:
         self._rng_key = jax.random.key(seed)
 
         if not fpath:
-            fpath = get_most_recent_file(f"./ckpts/gen{generation}")
+            fpath = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
         print(f"loading checkpoint from {fpath}")
-        with open(fpath, "rb") as f:
-            step = pickle.load(f)
-
-        self._player_params = step["player_state"]["params"]
-        self._builder_params = step["builder_state"]["params"]
+        self._player_params = checkpoint.load_component(fpath, "player", "params")
+        self._builder_params = checkpoint.load_component(fpath, "builder", "params")
 
         print("initializing...")
         self._builder_env = TeamBuilderEnvironment(
