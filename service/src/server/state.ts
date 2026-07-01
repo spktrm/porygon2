@@ -729,11 +729,12 @@ function getArrayFromPrivatePokemon(
     candidate: Pokemon | null | undefined,
     // pokemonSet: PokemonSet,
     pokemonSet: Protocol.Request.Pokemon,
+    firstPokemonSet: Protocol.Request.Pokemon,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
     if (candidate === null || candidate === undefined) {
-        return dataArr;
+        throw new Error("candidate must be defined");
     }
 
     let pokemon: Pokemon;
@@ -786,7 +787,7 @@ function getArrayFromPrivatePokemon(
 
     const stats = pokemonSet.stats ?? {};
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT] =
-        pokemonSet.maxhp;
+        firstPokemonSet.maxhp;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT] =
         stats.atk ?? 0;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT] =
@@ -4098,10 +4099,14 @@ export class StateHandler {
 
     getPrivateTeam(playerIndex: number): Int16Array {
         const request = this.player.getRequest();
+        const firstRequest = this.player.firstRequest!;
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
         const requestPokemon = request.side?.pokemon as
+            | Protocol.Request.SideInfo["pokemon"]
+            | undefined;
+        const firstRequestPokemon = firstRequest.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
 
@@ -4146,8 +4151,21 @@ export class StateHandler {
                     );
                 });
 
+                const firstRequestValue = firstRequestPokemon!.find(
+                    (teamMate) => {
+                        return teamMate.ident === member.ident;
+                    },
+                );
+                if (firstRequestValue === undefined) {
+                    throw new Error("cannot find first instance of pokemon");
+                }
+
                 buffer.set(
-                    getArrayFromPrivatePokemon(matchedTeamMate, member),
+                    getArrayFromPrivatePokemon(
+                        matchedTeamMate,
+                        member,
+                        firstRequestValue,
+                    ),
                     offset,
                 );
                 offset += numPrivateEntityNodeFeatures;

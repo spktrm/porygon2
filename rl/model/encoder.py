@@ -625,7 +625,7 @@ class Encoder(nn.Module):
 
         return revealed_embedding, mask
 
-    def _embed_private_entity(self, private: jax.Array):
+    def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
         move_indices = np.array(
             [
                 EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
@@ -670,34 +670,22 @@ class Encoder(nn.Module):
                 ]
             )
         ].astype(self.cfg.dtype)
-        stat_norm = jnp.linalg.norm(stat_features) + 1e-6
-        stat_mean = jnp.mean(stat_features)
-        stat_std = jnp.std(stat_features)
-        hp, atk, def_, spa, spd, spe = jnp.split(stat_features, 6)
 
-        private_encoding = jnp.concatenate(
-            [
-                boolean_code,
-                stat_features / stat_norm,
-                (stat_features - stat_mean) / (stat_std + 1e-6),
-                # log1p(200) is approximately 5.3, which scales the log features to a reasonable range given the max stats in Pokemon.
-                jnp.log1p(stat_features[1:]) - 5.3,
-                atk / (atk + spa + 1e-6),
-                spa / (atk + spa + 1e-6),
-                (hp * def_) / (hp * (def_ + spd) + 1e-6),
-                (hp * spd) / (hp * (def_ + spd) + 1e-6),
-                spe / (hp + def_ + spe + 1e-6),
-                # log1p(364) is approximately 5.9, which scales the log features to a reasonable range given the max stats in Pokemon.
-                jnp.log1p(stat_features[:1]) - 5.9,
-            ],
+        stat_encoding = stat_features / np.array([714, 526, 658, 535, 658, 548])
+        freqs = 2.0 ** np.arange(num_stat_bands) * np.pi
+        stat_encoding = (stat_encoding[..., None] * freqs[None]).astype(self.cfg.dtype)
+        stat_encoding = jnp.concatenate(
+            (jnp.sin(stat_encoding), jnp.cos(stat_encoding)),
             axis=-1,
-        )
+        ).reshape(-1)
+
         private_embedding = self.private_entity_sum(
             self._embed_species(species_token),
             self._embed_ability(ability_token),
             self._embed_item(item_token),
             move_embeddings.mean(axis=0),
-            private_encoding,
+            boolean_code,
+            stat_encoding,
         )
 
         # Apply mask to filter out invalid entities.

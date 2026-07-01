@@ -80,6 +80,22 @@ class Porygon2LearnerConfig:
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
+    # Plasticity (shrink-and-perturb) params. Triggered when the main player
+    # keeps failing to dominate its own league history: after
+    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
+    # player params are interpolated toward a fresh init draw.
+    plasticity_enabled: bool = True
+    plasticity_overdue_trigger: int = 2
+    # Fraction of the old weights kept (lambda). Higher = milder perturbation.
+    plasticity_default_shrink: float = 0.7
+    # Per top-level module overrides; the encoder holds expensive
+    # representations, so it is perturbed more gently than the heads.
+    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.9),)
+    # Recovery gate: no further perturbations until the main player beats the
+    # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
+    plasticity_recovery_winrate: float = 0.6
+    plasticity_cooldown_frames: int = int(1e6)
+
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05

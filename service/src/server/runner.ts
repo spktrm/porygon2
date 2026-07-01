@@ -178,6 +178,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     prevMyFaintedCount: number;
     prevOppFaintedCount: number;
 
+    firstRequest: AnyObject | undefined;
+
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,
@@ -207,6 +209,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.requestCount = 0;
         this.finishedEarly = false;
         this.rqid = -1;
+        this.firstRequest = undefined;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -270,6 +273,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     getRequest(): AnyObject {
+        if (this.firstRequest === undefined) {
+            this.firstRequest = JSON.parse(
+                JSON.stringify(this.privateBattle.request),
+            );
+        }
         return this.privateBattle.request as AnyObject;
     }
 
