@@ -41,6 +41,7 @@ class AdamWConfig:
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
+PolicyObjectiveT = Literal["spo", "ppo", "neurd"]
 
 
 @chex.dataclass(frozen=True)
@@ -109,8 +110,23 @@ class Porygon2LearnerConfig:
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
     gradient_accumulation_steps: int = 1
+    # Fast EMA target (IMPACT-style): supplies the clipped-target ratio in
+    # the surrogate, the v-trace reference policy, and the value bootstraps,
+    # so it must track the learner closely for stability under replay reuse.
+    # (R-NaD likewise keeps a 1e-3 target purely for v-trace stability,
+    # separate from its slow anchors.)
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
+    # Slow EMA anchor: the single-EMA replacement for R-NaD's prev/prev_
+    # anchor pair (and their alpha-ramp smoothing), used ONLY for the
+    # anchor-KL reward. R-NaD refreshes the anchors every N steps and ramps
+    # between them, giving the effective anchor a mean lag of ~3N/4, plus the
+    # ~1k-step lag prev inherits by being snapshotted from the fast target.
+    # Matching that mean lag: tau = 1 / (0.75 * N + 1_000).
+    player_anchor_iteration_steps: int = 20_000
+    player_anchor_ema_update_rate: float = 1.0 / (
+        0.75 * player_anchor_iteration_steps + 1_000
+    )
 
     # Advantage estimation params
     player_gamma: float = 1.0
@@ -121,11 +137,37 @@ class Porygon2LearnerConfig:
     builder_alpha: float = 1.0
     builder_lambda: float = 0.99
 
+    # Player policy objective: "spo"/"ppo" are ratio-based surrogates with a
+    # trust region; "neurd" is sample-based NeuRD — a logit-space update with
+    # no pi(a) attenuation, so actions the policy abandoned still learn at
+    # full strength when the behavior policy samples them. NeuRD has no ratio
+    # clip; its stabilizers are the is-weight clip, the logit force threshold
+    # (beta), and the anchor-KL reward.
+    player_policy_objective: PolicyObjectiveT = "spo"
+    # Clip on the 1/mu importance weight (variance control; biases rare
+    # actions back toward ratio-style attenuation as it tightens).
+    player_neurd_is_clip: float = 10.0
+    # Centered logits beyond +/-beta receive no further outward force
+    # (R-NaD's apply_force_with_threshold, default beta=2).
+    player_neurd_beta: float = 2.0
+
     player_ppo_clip_threshold: float = 0.3
     builder_ppo_clip_threshold: float = 0.3
 
+    # Advantage EMA normalization. When disabled, raw advantages are used;
+    # the EMA statistics keep updating either way so re-enabling is smooth.
+    player_advantage_ema_enabled: bool = True
+
     # Regularised reward params
     player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
+    # Anchor-based KL reward (R-NaD / magnetic mirror descent style): the
+    # per-step penalty -log(pi/pi_anchor) enters the return through its own
+    # value head and mixes into advantages with this weight. Unlike an entropy
+    # bonus this permits low-entropy solutions — the anchor sharpens as the
+    # policy improves; it only punishes moving away from it faster than the
+    # anchor EMA tracks.
+    player_kl_reward_coef: float = 0.05
+    player_kl_value_loss_coef: float = 0.5
 
     # Loss coefficients
     ## Player
@@ -166,6 +208,9 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    # Slow mirror-descent anchor (KL reward reference only) — see
+    # player_anchor_ema_update_rate.
+    anchor_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     alpha_params: jax.Array = struct.field(pytree_node=True)
     alpha_apply_fn: Callable[[Params], PlayerAlphasOutput] = struct.field(
@@ -260,6 +305,7 @@ def create_train_state(
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
+        anchor_params=initial_player_params,
         tx=player_optimizer,
         alpha_params=init_player_alpha_params,
         alpha_apply_fn=player_alpha_mod.apply,
@@ -346,6 +392,7 @@ def save_state(
     player_components = dict(
         params=player_state.params,
         target_params=player_state.target_params,
+        anchor_params=player_state.anchor_params,
         opt_state=player_state.opt_state,
         alpha_params=player_state.alpha_params,
         alpha_opt_state=player_state.alpha_opt_state,
@@ -450,6 +497,11 @@ def load_from_checkpoint(
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
+        # Fallback for checkpoints predating the anchor: seed it from the
+        # target so the KL reward starts from a sensible reference.
+        anchor_params=ckpt_player_state.get(
+            "anchor_params", ckpt_player_state["target_params"]
+        ),
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],

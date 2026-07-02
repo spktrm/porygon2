@@ -133,6 +133,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.dense.features = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
+    # Scalar head estimating the discounted future anchor-KL penalty; kept
+    # separate from v_head so the categorical support stays on win/draw/loss.
+    cfg.kl_v_head = ConfigDict()
+    cfg.kl_v_head.dense = ConfigDict()
+    cfg.kl_v_head.dense.features = 1
+    cfg.kl_v_head.dense.use_bias = True
+
     for head in [cfg.pi_head]:
         head.train = train
 

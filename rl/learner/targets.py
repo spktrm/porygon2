@@ -6,7 +6,6 @@ from rl.environment.interfaces import (
     Batch,
     BuilderActorOutput,
     BuilderTargets,
-    PlayerActorOutput,
     PlayerTargets,
     Trajectory,
 )
@@ -39,11 +38,31 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
 
 def compute_player_targets(
     batch: Batch,
-    target_pred: PlayerActorOutput,
+    value_log_probs: jax.Array,
+    kl_value: jax.Array,
     isr: jax.Array,
+    kl_log_ratio: jax.Array,
     heuristic_advantage_coef: float,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
+    """Computes v-trace returns and advantages over stacked reward channels.
+
+    Channels: [0:n_bins] categorical win reward, [n_bins] heuristic potential,
+    [n_bins+1] the anchor-KL penalty reward ``-log(pi/pi_anchor)`` (R-NaD-style
+    reward transformation; ``kl_log_ratio`` is ``log pi_anchor - log pi`` at
+    the taken actions). The KL channel bootstraps from the separate scalar
+    kl_value_head and mixes into advantages via ``player_kl_reward_coef``.
+
+    IMPACT-style: ``value_log_probs``/``kl_value`` are the *fast* EMA
+    target's predictions and ``isr = pi_target/mu`` its ratio to the behavior
+    policy, so v-trace estimates the target policy's values with off-policy
+    correction — stable under replay reuse because the fast target tracks
+    the learner within ~1k steps. The slow anchor must never be the value
+    reference here: it would bootstrap from a ~16k-step stale net while
+    ``rho = min(1, pi_anchor/mu)`` truncates the sampled outcome signal
+    wherever the policy has outrun the anchor. The anchor enters only through
+    ``kl_log_ratio``.
+    """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
     dones = batch.player_transitions.env_output.done
@@ -64,14 +83,22 @@ def compute_player_targets(
     player_reward = batch.player_transitions.env_output.win_reward
 
     terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
+    kl_reward = jnp.where(dones, 0.0, kl_log_ratio)
     r_t = jnp.concatenate(
-        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
+        (
+            player_reward,
+            terminal_heuristic_reward[..., None],
+            kl_reward[..., None],
+        ),
+        axis=-1,
     )
 
-    target_value_probs = jnp.exp(target_pred.value_head.log_probs)
+    value_probs = jnp.exp(value_log_probs)
 
-    n_bins = target_value_probs.shape[-1]
-    v_tm1 = jnp.concatenate((target_value_probs, state_potential[..., None]), axis=-1)
+    n_bins = value_probs.shape[-1]
+    v_tm1 = jnp.concatenate(
+        (value_probs, state_potential[..., None], kl_value[..., None]), axis=-1
+    )
     last_values = v_tm1[-1:]
 
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
@@ -95,9 +122,11 @@ def compute_player_targets(
     combined_advantage = (
         pg_advantages[..., :n_bins] @ cat_vf_support
         + heuristic_advantage_coef * pg_advantages[..., n_bins]
+        + config.player_kl_reward_coef * pg_advantages[..., n_bins + 1]
     )
 
     win_returns = targets_tm1[..., :n_bins]
+    kl_returns = targets_tm1[..., n_bins + 1]
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
 
@@ -114,6 +143,7 @@ def compute_player_targets(
     return PlayerTargets(
         win_returns=win_returns,
         advantages=combined_advantage,
+        kl_returns=kl_returns,
         policy_mask=policy_mask,
         value_mask=value_mask,
     )

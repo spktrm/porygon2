@@ -29,6 +29,7 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
+    RegressionValueLogitHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -103,6 +104,7 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.kl_v_head = RegressionValueLogitHead(self.cfg.kl_v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         square_logits = (action_embeddings @ action_embeddings.T) / np.array(
@@ -195,6 +197,11 @@ class Porygon2PlayerModel(nn.Module):
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
 
+        mean_valid_logit = jnp.mean(micro_logits, where=flat_valid_mask)
+        centered_logit = (
+            jnp.take(micro_logits, action_index, axis=-1) - mean_valid_logit
+        )
+
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
@@ -213,6 +220,7 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
+            centered_logit=centered_logit,
         )
 
     def _forward_value_head(self, value_embedding: jax.Array):
@@ -238,6 +246,7 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerActorOutput(
             action_head=action_head,
             value_head=self._forward_value_head(value_embedding),
+            kl_value_head=self.kl_v_head(value_embedding),
         )
 
     def __call__(

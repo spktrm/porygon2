@@ -74,6 +74,9 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
+    # Taken action's logit minus the mean legal logit — the NeuRD decision
+    # variable (its gradient is the centered logit-space force).
+    centered_logit: ArrayLike = ()
 
 
 @dataclass
@@ -88,6 +91,12 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    # Scalar estimate of the discounted future anchor-KL penalty (the KL
+    # component of the R-NaD-style transformed reward), kept separate so the
+    # categorical win value head stays on its fixed support.
+    kl_value_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
 
 
 @dataclass
@@ -180,6 +189,7 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    kl_returns: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
 
