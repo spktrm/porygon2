@@ -45,8 +45,9 @@ def shrink_and_perturb_player_state(
     ``new = lam * old + (1 - lam) * fresh_init`` per leaf, with ``lam`` chosen
     by top-level module. Sampling the perturbation from the init distribution
     respects per-layer init scales, unlike fixed-sigma Gaussian noise.
-    ``target_params`` are deliberately not perturbed so the KL term pulls the
-    perturbed policy back toward pre-perturbation behaviour.
+    ``target_params`` and ``anchor_params`` are deliberately not perturbed so
+    the KL terms pull the perturbed policy back toward pre-perturbation
+    behaviour.
     """
     fresh_params = player_state.init_fn(rng)
     shrink_by_module = dict(module_shrink)
