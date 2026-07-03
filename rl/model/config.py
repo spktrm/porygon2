@@ -114,14 +114,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.latent_encoder.num_layers = 4
     cfg.encoder.action_decoder.need_pos = False
     # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size
-    cfg.encoder.value_decoder.num_layers = 2
     cfg.encoder.value_decoder.need_pos = False
 
-    for decoder in [
-        cfg.encoder.action_decoder,
-        cfg.encoder.value_decoder,
-    ]:
-        decoder.norm_output = True
+    cfg.encoder.action_decoder.num_layers = 4
+    cfg.encoder.action_decoder.norm_output = True
+    cfg.encoder.value_decoder.num_layers = 4
+    cfg.encoder.value_decoder.norm_output = False
 
     cfg.pi_head = ConfigDict()
     cfg.pi_head.qk_logits = ConfigDict()
@@ -129,16 +127,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head.qk_logits.use_bias = True
 
     cfg.v_head = ConfigDict()
-    cfg.v_head.dense = ConfigDict()
-    cfg.v_head.dense.features = 3
+    cfg.v_head.mlp = ConfigDict()
+    cfg.v_head.mlp.layer_sizes = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     # Scalar head estimating the discounted future anchor-KL penalty; kept
     # separate from v_head so the categorical support stays on win/draw/loss.
     cfg.kl_v_head = ConfigDict()
-    cfg.kl_v_head.dense = ConfigDict()
-    cfg.kl_v_head.dense.features = 1
-    cfg.kl_v_head.dense.use_bias = True
+    cfg.kl_v_head.mlp = ConfigDict()
+    cfg.kl_v_head.mlp.layer_sizes = 1
+    cfg.kl_v_head.mlp.use_bias = True
 
     for head in [cfg.pi_head]:
         head.train = train
@@ -204,13 +202,13 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
         setattr(cfg, name, head_cfg)
 
     cfg.entropy_head = ConfigDict()
-    cfg.entropy_head.dense = ConfigDict()
-    cfg.entropy_head.dense.features = 1
-    cfg.entropy_head.dense.use_bias = True
+    cfg.entropy_head.mlp = ConfigDict()
+    cfg.entropy_head.mlp.layer_sizes = 1
+    cfg.entropy_head.mlp.use_bias = True
 
-    cfg.value_head.dense = ConfigDict()
-    cfg.value_head.dense.features = 3
-    cfg.value_head.dense.use_bias = True
+    cfg.value_head.mlp = ConfigDict()
+    cfg.value_head.mlp.layer_sizes = 3
+    cfg.value_head.mlp.use_bias = True
     cfg.value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     for head in [

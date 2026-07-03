@@ -73,7 +73,7 @@ class Porygon2LearnerConfig:
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e5)
     add_player_max_frames: int = int(3e6)
-    minimum_historical_player_steps: int = int(1e4)
+    minimum_historical_player_steps: int = int(1e6)
     league_size: int = 16
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
@@ -100,7 +100,7 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.25
+    player_target_normalized_entropy: float = 0.0
     player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
@@ -143,7 +143,7 @@ class Porygon2LearnerConfig:
     # full strength when the behavior policy samples them. NeuRD has no ratio
     # clip; its stabilizers are the is-weight clip, the logit force threshold
     # (beta), and the anchor-KL reward.
-    player_policy_objective: PolicyObjectiveT = "spo"
+    player_policy_objective: PolicyObjectiveT = "neurd"
     # Clip on the 1/mu importance weight (variance control; biases rare
     # actions back toward ratio-style attenuation as it tightens).
     player_neurd_is_clip: float = 10.0
@@ -172,7 +172,7 @@ class Porygon2LearnerConfig:
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.05
+    player_kl_loss_coef: float = 0.0
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
 
