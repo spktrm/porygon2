@@ -111,14 +111,14 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.latent_encoder.need_pos = False
-    cfg.encoder.latent_encoder.num_layers = 4
+    cfg.encoder.latent_encoder.num_layers = 2
     cfg.encoder.action_decoder.need_pos = False
     # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size
     cfg.encoder.value_decoder.need_pos = False
 
-    cfg.encoder.action_decoder.num_layers = 4
+    cfg.encoder.action_decoder.num_layers = 2
     cfg.encoder.action_decoder.norm_output = True
-    cfg.encoder.value_decoder.num_layers = 4
+    cfg.encoder.value_decoder.num_layers = 2
     cfg.encoder.value_decoder.norm_output = False
 
     cfg.pi_head = ConfigDict()
