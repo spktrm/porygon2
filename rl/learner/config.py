@@ -143,7 +143,7 @@ class Porygon2LearnerConfig:
     # full strength when the behavior policy samples them. NeuRD has no ratio
     # clip; its stabilizers are the is-weight clip, the logit force threshold
     # (beta), and the anchor-KL reward.
-    player_policy_objective: PolicyObjectiveT = "neurd"
+    player_policy_objective: PolicyObjectiveT = "spo"
     # Clip on the 1/mu importance weight (variance control; biases rare
     # actions back toward ratio-style attenuation as it tightens).
     player_neurd_is_clip: float = 10.0
