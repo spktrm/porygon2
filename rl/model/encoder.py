@@ -303,7 +303,7 @@ class Encoder(nn.Module):
         )
 
         self.value_embeddings = self.param(
-            "value_embeddings", embedding_init, (1, entity_size)
+            "value_embeddings", embedding_init, (2, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -1237,13 +1237,13 @@ class Encoder(nn.Module):
                 group_action_embeddings
             )
 
-        value_embedding = self.value_decoder(
+        value_embeddings = self.value_decoder(
             q=self.value_embeddings.astype(self.cfg.dtype),
             kv=latent_queries,
             kv_mask=input_state_mask,
-        ).reshape(-1)
+        )
 
-        return action_embeddings, value_embedding
+        return action_embeddings, value_embeddings
 
     def __call__(
         self,
