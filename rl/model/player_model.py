@@ -29,7 +29,6 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
-    RegressionValueLogitHead,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -104,7 +103,6 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        self.kl_v_head = RegressionValueLogitHead(self.cfg.kl_v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         square_logits = (action_embeddings @ action_embeddings.T) / np.array(
@@ -245,8 +243,7 @@ class Porygon2PlayerModel(nn.Module):
 
         return PlayerActorOutput(
             action_head=action_head,
-            value_head=self._forward_value_head(value_embeddings[0]),
-            kl_value_head=self.kl_v_head(value_embeddings[1]),
+            value_head=self._forward_value_head(value_embeddings),
         )
 
     def __call__(
@@ -284,9 +281,9 @@ def create_attention_graph(path, value):
         if getattr(value, "val", None) is not None:
             value = value.val
 
-        avg_attn = jnp.mean(value[:, :10], axis=1)  # Shape: (H, S, S)
+        avg_attn = jnp.max(value[:, :20], axis=1)  # Shape: (H, S, S)
         if avg_attn.ndim > 3:
-            avg_attn = jnp.mean(avg_attn, 0)
+            avg_attn = jnp.max(avg_attn, 0)
 
         assert (
             avg_attn.ndim == 3

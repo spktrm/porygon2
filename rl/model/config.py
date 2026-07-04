@@ -89,7 +89,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     )
 
     cfg.encoder.local_timestep_decoder = ConfigDict()
-    cfg.encoder.input_decoder = ConfigDict()
     cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
     cfg.encoder.action_decoder = ConfigDict()
@@ -100,7 +99,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     for decoder in [
         cfg.encoder.local_timestep_decoder,
-        cfg.encoder.input_decoder,
         cfg.encoder.history_decoder,
         cfg.encoder.action_decoder,
         cfg.encoder.value_decoder,
@@ -108,7 +106,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     cfg.encoder.local_timestep_decoder.need_pos = False
-    cfg.encoder.input_decoder.need_pos = False
     cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.latent_encoder.need_pos = False
     cfg.encoder.latent_encoder.num_layers = 2
@@ -130,13 +127,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-
-    # Scalar head estimating the discounted future anchor-KL penalty; kept
-    # separate from v_head so the categorical support stays on win/draw/loss.
-    cfg.kl_v_head = ConfigDict()
-    cfg.kl_v_head.mlp = ConfigDict()
-    cfg.kl_v_head.mlp.layer_sizes = 1
-    cfg.kl_v_head.mlp.use_bias = True
 
     for head in [cfg.pi_head]:
         head.train = train

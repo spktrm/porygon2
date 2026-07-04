@@ -39,9 +39,7 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
 def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
-    kl_value: jax.Array,
     isr: jax.Array,
-    kl_log_ratio: jax.Array,
     heuristic_advantage_coef: float,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
@@ -83,22 +81,14 @@ def compute_player_targets(
     player_reward = batch.player_transitions.env_output.win_reward
 
     terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
-    kl_reward = jnp.where(dones, 0.0, kl_log_ratio)
     r_t = jnp.concatenate(
-        (
-            player_reward,
-            terminal_heuristic_reward[..., None],
-            kl_reward[..., None],
-        ),
-        axis=-1,
+        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
     )
 
     value_probs = jnp.exp(value_log_probs)
 
     n_bins = value_probs.shape[-1]
-    v_tm1 = jnp.concatenate(
-        (value_probs, state_potential[..., None], kl_value[..., None]), axis=-1
-    )
+    v_tm1 = jnp.concatenate((value_probs, state_potential[..., None]), axis=-1)
     last_values = v_tm1[-1:]
 
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
@@ -122,11 +112,9 @@ def compute_player_targets(
     combined_advantage = (
         pg_advantages[..., :n_bins] @ cat_vf_support
         + heuristic_advantage_coef * pg_advantages[..., n_bins]
-        + config.player_kl_reward_coef * pg_advantages[..., n_bins + 1]
     )
 
     win_returns = targets_tm1[..., :n_bins]
-    kl_returns = targets_tm1[..., n_bins + 1]
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
 
@@ -143,7 +131,6 @@ def compute_player_targets(
     return PlayerTargets(
         win_returns=win_returns,
         advantages=combined_advantage,
-        kl_returns=kl_returns,
         policy_mask=policy_mask,
         value_mask=value_mask,
     )

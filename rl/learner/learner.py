@@ -79,19 +79,10 @@ def train_step(
         player_transitions.agent_output.actor_output,
         HeadParams(),
     )
-    # Slow anchor forward — only its action log-probs are consumed, for the
-    # anchor-KL reward.
-    player_anchor_pred = player_state.apply_fn(
-        player_state.anchor_params,
-        player_actor_input,
-        player_transitions.agent_output.actor_output,
-        HeadParams(),
-    )
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
     player_actor_log_prob = player_actor_action_head.log_prob
     player_target_log_prob = player_target_pred.action_head.log_prob
-    player_anchor_log_prob = player_anchor_pred.action_head.log_prob
 
     float_dtype = player_actor_log_prob.dtype
 
@@ -116,20 +107,12 @@ def train_step(
     # replay reuse instead of resetting to the per-sample behavior policy.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
 
-    anchor_actor_log_ratio = player_anchor_log_prob - player_actor_log_prob
-
     # IMPACT-style targets: the fast target network supplies the v-trace
-    # reference policy and value/kl bootstraps; the slow anchor contributes
-    # only the KL reward channel.
+    # reference policy and value/kl bootstraps.
     player_targets = compute_player_targets(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
-        kl_value=player_target_pred.kl_value_head.logits,
         isr=target_actor_ratio,
-        # Anchor-KL penalty reward: log(pi_anchor) - log(pi_actor) at the
-        # taken actions. Computed from actor/anchor data only, so no learner
-        # gradient flows through the reward.
-        kl_log_ratio=anchor_actor_log_ratio,
         heuristic_advantage_coef=heuristic_advantage_coef,
         config=config,
     )
@@ -141,14 +124,8 @@ def train_step(
         player_advantages = (player_targets.advantages - player_state.ema_adv_mean) / (
             player_state.ema_adv_std + 1e-8
         )
-        # The live anchor-KL correction below must land on the same scale as
-        # the normalized advantages.
-        kl_correction_scale = config.player_kl_reward_coef / (
-            player_state.ema_adv_std + 1e-8
-        )
     else:
         player_advantages = player_targets.advantages
-        kl_correction_scale = config.player_kl_reward_coef
 
     def player_loss_fn(params: Params):
 
@@ -169,20 +146,11 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Make the immediate anchor-KL penalty live (R-NaD evaluates the
-        # reward transform against the current params): the data-based reward
-        # in the kl channel used log(anchor/mu); correcting by
-        # log(pi/mu) turns the current step's penalty into log(anchor/pi)
-        # while future penalties stay data-based via the returns.
-        regularized_advantages = player_advantages - (
-            kl_correction_scale * jax.lax.stop_gradient(learner_actor_log_ratio)
-        )
-
         # Calculate losses.
         if config.player_policy_objective == "neurd":
             loss_pg = neurd_loss(
                 centered_logits=learner_action_head.centered_logit,
-                advantages=regularized_advantages,
+                advantages=player_advantages,
                 # 1/mu from the behavior policy's stored log-probs.
                 is_weights=jnp.exp(-player_actor_log_prob),
                 valid=policy_mask,
@@ -194,7 +162,7 @@ def train_step(
             # clipped correction.
             loss_pg = policy_gradient_loss(
                 policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-                advantages=regularized_advantages,
+                advantages=player_advantages,
                 valid=policy_mask,
                 threshold=config.player_ppo_clip_threshold,
                 objective=config.player_policy_objective,
@@ -207,13 +175,6 @@ def train_step(
                 labels=player_targets.win_returns,
             ),
             value_mask,
-        )
-
-        # MSE loss for the anchor-KL penalty value head
-        loss_v_kl = mse_value_loss(
-            pred=learner_player_pred.kl_value_head.logits,
-            target=player_targets.kl_returns,
-            valid=value_mask,
         )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
@@ -261,7 +222,6 @@ def train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
-            + config.player_kl_value_loss_coef * loss_v_kl
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
                 player_alpha * normalized_entropy
@@ -274,7 +234,6 @@ def train_step(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
-            player_loss_v_kl=loss_v_kl,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
@@ -321,11 +280,6 @@ def train_step(
             )
             .sum(axis=0)
             .mean(),
-            # Drift of the learner past the slow anchor (the KL reward's
-            # reference) — the mirror-descent analogue of the target ratio.
-            player_learner_anchor_ratio=average(
-                jnp.exp(learner_log_prob - player_anchor_log_prob), policy_mask
-            ),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
@@ -376,11 +330,6 @@ def train_step(
             player_state.target_params,
             config.player_ema_update_rate,
         ),
-        anchor_params=optax.incremental_update(
-            player_state.params,
-            player_state.anchor_params,
-            config.player_anchor_ema_update_rate,
-        ),
         ema_adv_mean=optax.incremental_update(
             player_targets.advantages.mean(where=policy_mask),
             player_state.ema_adv_mean,
@@ -417,10 +366,6 @@ def train_step(
             / (value_mask.sum() + 1e-8),
             player_state_adv_mean=player_state.ema_adv_mean,
             player_state_adv_std=player_state.ema_adv_std,
-            # Anchor-KL reward stats: per-step penalty (~ -KL(actor||anchor))
-            # and the resulting returns the kl value head regresses onto.
-            player_kl_reward_mean=average(anchor_actor_log_ratio, policy_mask),
-            player_kl_returns_mean=average(player_targets.kl_returns, value_mask),
         )
     )
     training_logs.update(

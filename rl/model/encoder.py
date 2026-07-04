@@ -303,7 +303,7 @@ class Encoder(nn.Module):
         )
 
         self.value_embeddings = self.param(
-            "value_embeddings", embedding_init, (2, entity_size)
+            "value_embeddings", embedding_init, (4, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -367,12 +367,8 @@ class Encoder(nn.Module):
 
         # RMS norms
         self.input_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
-        self.output_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
 
         # Transformer Decoders
-        self.input_decoder = TransformerDecoder(
-            **self.cfg.input_decoder.to_dict(),
-        )
         self.history_decoder = TransformerDecoder(
             **self.cfg.history_decoder.to_dict(),
         )
@@ -382,6 +378,13 @@ class Encoder(nn.Module):
         # Per-provenance action decoders: each group decodes only its own action
         # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
         # no longer share decoder parameters with move embeddings.
+        self.action_norms = [
+            MLP(
+                (4 * self.entity_size, self.entity_size),
+                name=f"action_norm_{group_name}",
+            )
+            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+        ]
         self.action_decoders = [
             TransformerDecoder(
                 name=f"action_decoder_{group_name}",
@@ -1196,15 +1199,6 @@ class Encoder(nn.Module):
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        input_state_sequence = self.input_seq_mlp(input_state_sequence)
-        output_state_sequence = self.output_seq_mlp(output_state_sequence)
-
-        latent_queries = self.input_decoder(
-            q=input_state_sequence,
-            kv=output_state_sequence,
-            q_mask=input_state_mask,
-            kv_mask=output_state_mask,
-        )
         # latent_queries = self.history_decoder(
         #     q=latent_queries,
         #     kv=timestep_embeddings,
@@ -1215,6 +1209,7 @@ class Encoder(nn.Module):
         # )
 
         # bulk of computation
+        latent_queries = self.input_seq_mlp(input_state_sequence)
         latent_queries = self.latent_encoder(
             qkv=latent_queries, qkv_mask=input_state_mask
         )
@@ -1225,12 +1220,13 @@ class Encoder(nn.Module):
         # self-attention), so decoding a group's slots in isolation matches decoding
         # them jointly.
         action_embeddings = jnp.zeros_like(output_state_sequence)
-        for decoder, (_, slot_indices) in zip(
-            self.action_decoders, ACTION_DECODER_SLOT_GROUPS
+        for q_norm, decoder, (_, slot_indices) in zip(
+            self.action_norms, self.action_decoders, ACTION_DECODER_SLOT_GROUPS
         ):
             group_action_embeddings = decoder(
-                q=output_state_sequence[slot_indices],
+                q=q_norm(output_state_sequence[slot_indices]),
                 kv=latent_queries,
+                q_mask=output_state_mask[slot_indices],
                 kv_mask=input_state_mask,
             )
             action_embeddings = action_embeddings.at[slot_indices].set(
@@ -1241,7 +1237,7 @@ class Encoder(nn.Module):
             q=self.value_embeddings.astype(self.cfg.dtype),
             kv=latent_queries,
             kv_mask=input_state_mask,
-        )
+        ).reshape(-1)
 
         return action_embeddings, value_embeddings
 
