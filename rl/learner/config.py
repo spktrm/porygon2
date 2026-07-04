@@ -100,7 +100,7 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.0
+    player_target_normalized_entropy: float = 0.5
     player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
@@ -117,16 +117,6 @@ class Porygon2LearnerConfig:
     # separate from its slow anchors.)
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
-    # Slow EMA anchor: the single-EMA replacement for R-NaD's prev/prev_
-    # anchor pair (and their alpha-ramp smoothing), used ONLY for the
-    # anchor-KL reward. R-NaD refreshes the anchors every N steps and ramps
-    # between them, giving the effective anchor a mean lag of ~3N/4, plus the
-    # ~1k-step lag prev inherits by being snapshotted from the fast target.
-    # Matching that mean lag: tau = 1 / (0.75 * N + 1_000).
-    player_anchor_iteration_steps: int = 20_000
-    player_anchor_ema_update_rate: float = 1.0 / (
-        0.75 * player_anchor_iteration_steps + 1_000
-    )
 
     # Advantage estimation params
     player_gamma: float = 1.0
@@ -160,19 +150,11 @@ class Porygon2LearnerConfig:
 
     # Regularised reward params
     player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
-    # Anchor-based KL reward (R-NaD / magnetic mirror descent style): the
-    # per-step penalty -log(pi/pi_anchor) enters the return through its own
-    # value head and mixes into advantages with this weight. Unlike an entropy
-    # bonus this permits low-entropy solutions — the anchor sharpens as the
-    # policy improves; it only punishes moving away from it faster than the
-    # anchor EMA tracks.
-    player_kl_reward_coef: float = 0.05
-    player_kl_value_loss_coef: float = 0.5
 
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.0
+    player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
 
@@ -208,9 +190,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    # Slow mirror-descent anchor (KL reward reference only) — see
-    # player_anchor_ema_update_rate.
-    anchor_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     alpha_params: jax.Array = struct.field(pytree_node=True)
     alpha_apply_fn: Callable[[Params], PlayerAlphasOutput] = struct.field(
@@ -305,7 +284,6 @@ def create_train_state(
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
-        anchor_params=initial_player_params,
         tx=player_optimizer,
         alpha_params=init_player_alpha_params,
         alpha_apply_fn=player_alpha_mod.apply,
@@ -392,7 +370,6 @@ def save_state(
     player_components = dict(
         params=player_state.params,
         target_params=player_state.target_params,
-        anchor_params=player_state.anchor_params,
         opt_state=player_state.opt_state,
         alpha_params=player_state.alpha_params,
         alpha_opt_state=player_state.alpha_opt_state,
@@ -497,11 +474,6 @@ def load_from_checkpoint(
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
-        # Fallback for checkpoints predating the anchor: seed it from the
-        # target so the KL reward starts from a sensible reference.
-        anchor_params=ckpt_player_state.get(
-            "anchor_params", ckpt_player_state["target_params"]
-        ),
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],
