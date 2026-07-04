@@ -269,11 +269,6 @@ def train_step(
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),
-            player_kl_value_head_r2=calculate_r2(
-                value_prediction=learner_player_pred.kl_value_head.logits,
-                value_target=player_targets.kl_returns,
-                mask=value_mask,
-            ),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
                 * policy_mask
