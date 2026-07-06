@@ -255,7 +255,6 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        # Get current state and action embeddings from the encoder
         action_embeddings, value_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
