@@ -4175,6 +4175,35 @@ export class StateHandler {
         return buffer;
     }
 
+    /**
+     * For each row of the public team buffers (as emitted by getPublicTeam:
+     * my side then opp side, each side sorted actives-first), the stable
+     * entity index used by ENTITY_EDGE_FEATURE__ENTITY_IDX, or -1 when the
+     * row is an unrevealed filler / the pokemon has no entity index yet.
+     *
+     * Must mirror the row ordering of getPublicTeamFromSide exactly.
+     */
+    getPublicTeamOrder(playerIndex: number): Int16Array {
+        const order = new Int16Array(12).fill(-1);
+        const identToIndex = this.player.eventHandler.identToIndex;
+
+        let offset = 0;
+        for (const idx of [playerIndex, 1 - playerIndex]) {
+            const side = this.player.publicBattle.sides[idx];
+            const team = side.team.slice(0, 6);
+            const sortedTeam = [...team].sort(
+                (a, b) => scoreOrder(b) - scoreOrder(a),
+            );
+            for (const [memberIndex, member] of sortedTeam.entries()) {
+                order[offset + memberIndex] =
+                    identToIndex.get(member.originalIdent as PokemonIdent) ??
+                    -1;
+            }
+            offset += 6;
+        }
+        return order;
+    }
+
     getPublicTeam(playerIndex: number): {
         publicData: Int16Array;
         revealedData: Int16Array;
@@ -4299,6 +4328,9 @@ export class StateHandler {
 
         const statePotential = this.getStatePotential();
         infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = statePotential;
+
+        const publicOrder = this.getPublicTeamOrder(playerIndex);
+        infoBuffer.set(publicOrder, InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0);
 
         return new Uint8Array(infoBuffer.buffer);
     }

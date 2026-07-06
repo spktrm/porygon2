@@ -196,6 +196,18 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__PREV_ACTION_TGT: _ClassVar[InfoFeature]
     INFO_FEATURE__STATE_POTENTIAL: _ClassVar[InfoFeature]
     INFO_FEATURE__HISTORY_STEP_COUNT: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_0: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_1: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_2: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_3: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_4: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_5: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_6: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_7: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_8: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_9: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_10: _ClassVar[InfoFeature]
+    INFO_FEATURE__PUBLIC_ORDER_11: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -396,6 +408,18 @@ INFO_FEATURE__PREV_ACTION_SRC: InfoFeature
 INFO_FEATURE__PREV_ACTION_TGT: InfoFeature
 INFO_FEATURE__STATE_POTENTIAL: InfoFeature
 INFO_FEATURE__HISTORY_STEP_COUNT: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_0: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_1: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_2: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_3: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_4: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_5: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_6: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_7: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_8: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_9: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_10: InfoFeature
+INFO_FEATURE__PUBLIC_ORDER_11: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType

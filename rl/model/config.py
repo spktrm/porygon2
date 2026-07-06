@@ -88,9 +88,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         init_residual_scale=decoder_init_residual_scale,
     )
 
-    cfg.encoder.local_timestep_decoder = ConfigDict()
-    cfg.encoder.history_decoder = ConfigDict()
     cfg.encoder.latent_encoder = ConfigDict()
+    cfg.encoder.history_cross_decoder = ConfigDict()
     cfg.encoder.action_decoder = ConfigDict()
     cfg.encoder.value_decoder = ConfigDict()
 
@@ -98,16 +97,18 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
-        cfg.encoder.local_timestep_decoder,
-        cfg.encoder.history_decoder,
+        cfg.encoder.history_cross_decoder,
         cfg.encoder.action_decoder,
         cfg.encoder.value_decoder,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
 
-    cfg.encoder.local_timestep_decoder.need_pos = False
-    cfg.encoder.history_decoder.need_pos = True
     cfg.encoder.latent_encoder.need_pos = False
+    # One cross-attention block per interleave round (the round count comes
+    # from latent_encoder.num_layers). Zero init_residual_scale means history
+    # integration starts as a no-op.
+    cfg.encoder.history_cross_decoder.need_pos = False
+    cfg.encoder.history_cross_decoder.num_layers = 1
     cfg.encoder.latent_encoder.num_layers = 2
     cfg.encoder.action_decoder.need_pos = False
     # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size

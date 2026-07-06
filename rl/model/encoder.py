@@ -59,6 +59,7 @@ from rl.model.modules import (
     TransformerEncoder,
     one_hot_concat_jax,
 )
+from rl.model.world_model import NUM_PUBLIC_SLOTS, PerSlotWorldModel
 
 # Action-decoder slot groups, segregated by input provenance rather than by
 # behavioural modality. Move slots (regular + wildcard) are move-feature-derived
@@ -223,24 +224,6 @@ def _max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
     )
 
 
-def enforce_sequential_counts(arr):
-    # 1. Identify where sequences reset.
-    # A reset happens if an element is NOT larger than the previous (arr[i] <= arr[i-1]).
-    # We prepend `True` because the very first element always starts at 1.
-    resets = jnp.concatenate([jnp.array([True]), arr[1:] <= arr[:-1]])
-
-    # 2. Create an array of absolute indices: [0, 1, 2, 3, ...]
-    indices = jnp.arange(arr.size)
-
-    # 3. Find the index of the most recent reset for every position.
-    # jnp.where places the current index if it's a reset, or -1 if it's not.
-    # maximum.accumulate then drags the largest (most recent) reset index forward.
-    last_reset_indices = jnp.maximum.accumulate(jnp.where(resets, indices, -1))
-
-    # 4. The new value is simply the distance from the last reset, plus 1.
-    return indices - last_reset_indices
-
-
 class Encoder(nn.Module):
     """
     Encoder model for processing environment steps and history to generate embeddings.
@@ -330,11 +313,6 @@ class Encoder(nn.Module):
         self.public_entity_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
         )
-        self.history_query_embedding_entity_sum = SumEmbeddings(
-            output_size=entity_size,
-            dtype=self.cfg.dtype,
-            name="history_query_embedding_entity_sum",
-        )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
@@ -348,33 +326,34 @@ class Encoder(nn.Module):
             name="side_condition_linear", use_bias=False, **dense_kwargs
         )
 
-        # Timestep wise graph attention layers
-        self.local_timestep_embedding = nn.Embed(
-            8, name="local_timestep_embedding", **embed_kwargs
+        # Recurrent history encoder over history edges. Twelve GRU states
+        # (one per public slot) scanned along the history axis; per request we
+        # read the state as of that request and let the latent sequence
+        # cross-attend to it.
+        self.world_model = PerSlotWorldModel(self.cfg, name="world_model")
+        self.wm_field_step_linear = nn.Dense(
+            name="wm_field_step_linear", use_bias=False, **dense_kwargs
         )
-        self.node_edge_projection = nn.Dense(
-            name="node_edge_projection", use_bias=False, **dense_kwargs
-        )
-        self.local_timestep_decoder = TransformerDecoder(
-            **self.cfg.local_timestep_decoder.to_dict()
-        )
-        self.local_timestep_linear = nn.Dense(
-            name="local_timestep_linear", use_bias=False, **dense_kwargs
-        )
-
-        # History cls token
-        self.null_history = self.param("null_history", embedding_init, (1, entity_size))
 
         # RMS norms
         self.input_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
 
-        # Transformer Decoders
-        self.history_decoder = TransformerDecoder(
-            **self.cfg.history_decoder.to_dict(),
-        )
-        self.latent_encoder = TransformerEncoder(
-            **self.cfg.latent_encoder.to_dict(),
-        )
+        # Interleaved self/cross attention over the latent sequence: each
+        # round self-attends the latents, then cross-attends them to the
+        # per-entity history states (12 slot states + field state). The cross
+        # blocks' residual gates are zero-init, so history integration starts
+        # as a no-op.
+        num_latent_rounds = self.cfg.latent_encoder.num_layers
+        latent_self_kwargs = {**self.cfg.latent_encoder.to_dict(), "num_layers": 1}
+        history_cross_kwargs = self.cfg.history_cross_decoder.to_dict()
+        self.latent_self_layers = [
+            TransformerEncoder(name=f"latent_self_{i}", **latent_self_kwargs)
+            for i in range(num_latent_rounds)
+        ]
+        self.history_cross_layers = [
+            TransformerDecoder(name=f"history_cross_{i}", **history_cross_kwargs)
+            for i in range(num_latent_rounds)
+        ]
         # Per-provenance action decoders: each group decodes only its own action
         # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
         # no longer share decoder parameters with move embeddings.
@@ -948,114 +927,6 @@ class Encoder(nn.Module):
     def _embed_private_entities(self, private_team: jax.Array):
         return jax.vmap(self._embed_private_entity)(private_team)
 
-    # Encode each timestep's features, including nodes and edges.
-    def _embed_local_timestep(
-        self,
-        history: PlayerHistoryOutput,
-        entity_embedding_cache: jax.Array,
-        edge_embedding_cache: jax.Array,
-    ):
-        """
-        Encode features of a single timestep, including entities and edges.
-        """
-        relevant_indices = history.field[
-            np.array(
-                [
-                    FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0,
-                    FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX1,
-                    FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX2,
-                    FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX3,
-                    # FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX4,
-                    # FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX5,
-                    # FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX6,
-                    # FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX7,
-                ]
-            )
-        ]
-
-        # Encode field
-        (
-            field_embeddings,
-            valid_timestep_mask,
-            history_request_count,
-            turn_order_value,
-        ) = self._embed_field(history.field)
-
-        num_relevant = history.field[FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
-        node_edge_mask = jnp.arange(relevant_indices.shape[0]) < num_relevant
-        valid_timestep_mask = (valid_timestep_mask & node_edge_mask.any()).squeeze()
-
-        node_embeddings = jnp.take(entity_embedding_cache, relevant_indices, axis=0)
-        edge_embeddings = jnp.take(edge_embedding_cache, relevant_indices, axis=0)
-        node_edge_projection = self.node_edge_projection(
-            jnp.concatenate((node_embeddings, edge_embeddings), axis=-1)
-        )
-
-        local_sequence = self.local_timestep_decoder(
-            q=field_embeddings,
-            kv=node_edge_projection
-            + self.local_timestep_embedding(jnp.arange(relevant_indices.shape[0])),
-            kv_mask=node_edge_mask,
-        )
-
-        local_timestep_embedding = self.local_timestep_linear(
-            local_sequence.reshape(-1)
-        )
-
-        return (
-            local_timestep_embedding,
-            valid_timestep_mask,
-            history_request_count,
-            turn_order_value,
-        )
-
-    def _embed_global_timestep(
-        self,
-        env_step: PlayerEnvOutput,
-        history: PlayerHistoryOutput,
-        packed_history: PlayerPackedHistoryOutput,
-    ):
-
-        entity_embedding_cache, *_ = jax.vmap(self._embed_public_entity)(
-            packed_history.public_cache, packed_history.revealed_cache
-        )
-
-        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(packed_history.edge_cache)
-
-        (
-            local_timestep_embedding,
-            valid_timestep_mask,
-            history_request_count,
-            turn_order_value,
-        ) = jax.vmap(self._embed_local_timestep, in_axes=(0, None, None))(
-            history, entity_embedding_cache, edge_embedding_cache
-        )
-
-        turn_order_value = jnp.maximum(enforce_sequential_counts(turn_order_value), 7)
-
-        # Apply mask to the timestep embeddings.
-        local_timestep_embedding = jnp.where(
-            valid_timestep_mask[..., None], local_timestep_embedding, 0
-        )
-
-        local_timestep_embedding = jnp.concatenate(
-            (self.null_history.astype(self.cfg.dtype), local_timestep_embedding), axis=0
-        )
-
-        valid_timestep_mask = jnp.concatenate(
-            (jnp.ones(1, dtype=jnp.bool), valid_timestep_mask), axis=0
-        )
-
-        timestep_positions = jnp.stack(
-            (history_request_count, turn_order_value), axis=-1
-        )
-        timestep_positions = jnp.concatenate(
-            (jnp.zeros_like(timestep_positions[:1]), timestep_positions),
-            axis=0,
-        )
-
-        return local_timestep_embedding, valid_timestep_mask, timestep_positions
-
     def _embed_action(self, action: jax.Array) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
@@ -1099,11 +970,9 @@ class Encoder(nn.Module):
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
-        # timestep_mask: jax.Array,
-        # current_position: jax.Array,
-        # timestep_embeddings: jax.Array,
-        # timestep_positions: jax.Array,
-        # initial_private_team: jax.Array,
+        wm_row_states: jax.Array,
+        wm_row_valid: jax.Array,
+        wm_field_state: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1199,20 +1068,26 @@ class Encoder(nn.Module):
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        # latent_queries = self.history_decoder(
-        #     q=latent_queries,
-        #     kv=timestep_embeddings,
-        #     q_mask=input_state_mask,
-        #     kv_mask=timestep_mask,
-        #     q_positions=jnp.expand_dims(current_position, axis=-1),
-        #     kv_positions=timestep_positions,
-        # )
-
-        # bulk of computation
-        latent_queries = self.input_seq_mlp(input_state_sequence)
-        latent_queries = self.latent_encoder(
-            qkv=latent_queries, qkv_mask=input_state_mask
+        # bulk of computation: interleaved self/cross attention. Each round
+        # self-attends the latent sequence, then cross-attends it to the
+        # per-entity history states (12 rows, PUBLIC_ORDER-aligned with the
+        # public team, masked to mapped rows) plus the field history state.
+        history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
+        history_mask = jnp.concatenate(
+            (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
         )
+
+        latent_queries = self.input_seq_mlp(input_state_sequence)
+        for self_layer, cross_layer in zip(
+            self.latent_self_layers, self.history_cross_layers
+        ):
+            latent_queries = self_layer(qkv=latent_queries, qkv_mask=input_state_mask)
+            latent_queries = cross_layer(
+                q=latent_queries,
+                kv=history_context,
+                q_mask=input_state_mask,
+                kv_mask=history_mask,
+            )
 
         # Decode each provenance group's action slots with its own decoder, then
         # scatter the results back into a single (NUM_ACTION_FEATURES, entity_size)
@@ -1244,32 +1119,73 @@ class Encoder(nn.Module):
     def __call__(
         self,
         env_step: PlayerEnvOutput,
-        packed_history_step: PlayerHistoryOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        # timestep_embeddings, history_valid_mask, timestep_positions = (
-        #     self._embed_global_timestep(env_step, history_step, packed_history_step)
-        # )
+        # --- Recurrent world model over the shared trajectory history ---
+        # Embed the packed (entity snapshot, edge) cache once; both are shared
+        # across every request of the trajectory.
+        node_embedding_cache, _ = jax.vmap(self._embed_public_entity)(
+            packed_history_step.public_cache, packed_history_step.revealed_cache
+        )
+        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(
+            packed_history_step.edge_cache
+        )
+        edge_slot_ids = packed_history_step.edge_cache[
+            :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
+        ]
 
-        # request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        # history_request_count = timestep_positions[..., 0]
+        # One pooled field vector per history step from the (field, my-side,
+        # opp-side) token triple.
+        (
+            step_field_embeddings,
+            step_valid,
+            step_request_count,
+            _,
+        ) = jax.vmap(
+            self._embed_field
+        )(history_step.field)
+        step_field_vec = self.wm_field_step_linear(
+            step_field_embeddings.reshape(step_field_embeddings.shape[0], -1)
+        )
 
-        # # For padded timesteps, request count is 0, so we use a large bias value.
-        # timestep_mask = request_count[..., None] >= jnp.where(
-        #     history_valid_mask,
-        #     history_request_count,
-        #     jnp.iinfo(request_count.dtype).max,
-        # )
+        wm_output = self.world_model(
+            history_field=history_step.field,
+            node_embedding_cache=node_embedding_cache,
+            edge_embedding_cache=edge_embedding_cache,
+            edge_slot_ids=edge_slot_ids,
+            field_step_embeddings=step_field_vec,
+            step_request_count=step_request_count,
+            step_valid=step_valid.squeeze(-1),
+        )
 
-        action_embeddings, value_embeddings = jax.vmap(
-            self._batched_forward,  # in_axes=(0, 0, 0, None, None, None)
-        )(
-            env_step,
-            # timestep_mask,
-            # request_count.reshape(-1, 1),
-            # timestep_embeddings,
-            # timestep_positions,
-            # env_step.private_team[0],
+        # Read the recurrent state as of each request: the snapshot after the
+        # last history step whose request_count <= the request's.
+        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        wm_slot_states, wm_field_state = self.world_model.state_at_requests(
+            wm_output, request_count
+        )
+
+        # World-model slots are keyed by the stable entity index that edges
+        # carry (revelation order across both sides), while public team rows
+        # are per-side and re-sorted actives-first every state. PUBLIC_ORDER
+        # is the server-provided permutation between the two: row i of the
+        # public team holds the pokemon in world-model slot public_order[i],
+        # or -1 for unrevealed fillers (masked out of the cross-attention).
+        public_order = env_step.info[
+            ...,
+            InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+            + 1,
+        ]
+        order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
+        wm_row_states = jnp.take_along_axis(
+            wm_slot_states,
+            public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None],
+            axis=1,
+        )
+
+        action_embeddings, value_embeddings = jax.vmap(self._batched_forward)(
+            env_step, wm_row_states, order_valid, wm_field_state
         )
 
         return action_embeddings, value_embeddings
