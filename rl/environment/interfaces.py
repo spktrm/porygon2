@@ -56,6 +56,10 @@ class CategoricalValueHeadOutput:
     entropy: ArrayLike = ()
     expectation: ArrayLike = ()
     l2_norm: ArrayLike = ()
+    # Mean KL(stopgrad(final-round distribution) || intermediate-round
+    # distribution) over the encoder's intermediate exits; zero when the
+    # head is fed a single round (e.g. the builder model).
+    exit_distill_kl: ArrayLike = ()
 
 
 @dataclass
@@ -77,6 +81,9 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     # Taken action's logit minus the mean legal logit — the NeuRD decision
     # variable (its gradient is the centered logit-space force).
     centered_logit: ArrayLike = ()
+    # Mean KL(stopgrad(final-round policy) || intermediate-round policy) over
+    # the encoder's intermediate exits — the multi-exit self-distillation term.
+    exit_distill_kl: ArrayLike = ()
 
 
 @dataclass

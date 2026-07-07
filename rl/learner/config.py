@@ -100,7 +100,7 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.6
+    player_target_normalized_entropy: float = 0.5
     player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
@@ -157,6 +157,10 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
+    # Multi-exit self-distillation: intermediate encoder rounds imitate the
+    # (stop-gradient) final-round policy / value distribution.
+    player_exit_distill_loss_coef: float = 0.1
+    player_value_exit_distill_loss_coef: float = 0.1
 
     ## Builder
     builder_value_loss_coef: float = 0.5
