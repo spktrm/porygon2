@@ -46,13 +46,13 @@ class PlayerActor:
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
 
-    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 64):
+    def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
         return PlayerActorInput(
             env=timestep.env,
             packed_history=clip_packed_history(
-                timestep.packed_history, resolution=resolution
+                timestep.packed_history, min_length=min_length
             ),
-            history=clip_history(timestep.history, resolution=resolution),
+            history=clip_history(timestep.history, min_length=min_length),
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
@@ -185,7 +185,8 @@ class PlayerActor:
         pick_idx = np.random.choice(
             len(historical), p=pfsp(win_rates, weighting="squared")
         )
-        return historical[pick_idx]
+        # Selection above is metadata-only; load params for just the chosen ref.
+        return self._learner.league.materialize(historical[pick_idx])
 
     def get_match(self) -> tuple[ParamsContainer, bool]:
         coin_toss = np.random.random()

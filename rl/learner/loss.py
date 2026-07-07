@@ -34,13 +34,44 @@ def policy_gradient_loss(
     advantages: jax.Array,
     valid: jax.Array,
     threshold: float,
+    objective: str = "spo",
 ):
-    pg_loss = spo_objective(
+    objective_fn = {"spo": spo_objective, "ppo": ppo_objective}[objective]
+    pg_loss = objective_fn(
         policy_ratios=policy_ratios,
         advantages=advantages,
         clip_ppo=threshold,
     )
     return -average(pg_loss, valid)
+
+
+def neurd_loss(
+    *,
+    centered_logits: jax.Array,
+    advantages: jax.Array,
+    is_weights: jax.Array,
+    valid: jax.Array,
+    is_clip: float,
+    beta: float,
+):
+    """Sample-based NeuRD (Neural Replicator Dynamics, Hennes et al. 2020).
+
+    The all-actions NeuRD update moves each logit by its advantage with no
+    pi(a) prefactor (Hedge in logit space), so abandoned actions keep
+    learning. The single-sample estimator applies the force only to the taken
+    action's centered logit, importance-weighted by 1/mu (clipped for
+    variance) instead of pi/mu — data about actions the policy has given up
+    on retains full strength rather than being attenuated by the ratio.
+
+    Following R-NaD's `apply_force_with_threshold`, the force is gated so a
+    centered logit beyond +/-beta cannot be pushed further out, which bounds
+    the logit random walk NeuRD otherwise permits.
+    """
+    force = jnp.minimum(is_weights, is_clip) * advantages
+    can_increase = centered_logits < beta
+    can_decrease = centered_logits > -beta
+    clipped_force = jnp.where(force >= 0.0, can_increase * force, can_decrease * force)
+    return -average(centered_logits * jax.lax.stop_gradient(clipped_force), valid)
 
 
 def clip_fraction(
@@ -119,7 +150,7 @@ def forward_kl_loss(
 
 
 def power_schedule(
-    coef: float, step: int, decay: float, floor: float, ceil: float
+    coef: float, step: int, decay: float, floor: float, ceil: float, scale: float = 1.0
 ) -> jax.Array:
-    x = coef / ((step + 1.0) ** decay)
+    x = coef / (((step + 1.0) * scale) ** decay)
     return jnp.clip(x, min=floor, max=ceil)

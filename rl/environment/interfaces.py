@@ -25,9 +25,9 @@ class PlayerEnvOutput:
 
 @dataclass
 class PlayerPackedHistoryOutput:
-    public: ArrayLike = ()
-    revealed: ArrayLike = ()
-    edges: ArrayLike = ()
+    public_cache: ArrayLike = ()
+    revealed_cache: ArrayLike = ()
+    edge_cache: ArrayLike = ()
 
 
 @dataclass
@@ -55,6 +55,11 @@ class CategoricalValueHeadOutput:
     log_probs: ArrayLike = ()
     entropy: ArrayLike = ()
     expectation: ArrayLike = ()
+    l2_norm: ArrayLike = ()
+    # Mean KL(stopgrad(final-round distribution) || intermediate-round
+    # distribution) over the encoder's intermediate exits; zero when the
+    # head is fed a single round (e.g. the builder model).
+    exit_distill_kl: ArrayLike = ()
 
 
 @dataclass
@@ -72,6 +77,19 @@ class PolicyHeadOutput:
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
+    normalized_modality_entropy: ArrayLike = ()
+    # Taken action's logit minus the mean legal logit — the NeuRD decision
+    # variable (its gradient is the centered logit-space force).
+    centered_logit: ArrayLike = ()
+    # Mean KL(stopgrad(final-round policy) || intermediate-round policy) over
+    # the encoder's intermediate exits — the multi-exit self-distillation term.
+    exit_distill_kl: ArrayLike = ()
+
+
+@dataclass
+class PlayerAlphasOutput(PolicyHeadOutput):
+    log_alpha: ArrayLike = ()
+    modality_log_alpha: ArrayLike = ()
 
 
 @dataclass

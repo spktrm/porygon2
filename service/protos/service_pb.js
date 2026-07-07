@@ -1178,9 +1178,9 @@ proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
 info: msg.getInfo_asB64(),
 actionMask: msg.getActionMask_asB64(),
-historyEntityPublic: msg.getHistoryEntityPublic_asB64(),
-historyEntityRevealed: msg.getHistoryEntityRevealed_asB64(),
-historyEntityEdges: msg.getHistoryEntityEdges_asB64(),
+historyEntityPublicCache: msg.getHistoryEntityPublicCache_asB64(),
+historyEntityRevealedCache: msg.getHistoryEntityRevealedCache_asB64(),
+historyEntityEdgeCache: msg.getHistoryEntityEdgeCache_asB64(),
 historyField: msg.getHistoryField_asB64(),
 historyLength: jspb.Message.getFieldWithDefault(msg, 7, 0),
 myMoveset: msg.getMyMoveset_asB64(),
@@ -1237,15 +1237,15 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityPublic(value);
+      msg.setHistoryEntityPublicCache(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityRevealed(value);
+      msg.setHistoryEntityRevealedCache(value);
       break;
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setHistoryEntityEdges(value);
+      msg.setHistoryEntityEdgeCache(value);
       break;
     case 6:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -1330,21 +1330,21 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
       f
     );
   }
-  f = message.getHistoryEntityPublic_asU8();
+  f = message.getHistoryEntityPublicCache_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       3,
       f
     );
   }
-  f = message.getHistoryEntityRevealed_asU8();
+  f = message.getHistoryEntityRevealedCache_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       4,
       f
     );
   }
-  f = message.getHistoryEntityEdges_asU8();
+  f = message.getHistoryEntityEdgeCache_asU8();
   if (f.length > 0) {
     writer.writeBytes(
       5,
@@ -1509,35 +1509,35 @@ proto.servicev2.EnvironmentState.prototype.setActionMask = function(value) {
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public_cache = 3;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
 };
 
 
 /**
- * optional bytes history_entity_public = 3;
- * This is a type-conversion wrapper around `getHistoryEntityPublic()`
+ * optional bytes history_entity_public_cache = 3;
+ * This is a type-conversion wrapper around `getHistoryEntityPublicCache()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryEntityPublic()));
+      this.getHistoryEntityPublicCache()));
 };
 
 
 /**
- * optional bytes history_entity_public = 3;
+ * optional bytes history_entity_public_cache = 3;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryEntityPublic()`
+ * This is a type-conversion wrapper around `getHistoryEntityPublicCache()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublicCache_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryEntityPublic()));
+      this.getHistoryEntityPublicCache()));
 };
 
 
@@ -1545,41 +1545,41 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityPublic_asU8 = functio
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryEntityPublic = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityPublicCache = function(value) {
   return jspb.Message.setProto3BytesField(this, 3, value);
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed_cache = 4;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
- * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
+ * optional bytes history_entity_revealed_cache = 4;
+ * This is a type-conversion wrapper around `getHistoryEntityRevealedCache()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryEntityRevealed()));
+      this.getHistoryEntityRevealedCache()));
 };
 
 
 /**
- * optional bytes history_entity_revealed = 4;
+ * optional bytes history_entity_revealed_cache = 4;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryEntityRevealed()`
+ * This is a type-conversion wrapper around `getHistoryEntityRevealedCache()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealedCache_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryEntityRevealed()));
+      this.getHistoryEntityRevealedCache()));
 };
 
 
@@ -1587,41 +1587,41 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityRevealed_asU8 = funct
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryEntityRevealed = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityRevealedCache = function(value) {
   return jspb.Message.setProto3BytesField(this, 4, value);
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_edge_cache = 5;
  * @return {!(string|Uint8Array)}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache = function() {
   return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 5, ""));
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
- * This is a type-conversion wrapper around `getHistoryEntityEdges()`
+ * optional bytes history_entity_edge_cache = 5;
+ * This is a type-conversion wrapper around `getHistoryEntityEdgeCache()`
  * @return {string}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asB64 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache_asB64 = function() {
   return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getHistoryEntityEdges()));
+      this.getHistoryEntityEdgeCache()));
 };
 
 
 /**
- * optional bytes history_entity_edges = 5;
+ * optional bytes history_entity_edge_cache = 5;
  * Note that Uint8Array is not supported on all browsers.
  * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getHistoryEntityEdges()`
+ * This is a type-conversion wrapper around `getHistoryEntityEdgeCache()`
  * @return {!Uint8Array}
  */
-proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function() {
+proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdgeCache_asU8 = function() {
   return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getHistoryEntityEdges()));
+      this.getHistoryEntityEdgeCache()));
 };
 
 
@@ -1629,7 +1629,7 @@ proto.servicev2.EnvironmentState.prototype.getHistoryEntityEdges_asU8 = function
  * @param {!(string|Uint8Array)} value
  * @return {!proto.servicev2.EnvironmentState} returns this
  */
-proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdges = function(value) {
+proto.servicev2.EnvironmentState.prototype.setHistoryEntityEdgeCache = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
 };
 

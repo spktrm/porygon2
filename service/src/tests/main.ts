@@ -14,6 +14,79 @@ import { numEvals } from "../server/eval";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
+/**
+ * Asserts the slot alignment the RL world model relies on. Edges carry a
+ * stable entity index (ENTITY_EDGE_FEATURE__ENTITY_IDX, revelation order
+ * across both sides) while the public team buffers are per-side and
+ * re-sorted actives-first every state. INFO_FEATURE__PUBLIC_ORDER_* is the
+ * per-state permutation between the two: publicOrder[row] = stable slot of
+ * the pokemon in that public-team row (-1 for unrevealed fillers).
+ *
+ * The model keys 12 recurrent states by the stable slot and residual-injects
+ * state publicOrder[row] onto public-team token row, so this checks that
+ * every edge's slot maps through the permutation to a current team row
+ * describing the same pokemon.
+ *
+ * Caveat: compared by (species, side), so a forme change between the
+ * snapshot and the current state can produce a false positive on species.
+ */
+function assertSlotAlignment(
+    publicOrder: Int16Array,
+    readableHistory: ReturnType<typeof EdgeBuffer.toReadableHistory>,
+    readablePublicTeam: ReturnType<typeof StateHandler.toReadablePublic>,
+    readableRevealedTeam: ReturnType<typeof StateHandler.toReadableRevealed>,
+) {
+    const slotToRow = new Map<number, number>();
+    publicOrder.forEach((slot, row) => {
+        if (slot < 0) {
+            return;
+        }
+        if (slotToRow.has(slot)) {
+            throw new Error(
+                `Slot alignment: PUBLIC_ORDER maps slot ${slot} to both ` +
+                    `row ${slotToRow.get(slot)} and row ${row}`,
+            );
+        }
+        slotToRow.set(slot, row);
+    });
+
+    for (const [stepIndex, step] of readableHistory.entries()) {
+        for (const [memberIndex, edge] of step.edges.entries()) {
+            const slot = edge.entityIdx;
+            if (slot < 0 || slot > 11) {
+                throw new Error(
+                    `Slot alignment: entityIdx ${slot} out of [0, 11] ` +
+                        `at history step ${stepIndex}, member ${memberIndex}`,
+                );
+            }
+            const row = slotToRow.get(slot);
+            if (row === undefined) {
+                throw new Error(
+                    `Slot alignment: edge entityIdx ${slot} at history step ` +
+                        `${stepIndex}, member ${memberIndex} has no ` +
+                        `PUBLIC_ORDER row in the current state`,
+                );
+            }
+            const snapshotSpecies = step.revealed[memberIndex].species;
+            const snapshotSide = step.public[memberIndex].side;
+            const currentSpecies = readableRevealedTeam[row].species;
+            const currentSide = readablePublicTeam[row].side;
+            if (
+                snapshotSpecies !== currentSpecies ||
+                snapshotSide !== currentSide
+            ) {
+                throw new Error(
+                    `Slot alignment violated at history step ${stepIndex}, ` +
+                        `member ${memberIndex}: edge entityIdx ${slot} -> ` +
+                        `current team row ${row}, snapshot ` +
+                        `(${snapshotSpecies}, side ${snapshotSide}) vs row ` +
+                        `(${currentSpecies}, side ${currentSide})`,
+                );
+            }
+        }
+    }
+}
+
 async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0;
@@ -27,12 +100,13 @@ async function playerController(player: TrainablePlayerAI) {
                 break;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableHistory = EdgeBuffer.toReadableHistory({
-                historyEntityPublicBuffer: state.getHistoryEntityPublic_asU8(),
-                historyEntityRevealedBuffer:
-                    state.getHistoryEntityRevealed_asU8(),
-                historyEntityEdgesBuffer: state.getHistoryEntityEdges_asU8(),
+                historyEntityPublicCacheBuffer:
+                    state.getHistoryEntityPublicCache_asU8(),
+                historyEntityRevealedCacheBuffer:
+                    state.getHistoryEntityRevealedCache_asU8(),
+                historyEntityEdgeCacheBuffer:
+                    state.getHistoryEntityEdgeCache_asU8(),
                 historyFieldBuffer: state.getHistoryField_asU8(),
                 historyLength: state.getHistoryLength(),
             });
@@ -46,13 +120,22 @@ async function playerController(player: TrainablePlayerAI) {
             const readablePrivateTeam = StateHandler.toReadablePrivate(
                 state.getPrivateTeam_asU8(),
             );
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readablePublicTeam = StateHandler.toReadablePublic(
                 state.getPublicTeam_asU8(),
             );
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableRevealedTeam = StateHandler.toReadableRevealed(
                 state.getRevealedTeam_asU8(),
+            );
+
+            const publicOrder = info.slice(
+                InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0,
+                InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1,
+            );
+            assertSlotAlignment(
+                publicOrder,
+                readableHistory,
+                readablePublicTeam,
+                readableRevealedTeam,
             );
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableMoveset = StateHandler.toReadableMoveset(

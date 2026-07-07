@@ -1,7 +1,6 @@
 import functools
 from pprint import pprint
 
-import cloudpickle as pickle
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -37,6 +36,7 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
+from rl.learner import checkpoint
 from rl.learner.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
@@ -46,7 +46,7 @@ from rl.model.heads import (
     RegressionValueLogitHead,
 )
 from rl.model.modules import MLP, RMSNorm, TransformerEncoder
-from rl.model.utils import get_most_recent_file, get_num_params
+from rl.model.utils import get_num_params
 
 
 class Porygon2BuilderModel(nn.Module):
@@ -675,12 +675,10 @@ def main(generation: int = 9):
     )
     key = jax.random.key(42)
 
-    latest_ckpt = get_most_recent_file(f"./ckpts/gen{generation}")
+    latest_ckpt = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
     if latest_ckpt:
         print(f"loading checkpoint from {latest_ckpt}")
-        with open(latest_ckpt, "rb") as f:
-            step = pickle.load(f)
-        builder_params = step["builder_state"]["params"]
+        builder_params = checkpoint.load_component(latest_ckpt, "builder", "params")
     else:
         builder_params = functools.partial(
             learner_network.init, head_params=HeadParams()
