@@ -1,10 +1,11 @@
+import math
 from typing import Sequence, TypeVar
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from constants import MAX_RATIO_TOKEN, NUM_HISTORY
+from constants import NUM_HISTORY
 from rl.environment.data import (
     EX_BATCH,
     NUM_ABILITIES,
@@ -72,28 +73,39 @@ def expand_dims(x, axis: int):
     return jax.tree.map(lambda i: np.expand_dims(i, axis=axis), x)
 
 
+def geometric_bucket(length: int, lo: int, hi: int) -> int:
+    """Rounds length up to the next lo * 2^k, capped at hi.
+
+    Geometric buckets bound the number of distinct clipped shapes (and thus
+    JIT recompilations) to log2(hi / lo) + 1, at the cost of at most 2x
+    padding waste per sample.
+    """
+    if length <= lo:
+        return lo
+    return min(hi, lo * 2 ** math.ceil(math.log2(length / lo)))
+
+
 def clip_history(
-    history: PlayerHistoryOutput, resolution: int = 64
+    history: PlayerHistoryOutput, min_length: int = 64
 ) -> PlayerHistoryOutput:
     history_length = np.max(
         history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0),
         axis=0,
     ).item()
 
-    # Round history length up to the nearest multiple of resolution
-    rounded_length = max(
-        resolution, int(np.ceil(history_length / resolution) * resolution)
+    rounded_length = geometric_bucket(
+        history_length, min_length, history.field.shape[0]
     )
 
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
 def clip_packed_history(
-    packed_history: PlayerPackedHistoryOutput, resolution: int = 64
+    packed_history: PlayerPackedHistoryOutput, min_length: int = 64
 ) -> PlayerPackedHistoryOutput:
     history_length = np.max(
         (
-            packed_history.revealed[
+            packed_history.revealed_cache[
                 ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
             ]
             != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
@@ -101,9 +113,8 @@ def clip_packed_history(
         axis=0,
     ).item()
 
-    # Round history length up to the nearest multiple of resolution
-    rounded_length = max(
-        resolution, int(np.ceil(history_length / resolution) * resolution)
+    rounded_length = geometric_bucket(
+        history_length, min_length, packed_history.revealed_cache.shape[0]
     )
 
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
@@ -124,20 +135,20 @@ def process_state(
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
     max_packed_history = 2 * max_history
 
-    history_entity_public = padnstack(
-        np.frombuffer(state.history_entity_public, dtype=np.int16).reshape(
+    history_entity_public_cache = padnstack(
+        np.frombuffer(state.history_entity_public_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_PUBLIC_FEATURES)
         ),
         max_packed_history,
     ).astype(np.int32)
-    history_entity_revealed = padnstack(
-        np.frombuffer(state.history_entity_revealed, dtype=np.int16).reshape(
+    history_entity_revealed_cache = padnstack(
+        np.frombuffer(state.history_entity_revealed_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_REVEALED_FEATURES)
         ),
         max_packed_history,
     ).astype(np.int32)
-    history_entity_edges = padnstack(
-        np.frombuffer(state.history_entity_edges, dtype=np.int16).reshape(
+    history_entity_edge_cache = padnstack(
+        np.frombuffer(state.history_entity_edge_cache, dtype=np.int16).reshape(
             (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
         ),
         max_packed_history,
@@ -184,21 +195,18 @@ def process_state(
     is_done = info[InfoFeature.INFO_FEATURE__DONE].astype(np.bool_)
 
     # Rewards are stored as int16 in the info array, so we need to convert them back to float32
-    win_reward = (
-        np.array(
-            [
-                info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
-                info[InfoFeature.INFO_FEATURE__TIE_REWARD],
-                info[InfoFeature.INFO_FEATURE__WIN_REWARD],
-            ],
-            dtype=np.float32,
-        )
-        / MAX_RATIO_TOKEN
+    win_reward = np.array(
+        [
+            info[InfoFeature.INFO_FEATURE__LOSS_REWARD],
+            info[InfoFeature.INFO_FEATURE__TIE_REWARD],
+            info[InfoFeature.INFO_FEATURE__WIN_REWARD],
+        ],
+        dtype=np.float32,
     )
 
-    state_potential = (
-        info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / MAX_RATIO_TOKEN
-    ).astype(np.float32)
+    state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / 1000).astype(
+        np.float32
+    )
 
     env_step = PlayerEnvOutput(
         info=info,
@@ -214,9 +222,9 @@ def process_state(
         action_mask=get_action_mask(state),
     )
     packed_history_step = PlayerPackedHistoryOutput(
-        public=history_entity_public,
-        revealed=history_entity_revealed,
-        edges=history_entity_edges,
+        public_cache=history_entity_public_cache,
+        revealed_cache=history_entity_revealed_cache,
+        edge_cache=history_entity_edge_cache,
     )
     history_step = PlayerHistoryOutput(field=history_field)
 
@@ -225,7 +233,7 @@ def process_state(
     )
 
 
-def get_ex_batch(resolution: int = 64) -> PlayerActorInput:
+def get_ex_batch(min_length: int = 64) -> PlayerActorInput:
     processed_states = []
     for i, unprocessed_states in enumerate(EX_BATCH.trajectories):
         states = []
@@ -251,9 +259,9 @@ def get_ex_batch(resolution: int = 64) -> PlayerActorInput:
     )
     ex_batch = ex_batch.replace(
         packed_history=clip_packed_history(
-            ex_batch.packed_history, resolution=resolution
+            ex_batch.packed_history, min_length=min_length
         ),
-        history=clip_history(ex_batch.history, resolution=resolution),
+        history=clip_history(ex_batch.history, min_length=min_length),
     )
 
     return ex_batch

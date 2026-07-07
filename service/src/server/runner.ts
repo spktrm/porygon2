@@ -150,6 +150,8 @@ const CHOOSABLE_TARGETS = new Set([
     "adjacentFoe",
 ]);
 
+const globalGens = new Generations(Dex);
+
 export class TrainablePlayerAI extends RandomPlayerAI {
     userName: string;
     privateBattle: Battle;
@@ -173,6 +175,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     isBaseline: boolean;
     baselineIndex: number;
 
+    prevMyFaintedCount: number;
+    prevOppFaintedCount: number;
+
+    firstRequest: AnyObject | undefined;
+
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,
@@ -187,8 +194,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.userName = userName;
 
-        this.privateBattle = new Battle(new Generations(Dex), null);
-        this.publicBattle = new Battle(new Generations(Dex), null);
+        this.privateBattle = new Battle(globalGens, null);
+        this.publicBattle = new Battle(globalGens, null);
         this.eventHandler = new EventHandler(this);
         this.done = false;
         this.choices = [];
@@ -202,6 +209,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.requestCount = 0;
         this.finishedEarly = false;
         this.rqid = -1;
+        this.firstRequest = undefined;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -211,6 +219,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         } else {
             this.baselineIndex = -1;
         }
+
+        this.prevMyFaintedCount = 0;
+        this.prevOppFaintedCount = 0;
     }
 
     finishEarly() {
@@ -262,6 +273,11 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     getRequest(): AnyObject {
+        if (this.firstRequest === undefined) {
+            this.firstRequest = JSON.parse(
+                JSON.stringify(this.privateBattle.request),
+            );
+        }
         return this.privateBattle.request as AnyObject;
     }
 
@@ -705,7 +721,7 @@ export function createBattle(
 >player p2 ${JSON.stringify(p2spec)}`);
 
     (async () => {
-        const spectator = new Battle(new Generations(Dex), null);
+        const spectator = new Battle(globalGens, null);
 
         // Replace your tracking variables with this:
         const windowSize = 40;
@@ -758,6 +774,7 @@ export function createBattle(
                 break;
             }
         }
+        spectator.destroy();
     })();
 
     return { p1, p2 };

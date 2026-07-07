@@ -24,7 +24,8 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
-            if (done || info[InfoFeature.INFO_FEATURE__TURN] > 10) {
+            // if (done || info[InfoFeature.INFO_FEATURE__TURN] > 10) {
+            if (done) {
                 console.log(
                     `${playerName}: Received 'done' state. Exiting loop.`,
                 );

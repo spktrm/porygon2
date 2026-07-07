@@ -202,7 +202,7 @@ def main(args: argparse.Namespace):
         actor_player_network.apply,
         actor_builder_network.apply,
         gpu_lock=gpu_lock,
-        player_head_params=HeadParams(temp=0.8),
+        player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
 

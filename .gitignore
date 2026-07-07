@@ -36,3 +36,7 @@ replays/**/*.ckpt
 
 # viz ignores
 viz/*.json
+
+.claude/
+
+attn_weights/
