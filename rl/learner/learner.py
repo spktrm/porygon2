@@ -686,7 +686,11 @@ class Learner:
         if debug:
             self._train_step_jit = train_step
         else:
-            self._train_step_jit = jax.jit(train_step, static_argnames=["config"])
+            self._train_step_jit = jax.jit(
+                train_step,
+                static_argnames=["config"],
+                donate_argnames=["player_state", "builder_state"],
+            )
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
