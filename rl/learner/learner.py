@@ -22,7 +22,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.utils import clip_history, clip_packed_history
+from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
@@ -588,11 +588,11 @@ def train_step(
 
 def _stack_and_pad_batch(
     batch: list[Trajectory],
-    player_transition_resolution: int = 24,
-    player_history_resolution: int = 64,
+    player_transition_min_length: int = 32,
+    player_history_min_length: int = 64,
     rng_key: jax.Array = None,
 ) -> Batch:
-    """Stacks a list of trajectories and pads them to a fixed resolution."""
+    """Stacks a list of trajectories and clips them to geometric buckets."""
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
@@ -603,8 +603,10 @@ def _stack_and_pad_batch(
         .item()
     )
 
-    num_valid = int(
-        np.ceil(max_valid / player_transition_resolution) * player_transition_resolution
+    num_valid = geometric_bucket(
+        max_valid,
+        player_transition_min_length,
+        stacked_trajectory.player_transitions.env_output.done.shape[0],
     )
 
     return Batch(
@@ -615,10 +617,10 @@ def _stack_and_pad_batch(
         ),
         player_packed_history=clip_packed_history(
             stacked_trajectory.player_packed_history,
-            resolution=player_history_resolution,
+            min_length=player_history_min_length,
         ),
         player_history=clip_history(
-            stacked_trajectory.player_history, resolution=player_history_resolution
+            stacked_trajectory.player_history, min_length=player_history_min_length
         ),
         rng_key=rng_key,
     )

@@ -100,7 +100,7 @@ class Porygon2LearnerConfig:
     # Player automatic entropy tuning params
     player_alpha_learning_rate: float = 1e-3
     player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.5
+    player_target_normalized_entropy: float = 0.6
     player_target_normalized_modality_entropy: float = 0.0
 
     # Learning params
