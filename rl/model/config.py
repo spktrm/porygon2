@@ -109,7 +109,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # num_rounds times. Depth comes from iteration, not stacked parameters.
     # Zero init_residual_scale means every residual update (including history
     # integration) starts as a no-op, so extra rounds are stable to add.
-    cfg.encoder.num_rounds = 4
+    cfg.encoder.num_rounds = 3
     cfg.encoder.history_cross_decoder.need_pos = False
     cfg.encoder.history_cross_decoder.num_layers = 1
     cfg.encoder.latent_encoder.num_layers = 1
