@@ -46,13 +46,13 @@ class PlayerActor:
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
 
-    def clip_actor_history(self, timestep: PlayerActorInput, resolution: int = 64):
+    def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
         return PlayerActorInput(
             env=timestep.env,
             packed_history=clip_packed_history(
-                timestep.packed_history, resolution=resolution
+                timestep.packed_history, min_length=min_length
             ),
-            history=clip_history(timestep.history, resolution=resolution),
+            history=clip_history(timestep.history, min_length=min_length),
         )
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
