@@ -14,6 +14,7 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
+    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAlphasOutput,
@@ -32,7 +33,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_num_params
+from rl.model.utils import get_num_params, legal_log_policy
 
 
 def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
@@ -105,10 +106,16 @@ class Porygon2PlayerModel(nn.Module):
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
-        square_logits = (action_embeddings @ action_embeddings.T) / np.array(
-            action_embeddings.shape[-1] ** 0.5
-        )
-        return square_logits.reshape(-1)
+        """Gram-matrix logits per round.
+
+        action_embeddings: (num_rounds, NUM_ACTION_FEATURES, entity_size),
+        already normed per round by the encoder's out-norms. Returns
+        (num_rounds, NUM_ACTION_FEATURES**2) src x tgt logits.
+        """
+        square_logits = jnp.einsum(
+            "rae,rbe->rab", action_embeddings, action_embeddings
+        ) / np.array(action_embeddings.shape[-1] ** 0.5)
+        return square_logits.reshape(square_logits.shape[0], -1)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -173,8 +180,9 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        micro_logits = self._forward_pi_head(action_embeddings)
-        micro_logits = micro_logits / temp
+        per_round_logits = self._forward_pi_head(action_embeddings) / temp
+        # The final round drives sampling, metrics, and the RL losses.
+        micro_logits = per_round_logits[-1]
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -208,6 +216,24 @@ class Porygon2PlayerModel(nn.Module):
             policy_metrics, flat_valid_mask
         )
 
+        # Multi-exit self-distillation: intermediate rounds are trained to
+        # match the final round's policy. The teacher side is stop-gradient,
+        # so this never pushes back on the RL objective for the final policy;
+        # it also keeps truncated-depth inference viable and the loss value
+        # doubles as a depth-saturation diagnostic.
+        if per_round_logits.shape[0] > 1:
+            final_policy = jax.lax.stop_gradient(policy_metrics.policy)
+            final_log_policy = jax.lax.stop_gradient(policy_metrics.log_policy)
+            intermediate_log_policy = legal_log_policy(
+                per_round_logits[:-1], flat_valid_mask
+            )
+            exit_kl = final_policy * (final_log_policy - intermediate_log_policy)
+            exit_distill_kl = (
+                jnp.where(flat_valid_mask, exit_kl, 0.0).sum(axis=-1).mean()
+            )
+        else:
+            exit_distill_kl = jnp.zeros_like(policy_metrics.entropy)
+
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
@@ -219,10 +245,34 @@ class Porygon2PlayerModel(nn.Module):
             logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
             centered_logit=centered_logit,
+            exit_distill_kl=exit_distill_kl,
         )
 
-    def _forward_value_head(self, value_embedding: jax.Array):
-        return self.v_head(value_embedding)
+    def _forward_value_head(self, value_embeddings: jax.Array):
+        """value_embeddings: (num_rounds, 4 * entity_size).
+
+        The final round supplies the value estimate; intermediate rounds are
+        distilled toward the (stop-gradient) final categorical distribution,
+        mirroring the policy-side exit self-distillation.
+        """
+        head = self.v_head(value_embeddings)  # every field gains a round axis
+
+        if value_embeddings.shape[0] > 1:
+            final_log_probs = jax.lax.stop_gradient(head.log_probs[-1])
+            final_probs = jnp.exp(final_log_probs)
+            exit_kl = final_probs * (final_log_probs - head.log_probs[:-1])
+            exit_distill_kl = exit_kl.sum(axis=-1).mean()
+        else:
+            exit_distill_kl = jnp.zeros_like(head.entropy[-1])
+
+        return CategoricalValueHeadOutput(
+            logits=head.logits[-1],
+            log_probs=head.log_probs[-1],
+            entropy=head.entropy[-1],
+            expectation=head.expectation[-1],
+            l2_norm=head.l2_norm[-1],
+            exit_distill_kl=exit_distill_kl,
+        )
 
     def get_head_outputs(
         self,

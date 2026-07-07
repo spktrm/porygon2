@@ -335,28 +335,39 @@ class Encoder(nn.Module):
             name="wm_field_step_linear", use_bias=False, **dense_kwargs
         )
 
-        # RMS norms
-        self.input_seq_mlp = MLP((4 * self.entity_size, self.entity_size))
+        # Per-modality input projections (replaces the single shared
+        # input_seq_mlp): each input-token modality comes from a different
+        # generative process (its own SumEmbeddings / linears upstream), so
+        # each gets its own norm+MLP into the shared latent space. The
+        # prev-action tokens especially need this — they are borrowed
+        # mixed-provenance action-slot embeddings with only an additive bias.
+        input_mlp_shape = (4 * self.entity_size, self.entity_size)
+        self.input_norm_private = MLP(input_mlp_shape, name="input_norm_private")
+        self.input_norm_public = MLP(input_mlp_shape, name="input_norm_public")
+        self.input_norm_field = MLP(input_mlp_shape, name="input_norm_field")
+        self.input_norm_prev_action = MLP(
+            input_mlp_shape, name="input_norm_prev_action"
+        )
 
-        # Interleaved self/cross attention over the latent sequence: each
-        # round self-attends the latents, then cross-attends them to the
-        # per-entity history states (12 slot states + field state). The cross
-        # blocks' residual gates are zero-init, so history integration starts
-        # as a no-op.
-        num_latent_rounds = self.cfg.latent_encoder.num_layers
-        latent_self_kwargs = {**self.cfg.latent_encoder.to_dict(), "num_layers": 1}
-        history_cross_kwargs = self.cfg.history_cross_decoder.to_dict()
-        self.latent_self_layers = [
-            TransformerEncoder(name=f"latent_self_{i}", **latent_self_kwargs)
-            for i in range(num_latent_rounds)
-        ]
-        self.history_cross_layers = [
-            TransformerDecoder(name=f"history_cross_{i}", **history_cross_kwargs)
-            for i in range(num_latent_rounds)
-        ]
-        # Per-provenance action decoders: each group decodes only its own action
+        # Weight-tied round block, applied num_rounds times: each round
+        # self-attends the latents, cross-attends them to the per-entity
+        # history states (12 slot states + field state), then lets each
+        # provenance group's action queries cross-read the freshly updated
+        # latents. Depth comes from iterating the same block, so num_rounds
+        # is a knob rather than a parameter count. The cross blocks' residual
+        # gates are zero-init, so history integration starts as a no-op.
+        self.num_rounds = self.cfg.num_rounds
+        self.latent_self = TransformerEncoder(
+            name="latent_self", **self.cfg.latent_encoder.to_dict()
+        )
+        self.history_cross = TransformerDecoder(
+            name="history_cross", **self.cfg.history_cross_decoder.to_dict()
+        )
+        # Per-provenance action decoders: each group refines only its own action
         # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
-        # no longer share decoder parameters with move embeddings.
+        # do not share decoder parameters with move embeddings. Each decoder is a
+        # single block reused every round (tied across rounds, separate across
+        # groups).
         self.action_norms = [
             MLP(
                 (4 * self.entity_size, self.entity_size),
@@ -369,6 +380,13 @@ class Encoder(nn.Module):
                 name=f"action_decoder_{group_name}",
                 **self.cfg.action_decoder.to_dict(),
             )
+            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+        ]
+        # Head-facing output norms, hoisted out of the decoders (norm_output is
+        # off) so the raw residual stream carries across rounds while every
+        # round still emits normed embeddings for the per-round policy head.
+        self.action_out_norms = [
+            MLP(name=f"action_out_norm_{group_name}")
             for group_name, _ in ACTION_DECODER_SLOT_GROUPS
         ]
         self.value_decoder = TransformerDecoder(
@@ -1040,13 +1058,22 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        input_state_sequence = jnp.concatenate(
+        prev_action_tokens = jnp.concatenate(
             (
-                private_entity_embeddings,
-                revealed_entity_embeddings,
-                field_embeddings,
                 prev_action_src + self.prev_action_src_bias.astype(self.cfg.dtype),
                 prev_action_tgt + self.prev_action_tgt_bias.astype(self.cfg.dtype),
+            ),
+            axis=0,
+        )
+
+        # Project each modality into the shared latent space with its own
+        # norm+MLP before concatenating into one sequence.
+        input_state_sequence = jnp.concatenate(
+            (
+                self.input_norm_private(private_entity_embeddings),
+                self.input_norm_public(revealed_entity_embeddings),
+                self.input_norm_field(field_embeddings),
+                self.input_norm_prev_action(prev_action_tokens),
             ),
             axis=0,
         )
@@ -1068,51 +1095,88 @@ class Encoder(nn.Module):
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        # bulk of computation: interleaved self/cross attention. Each round
-        # self-attends the latent sequence, then cross-attends it to the
-        # per-entity history states (12 rows, PUBLIC_ORDER-aligned with the
-        # public team, masked to mapped rows) plus the field history state.
+        # bulk of computation: one weight-tied round block iterated
+        # num_rounds times. Each round self-attends the latent sequence,
+        # cross-attends it to the per-entity history states (12 rows,
+        # PUBLIC_ORDER-aligned with the public team, masked to mapped rows)
+        # plus the field history state, then lets each provenance group's
+        # action queries cross-read the freshly updated latents. Information
+        # flow is one-way (latents never attend to action queries), and each
+        # group reads with its own weights, so the per-group decode-in-
+        # isolation property holds round by round.
         history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
         history_mask = jnp.concatenate(
             (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
         )
 
-        latent_queries = self.input_seq_mlp(input_state_sequence)
-        for self_layer, cross_layer in zip(
-            self.latent_self_layers, self.history_cross_layers
-        ):
-            latent_queries = self_layer(qkv=latent_queries, qkv_mask=input_state_mask)
-            latent_queries = cross_layer(
+        latent_queries = input_state_sequence
+
+        # Warm-start the action queries with their per-provenance input norms.
+        action_queries = [
+            q_norm(output_state_sequence[slot_indices])
+            for q_norm, (_, slot_indices) in zip(
+                self.action_norms, ACTION_DECODER_SLOT_GROUPS
+            )
+        ]
+        group_masks = [
+            output_state_mask[slot_indices]
+            for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
+        ]
+
+        # Value queries join the same loop: the tied value-decoder block reads
+        # each round's latents and the query stream carries across rounds,
+        # mirroring the action queries.
+        value_queries = self.value_embeddings.astype(self.cfg.dtype)
+
+        # Per-round head-facing action embeddings: the raw query stream
+        # carries across rounds; the (per-group) out-norm snapshots it into
+        # normed embeddings each round so the policy head can be applied at
+        # every exit with comparable logit scale.
+        per_round_action_embeddings = []
+        per_round_value_embeddings = []
+        for _ in range(self.num_rounds):
+            latent_queries = self.latent_self(
+                qkv=latent_queries, qkv_mask=input_state_mask
+            )
+            latent_queries = self.history_cross(
                 q=latent_queries,
                 kv=history_context,
                 q_mask=input_state_mask,
                 kv_mask=history_mask,
             )
 
-        # Decode each provenance group's action slots with its own decoder, then
-        # scatter the results back into a single (NUM_ACTION_FEATURES, entity_size)
-        # sequence. The decoder only cross-attends queries to the latents (no query
-        # self-attention), so decoding a group's slots in isolation matches decoding
-        # them jointly.
-        action_embeddings = jnp.zeros_like(output_state_sequence)
-        for q_norm, decoder, (_, slot_indices) in zip(
-            self.action_norms, self.action_decoders, ACTION_DECODER_SLOT_GROUPS
-        ):
-            group_action_embeddings = decoder(
-                q=q_norm(output_state_sequence[slot_indices]),
+            round_action_embeddings = jnp.zeros_like(output_state_sequence)
+            for group_idx, (decoder, out_norm, (_, slot_indices)) in enumerate(
+                zip(
+                    self.action_decoders,
+                    self.action_out_norms,
+                    ACTION_DECODER_SLOT_GROUPS,
+                )
+            ):
+                action_queries[group_idx] = decoder(
+                    q=action_queries[group_idx],
+                    kv=latent_queries,
+                    q_mask=group_masks[group_idx],
+                    kv_mask=input_state_mask,
+                )
+                round_action_embeddings = round_action_embeddings.at[
+                    slot_indices
+                ].set(out_norm(action_queries[group_idx]))
+            per_round_action_embeddings.append(round_action_embeddings)
+
+            value_queries = self.value_decoder(
+                q=value_queries,
                 kv=latent_queries,
-                q_mask=output_state_mask[slot_indices],
                 kv_mask=input_state_mask,
             )
-            action_embeddings = action_embeddings.at[slot_indices].set(
-                group_action_embeddings
-            )
+            per_round_value_embeddings.append(value_queries.reshape(-1))
 
-        value_embeddings = self.value_decoder(
-            q=self.value_embeddings.astype(self.cfg.dtype),
-            kv=latent_queries,
-            kv_mask=input_state_mask,
-        ).reshape(-1)
+        # (num_rounds, NUM_ACTION_FEATURES, entity_size) and
+        # (num_rounds, 4 * entity_size); the final round drives the acting
+        # policy and value estimate, earlier rounds feed the exit
+        # self-distillation losses.
+        action_embeddings = jnp.stack(per_round_action_embeddings)
+        value_embeddings = jnp.stack(per_round_value_embeddings)
 
         return action_embeddings, value_embeddings
 

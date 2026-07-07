@@ -22,7 +22,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
+from rl.environment.utils import clip_history, clip_packed_history
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.learner.config import (
@@ -207,6 +207,13 @@ def train_step(
 
         loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
 
+        loss_exit_distill = average(
+            learner_action_head.exit_distill_kl, valid=policy_mask
+        )
+        loss_value_exit_distill = average(
+            learner_value_head.exit_distill_kl, valid=value_mask
+        )
+
         mask_entropy = policy_mask & (learner_action_head.normalized_entropy > 0)
         mask_modality = policy_mask & (
             learner_action_head.normalized_modality_entropy > 0
@@ -228,6 +235,8 @@ def train_step(
                 + player_modality_alpha * normalized_modality_entropy
             )
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
+            + config.player_exit_distill_loss_coef * loss_exit_distill
+            + config.player_value_exit_distill_loss_coef * loss_value_exit_distill
         )
 
         return loss, dict(
@@ -237,6 +246,8 @@ def train_step(
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
+            player_loss_exit_distill=loss_exit_distill,
+            player_loss_value_exit_distill=loss_value_exit_distill,
             # Per head entropies
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
@@ -588,11 +599,11 @@ def train_step(
 
 def _stack_and_pad_batch(
     batch: list[Trajectory],
-    player_transition_min_length: int = 32,
-    player_history_min_length: int = 64,
+    player_transition_resolution: int = 24,
+    player_history_resolution: int = 64,
     rng_key: jax.Array = None,
 ) -> Batch:
-    """Stacks a list of trajectories and clips them to geometric buckets."""
+    """Stacks a list of trajectories and pads them to a fixed resolution."""
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
@@ -603,10 +614,8 @@ def _stack_and_pad_batch(
         .item()
     )
 
-    num_valid = geometric_bucket(
-        max_valid,
-        player_transition_min_length,
-        stacked_trajectory.player_transitions.env_output.done.shape[0],
+    num_valid = int(
+        np.ceil(max_valid / player_transition_resolution) * player_transition_resolution
     )
 
     return Batch(
@@ -617,10 +626,10 @@ def _stack_and_pad_batch(
         ),
         player_packed_history=clip_packed_history(
             stacked_trajectory.player_packed_history,
-            min_length=player_history_min_length,
+            resolution=player_history_resolution,
         ),
         player_history=clip_history(
-            stacked_trajectory.player_history, min_length=player_history_min_length
+            stacked_trajectory.player_history, resolution=player_history_resolution
         ),
         rng_key=rng_key,
     )
