@@ -1159,9 +1159,9 @@ class Encoder(nn.Module):
                     q_mask=group_masks[group_idx],
                     kv_mask=input_state_mask,
                 )
-                round_action_embeddings = round_action_embeddings.at[
-                    slot_indices
-                ].set(out_norm(action_queries[group_idx]))
+                round_action_embeddings = round_action_embeddings.at[slot_indices].set(
+                    out_norm(action_queries[group_idx])
+                )
             per_round_action_embeddings.append(round_action_embeddings)
 
             value_queries = self.value_decoder(
