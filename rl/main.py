@@ -80,35 +80,44 @@ def run_eval_heuristic(
     """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
 
-    step_count = np.array(learner.player_state.step_count).item()
+    with learner.gpu_lock:
+        step_count = np.array(learner.player_state.step_count).item()
 
     session_id = actor._env.username
     swap = True
 
     while not stop_signal[0]:
         try:
-            new_step_count = np.array(learner.player_state.step_count).item()
+            with learner.gpu_lock:
+                new_step_count = np.array(learner.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
 
+                # Snapshot params to host under the lock: the learner's train
+                # step donates its state buffers, so holding live device
+                # references across an unroll would read deleted arrays.
                 if swap:
                     prefix = "main"
-                    player = ParamsContainer(
-                        step_count=step_count,
-                        player_frame_count=0,
-                        builder_frame_count=0,
-                        player_params=learner.player_state.params,
-                        builder_params=learner.builder_state.params,
-                    )
+                    with learner.gpu_lock:
+                        player_params = jax.device_get(learner.player_state.params)
+                        builder_params = jax.device_get(learner.builder_state.params)
                 else:
                     prefix = "ema"
-                    player = ParamsContainer(
-                        step_count=step_count,
-                        player_frame_count=0,
-                        builder_frame_count=0,
-                        player_params=learner.player_state.target_params,
-                        builder_params=learner.builder_state.target_params,
-                    )
+                    with learner.gpu_lock:
+                        player_params = jax.device_get(
+                            learner.player_state.target_params
+                        )
+                        builder_params = jax.device_get(
+                            learner.builder_state.target_params
+                        )
+
+                player = ParamsContainer(
+                    step_count=step_count,
+                    player_frame_count=0,
+                    builder_frame_count=0,
+                    player_params=player_params,
+                    builder_params=builder_params,
+                )
 
                 swap = not swap
 
