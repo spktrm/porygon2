@@ -349,25 +349,35 @@ class Encoder(nn.Module):
             input_mlp_shape, name="input_norm_prev_action"
         )
 
-        # Weight-tied round block, applied num_rounds times: each round
-        # self-attends the latents, cross-attends them to the per-entity
-        # history states (12 slot states + field state), then lets each
-        # provenance group's action queries cross-read the freshly updated
-        # latents. Depth comes from iterating the same block, so num_rounds
-        # is a knob rather than a parameter count. The cross blocks' residual
-        # gates are zero-init, so history integration starts as a no-op.
+        # Round blocks, one per round (untied): each round self-attends the
+        # latents, cross-attends them to the per-entity history states (12
+        # slot states + field state), then lets each provenance group's
+        # action queries cross-read the freshly updated latents. Each round
+        # has its own weights so rounds can specialize — round 1 sees fresh
+        # input-norm outputs while later rounds see an accumulated residual
+        # stream, and distinct weights let the rounds compose different
+        # transformations instead of iterating one refinement operator. The
+        # cross blocks' residual gates are zero-init, so every round's
+        # history integration starts as a no-op.
         self.num_rounds = self.cfg.num_rounds
-        self.latent_self = TransformerEncoder(
-            name="latent_self", **self.cfg.latent_encoder.to_dict()
-        )
-        self.history_cross = TransformerDecoder(
-            name="history_cross", **self.cfg.history_cross_decoder.to_dict()
-        )
+        self.latent_selfs = [
+            TransformerEncoder(
+                name=f"latent_self_round{round_idx}",
+                **self.cfg.latent_encoder.to_dict(),
+            )
+            for round_idx in range(self.num_rounds)
+        ]
+        self.history_crosses = [
+            TransformerDecoder(
+                name=f"history_cross_round{round_idx}",
+                **self.cfg.history_cross_decoder.to_dict(),
+            )
+            for round_idx in range(self.num_rounds)
+        ]
         # Per-provenance action decoders: each group refines only its own action
         # slots with dedicated weights, so e.g. switch embeddings (entity-derived)
-        # do not share decoder parameters with move embeddings. Each decoder is a
-        # single block reused every round (tied across rounds, separate across
-        # groups).
+        # do not share decoder parameters with move embeddings. Decoders are
+        # separate across both groups and rounds ([round][group]).
         self.action_norms = [
             MLP(
                 (4 * self.entity_size, self.entity_size),
@@ -376,22 +386,34 @@ class Encoder(nn.Module):
             for group_name, _ in ACTION_DECODER_SLOT_GROUPS
         ]
         self.action_decoders = [
-            TransformerDecoder(
-                name=f"action_decoder_{group_name}",
-                **self.cfg.action_decoder.to_dict(),
-            )
-            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            [
+                TransformerDecoder(
+                    name=f"action_decoder_{group_name}_round{round_idx}",
+                    **self.cfg.action_decoder.to_dict(),
+                )
+                for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            ]
+            for round_idx in range(self.num_rounds)
         ]
         # Head-facing output norms, hoisted out of the decoders (norm_output is
         # off) so the raw residual stream carries across rounds while every
         # round still emits normed embeddings for the per-round policy head.
+        # Per-round as well: the residual scale entering the norm grows with
+        # round index, so each exit gets its own normalization.
         self.action_out_norms = [
-            MLP(name=f"action_out_norm_{group_name}")
-            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            [
+                MLP(name=f"action_out_norm_{group_name}_round{round_idx}")
+                for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            ]
+            for round_idx in range(self.num_rounds)
         ]
-        self.value_decoder = TransformerDecoder(
-            **self.cfg.value_decoder.to_dict(),
-        )
+        self.value_decoders = [
+            TransformerDecoder(
+                name=f"value_decoder_round{round_idx}",
+                **self.cfg.value_decoder.to_dict(),
+            )
+            for round_idx in range(self.num_rounds)
+        ]
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1095,15 +1117,15 @@ class Encoder(nn.Module):
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        # bulk of computation: one weight-tied round block iterated
-        # num_rounds times. Each round self-attends the latent sequence,
-        # cross-attends it to the per-entity history states (12 rows,
-        # PUBLIC_ORDER-aligned with the public team, masked to mapped rows)
-        # plus the field history state, then lets each provenance group's
-        # action queries cross-read the freshly updated latents. Information
-        # flow is one-way (latents never attend to action queries), and each
-        # group reads with its own weights, so the per-group decode-in-
-        # isolation property holds round by round.
+        # bulk of computation: num_rounds round blocks, each with its own
+        # weights. Each round self-attends the latent sequence, cross-attends
+        # it to the per-entity history states (12 rows, PUBLIC_ORDER-aligned
+        # with the public team, masked to mapped rows) plus the field history
+        # state, then lets each provenance group's action queries cross-read
+        # the freshly updated latents. Information flow is one-way (latents
+        # never attend to action queries), and each group reads with its own
+        # weights, so the per-group decode-in-isolation property holds round
+        # by round.
         history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
         history_mask = jnp.concatenate(
             (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
@@ -1123,22 +1145,22 @@ class Encoder(nn.Module):
             for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
         ]
 
-        # Value queries join the same loop: the tied value-decoder block reads
-        # each round's latents and the query stream carries across rounds,
-        # mirroring the action queries.
+        # Value queries join the same loop: each round's value-decoder block
+        # reads that round's latents and the query stream carries across
+        # rounds, mirroring the action queries.
         value_queries = self.value_embeddings.astype(self.cfg.dtype)
 
         # Per-round head-facing action embeddings: the raw query stream
-        # carries across rounds; the (per-group) out-norm snapshots it into
-        # normed embeddings each round so the policy head can be applied at
-        # every exit with comparable logit scale.
+        # carries across rounds; the (per-round, per-group) out-norm snapshots
+        # it into normed embeddings each round so the policy head can be
+        # applied at every exit with comparable logit scale.
         per_round_action_embeddings = []
         per_round_value_embeddings = []
-        for _ in range(self.num_rounds):
-            latent_queries = self.latent_self(
+        for round_idx in range(self.num_rounds):
+            latent_queries = self.latent_selfs[round_idx](
                 qkv=latent_queries, qkv_mask=input_state_mask
             )
-            latent_queries = self.history_cross(
+            latent_queries = self.history_crosses[round_idx](
                 q=latent_queries,
                 kv=history_context,
                 q_mask=input_state_mask,
@@ -1148,8 +1170,8 @@ class Encoder(nn.Module):
             round_action_embeddings = jnp.zeros_like(output_state_sequence)
             for group_idx, (decoder, out_norm, (_, slot_indices)) in enumerate(
                 zip(
-                    self.action_decoders,
-                    self.action_out_norms,
+                    self.action_decoders[round_idx],
+                    self.action_out_norms[round_idx],
                     ACTION_DECODER_SLOT_GROUPS,
                 )
             ):
@@ -1164,7 +1186,7 @@ class Encoder(nn.Module):
                 )
             per_round_action_embeddings.append(round_action_embeddings)
 
-            value_queries = self.value_decoder(
+            value_queries = self.value_decoders[round_idx](
                 q=value_queries,
                 kv=latent_queries,
                 kv_mask=input_state_mask,
