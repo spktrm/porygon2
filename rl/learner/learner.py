@@ -689,7 +689,7 @@ class Learner:
             self._train_step_jit = jax.jit(
                 train_step,
                 static_argnames=["config"],
-                # donate_argnames=["player_state", "builder_state"],
+                donate_argnames=["player_state", "builder_state"],
             )
 
     def enqueue_traj(self, traj: Trajectory):
