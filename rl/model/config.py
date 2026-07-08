@@ -104,12 +104,14 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         set_attributes(decoder, **transformer_decoder_kwargs)
 
     cfg.encoder.latent_encoder.need_pos = False
-    # The trunk is a single weight-tied round block — (latent self-attention,
-    # history cross-attention, per-group action cross-attention) — applied
-    # num_rounds times. Depth comes from iteration, not stacked parameters.
-    # Zero init_residual_scale means every residual update (including history
-    # integration) starts as a no-op, so extra rounds are stable to add.
-    cfg.encoder.num_rounds = 3
+    # The trunk is num_rounds round blocks — (latent self-attention, history
+    # cross-attention, per-group action cross-attention) — each with its own
+    # weights, so rounds can specialize instead of iterating one shared
+    # refinement operator. Zero init_residual_scale means every residual
+    # update (including history integration) starts as a no-op, so extra
+    # rounds are stable to add; each round now adds parameters as well as
+    # compute.
+    cfg.encoder.num_rounds = 2
     cfg.encoder.history_cross_decoder.need_pos = False
     cfg.encoder.history_cross_decoder.num_layers = 1
     cfg.encoder.latent_encoder.num_layers = 1
@@ -117,15 +119,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size
     cfg.encoder.value_decoder.need_pos = False
 
-    # One tied block per provenance group, iterated each round. The output
-    # norm is hoisted out of the decoder (norm_output=False) so the raw
-    # residual stream carries across rounds; per-group out-norms in the
-    # encoder produce the head-facing embeddings at every round.
+    # One block per provenance group per round ([round][group], all untied).
+    # The output norm is hoisted out of the decoder (norm_output=False) so
+    # the raw residual stream carries across rounds; per-round, per-group
+    # out-norms in the encoder produce the head-facing embeddings at every
+    # round.
     cfg.encoder.action_decoder.num_layers = 1
     cfg.encoder.action_decoder.norm_output = False
-    # The value decoder is likewise a single tied block, iterated inside the
-    # round loop; the value head's leading layer norm handles the growing
-    # residual scale, so no hoisted out-norm is needed.
+    # The value decoder is likewise one block per round inside the round
+    # loop; the value head's leading layer norm handles the growing residual
+    # scale, so no hoisted out-norm is needed.
     cfg.encoder.value_decoder.num_layers = 1
     cfg.encoder.value_decoder.norm_output = False
 
