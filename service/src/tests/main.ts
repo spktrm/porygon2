@@ -29,6 +29,11 @@ Teams.setGeneratorFactory(TeamGenerators);
  *
  * Caveat: compared by (species, side), so a forme change between the
  * snapshot and the current state can produce a false positive on species.
+ *
+ * Illusion: on |replace| the EventHandler retroactively remaps edges
+ * recorded since the disguised pokemon's switch-in from the disguise's slot
+ * to the true pokemon's slot (rewriting snapshot species to match), so
+ * disguised periods must also satisfy this check once revealed.
  */
 function assertSlotAlignment(
     publicOrder: Int16Array,

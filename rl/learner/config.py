@@ -157,10 +157,14 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
-    # Multi-exit self-distillation: intermediate encoder rounds imitate the
-    # (stop-gradient) final-round policy / value distribution.
-    player_exit_distill_loss_coef: float = 0.1
-    player_value_exit_distill_loss_coef: float = 0.1
+    # Per-action q head: taken-action CE on the same categorical v-trace
+    # target as the value head grounds individual q(s, a) entries...
+    player_q_value_loss_coef: float = 1.0
+    # ...and the consistency term ties the policy mixture of q back to the
+    # stop-gradded value head, E_{a~pi}[q(s, a)] ~= v(s), spreading value
+    # information across the non-taken actions. Aux-scale by design; the
+    # residual won't reach zero off-policy, so don't crank this chasing it.
+    player_q_consistency_loss_coef: float = 0.1
 
     ## Builder
     builder_value_loss_coef: float = 0.5

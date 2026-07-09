@@ -1517,6 +1517,29 @@ class Edge {
             value: newValue,
         });
     }
+
+    remapEntitySlot(args: {
+        fromSlot: number;
+        toSlot: number;
+        speciesToken?: number;
+    }) {
+        const { fromSlot, toSlot, speciesToken } = args;
+        for (let row = 0; row < this.entity2Idx.size; row++) {
+            const entityIdxIndex =
+                row * numEntityEdgeFeatures +
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX;
+            if (this.entityEdgeData.buffer[entityIdxIndex] !== fromSlot) {
+                continue;
+            }
+            this.entityEdgeData.buffer[entityIdxIndex] = toSlot;
+            if (speciesToken !== undefined) {
+                this.entityRevealedData.buffer[
+                    row * numRevealedEntityNodeFeatures +
+                        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+                ] = speciesToken;
+            }
+        }
+    }
 }
 
 export class EdgeBuffer {
@@ -1595,6 +1618,35 @@ export class EdgeBuffer {
         });
         this.fieldData.setNextSlice(edge.fieldData.buffer);
         this.numEdges += 1;
+    }
+
+    packedSize() {
+        return this.entityPublicData.size();
+    }
+
+    remapEntitySlot(args: {
+        fromSlot: number;
+        toSlot: number;
+        startPackedRow: number;
+        speciesToken?: number;
+    }) {
+        const { fromSlot, toSlot, startPackedRow, speciesToken } = args;
+        const numRows = this.entityPublicData.size();
+        for (let row = startPackedRow; row < numRows; row++) {
+            const entityIdxIndex =
+                row * numEntityEdgeFeatures +
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX;
+            if (this.entityEdgeData.buffer[entityIdxIndex] !== fromSlot) {
+                continue;
+            }
+            this.entityEdgeData.buffer[entityIdxIndex] = toSlot;
+            if (speciesToken !== undefined) {
+                this.entityRevealedData.buffer[
+                    row * numRevealedEntityNodeFeatures +
+                        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+                ] = speciesToken;
+            }
+        }
     }
 
     getHistory(numHistory: number = NUM_HISTORY) {
@@ -1719,6 +1771,9 @@ export class EventHandler implements Protocol.Handler {
     timestamp: number;
 
     identToIndex: Map<PokemonIdent | SideID, number>;
+    // Packed edge-buffer position at the last switch-in per active position
+    // ("siden:slot"), bounding how far back a |replace| remap may reach.
+    switchPackedWatermarks: Map<string, number>;
 
     constructor(player: TrainablePlayerAI) {
         this.player = player;
@@ -1732,6 +1787,7 @@ export class EventHandler implements Protocol.Handler {
         this.timestamp = 0;
 
         this.identToIndex = new Map<PokemonIdent, number>();
+        this.switchPackedWatermarks = new Map<string, number>();
     }
 
     getPokemon(
@@ -1917,6 +1973,71 @@ export class EventHandler implements Protocol.Handler {
         this.handleSwitch(args, kwArgs);
     }
 
+    "|replace|"(args: Args["|replace|"]) {
+        const [, pokeIdent, pokeDetails] = args;
+
+        // Illusion reveal: events since this position's switch-in were keyed
+        // to the disguise's slot, so remap them onto the true pokemon's slot.
+        // ingestEvent runs before publicBattle.add, so the active pokemon
+        // here is still the disguised entry.
+        const { siden, slot, pokemonid: trueIdent } =
+            this.player.publicBattle.parsePokemonId(pokeIdent as PokemonIdent);
+        if (slot < 0) {
+            return;
+        }
+        const phantom = this.player.publicBattle.sides[siden]?.active[slot];
+        if (!phantom) {
+            return;
+        }
+        const disguiseSlot = this.identToIndex.get(
+            phantom.originalIdent as PokemonIdent,
+        );
+
+        if (!this.identToIndex.has(trueIdent as PokemonIdent)) {
+            this.identToIndex.set(
+                trueIdent as PokemonIdent,
+                this.identToIndex.size,
+            );
+        }
+        const trueSlot = this.identToIndex.get(trueIdent as PokemonIdent)!;
+        if (
+            disguiseSlot === undefined ||
+            trueSlot > 11 ||
+            disguiseSlot === trueSlot
+        ) {
+            return;
+        }
+
+        // Snapshot rows for the disguised period carry the disguise's
+        // species; rewrite them so remapped edges describe the true pokemon.
+        let speciesToken: number | undefined;
+        const speciesName = (pokeDetails as string).split(",")[0];
+        const dexSpecies =
+            this.player.publicBattle.gens.dex.species.get(speciesName);
+        if (dexSpecies) {
+            try {
+                speciesToken = tryFindIndex(SpeciesEnum, [
+                    dexSpecies.id,
+                    toID(dexSpecies.baseSpecies),
+                ]);
+            } catch (err) {}
+        }
+
+        const startPackedRow =
+            this.switchPackedWatermarks.get(`${siden}:${slot}`) ?? 0;
+        this.edgeBuffer.remapEntitySlot({
+            fromSlot: disguiseSlot,
+            toSlot: trueSlot,
+            startPackedRow,
+            speciesToken,
+        });
+        this.latestEdge.remapEntitySlot({
+            fromSlot: disguiseSlot,
+            toSlot: trueSlot,
+            speciesToken,
+        });
+    }
+
     "|request|"() {
         this.latestEdge.updateSideData();
     }
@@ -1941,6 +2062,16 @@ export class EventHandler implements Protocol.Handler {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error();
+        }
+
+        const { siden, slot } = this.player.publicBattle.parsePokemonId(
+            pokeIdent as PokemonIdent,
+        );
+        if (slot >= 0) {
+            this.switchPackedWatermarks.set(
+                `${siden}:${slot}`,
+                this.edgeBuffer.packedSize(),
+            );
         }
 
         const switchedOut = this.player.publicBattle.getSwitchedOutPokemon(

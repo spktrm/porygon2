@@ -162,6 +162,49 @@ class CategoricalValueLogitHead(nn.Module):
         )
 
 
+class CategoricalQValueLogitHead(nn.Module):
+    """Per-action categorical q values from the same action embeddings the
+    policy reads.
+
+    Mirrors the policy's src x tgt Gram-matrix logits: one Gram matrix per
+    outcome bin, formed by per-bin projected queries against the shared
+    (unprojected) keys. Returns bin logits of shape (A**2, num_bins) over the
+    flat action space.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array):
+        num_bins = self.cfg.category_values.shape[-1]
+        entity_size = action_embeddings.shape[-1]
+
+        queries = nn.Dense(num_bins * entity_size, use_bias=False)(action_embeddings)
+        queries = queries.reshape(-1, num_bins, entity_size)
+        logits = jnp.einsum("ake,be->abk", queries, action_embeddings) / (
+            entity_size**0.5
+        )
+        logits = logits.reshape(-1, num_bins)
+
+        log_probs = nn.log_softmax(logits, axis=-1)
+        probs = jnp.exp(log_probs)
+        entropy = -jnp.sum(probs * log_probs, axis=-1)
+
+        values = self.cfg.category_values.astype(logits.dtype)
+        expectation = probs @ values
+
+        mean_logit = jnp.mean(logits, axis=-1, keepdims=True)
+        l2_norm = jnp.linalg.norm(logits - mean_logit, axis=-1)
+
+        return CategoricalValueHeadOutput(
+            logits=logits,
+            log_probs=log_probs,
+            entropy=entropy,
+            expectation=expectation,
+            l2_norm=l2_norm,
+        )
+
+
 class RegressionValueLogitHead(nn.Module):
     cfg: ConfigDict
 
