@@ -14,7 +14,6 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
-    CategoricalValueHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAlphasOutput,
@@ -28,7 +27,6 @@ from rl.learner import checkpoint
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    CategoricalQValueLogitHead,
     CategoricalValueLogitHead,
     HeadParams,
     compute_policy_metrics,
@@ -105,7 +103,6 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        self.q_head = CategoricalQValueLogitHead(self.cfg.q_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         """Gram-matrix logits.
@@ -219,9 +216,6 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            # Full policy vector is learner-only: the q-consistency mixture
-            # needs it, and storing it on actors would bloat trajectories.
-            log_policy=policy_metrics.log_policy if train else (),
             src_index=src_index,
             tgt_index=tgt_index,
             entropy=policy_metrics.entropy,
@@ -253,15 +247,9 @@ class Porygon2PlayerModel(nn.Module):
             temp=head_params.temp,
         )
 
-        if self.cfg.train:
-            q_head = self.q_head(action_embeddings)
-        else:
-            q_head = CategoricalValueHeadOutput()
-
         return PlayerActorOutput(
             action_head=action_head,
             value_head=self._forward_value_head(value_embeddings),
-            q_head=q_head,
         )
 
     def __call__(

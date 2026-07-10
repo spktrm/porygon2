@@ -143,9 +143,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp.layer_sizes = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
-    cfg.q_head = ConfigDict()
-    cfg.q_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-
     for head in [cfg.pi_head]:
         head.train = train
 

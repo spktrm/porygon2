@@ -57,7 +57,7 @@ class Porygon2LearnerConfig:
 
     # Replay buffer params
     player_replay_buffer_capacity: int = 1024 * 2
-    player_replay_ratio: int = 4
+    player_replay_ratio: int = 8
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
@@ -73,7 +73,7 @@ class Porygon2LearnerConfig:
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e5)
     add_player_max_frames: int = int(3e6)
-    minimum_historical_player_steps: int = int(1e6)
+    minimum_historical_player_steps: int = int(1e5)
     league_size: int = 16
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
@@ -86,12 +86,12 @@ class Porygon2LearnerConfig:
     # `plasticity_overdue_trigger` consecutive overdue-only league additions,
     # player params are interpolated toward a fresh init draw.
     plasticity_enabled: bool = True
-    plasticity_overdue_trigger: int = 2
+    plasticity_overdue_trigger: int = 1
     # Fraction of the old weights kept (lambda). Higher = milder perturbation.
-    plasticity_default_shrink: float = 0.7
+    plasticity_default_shrink: float = 0.5
     # Per top-level module overrides; the encoder holds expensive
     # representations, so it is perturbed more gently than the heads.
-    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.9),)
+    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.5),)
     # Recovery gate: no further perturbations until the main player beats the
     # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
     plasticity_recovery_winrate: float = 0.6
@@ -157,14 +157,6 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
-    # Per-action q head: taken-action CE on the same categorical v-trace
-    # target as the value head grounds individual q(s, a) entries...
-    player_q_value_loss_coef: float = 1.0
-    # ...and the consistency term ties the policy mixture of q back to the
-    # stop-gradded value head, E_{a~pi}[q(s, a)] ~= v(s), spreading value
-    # information across the non-taken actions. Aux-scale by design; the
-    # residual won't reach zero off-policy, so don't crank this chasing it.
-    player_q_consistency_loss_coef: float = 0.1
 
     ## Builder
     builder_value_loss_coef: float = 0.5
