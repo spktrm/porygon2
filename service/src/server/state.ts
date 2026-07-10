@@ -1170,9 +1170,13 @@ class DynamicArray {
     }
 
     setNextSlice(data: Int16Array, sizeOverride?: number) {
-        this.buffer.set(data, this.currentCursor);
+        // Copy only the rows being claimed: `data` may be a fixed-size local
+        // buffer larger than the slice, and copying it whole would write past
+        // the cursor (and past the end of `buffer` near capacity).
+        const length = (sizeOverride ?? 1) * this.increment;
+        this.buffer.set(data.subarray(0, length), this.currentCursor);
         this.prevCursor = this.currentCursor;
-        this.currentCursor += (sizeOverride ?? 1) * this.increment;
+        this.currentCursor += length;
     }
 
     setValue(index: number, value: number) {
@@ -1284,6 +1288,21 @@ class Edge {
             publicData,
             index * numPublicEntityNodeFeatures,
         );
+
+        // Stamp the stable entity index here, at row creation, rather than
+        // relying on every handler to set it — a row left at the buffer
+        // default of 0 would be silently scattered into slot 0 by the
+        // world model. Allocation mirrors getPokemon's first-touch order so
+        // the two paths agree.
+        const identToIndex = this.player.eventHandler.identToIndex;
+        const originalIdent = pokemon.originalIdent as PokemonIdent;
+        if (!identToIndex.has(originalIdent)) {
+            identToIndex.set(originalIdent, identToIndex.size);
+        }
+        this.entityEdgeData.buffer[
+            index * numEntityEdgeFeatures +
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
+        ] = identToIndex.get(originalIdent)!;
     }
 
     updateSideData() {
@@ -1589,6 +1608,14 @@ export class EdgeBuffer {
         if (numEntities === 0) {
             return;
         }
+        // maxEdges bounds the fieldData rows (one per edge); the entity
+        // arrays hold up to 8 rows per edge and need their own check.
+        if (prevSize + numEntities > this.maxEdges) {
+            throw new Error(
+                `EdgeBuffer packed row capacity exceeded: ` +
+                    `${prevSize} + ${numEntities} > ${this.maxEdges}`,
+            );
+        }
         this.entityPublicData.setNextSlice(
             edge.entityPublicData.buffer,
             numEntities,
@@ -1602,19 +1629,24 @@ export class EdgeBuffer {
             edge.entityEdgeData.buffer,
             numEntities,
         );
-        let offset = 0;
-        for (let i = prevSize; i < postSize; i++) {
+        // The field row only has RELEVANT_ENTITY_IDX0..7 — the next feature
+        // is NUM_RELEVANT itself — so an edge touching more than 8 entities
+        // must drop the overflow instead of writing past the block. The
+        // extra rows still land in the packed cache; this step just doesn't
+        // reference them.
+        const maxRelevant = 8;
+        const numRelevant = Math.min(maxRelevant, postSize - prevSize);
+        for (let offset = 0; offset < numRelevant; offset++) {
             edge.setFieldFeature({
                 featureIndex:
                     (FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0 +
                         offset) as FieldFeatureMap[keyof FieldFeatureMap],
-                value: i,
+                value: prevSize + offset,
             });
-            offset += 1;
         }
         edge.setFieldFeature({
             featureIndex: FieldFeature.FIELD_FEATURE__NUM_RELEVANT,
-            value: postSize - prevSize,
+            value: numRelevant,
         });
         this.fieldData.setNextSlice(edge.fieldData.buffer);
         this.numEdges += 1;
@@ -1650,27 +1682,71 @@ export class EdgeBuffer {
     }
 
     getHistory(numHistory: number = NUM_HISTORY) {
-        const historyLength = Math.max(1, Math.min(this.numEdges, numHistory));
-        const numEdges = Math.max(1, this.entityPublicData.size());
+        const totalRows = this.entityPublicData.size();
+        // The actor pads entity rows to 2 * numHistory and field steps to
+        // numHistory, truncating from the front without rebasing the
+        // RELEVANT_ENTITY_IDX* offsets — so overflow there silently
+        // misaligns every gather. Window here instead: ship only the entity
+        // rows the field window references, shrinking the window until its
+        // rows fit, and rebase the offsets to the window start.
+        const maxPackedRows = 2 * numHistory;
+        let historyLength = Math.min(this.numEdges, numHistory);
+        let startRow = 0;
+        while (historyLength > 0) {
+            const oldestStep = this.numEdges - historyLength;
+            // RELEVANT_ENTITY_IDX0 of a step is its first packed row.
+            const oldestRow =
+                this.fieldData.buffer[
+                    oldestStep * numFieldFeatures +
+                        FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0
+                ];
+            if (totalRows - oldestRow <= maxPackedRows) {
+                startRow = oldestRow;
+                break;
+            }
+            historyLength -= 1;
+        }
+
+        const numRows = Math.max(1, totalRows - startRow);
+        historyLength = Math.max(1, historyLength);
+
+        const historyFieldInt16 = this.fieldData.getLatestSlice(historyLength);
+        if (startRow > 0) {
+            for (let step = 0; step < historyLength; step++) {
+                const base = step * numFieldFeatures;
+                const numRelevant = Math.min(
+                    8,
+                    historyFieldInt16[
+                        base + FieldFeature.FIELD_FEATURE__NUM_RELEVANT
+                    ],
+                );
+                for (let k = 0; k < numRelevant; k++) {
+                    historyFieldInt16[
+                        base +
+                            FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0 +
+                            k
+                    ] -= startRow;
+                }
+            }
+        }
+
         const historyEntityPublic = new Uint8Array(
-            this.entityPublicData.getLatestSlice(numEdges).buffer,
+            this.entityPublicData.getLatestSlice(numRows).buffer,
         );
         const historyEntityRevealed = new Uint8Array(
-            this.entityRevealedData.getLatestSlice(numEdges).buffer,
+            this.entityRevealedData.getLatestSlice(numRows).buffer,
         );
         const historyEntityEdges = new Uint8Array(
-            this.entityEdgeData.getLatestSlice(numEdges).buffer,
+            this.entityEdgeData.getLatestSlice(numRows).buffer,
         );
-        const historyField = new Uint8Array(
-            this.fieldData.getLatestSlice(historyLength).buffer,
-        );
+        const historyField = new Uint8Array(historyFieldInt16.buffer);
         return {
             historyEntityPublic,
             historyEntityRevealed,
             historyEntityEdges,
             historyField,
             historyLength,
-            historyPackedLength: numEdges,
+            historyPackedLength: numRows,
         };
     }
 

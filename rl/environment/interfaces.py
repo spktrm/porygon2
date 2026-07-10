@@ -91,12 +91,6 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Per-action categorical q values over the flat (src, tgt) action space.
-    # Learner-only (train=True); actors leave this empty so trajectories and
-    # actor->learner traffic are unaffected.
-    q_head: CategoricalValueHeadOutput = field(
-        default_factory=CategoricalValueHeadOutput
-    )
 
 
 @dataclass

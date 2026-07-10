@@ -177,48 +177,6 @@ def train_step(
             value_mask,
         )
 
-        # Per-action q head. Two terms: (1) taken-action CE on the same
-        # categorical v-trace target as the value head, grounding q(s, a_t);
-        # (2) consistency CE tying the policy mixture of q distributions to
-        # the stop-gradded value head, E_{a~pi}[q(s, a)] ~= v(s). Both pi and
-        # v are stop-gradded so consistency only shapes q (and the shared
-        # action embeddings), never the policy or value heads.
-        learner_q_head = learner_player_pred.q_head
-        action_mask = player_transitions.env_output.action_mask
-        flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
-        q_mask = policy_mask & value_mask
-
-        action_index = player_actor_action_head.action_index
-        num_bins = learner_q_head.logits.shape[-1]
-        taken_q_logits = jnp.take_along_axis(
-            learner_q_head.logits,
-            jnp.broadcast_to(
-                action_index[..., None, None], (*action_index.shape, 1, num_bins)
-            ),
-            axis=-2,
-        ).squeeze(-2)
-        loss_q_win = average(
-            optax.softmax_cross_entropy(
-                logits=taken_q_logits,
-                labels=player_targets.win_returns,
-            ),
-            q_mask,
-        )
-
-        # legal_log_policy returns 0.0 on illegal actions, so the mixture
-        # must mask with the action mask before the logsumexp.
-        log_pi = jax.lax.stop_gradient(learner_action_head.log_policy)
-        mix_terms = jnp.where(
-            flat_action_mask[..., None],
-            log_pi[..., None] + learner_q_head.log_probs,
-            -1e9,
-        )
-        log_q_mix = jax.nn.logsumexp(mix_terms, axis=-2)
-        v_probs = jax.lax.stop_gradient(jnp.exp(learner_value_head.log_probs))
-        loss_q_consistency = average(
-            -jnp.sum(v_probs * log_q_mix, axis=-1), q_mask
-        )
-
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
             learner_action_head.normalized_entropy, policy_mask
@@ -264,8 +222,6 @@ def train_step(
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
-            + config.player_q_value_loss_coef * loss_q_win
-            + config.player_q_consistency_loss_coef * loss_q_consistency
             + config.player_kl_loss_coef * loss_actor_backward_kl
             - (
                 player_alpha * normalized_entropy
@@ -274,17 +230,10 @@ def train_step(
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
-        taken_q_expectation = jnp.take_along_axis(
-            learner_q_head.expectation, action_index[..., None], axis=-1
-        ).squeeze(-1)
-        q_mix_expectation = jnp.exp(log_q_mix) @ cat_vf_support
-
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
-            player_loss_q_win=loss_q_win,
-            player_loss_q_consistency=loss_q_consistency,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
@@ -319,17 +268,6 @@ def train_step(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
-            ),
-            player_q_head_r2=calculate_r2(
-                value_prediction=taken_q_expectation,
-                value_target=player_targets.win_returns @ cat_vf_support,
-                mask=q_mask,
-            ),
-            # Miscalibration between the value head and the policy-weighted
-            # q values; divergence from player_value_head_r2 says which head
-            # is lagging.
-            player_q_pi_v_gap=average(
-                jnp.abs(q_mix_expectation - learner_value_head.expectation), q_mask
             ),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
