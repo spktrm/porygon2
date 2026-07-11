@@ -56,6 +56,8 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__RESERVE_4_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__RESERVE_5_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_1_SWITCH: _ClassVar[ActionEnum]
+    ACTION_ENUM__ALLY_2_SWITCH: _ClassVar[ActionEnum]
 MODALITY_ENUM___UNSPECIFIED: ModalityEnum
 MODALITY_ENUM__MOVE: ModalityEnum
 MODALITY_ENUM__SWITCH: ModalityEnum
@@ -100,6 +102,8 @@ ACTION_ENUM__RESERVE_3_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_4_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_5_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_6_SWITCH_IN: ActionEnum
+ACTION_ENUM__ALLY_1_SWITCH: ActionEnum
+ACTION_ENUM__ALLY_2_SWITCH: ActionEnum
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")

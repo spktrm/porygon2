@@ -3892,13 +3892,14 @@ export class StateHandler {
                         continue;
                     }
 
+                    const forcedSwitchSrc = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
+                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
+                    ][i];
                     for (const [j, _] of canSwitch) {
                         actionMask.setRowCol(
+                            forcedSwitchSrc,
                             reserveIndices[j],
-                            [
-                                ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-                                ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
-                            ][i],
                             true,
                         );
                     }
@@ -4127,20 +4128,16 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchToIndex =
-                        allyTargets[i] ??
-                        [
-                            ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-                            ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
-                        ][i];
+                    const switchSrcIndex = [
+                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
+                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
+                    ][i];
 
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            const switchFromIndex = reserveIndices[j];
-
                             actionMask.setRowCol(
-                                switchFromIndex,
-                                switchToIndex,
+                                switchSrcIndex,
+                                reserveIndices[j],
                                 true,
                             );
                         }

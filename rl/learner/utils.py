@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from rl.environment.data import (
-    ALLY_TARGET_INDICES,
+    ALLY_SWITCH_INDICES,
     CAT_VF_SUPPORT,
     NUM_PACKED_SET_FEATURES,
     RESERVE_ENTITY_INDICES,
@@ -64,7 +64,7 @@ def collect_batch_telemetry_data(
     )
     can_switch = batch.player_transitions.env_output.action_mask[
         ...,
-        RESERVE_ENTITY_INDICES,
+        ALLY_SWITCH_INDICES,
         :,
     ].any((-2, -1))
     can_act = can_move & can_switch & player_valid
@@ -91,8 +91,10 @@ def collect_batch_telemetry_data(
         )
     ) & can_move
     did_switch = (
-        (src_action_index[..., None] == RESERVE_ENTITY_INDICES[None, None]).any(axis=-1)
-        & (tgt_action_index[..., None] == ALLY_TARGET_INDICES[None, None]).any(axis=-1)
+        (src_action_index[..., None] == ALLY_SWITCH_INDICES[None, None]).any(axis=-1)
+        & (tgt_action_index[..., None] == RESERVE_ENTITY_INDICES[None, None]).any(
+            axis=-1
+        )
         & can_switch
     )
     move_ratio = renormalize(did_move, can_act)

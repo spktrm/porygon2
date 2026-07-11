@@ -78,13 +78,24 @@ function isWildcardSrc(src: number): boolean {
     );
 }
 
-/** team-roster index (0-5) for a reserve switch src, else null. */
-function decodeReserveSrc(src: number): number | null {
+/** team-roster index (0-5) for a reserve slot index, else null. */
+function decodeReserveIndex(index: number): number | null {
     if (
-        src >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN &&
-        src <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
+        index >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN &&
+        index <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
     ) {
-        return src - ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN;
+        return index - ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN;
+    }
+    return null;
+}
+
+/** ally slot (0/1) for a battle-switch src, else null. */
+function decodeSwitchSrc(src: number): number | null {
+    if (src === ActionEnum.ACTION_ENUM__ALLY_1_SWITCH) {
+        return 0;
+    }
+    if (src === ActionEnum.ACTION_ENUM__ALLY_2_SWITCH) {
+        return 1;
     }
     return null;
 }
@@ -425,7 +436,13 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
                     if (isWildcardSrc(src)) score -= 0.01;
                 }
             } else {
-                const teamIdx = decodeReserveSrc(src);
+                // Battle switch: (ALLY_i_SWITCH, RESERVE_j); team preview
+                // still encodes the chosen mon as the src.
+                const switchAlly = decodeSwitchSrc(src);
+                const teamIdx =
+                    switchAlly !== null
+                        ? decodeReserveIndex(tgt)
+                        : decodeReserveIndex(src);
                 if (teamIdx !== null) {
                     const candidate = mySide.team[teamIdx];
                     if (!candidate) {
@@ -434,7 +451,7 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
                         score = leadScore(candidate) - 0.001 * teamIdx;
                     } else {
                         const opp = oppSide.active[0] ?? null;
-                        const current = mySide.active[0];
+                        const current = mySide.active[switchAlly ?? 0];
                         if (!current) {
                             score =
                                 100 +
