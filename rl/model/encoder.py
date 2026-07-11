@@ -12,6 +12,7 @@ from ml_collections import ConfigDict
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     ACTION_MAX_VALUES,
+    ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     ENTITY_EDGE_MAX_VALUES,
@@ -65,11 +66,15 @@ from rl.model.world_model import NUM_PUBLIC_SLOTS, PerSlotWorldModel
 
 # Action-decoder slot groups, segregated by input provenance rather than by
 # behavioural modality. Move slots (regular + wildcard) are move-feature-derived
-# and share a decoder; switch slots are entity-derived; the remaining target and
-# structural slots (ally/enemy targets, TARGET_*, pass, default) only ever act as
-# bilinear keys. These three groups partition all NUM_ACTION_FEATURES slots.
+# and share a decoder; switch slots are entity-derived — the reserve candidates
+# (battle-switch tgt keys / preview srcs) plus the two ALLY_i_SWITCH srcs that
+# carry the outgoing active entity; the remaining target and structural slots
+# (ally/enemy targets, TARGET_*, pass, default) only ever act as bilinear keys.
+# These three groups partition all NUM_ACTION_FEATURES slots.
 _MOVE_SLOTS = np.asarray(MOVE_INDICES)
-_SWITCH_SLOTS = np.asarray(RESERVE_ENTITY_INDICES)
+_SWITCH_SLOTS = np.concatenate(
+    [np.asarray(RESERVE_ENTITY_INDICES), np.asarray(ALLY_SWITCH_INDICES)]
+)
 _TARGET_STATIC_SLOTS = np.setdiff1d(
     np.arange(NUM_ACTION_FEATURES),
     np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
@@ -340,6 +345,9 @@ class Encoder(nn.Module):
         )
         self.switch_src_bias = self.param(
             "switch_src_bias", bias_init, (1, entity_size)
+        )
+        self.switch_tgt_bias = self.param(
+            "switch_tgt_bias", bias_init, (1, entity_size)
         )
         self.ally_target_bias = self.param(
             "ally_target_bias", bias_init, (1, entity_size)
@@ -1092,6 +1100,7 @@ class Encoder(nn.Module):
         for indices, accumulator in [
             (MOVE_INDICES, my_move_embeddings),
             (RESERVE_ENTITY_INDICES, private_entity_embeddings[:6]),
+            (ALLY_SWITCH_INDICES, revealed_entity_embeddings[:2]),
             (ALLY_TARGET_INDICES, revealed_entity_embeddings[:2]),
             (ENEMY_TARGET_INDICES, revealed_entity_embeddings[6:8]),
             (PASS_INDICES, pass_embeddings),
@@ -1099,11 +1108,14 @@ class Encoder(nn.Module):
         ]:
             output_state_sequence = output_state_sequence.at[indices].add(accumulator)
 
-        # Add modality biases
+        # Add modality biases. Battle switches read (ALLY_i_SWITCH src,
+        # RESERVE_j tgt): the src carries the outgoing active entity, the
+        # reserve slots carry the incoming candidates.
         for indices, accumulator in [
             (REGULAR_MOVE_INDICES, self.regular_move_bias.astype(self.cfg.dtype)),
             (WILDCARD_MOVE_INDICES, self.wildcard_move_bias.astype(self.cfg.dtype)),
-            (RESERVE_ENTITY_INDICES, self.switch_src_bias.astype(self.cfg.dtype)),
+            (ALLY_SWITCH_INDICES, self.switch_src_bias.astype(self.cfg.dtype)),
+            (RESERVE_ENTITY_INDICES, self.switch_tgt_bias.astype(self.cfg.dtype)),
             (ALLY_TARGET_INDICES, self.ally_target_bias.astype(self.cfg.dtype)),
             (ENEMY_TARGET_INDICES, self.enemy_target_bias.astype(self.cfg.dtype)),
         ]:

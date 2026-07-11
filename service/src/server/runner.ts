@@ -415,7 +415,21 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 `move ${moveIndex + 1} ${showdownFormat}`.trim() +
                 " terastallize"
             );
+        } else if (
+            srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_SWITCH ||
+            srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_SWITCH
+        ) {
+            // Battle switch: the reserve mon switching in is encoded as the target.
+            const switchIndex = reserveSwitchIndices.indexOf(tgtIndex);
+            if (switchIndex === -1) {
+                throw new Error(
+                    `Invalid switch target index: ${tgtIndex} for src: ${srcIndex}`,
+                );
+            }
+
+            return `switch ${switchIndex + 1}`;
         } else if (reserveSwitchIndices.includes(srcIndex)) {
+            // Team preview: the chosen mon is still encoded as the source.
             const switchIndex = reserveSwitchIndices.indexOf(srcIndex);
 
             return `switch ${switchIndex + 1}`;

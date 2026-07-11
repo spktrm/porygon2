@@ -239,6 +239,12 @@ RESERVE_ENTITY_INDICES = np.array(
         ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
     ]
 )
+ALLY_SWITCH_INDICES = np.array(
+    [
+        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
+        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
+    ]
+)
 ALLY_TARGET_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
@@ -281,6 +287,7 @@ ALLY_1_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
+        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
     ]
 )
 ALLY_2_INDICES = np.array(
@@ -294,6 +301,7 @@ ALLY_2_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
         ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
     ]
 )
 
@@ -317,8 +325,15 @@ def calculate_flat_modality_mask():
         (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
         & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
     )
-    is_switch = (src_indices >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN) & (
-        src_indices <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
+    # Battle switches are (ALLY_i_SWITCH src, RESERVE_j tgt); team preview
+    # still uses RESERVE_j as the src, so both classify as switch modality.
+    is_switch = (
+        (src_indices == ActionEnum.ACTION_ENUM__ALLY_1_SWITCH)
+        | (src_indices == ActionEnum.ACTION_ENUM__ALLY_2_SWITCH)
+        | (
+            (src_indices >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN)
+            & (src_indices <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN)
+        )
     )
     is_other = ~(is_move | is_wildcard | is_switch)
     return (
@@ -334,6 +349,7 @@ FLAT_MODALITY_MASK = calculate_flat_modality_mask()
 for indices in [
     MOVE_INDICES,
     RESERVE_ENTITY_INDICES,
+    ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     PASS_INDICES,
