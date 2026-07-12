@@ -2056,8 +2056,11 @@ export class EventHandler implements Protocol.Handler {
         // to the disguise's slot, so remap them onto the true pokemon's slot.
         // ingestEvent runs before publicBattle.add, so the active pokemon
         // here is still the disguised entry.
-        const { siden, slot, pokemonid: trueIdent } =
-            this.player.publicBattle.parsePokemonId(pokeIdent as PokemonIdent);
+        const {
+            siden,
+            slot,
+            pokemonid: trueIdent,
+        } = this.player.publicBattle.parsePokemonId(pokeIdent as PokemonIdent);
         if (slot < 0) {
             return;
         }

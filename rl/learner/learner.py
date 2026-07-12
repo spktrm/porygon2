@@ -94,11 +94,6 @@ def train_step(
     )
 
     training_logs = {}
-    player_log_alphas = player_state.alpha_apply_fn(player_state.alpha_params)
-    player_log_alphas = promote_map(player_log_alphas, float_dtype)
-
-    player_alpha = jnp.exp(player_log_alphas.log_alpha)
-    player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
 
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     target_actor_ratio = jnp.exp(target_actor_log_ratio)
@@ -126,6 +121,24 @@ def train_step(
         )
     else:
         player_advantages = player_targets.advantages
+
+    # Magnet policy for the KL regularizer: the EMA target policy mixed with
+    # eps-uniform over legal actions. The uniform mixing is the entropy floor —
+    # it scales with the number of legal actions, so no per-state entropy
+    # normalisation or target is needed.
+    action_mask = player_transitions.env_output.action_mask
+    flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
+    num_legal = jnp.maximum(flat_action_mask.sum(axis=-1, keepdims=True), 1).astype(
+        float_dtype
+    )
+    uniform_policy = flat_action_mask.astype(float_dtype) / num_legal
+    magnet_eps = config.player_magnet_uniform_eps
+    magnet_policy = (1.0 - magnet_eps) * jnp.exp(
+        player_target_pred.action_head.log_policy
+    ) + magnet_eps * uniform_policy
+    magnet_log_policy = jnp.where(
+        flat_action_mask, jnp.log(jnp.maximum(magnet_policy, 1e-9)), 0.0
+    )
 
     def player_loss_fn(params: Params):
 
@@ -203,30 +216,27 @@ def train_step(
             valid=policy_mask,
         )
 
-        loss_magnet_kl = average(learner_action_head.magnet_kl, valid=policy_mask)
+        # Full-support KL(pi_learner || pi_magnet), exact per state — no
+        # importance correction needed since no sampled action is involved.
+        learner_log_policy = learner_action_head.log_policy
+        magnet_kl = jnp.where(
+            flat_action_mask,
+            jnp.exp(learner_log_policy) * (learner_log_policy - magnet_log_policy),
+            0.0,
+        ).sum(axis=-1)
+        loss_magnet_kl = average(magnet_kl, valid=policy_mask)
 
         loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
 
-        mask_entropy = policy_mask & (learner_action_head.normalized_entropy > 0)
-        mask_modality = policy_mask & (
-            learner_action_head.normalized_modality_entropy > 0
-        )
-
-        normalized_entropy = average(
-            learner_action_head.normalized_entropy, mask_entropy
-        )
         normalized_modality_entropy = average(
-            learner_action_head.normalized_modality_entropy, mask_modality
+            learner_action_head.normalized_modality_entropy, policy_mask
         )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            - (
-                player_alpha * normalized_entropy
-                + player_modality_alpha * normalized_modality_entropy
-            )
+            + config.player_magnet_kl_coef * loss_magnet_kl
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
@@ -237,14 +247,10 @@ def train_step(
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_loss_logit_l2_norm=loss_logit_l2_norm,
-            # Per head entropies
+            # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
-            player_normalized_entropy=normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
-            # Entropy Valid Flags (Prevents alpha explosion)
-            player_has_entropy=mask_entropy.any(),
-            player_has_modality_entropy=mask_modality.any(),
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
@@ -280,43 +286,7 @@ def train_step(
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
-    def player_alpha_loss_fn(player_alpha_params):
-        player_log_alphas = player_state.alpha_apply_fn(player_alpha_params)
-        player_log_alphas = promote_map(player_log_alphas, float_dtype)
-
-        player_alpha = jnp.exp(player_log_alphas.log_alpha)
-        player_modality_alpha = jnp.exp(player_log_alphas.modality_log_alpha)
-
-        # Stop gradient on the difference to only flow gradients to log_alpha
-        # Multiply by the 'has_*' flag to zero out the loss if the batch lacked these states
-        ent_err = jnp.clip(
-            player_logs["player_normalized_entropy"]
-            - config.player_target_normalized_entropy,
-            -0.25,
-            0.25,
-        )
-        mod_err = jnp.clip(
-            player_logs["player_normalized_modality_entropy"]
-            - config.player_target_normalized_modality_entropy,
-            -0.25,
-            0.25,
-        )
-        loss = (
-            player_modality_alpha
-            * jax.lax.stop_gradient(mod_err)
-            * player_logs["player_has_modality_entropy"]
-            + player_alpha
-            * jax.lax.stop_gradient(ent_err)
-            * player_logs["player_has_entropy"]
-        )
-
-        return loss.mean()
-
-    alpha_grad_fn = jax.value_and_grad(player_alpha_loss_fn)
-    alpha_loss_val, alpha_grads = alpha_grad_fn(player_state.alpha_params)
-
     player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.apply_alpha_gradients(grads=alpha_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
@@ -344,10 +314,6 @@ def train_step(
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
             player_advantage_mixing_alpha=heuristic_advantage_coef,
-            player_loss_entropy_alpha=alpha_loss_val,
-            # Alphas
-            player_alpha=player_alpha,
-            player_modality_alpha=player_modality_alpha,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
