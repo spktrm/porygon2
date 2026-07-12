@@ -1,5 +1,4 @@
 import functools
-import math
 import os
 from pprint import pprint
 from typing import Any, Callable, Literal
@@ -19,13 +18,11 @@ from rl.environment.interfaces import (
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
-    PlayerAlphasOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
-from rl.model.player_model import Porygon2PlayerAlphas
 from rl.model.utils import Params, ParamsContainer
 
 
@@ -73,7 +70,7 @@ class Porygon2LearnerConfig:
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e5)
     add_player_max_frames: int = int(3e6)
-    minimum_historical_player_steps: int = int(1e5)
+    minimum_historical_player_steps: int = int(1e6)
     league_size: int = 16
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
@@ -97,11 +94,17 @@ class Porygon2LearnerConfig:
     plasticity_recovery_winrate: float = 0.6
     plasticity_cooldown_frames: int = int(1e6)
 
-    # Player automatic entropy tuning params
-    player_alpha_learning_rate: float = 1e-3
-    player_initial_alpha: float = 0.05
-    player_target_normalized_entropy: float = 0.6
-    player_target_normalized_modality_entropy: float = 0.0
+    # Player magnet regularization (MMD/R-NaD style). The policy is pulled
+    # toward a magnet distribution: the EMA target policy mixed with
+    # eps-uniform over legal actions. Early in training the magnet is
+    # near-uniform (exploration); as self-play converges the magnet follows
+    # the policy wherever it is consistently confident, so per-state
+    # exploration/exploitation is set by the game rather than an entropy
+    # target. The coef sets the trust-region timescale, not an entropy level.
+    player_magnet_kl_coef: float = 0.05
+    # Uniform mixing fraction in the magnet — the entropy floor. Scales with
+    # the number of legal actions automatically (uniform over the legal set).
+    player_magnet_uniform_eps: float = 0.03
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -191,13 +194,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    alpha_params: jax.Array = struct.field(pytree_node=True)
-    alpha_apply_fn: Callable[[Params], PlayerAlphasOutput] = struct.field(
-        pytree_node=False
-    )
-    alpha_tx: optax.GradientTransformation = struct.field(pytree_node=False)
-    alpha_opt_state: optax.OptState = struct.field(pytree_node=True)
-
     # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
     step_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
@@ -212,19 +208,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ema_adv_std: jax.Array = struct.field(
         default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
     )
-
-    def apply_alpha_gradients(self, grads, **kwargs):
-        """Applies gradients specifically to the alpha_params."""
-        updates, new_opt_state = self.alpha_tx.update(
-            grads, self.alpha_opt_state, self.alpha_params
-        )
-        new_alpha_params = optax.apply_updates(self.alpha_params, updates)
-        new_alpha_params = jax.tree.map(
-            lambda x: jnp.clip(x, math.log(1e-3), math.log(5)), new_alpha_params
-        )
-        return self.replace(
-            alpha_params=new_alpha_params, alpha_opt_state=new_opt_state
-        )
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -275,20 +258,12 @@ def create_train_state(
         )
     initial_player_params = player_params_init_fn(rng)
 
-    player_alpha_mod = Porygon2PlayerAlphas(config.player_initial_alpha)
-    init_player_alpha_params = player_alpha_mod.init(rng)
-    alpha_tx = optax.adam(config.player_alpha_learning_rate)
-
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
         target_params=initial_player_params,
         tx=player_optimizer,
-        alpha_params=init_player_alpha_params,
-        alpha_apply_fn=player_alpha_mod.apply,
-        alpha_opt_state=alpha_tx.init(init_player_alpha_params),
-        alpha_tx=alpha_tx,
     )
 
     builder_params_init_fn = functools.partial(
@@ -371,8 +346,6 @@ def save_state(
         params=player_state.params,
         target_params=player_state.target_params,
         opt_state=player_state.opt_state,
-        alpha_params=player_state.alpha_params,
-        alpha_opt_state=player_state.alpha_opt_state,
         scalars=dict(
             step_count=player_state.step_count,
             frame_count=player_state.frame_count,
@@ -477,8 +450,6 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],
-        alpha_params=ckpt_player_state["alpha_params"],
-        alpha_opt_state=ckpt_player_state["alpha_opt_state"],
         ema_adv_mean=player_scalars["ema_adv_mean"],
         ema_adv_std=player_scalars["ema_adv_std"],
     )

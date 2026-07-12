@@ -16,7 +16,6 @@ from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, Modal
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
-    PlayerAlphasOutput,
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
@@ -73,28 +72,6 @@ def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
     other_prior = jnp.where(valid_other, category_mass / num_valid_other, 0.0)
 
     return move_prior + switch_prior + wildcard_prior + other_prior
-
-
-class Porygon2PlayerAlphas(nn.Module):
-    alphas_init: float = 0.1
-
-    def setup(self):
-        self.log_alpha = self.param(
-            "log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-        self.modality_log_alpha = self.param(
-            "modality_log_alpha",
-            nn.initializers.constant(jnp.log(self.alphas_init)),
-            (1,),
-        )
-
-    def __call__(self):
-        return PlayerAlphasOutput(
-            log_alpha=self.log_alpha.squeeze(),
-            modality_log_alpha=self.modality_log_alpha.squeeze(),
-        )
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -216,6 +193,9 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
+            # Full support only in the learner: the magnet KL needs both
+            # distributions; actors skip it so replay transitions stay small.
+            log_policy=policy_metrics.log_policy if self.cfg.train else (),
             src_index=src_index,
             tgt_index=tgt_index,
             entropy=policy_metrics.entropy,
