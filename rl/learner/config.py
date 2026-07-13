@@ -160,6 +160,19 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
+    # Latent opponent-action model (active only when the model config has
+    # latent_opponent.enabled). Forward loss grounds the codebook in
+    # transition consequences; the balanced KL distills the posterior into
+    # the decision-time prior while taxing the intent posterior for
+    # unpredictable content; the noise KL (to uniform) taxes the noise
+    # channel. Routing invariant: noise tax < intent posterior tax
+    # (kl_coef * (1 - kl_balance)), so RNG routes to noise and predictable
+    # intent routes to the codes. The usage-entropy bonus (on the
+    # batch-marginal intent posterior) guards against codebook collapse.
+    player_latent_opponent_forward_loss_coef: float = 1.0
+    player_latent_opponent_kl_loss_coef: float = 0.3
+    player_latent_opponent_noise_kl_loss_coef: float = 0.03
+    player_latent_opponent_usage_entropy_coef: float = 0.01
 
     ## Builder
     builder_value_loss_coef: float = 0.5

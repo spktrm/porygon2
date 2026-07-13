@@ -86,11 +86,28 @@ class PlayerAlphasOutput(PolicyHeadOutput):
 
 
 @dataclass
+class LatentOpponentHeadOutput:
+    # Per-request latent opponent-action diagnostics/losses; populated only
+    # in the learner (train=True), like PolicyHeadOutput.log_policy.
+    forward_loss: ArrayLike = ()
+    kl: ArrayLike = ()
+    noise_kl: ArrayLike = ()
+    pair_valid: ArrayLike = ()
+    posterior_probs: ArrayLike = ()
+    noise_posterior_probs: ArrayLike = ()
+    prior_entropy: ArrayLike = ()
+    posterior_entropy: ArrayLike = ()
+
+
+@dataclass
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    latent_opponent: LatentOpponentHeadOutput = field(
+        default_factory=LatentOpponentHeadOutput
+    )
 
 
 @dataclass
