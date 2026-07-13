@@ -1296,4 +1296,6 @@ class Encoder(nn.Module):
             env_step, wm_row_states, order_valid, wm_field_state
         )
 
-        return action_embeddings, value_embeddings
+        # wm_field_state (T, D) rides along for the latent opponent model:
+        # consecutive snapshots bracket the transition each turn caused.
+        return action_embeddings, value_embeddings, wm_field_state

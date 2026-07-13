@@ -1,5 +1,5 @@
 import math
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 import flax.linen as nn
 import jax
@@ -717,6 +717,93 @@ class SumEmbeddings(nn.Module):
             return aggregated + bias.astype(self.dtype)
         else:
             return aggregated
+
+
+class GatedFeatureMerge(nn.Module):
+    """Merge pre-projected embeddings with raw feature encodings.
+
+    Embeddings already in model space are added directly, each scaled by a
+    learned scalar gate (init 1/sqrt(N) so the output distribution at init
+    matches SumEmbeddings' simple_sum mode). Raw feature vectors get their
+    own bias-free Dense into model space.
+
+    Both input groups are dicts keyed by name; the names also key the
+    per-input gate/Dense parameters, so checkpoints stay aligned if a call
+    site reorders its inputs.
+
+    `interactions` selects which embeddings additionally combine through
+    gated Hadamard products: each entry is a tuple of embedding names, and
+    the elementwise product of those embeddings is added to the sum behind
+    a zero-init scalar gate — so at init the module is purely additive and
+    product terms only enter as the optimizer grows their gates. E.g. with
+    embeddings {"species": ..., "ability": ..., "item": ..., "moves": ...},
+    interactions=(("species", "item"), ("species", "moves"),
+    ("species", "item", "moves")) adds species*item, species*moves and the
+    species*item*moves triple.
+    """
+
+    output_size: int
+    interactions: Sequence[tuple[str, ...]] = ()
+    dtype: jnp.dtype = jnp.float32
+    use_bias: bool = True
+
+    @nn.compact
+    def __call__(
+        self,
+        embeddings: dict[str, jax.Array] | None = None,
+        features: dict[str, jax.Array] | None = None,
+    ) -> jax.Array:
+        embeddings = embeddings or {}
+        features = features or {}
+        num_additive = len(embeddings) + len(features)
+        if num_additive == 0:
+            raise ValueError("No inputs provided")
+        for interaction in self.interactions:
+            if len(interaction) < 2:
+                raise ValueError(
+                    f"Interaction {interaction} needs at least two embeddings"
+                )
+            unknown = [name for name in interaction if name not in embeddings]
+            if unknown:
+                raise ValueError(
+                    f"Interaction {interaction} references unknown embeddings "
+                    f"{unknown}; available: {sorted(embeddings)}"
+                )
+
+        init_scale = 1.0 / math.sqrt(num_additive)
+        terms = []
+
+        for name, emb in embeddings.items():
+            gate = self.param(
+                f"{name}_gate", nn.initializers.constant(init_scale), ()
+            ).astype(self.dtype)
+            terms.append(gate * emb)
+
+        for name, feat in features.items():
+            terms.append(
+                init_scale
+                * nn.Dense(
+                    self.output_size,
+                    dtype=self.dtype,
+                    use_bias=False,
+                    name=f"{name}_dense",
+                )(feat)
+            )
+
+        for interaction in self.interactions:
+            gate = self.param(
+                f"{'_x_'.join(interaction)}_gate", nn.initializers.zeros_init(), ()
+            ).astype(self.dtype)
+            product = embeddings[interaction[0]]
+            for name in interaction[1:]:
+                product = product * embeddings[name]
+            terms.append(gate * product)
+
+        aggregated = sum(terms)
+        if self.use_bias:
+            bias = self.param("bias", nn.initializers.zeros_init(), (self.output_size,))
+            aggregated = aggregated + bias.astype(self.dtype)
+        return aggregated
 
 
 class PointerLogits(nn.Module):

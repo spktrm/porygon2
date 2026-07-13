@@ -31,6 +31,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
+from rl.model.latent_opponent import LatentOpponentModel
 from rl.model.utils import get_num_params
 
 
@@ -80,6 +81,10 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        if self.cfg.latent_opponent.enabled:
+            self.latent_opponent = LatentOpponentModel(
+                self.cfg.latent_opponent, name="latent_opponent"
+            )
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         """Gram-matrix logits.
@@ -153,10 +158,14 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
+        logit_bonus: jax.Array | None = None,
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        micro_logits = self._forward_pi_head(action_embeddings) / temp
+        micro_logits = self._forward_pi_head(action_embeddings)
+        if logit_bonus is not None:
+            micro_logits = micro_logits + logit_bonus
+        micro_logits = micro_logits / temp
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -218,6 +227,14 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
+        logit_bonus = None
+        if self.cfg.latent_opponent.enabled:
+            prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+            logit_bonus = self.latent_opponent.action_logit_bonus(
+                action_embeddings,
+                env_step.action_mask.reshape(-1),
+                prior_log_probs,
+            )
 
         action_head = self._forward_action_head(
             action_embeddings,
@@ -225,11 +242,56 @@ class Porygon2PlayerModel(nn.Module):
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
+            logit_bonus=logit_bonus,
         )
 
         return PlayerActorOutput(
             action_head=action_head,
             value_head=self._forward_value_head(value_embeddings),
+        )
+
+    def _forward_latent_opponent(
+        self,
+        action_embeddings: jax.Array,
+        value_embeddings: jax.Array,
+        wm_field_state: jax.Array,
+        env_step: PlayerEnvOutput,
+        actor_output: PlayerActorOutput,
+    ):
+        """Trajectory-level latent opponent losses (learner only).
+
+        The transition bracketed by the field states at requests t and t+1 is
+        what the joint action at t caused; the taken action embedding lets the
+        posterior explain away our own contribution, so the code is pushed
+        toward the opponent's (plus RNG — see module docstring).
+        """
+        num_actions = action_embeddings.shape[-2]
+        action_index = actor_output.action_head.action_index
+        src_index = action_index // num_actions
+        tgt_index = action_index % num_actions
+        taken_src = jnp.take_along_axis(
+            action_embeddings, src_index[:, None, None], axis=-2
+        ).squeeze(-2)
+        taken_tgt = jnp.take_along_axis(
+            action_embeddings, tgt_index[:, None, None], axis=-2
+        ).squeeze(-2)
+        taken_action_embeddings = taken_src + taken_tgt
+
+        next_field_state = jnp.concatenate(
+            (wm_field_state[1:], jnp.zeros_like(wm_field_state[:1])), axis=0
+        )
+        valid = jnp.logical_not(env_step.done)
+        next_valid = jnp.concatenate((valid[1:], jnp.zeros_like(valid[:1])), axis=0)
+        pair_valid = valid & next_valid
+
+        prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+
+        return self.latent_opponent.transition_outputs(
+            wm_field_state,
+            next_field_state,
+            taken_action_embeddings,
+            prior_log_probs,
+            pair_valid,
         )
 
     def __call__(
@@ -241,13 +303,26 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings = self.encoder(
+        action_embeddings, value_embeddings, wm_field_state = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        return jax.vmap(
+        output = jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+
+        if self.cfg.latent_opponent.enabled and self.cfg.train:
+            output = output.replace(
+                latent_opponent=self._forward_latent_opponent(
+                    action_embeddings,
+                    value_embeddings,
+                    wm_field_state,
+                    actor_input.env,
+                    actor_output,
+                )
+            )
+
+        return output
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

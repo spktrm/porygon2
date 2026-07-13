@@ -240,7 +240,57 @@ def train_step(
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
+        # Latent opponent-action model. The empty-tuple default means the
+        # model config has it disabled; the check is static under jit.
+        latent_opponent = learner_player_pred.latent_opponent
+        latent_opponent_logs = {}
+        if not isinstance(latent_opponent.forward_loss, tuple):
+            lo_mask = latent_opponent.pair_valid & policy_mask
+            loss_lo_forward = average(latent_opponent.forward_loss, lo_mask)
+            loss_lo_kl = average(latent_opponent.kl, lo_mask)
+            loss_lo_noise_kl = average(latent_opponent.noise_kl, lo_mask)
+
+            # Batch-marginal posterior usage: high entropy = codes shared out,
+            # low = collapse. Bonus (negated loss) resists collapse.
+            code_marginal = jnp.where(
+                lo_mask[..., None], latent_opponent.posterior_probs, 0.0
+            ).sum(axis=(0, 1)) / lo_mask.sum().clip(min=1)
+            lo_usage_entropy = -jnp.sum(
+                code_marginal * jnp.log(code_marginal.clip(min=1e-9))
+            )
+            noise_marginal = jnp.where(
+                lo_mask[..., None], latent_opponent.noise_posterior_probs, 0.0
+            ).sum(axis=(0, 1)) / lo_mask.sum().clip(min=1)
+            lo_noise_usage_entropy = -jnp.sum(
+                noise_marginal * jnp.log(noise_marginal.clip(min=1e-9))
+            )
+
+            loss = loss + (
+                config.player_latent_opponent_forward_loss_coef * loss_lo_forward
+                + config.player_latent_opponent_kl_loss_coef * loss_lo_kl
+                + config.player_latent_opponent_noise_kl_loss_coef * loss_lo_noise_kl
+                - config.player_latent_opponent_usage_entropy_coef * lo_usage_entropy
+            )
+            num_codes = latent_opponent.posterior_probs.shape[-1]
+            num_noise_codes = latent_opponent.noise_posterior_probs.shape[-1]
+            latent_opponent_logs = dict(
+                player_lo_loss_forward=loss_lo_forward,
+                player_lo_loss_kl=loss_lo_kl,
+                player_lo_loss_noise_kl=loss_lo_noise_kl,
+                # Normalized so 1.0 = uniform code usage, ~0 = collapsed.
+                player_lo_usage_entropy=lo_usage_entropy / jnp.log(num_codes),
+                player_lo_noise_usage_entropy=lo_noise_usage_entropy
+                / jnp.log(num_noise_codes),
+                player_lo_prior_entropy=average(latent_opponent.prior_entropy, lo_mask)
+                / jnp.log(num_codes),
+                player_lo_posterior_entropy=average(
+                    latent_opponent.posterior_entropy, lo_mask
+                )
+                / jnp.log(num_codes),
+            )
+
         return loss, dict(
+            **latent_opponent_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
