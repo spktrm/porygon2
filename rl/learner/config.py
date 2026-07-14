@@ -169,10 +169,15 @@ class Porygon2LearnerConfig:
     # (kl_coef * (1 - kl_balance)), so RNG routes to noise and predictable
     # intent routes to the codes. The usage-entropy bonus (on the
     # batch-marginal intent posterior) guards against codebook collapse.
+    # The payoff loss grounds the payoff matrix: the taken action's payoff
+    # against the inferred code mix regresses onto the realized (normalized)
+    # advantage, so payoffs carry outcome semantics before the zero-init
+    # bonus gate opens.
     player_latent_opponent_forward_loss_coef: float = 1.0
     player_latent_opponent_kl_loss_coef: float = 0.3
     player_latent_opponent_noise_kl_loss_coef: float = 0.03
     player_latent_opponent_usage_entropy_coef: float = 0.01
+    player_latent_opponent_payoff_loss_coef: float = 0.1
 
     ## Builder
     builder_value_loss_coef: float = 0.5

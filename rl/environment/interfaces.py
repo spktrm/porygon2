@@ -93,10 +93,20 @@ class LatentOpponentHeadOutput:
     kl: ArrayLike = ()
     noise_kl: ArrayLike = ()
     pair_valid: ArrayLike = ()
+    # pair_valid restricted to pairs spanning a turn boundary — the only
+    # transitions that contain an opponent decision; the intent KL (prior
+    # training) is averaged over this mask.
+    intent_valid: ArrayLike = ()
+    # Payoff of the taken action against the inferred code mix; regressed
+    # onto the realized advantage in the learner to ground the payoff matrix.
+    taken_payoff: ArrayLike = ()
     posterior_probs: ArrayLike = ()
     noise_posterior_probs: ArrayLike = ()
     prior_entropy: ArrayLike = ()
     posterior_entropy: ArrayLike = ()
+    # Mean |gated logit bonus| over valid actions at each step; the first
+    # diagnostic to check when asking whether the subsystem has turned on.
+    bonus_mean_abs: ArrayLike = ()
 
 
 @dataclass

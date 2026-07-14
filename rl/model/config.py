@@ -141,13 +141,17 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # Latent opponent-action model: K-code intent codebook learned from
     # transition consequences (posterior/forward, learner only) with a prior
     # that anticipates the code at decision time; a bilinear payoff over
-    # (actions x codes) is regret-matched and enters the policy logits
-    # behind a zero-init gate. A second small noise latent (no prior, no
-    # payoff role) absorbs the unpredictable part of the transition — RNG
-    # and simultaneous-resolution effects — so intent codes stay clean.
-    # kl_balance is the Dreamer-style split: the prior-side share teaches
-    # the prior, the posterior-side share taxes the intent posterior for
-    # unpredictable content, routing it to the noise channel.
+    # (actions x codes) is solved — my side by regret matching, the opponent
+    # side by a quantal response KL-anchored at the prior (anchor_temp is
+    # the KL weight: lower = the imagined opponent tracks the payoff more
+    # and the prior less) — and the iterate-averaged result enters the
+    # policy logits behind a zero-init gate. A second small noise latent
+    # (no prior, no payoff role) absorbs the unpredictable part of the
+    # transition — RNG and simultaneous-resolution effects — so intent
+    # codes stay clean. kl_balance is the Dreamer-style split: the
+    # prior-side share teaches the prior, the posterior-side share taxes
+    # the intent posterior for unpredictable content, routing it to the
+    # noise channel.
     cfg.latent_opponent = ConfigDict()
     cfg.latent_opponent.enabled = True
     cfg.latent_opponent.entity_size = entity_size
@@ -156,6 +160,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.latent_opponent.num_noise_codes = 8
     cfg.latent_opponent.kl_balance = 0.8
     cfg.latent_opponent.num_rm_steps = 8
+    cfg.latent_opponent.anchor_temp = 1.0
     cfg.latent_opponent.qk_size = entity_size // num_heads
 
     cfg.v_head = ConfigDict()
