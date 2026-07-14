@@ -14,12 +14,14 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
+    LatentOpponentHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.learner import checkpoint
@@ -164,6 +166,8 @@ class Porygon2PlayerModel(nn.Module):
 
         micro_logits = self._forward_pi_head(action_embeddings)
         if logit_bonus is not None:
+            # Deliberately inside the temperature: the bonus is part of the
+            # policy logits, so eval-time sharpening applies to it too.
             micro_logits = micro_logits + logit_bonus
         micro_logits = micro_logits / temp
 
@@ -225,16 +229,26 @@ class Porygon2PlayerModel(nn.Module):
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
+        prior_log_probs: jax.Array | None = None,
+        *,
         head_params: HeadParams,
     ):
         logit_bonus = None
+        latent_opponent = actor_output.latent_opponent
         if self.cfg.latent_opponent.enabled:
-            prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+            flat_action_mask = env_step.action_mask.reshape(-1)
             logit_bonus = self.latent_opponent.action_logit_bonus(
                 action_embeddings,
-                env_step.action_mask.reshape(-1),
+                flat_action_mask,
                 prior_log_probs,
             )
+            if self.cfg.train:
+                # Learner-only diagnostic (actors keep replay small): how
+                # hard is the gated bonus pushing the logits?
+                latent_opponent = LatentOpponentHeadOutput(
+                    bonus_mean_abs=jnp.abs(logit_bonus).sum()
+                    / flat_action_mask.sum().clip(min=1)
+                )
 
         action_head = self._forward_action_head(
             action_embeddings,
@@ -248,15 +262,16 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerActorOutput(
             action_head=action_head,
             value_head=self._forward_value_head(value_embeddings),
+            latent_opponent=latent_opponent,
         )
 
     def _forward_latent_opponent(
         self,
         action_embeddings: jax.Array,
-        value_embeddings: jax.Array,
         wm_field_state: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
+        prior_log_probs: jax.Array,
     ):
         """Trajectory-level latent opponent losses (learner only).
 
@@ -275,23 +290,37 @@ class Porygon2PlayerModel(nn.Module):
         taken_tgt = jnp.take_along_axis(
             action_embeddings, tgt_index[:, None, None], axis=-2
         ).squeeze(-2)
-        taken_action_embeddings = taken_src + taken_tgt
 
         next_field_state = jnp.concatenate(
             (wm_field_state[1:], jnp.zeros_like(wm_field_state[:1])), axis=0
         )
+        # A pair is usable when step t is a real decision step and t+1 exists
+        # in the buffer: t+1 is then either mid-episode or the terminal
+        # observation. The terminal transition (the KO turn) carries the
+        # strongest consequences, so it stays in; post-episode padding is
+        # excluded by the learner's policy-mask AND.
         valid = jnp.logical_not(env_step.done)
-        next_valid = jnp.concatenate((valid[1:], jnp.zeros_like(valid[:1])), axis=0)
-        pair_valid = valid & next_valid
+        has_next = jnp.concatenate(
+            (jnp.ones_like(valid[:-1]), jnp.zeros_like(valid[:1])), axis=0
+        )
+        pair_valid = valid & has_next
 
-        prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+        # Pairs that don't span a turn boundary (forced switches and other
+        # same-turn sub-requests) contain no opponent decision: they are
+        # gated out of the intent KL and flagged to the posterior/forward
+        # model instead.
+        turn = env_step.info[..., InfoFeature.INFO_FEATURE__TURN]
+        next_turn = jnp.concatenate((turn[1:], turn[-1:]), axis=0)
+        turn_advanced = next_turn > turn
 
         return self.latent_opponent.transition_outputs(
             wm_field_state,
             next_field_state,
-            taken_action_embeddings,
+            taken_src,
+            taken_tgt,
             prior_log_probs,
             pair_valid,
+            turn_advanced,
         )
 
     def __call__(
@@ -307,18 +336,34 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        output = jax.vmap(
-            functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+        head_fn = functools.partial(self.get_head_outputs, head_params=head_params)
+        if self.cfg.latent_opponent.enabled:
+            # Computed once at trajectory level; the per-step slices feed the
+            # decision-time bonus and the whole array feeds the KL below.
+            prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+            output = jax.vmap(head_fn)(
+                action_embeddings,
+                value_embeddings,
+                actor_input.env,
+                actor_output,
+                prior_log_probs,
+            )
+        else:
+            output = jax.vmap(head_fn)(
+                action_embeddings, value_embeddings, actor_input.env, actor_output
+            )
 
         if self.cfg.latent_opponent.enabled and self.cfg.train:
+            latent_opponent = self._forward_latent_opponent(
+                action_embeddings,
+                wm_field_state,
+                actor_input.env,
+                actor_output,
+                prior_log_probs,
+            )
             output = output.replace(
-                latent_opponent=self._forward_latent_opponent(
-                    action_embeddings,
-                    value_embeddings,
-                    wm_field_state,
-                    actor_input.env,
-                    actor_output,
+                latent_opponent=latent_opponent.replace(
+                    bonus_mean_abs=output.latent_opponent.bonus_mean_abs
                 )
             )
 

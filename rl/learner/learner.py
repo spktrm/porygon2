@@ -246,9 +246,21 @@ def train_step(
         latent_opponent_logs = {}
         if not isinstance(latent_opponent.forward_loss, tuple):
             lo_mask = latent_opponent.pair_valid & policy_mask
+            # Intent KL (prior training) only where the pair spans a turn
+            # boundary: same-turn request pairs (forced switches etc.) have
+            # no opponent decision to anticipate.
+            lo_intent_mask = latent_opponent.intent_valid & policy_mask
             loss_lo_forward = average(latent_opponent.forward_loss, lo_mask)
-            loss_lo_kl = average(latent_opponent.kl, lo_mask)
+            loss_lo_kl = average(latent_opponent.kl, lo_intent_mask)
             loss_lo_noise_kl = average(latent_opponent.noise_kl, lo_mask)
+            # Payoff grounding: taken action's payoff vs the inferred code
+            # mix regresses onto the realized (normalized) advantage.
+            loss_lo_payoff = average(
+                jnp.square(
+                    latent_opponent.taken_payoff - player_advantages.astype(jnp.float32)
+                ),
+                lo_mask,
+            )
 
             # Batch-marginal posterior usage: high entropy = codes shared out,
             # low = collapse. Bonus (negated loss) resists collapse.
@@ -269,6 +281,7 @@ def train_step(
                 config.player_latent_opponent_forward_loss_coef * loss_lo_forward
                 + config.player_latent_opponent_kl_loss_coef * loss_lo_kl
                 + config.player_latent_opponent_noise_kl_loss_coef * loss_lo_noise_kl
+                + config.player_latent_opponent_payoff_loss_coef * loss_lo_payoff
                 - config.player_latent_opponent_usage_entropy_coef * lo_usage_entropy
             )
             num_codes = latent_opponent.posterior_probs.shape[-1]
@@ -277,11 +290,23 @@ def train_step(
                 player_lo_loss_forward=loss_lo_forward,
                 player_lo_loss_kl=loss_lo_kl,
                 player_lo_loss_noise_kl=loss_lo_noise_kl,
+                player_lo_loss_payoff=loss_lo_payoff,
+                # Gate + bonus magnitude: whether the subsystem has turned on
+                # and how hard it is pushing the policy logits.
+                player_lo_bonus_gate=params["params"]["latent_opponent"]["bonus_gate"],
+                player_lo_bonus_mean_abs=average(
+                    latent_opponent.bonus_mean_abs, policy_mask
+                ),
+                # Fraction of usable pairs that span a turn boundary (only
+                # these train the anticipation prior).
+                player_lo_intent_frac=lo_intent_mask.sum() / lo_mask.sum().clip(min=1),
                 # Normalized so 1.0 = uniform code usage, ~0 = collapsed.
                 player_lo_usage_entropy=lo_usage_entropy / jnp.log(num_codes),
                 player_lo_noise_usage_entropy=lo_noise_usage_entropy
                 / jnp.log(num_noise_codes),
-                player_lo_prior_entropy=average(latent_opponent.prior_entropy, lo_mask)
+                player_lo_prior_entropy=average(
+                    latent_opponent.prior_entropy, lo_intent_mask
+                )
                 / jnp.log(num_codes),
                 player_lo_posterior_entropy=average(
                     latent_opponent.posterior_entropy, lo_mask
