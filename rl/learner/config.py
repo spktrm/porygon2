@@ -38,7 +38,7 @@ class AdamWConfig:
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
-PolicyObjectiveT = Literal["spo", "ppo", "neurd"]
+PolicyObjectiveT = Literal["spo", "ppo"]
 
 
 @chex.dataclass(frozen=True)
@@ -94,17 +94,15 @@ class Porygon2LearnerConfig:
     plasticity_recovery_winrate: float = 0.6
     plasticity_cooldown_frames: int = int(1e6)
 
-    # Player magnet regularization (MMD/R-NaD style). The policy is pulled
-    # toward a magnet distribution: the EMA target policy mixed with
-    # eps-uniform over legal actions. Early in training the magnet is
-    # near-uniform (exploration); as self-play converges the magnet follows
-    # the policy wherever it is consistently confident, so per-state
-    # exploration/exploitation is set by the game rather than an entropy
-    # target. The coef sets the trust-region timescale, not an entropy level.
+    # Player magnet regularization (MMD-style). The policy is pulled toward a
+    # fixed uniform magnet over legal actions: KL(pi || uniform-over-legal) is
+    # per-state entropy regularization that scales with the legal set. The
+    # magnet is deliberately stationary — a fixed anchor is what gives the
+    # regularized self-play dynamics a stable fixed point (QRE), whereas an
+    # EMA magnet chases the policy and degenerates into a short-horizon trust
+    # region. The EMA target is reserved for the v-trace/IMPACT reference and
+    # plays no regularization role. The coef sets the softness level.
     player_magnet_kl_coef: float = 0.05
-    # Uniform mixing fraction in the magnet — the entropy floor. Scales with
-    # the number of legal actions automatically (uniform over the legal set).
-    player_magnet_uniform_eps: float = 0.03
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -130,19 +128,8 @@ class Porygon2LearnerConfig:
     builder_alpha: float = 1.0
     builder_lambda: float = 0.99
 
-    # Player policy objective: "spo"/"ppo" are ratio-based surrogates with a
-    # trust region; "neurd" is sample-based NeuRD — a logit-space update with
-    # no pi(a) attenuation, so actions the policy abandoned still learn at
-    # full strength when the behavior policy samples them. NeuRD has no ratio
-    # clip; its stabilizers are the is-weight clip, the logit force threshold
-    # (beta), and the anchor-KL reward.
+    # Player policy objective: ratio-based surrogates with a trust region.
     player_policy_objective: PolicyObjectiveT = "spo"
-    # Clip on the 1/mu importance weight (variance control; biases rare
-    # actions back toward ratio-style attenuation as it tightens).
-    player_neurd_is_clip: float = 10.0
-    # Centered logits beyond +/-beta receive no further outward force
-    # (R-NaD's apply_force_with_threshold, default beta=2).
-    player_neurd_beta: float = 2.0
 
     player_ppo_clip_threshold: float = 0.3
     builder_ppo_clip_threshold: float = 0.3
@@ -173,11 +160,36 @@ class Porygon2LearnerConfig:
     # against the inferred code mix regresses onto the realized (normalized)
     # advantage, so payoffs carry outcome semantics before the zero-init
     # bonus gate opens.
+    # Free bits: per-transition KL below the budget is untaxed (loss floor,
+    # zero gradient), so posteriors can escape the uniform fixed point where
+    # the per-code forward-loss spread is weaker than the tax. Budgets are
+    # in nats against max log(16) ≈ 2.77 intent / log(8) ≈ 2.08 noise.
+    # The variance hinge trains the pooler away from its constant-output
+    # optimum (all latent-opponent losses are simultaneously zero there —
+    # the pooler has no other consumer to keep it alive).
     player_latent_opponent_forward_loss_coef: float = 1.0
     player_latent_opponent_kl_loss_coef: float = 0.3
+    player_latent_opponent_kl_free_nats: float = 1.0
     player_latent_opponent_noise_kl_loss_coef: float = 0.03
+    player_latent_opponent_noise_kl_free_nats: float = 0.5
     player_latent_opponent_usage_entropy_coef: float = 0.01
     player_latent_opponent_payoff_loss_coef: float = 0.1
+    player_latent_opponent_variance_loss_coef: float = 1.0
+    # Hinge on the per-dim std of pooled_{t+1} - pooled_t (pair-valid steps).
+    # The batch-variance hinge alone is satisfiable with static
+    # battle-identity content, leaving transitions invisible to the codes
+    # (forward model degenerates to a copy); this forces per-turn changes
+    # to be distinguishable.
+    player_latent_opponent_delta_variance_loss_coef: float = 1.0
+    # Payoff <-> forward-model consistency: the taken action's payoff row
+    # regresses onto the imagined per-code one-step value gain
+    # sg(Vp(f(s,a,z)) - Vp(s)), grounding the counterfactual code entries
+    # the piKL solve consults (the payoff loss above constrains only the
+    # realized code mix). The value probe Vp regresses onto the value
+    # head's expectation on real pooled states — also the pooler's external
+    # grounding signal.
+    player_latent_opponent_consistency_loss_coef: float = 0.1
+    player_latent_opponent_value_probe_loss_coef: float = 1.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5

@@ -36,7 +36,6 @@ from rl.learner.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
-    neurd_loss,
     policy_gradient_loss,
 )
 from rl.learner.plasticity import (
@@ -122,23 +121,19 @@ def train_step(
     else:
         player_advantages = player_targets.advantages
 
-    # Magnet policy for the KL regularizer: the EMA target policy mixed with
-    # eps-uniform over legal actions. The uniform mixing is the entropy floor —
-    # it scales with the number of legal actions, so no per-state entropy
-    # normalisation or target is needed.
+    # Magnet policy for the KL regularizer: uniform over legal actions. The
+    # magnet is deliberately stationary — a fixed anchor gives the regularized
+    # self-play dynamics a stable fixed point, whereas an EMA magnet chases
+    # the policy and degenerates into a short-horizon trust region. The EMA
+    # target's only remaining role is the v-trace/IMPACT reference.
+    # KL(pi || uniform-over-legal) = log(num_legal) - H(pi), so this is
+    # per-state entropy regularization that scales with the legal set.
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
     num_legal = jnp.maximum(flat_action_mask.sum(axis=-1, keepdims=True), 1).astype(
         float_dtype
     )
-    uniform_policy = flat_action_mask.astype(float_dtype) / num_legal
-    magnet_eps = config.player_magnet_uniform_eps
-    magnet_policy = (1.0 - magnet_eps) * jnp.exp(
-        player_target_pred.action_head.log_policy
-    ) + magnet_eps * uniform_policy
-    magnet_log_policy = jnp.where(
-        flat_action_mask, jnp.log(jnp.maximum(magnet_policy, 1e-9)), 0.0
-    )
+    magnet_log_policy = jnp.where(flat_action_mask, -jnp.log(num_legal), 0.0)
 
     def player_loss_fn(params: Params):
 
@@ -159,27 +154,15 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Calculate losses.
-        if config.player_policy_objective == "neurd":
-            loss_pg = neurd_loss(
-                centered_logits=learner_action_head.centered_logit,
-                advantages=player_advantages,
-                # 1/mu from the behavior policy's stored log-probs.
-                is_weights=jnp.exp(-player_actor_log_prob),
-                valid=policy_mask,
-                is_clip=config.player_neurd_is_clip,
-                beta=config.player_neurd_beta,
-            )
-        else:
-            # IMPACT surrogate: ratio recentered on the fast target via the
-            # clipped correction.
-            loss_pg = policy_gradient_loss(
-                policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-                advantages=player_advantages,
-                valid=policy_mask,
-                threshold=config.player_ppo_clip_threshold,
-                objective=config.player_policy_objective,
-            )
+        # IMPACT surrogate: ratio recentered on the fast target via the
+        # clipped correction.
+        loss_pg = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_advantages,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip_threshold,
+            objective=config.player_policy_objective,
+        )
 
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
@@ -251,8 +234,23 @@ def train_step(
             # no opponent decision to anticipate.
             lo_intent_mask = latent_opponent.intent_valid & policy_mask
             loss_lo_forward = average(latent_opponent.forward_loss, lo_mask)
-            loss_lo_kl = average(latent_opponent.kl, lo_intent_mask)
-            loss_lo_noise_kl = average(latent_opponent.noise_kl, lo_mask)
+            # Free bits (Dreamer-style): no KL tax below the budget, so the
+            # posteriors can escape the uniform fixed point where the
+            # per-code loss spread is weaker than the tax. The floor makes
+            # the loss constant (zero gradient) at the collapsed point.
+            loss_lo_kl = average(
+                jnp.maximum(
+                    latent_opponent.kl, config.player_latent_opponent_kl_free_nats
+                ),
+                lo_intent_mask,
+            )
+            loss_lo_noise_kl = average(
+                jnp.maximum(
+                    latent_opponent.noise_kl,
+                    config.player_latent_opponent_noise_kl_free_nats,
+                ),
+                lo_mask,
+            )
             # Payoff grounding: taken action's payoff vs the inferred code
             # mix regresses onto the realized (normalized) advantage.
             loss_lo_payoff = average(
@@ -261,6 +259,56 @@ def train_step(
                 ),
                 lo_mask,
             )
+            # Payoff <-> forward-model consistency (per-code counterfactual
+            # grounding) and the value-probe regression that supplies its
+            # targets. The probe loss averages over value_mask: pooled
+            # states and the value expectation are real at every in-episode
+            # step; consistency needs the transition pair, hence lo_mask.
+            loss_lo_consistency = average(
+                latent_opponent.payoff_consistency_loss, lo_mask
+            )
+            loss_lo_value_probe = average(latent_opponent.value_probe_loss, value_mask)
+            # VICReg-style variance hinge over full (T, B) batch statistics:
+            # the pooler's only consumers are these losses, which are all
+            # zero at constant output — the hinge removes that optimum.
+            # value_mask (not pair_valid) because the pooled state is real
+            # at every in-episode step including the terminal one.
+            pooled = latent_opponent.pooled_states.astype(jnp.float32)
+            pooled_w = value_mask.astype(jnp.float32)[..., None]
+            pooled_denom = pooled_w.sum().clip(min=1.0)
+            pooled_mean = (pooled_w * pooled).sum(
+                axis=(0, 1), keepdims=True
+            ) / pooled_denom
+            pooled_var = (pooled_w * jnp.square(pooled - pooled_mean)).sum(
+                axis=(0, 1)
+            ) / pooled_denom
+            pooled_std = jnp.sqrt(pooled_var + 1e-4)
+            loss_lo_variance = jnp.mean(jnp.square(jax.nn.relu(1.0 - pooled_std)))
+
+            # Temporal-delta variance hinge. The batch-variance hinge above
+            # is satisfiable with static battle-identity content (high
+            # variance across games, constant within one), which leaves the
+            # transitions — the signal the codes must explain — invisible:
+            # the forward model degenerates to a copy, spread collapses, and
+            # the posterior stays uniform. Hinging the per-dim std of
+            # pooled_{t+1} - pooled_t forces what changed this turn to be
+            # distinguishable across the batch. lo_mask: both endpoints real.
+            next_pooled = jnp.concatenate(
+                (pooled[1:], jnp.zeros_like(pooled[:1])), axis=0
+            )
+            delta = next_pooled - pooled
+            delta_w = lo_mask.astype(jnp.float32)[..., None]
+            delta_denom = delta_w.sum().clip(min=1.0)
+            delta_mean = (delta_w * delta).sum(axis=(0, 1), keepdims=True) / delta_denom
+            delta_var = (delta_w * jnp.square(delta - delta_mean)).sum(
+                axis=(0, 1)
+            ) / delta_denom
+            delta_std = jnp.sqrt(delta_var + 1e-4)
+            loss_lo_delta_variance = jnp.mean(jnp.square(jax.nn.relu(1.0 - delta_std)))
+            # Copy baseline: the forward loss of predicting "no change".
+            # loss_forward is only meaningful relative to this — below it,
+            # the codes are doing work; equal to it, the model just copies.
+            lo_copy_baseline = average(jnp.square(delta).mean(axis=-1), lo_mask)
 
             # Batch-marginal posterior usage: high entropy = codes shared out,
             # low = collapse. Bonus (negated loss) resists collapse.
@@ -282,6 +330,13 @@ def train_step(
                 + config.player_latent_opponent_kl_loss_coef * loss_lo_kl
                 + config.player_latent_opponent_noise_kl_loss_coef * loss_lo_noise_kl
                 + config.player_latent_opponent_payoff_loss_coef * loss_lo_payoff
+                + config.player_latent_opponent_consistency_loss_coef
+                * loss_lo_consistency
+                + config.player_latent_opponent_value_probe_loss_coef
+                * loss_lo_value_probe
+                + config.player_latent_opponent_variance_loss_coef * loss_lo_variance
+                + config.player_latent_opponent_delta_variance_loss_coef
+                * loss_lo_delta_variance
                 - config.player_latent_opponent_usage_entropy_coef * lo_usage_entropy
             )
             num_codes = latent_opponent.posterior_probs.shape[-1]
@@ -291,6 +346,28 @@ def train_step(
                 player_lo_loss_kl=loss_lo_kl,
                 player_lo_loss_noise_kl=loss_lo_noise_kl,
                 player_lo_loss_payoff=loss_lo_payoff,
+                player_lo_loss_consistency=loss_lo_consistency,
+                player_lo_loss_value_probe=loss_lo_value_probe,
+                player_lo_loss_variance=loss_lo_variance,
+                player_lo_loss_delta_variance=loss_lo_delta_variance,
+                # Collapse detector: mean per-dim std of the pooled states.
+                # Healthy sits at/above the hinge target (1.0); ~0 = the
+                # pooler has collapsed to constant output.
+                player_lo_pooled_std=pooled_std.mean(),
+                # Temporal-collapse detector: mean per-dim std of the
+                # transition deltas. Healthy at/above 1.0; ~0 = pooled
+                # states are static battle identity and transitions are
+                # invisible to the codes.
+                player_lo_delta_std=delta_std.mean(),
+                # Read loss_forward against this: equal = the forward model
+                # merely copies s_t; meaningfully below = codes carry
+                # transition information.
+                player_lo_copy_baseline=lo_copy_baseline,
+                # Signal-to-commit: std of the forward loss across codes.
+                # ~0 means the posterior has nothing to differentiate on.
+                player_lo_forward_spread=average(
+                    latent_opponent.forward_loss_spread, lo_mask
+                ),
                 # Gate + bonus magnitude: whether the subsystem has turned on
                 # and how hard it is pushing the policy logits.
                 player_lo_bonus_gate=params["params"]["latent_opponent"]["bonus_gate"],
@@ -329,16 +406,6 @@ def train_step(
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
-            # NeuRD diagnostics: drift of the taken action's centered logit
-            # toward the +/-beta force threshold, and how often the 1/mu
-            # importance weight is being clipped.
-            player_centered_logit=average(
-                jnp.abs(learner_action_head.centered_logit), policy_mask
-            ),
-            player_neurd_is_clip_fraction=average(
-                jnp.exp(-player_actor_log_prob) > config.player_neurd_is_clip,
-                policy_mask,
-            ),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             player_learner_actor_backward_kl=loss_actor_backward_kl,

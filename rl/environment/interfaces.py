@@ -74,9 +74,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
-    # Taken action's logit minus the mean legal logit — the NeuRD decision
-    # variable (its gradient is the centered logit-space force).
-    centered_logit: ArrayLike = ()
 
 
 @dataclass
@@ -100,10 +97,25 @@ class LatentOpponentHeadOutput:
     # Payoff of the taken action against the inferred code mix; regressed
     # onto the realized advantage in the learner to ground the payoff matrix.
     taken_payoff: ArrayLike = ()
+    # Per-step MSE between the taken action's payoff row and the imagined
+    # per-code one-step value gain sg(Vp(f(s,a,z)) - Vp(s)) — grounds the
+    # counterfactual code dimension the piKL solve consults.
+    payoff_consistency_loss: ArrayLike = ()
+    # Value-probe regression on real pooled states (toward the value head's
+    # expectation); also the pooler's external grounding signal.
+    value_probe_loss: ArrayLike = ()
     posterior_probs: ArrayLike = ()
     noise_posterior_probs: ArrayLike = ()
     prior_entropy: ArrayLike = ()
     posterior_entropy: ArrayLike = ()
+    # (T, n*D) pooled transition states, exposed so the learner can apply
+    # the VICReg variance hinge over full batch statistics — the pooler is
+    # trained only by latent-opponent losses, which share a degenerate
+    # optimum at constant output; the hinge destroys that optimum.
+    pooled_states: ArrayLike = ()
+    # Per-step std of the forward loss across codes: the direct measure of
+    # whether codes have any signal to differentiate on.
+    forward_loss_spread: ArrayLike = ()
     # Mean |gated logit bonus| over valid actions at each step; the first
     # diagnostic to check when asking whether the subsystem has turned on.
     bonus_mean_abs: ArrayLike = ()
