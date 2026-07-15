@@ -190,11 +190,6 @@ class Porygon2PlayerModel(nn.Module):
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
 
-        mean_valid_logit = jnp.mean(micro_logits, where=flat_valid_mask)
-        centered_logit = (
-            jnp.take(micro_logits, action_index, axis=-1) - mean_valid_logit
-        )
-
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
         tgt_index = action_index % mask_width
@@ -216,7 +211,6 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
-            centered_logit=centered_logit,
         )
 
     def _forward_value_head(self, value_embeddings: jax.Array):
@@ -237,10 +231,14 @@ class Porygon2PlayerModel(nn.Module):
         latent_opponent = actor_output.latent_opponent
         if self.cfg.latent_opponent.enabled:
             flat_action_mask = env_step.action_mask.reshape(-1)
+            # Pre-bonus policy logits anchor my side of the solve; XLA CSE
+            # dedupes the recompute inside _forward_action_head.
+            base_logits = self._forward_pi_head(action_embeddings)
             logit_bonus = self.latent_opponent.action_logit_bonus(
                 action_embeddings,
                 flat_action_mask,
                 prior_log_probs,
+                base_logits,
             )
             if self.cfg.train:
                 # Learner-only diagnostic (actors keep replay small): how
@@ -268,17 +266,21 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_latent_opponent(
         self,
         action_embeddings: jax.Array,
-        wm_field_state: jax.Array,
+        pooled_state: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         prior_log_probs: jax.Array,
+        value_expectation: jax.Array,
     ):
         """Trajectory-level latent opponent losses (learner only).
 
-        The transition bracketed by the field states at requests t and t+1 is
-        what the joint action at t caused; the taken action embedding lets the
-        posterior explain away our own contribution, so the code is pushed
-        toward the opponent's (plus RNG — see module docstring).
+        The transition bracketed by the pooled world-model states at requests
+        t and t+1 is what the joint action at t caused; the taken action
+        embedding lets the posterior explain away our own contribution, so
+        the code is pushed toward the opponent's (plus RNG — see module
+        docstring). ``actor_output`` is the replayed behavior output (source
+        of the taken action); ``value_expectation`` is the *fresh* forward's
+        value head expectation, the value probe's regression target.
         """
         num_actions = action_embeddings.shape[-2]
         action_index = actor_output.action_head.action_index
@@ -291,8 +293,8 @@ class Porygon2PlayerModel(nn.Module):
             action_embeddings, tgt_index[:, None, None], axis=-2
         ).squeeze(-2)
 
-        next_field_state = jnp.concatenate(
-            (wm_field_state[1:], jnp.zeros_like(wm_field_state[:1])), axis=0
+        next_pooled_state = jnp.concatenate(
+            (pooled_state[1:], jnp.zeros_like(pooled_state[:1])), axis=0
         )
         # A pair is usable when step t is a real decision step and t+1 exists
         # in the buffer: t+1 is then either mid-episode or the terminal
@@ -314,13 +316,14 @@ class Porygon2PlayerModel(nn.Module):
         turn_advanced = next_turn > turn
 
         return self.latent_opponent.transition_outputs(
-            wm_field_state,
-            next_field_state,
+            pooled_state,
+            next_pooled_state,
             taken_src,
             taken_tgt,
             prior_log_probs,
             pair_valid,
             turn_advanced,
+            value_expectation,
         )
 
     def __call__(
@@ -332,15 +335,22 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings, wm_field_state = self.encoder(
-            actor_input.env, actor_input.packed_history, actor_input.history
+        action_embeddings, value_embeddings, wm_slot_states, wm_field_state = (
+            self.encoder(
+                actor_input.env, actor_input.packed_history, actor_input.history
+            )
         )
 
         head_fn = functools.partial(self.get_head_outputs, head_params=head_params)
         if self.cfg.latent_opponent.enabled:
             # Computed once at trajectory level; the per-step slices feed the
             # decision-time bonus and the whole array feeds the KL below.
-            prior_log_probs = self.latent_opponent.prior_log_probs(value_embeddings)
+            pooled_state = self.latent_opponent.pool_state(
+                wm_slot_states, wm_field_state
+            )
+            prior_log_probs = self.latent_opponent.prior_log_probs(
+                value_embeddings, pooled_state
+            )
             output = jax.vmap(head_fn)(
                 action_embeddings,
                 value_embeddings,
@@ -356,10 +366,13 @@ class Porygon2PlayerModel(nn.Module):
         if self.cfg.latent_opponent.enabled and self.cfg.train:
             latent_opponent = self._forward_latent_opponent(
                 action_embeddings,
-                wm_field_state,
+                pooled_state,
                 actor_input.env,
                 actor_output,
                 prior_log_probs,
+                # Stop-gradient: the probe follows the value head, never the
+                # reverse.
+                jax.lax.stop_gradient(output.value_head.expectation),
             )
             output = output.replace(
                 latent_opponent=latent_opponent.replace(
