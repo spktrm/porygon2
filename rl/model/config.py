@@ -138,42 +138,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True
 
-    # Latent opponent-action model: K-code intent codebook learned from
-    # transition consequences (posterior/forward, learner only) with a prior
-    # that anticipates the code at decision time; a bilinear payoff over
-    # (actions x codes) is solved with symmetric piKL-hedge — the opponent
-    # side KL-anchored at the prior (anchor_temp is the KL weight: lower =
-    # the imagined opponent tracks the payoff more and the prior less), my
-    # side KL-anchored at the current policy — and the iterate-averaged
-    # result enters the policy logits behind a zero-init gate. A second small noise latent
-    # (no prior, no payoff role) absorbs the unpredictable part of the
-    # transition — RNG and simultaneous-resolution effects — so intent
-    # codes stay clean. kl_balance is the Dreamer-style split: the
-    # prior-side share teaches the prior, the posterior-side share taxes
-    # the intent posterior for unpredictable content, routing it to the
-    # noise channel.
-    cfg.latent_opponent = ConfigDict()
-    cfg.latent_opponent.enabled = True
-    cfg.latent_opponent.entity_size = entity_size
-    cfg.latent_opponent.dtype = DEFAULT_DTYPE
-    cfg.latent_opponent.num_codes = 16
-    cfg.latent_opponent.num_noise_codes = 8
-    cfg.latent_opponent.kl_balance = 0.8
-    cfg.latent_opponent.num_rm_steps = 8
-    cfg.latent_opponent.anchor_temp = 1.0
-    # My side of the solve is anchored (piKL) at the current policy;
-    # x_anchor_temp is that KL weight. Lower = the solve deviates further
-    # from the policy toward payoff-optimal play, trusting the payoff
-    # estimate more where data is thin.
-    cfg.latent_opponent.x_anchor_temp = 1.0
-    cfg.latent_opponent.qk_size = entity_size // num_heads
-    # PMA transition representation: num_pool_latents learned queries
-    # cross-attend over the 12 slot states + field token, so per-pokemon
-    # consequences reach the forward target instead of only the pooled
-    # field state.
-    cfg.latent_opponent.num_pool_latents = 4
-    cfg.latent_opponent.pool_num_heads = 2
-
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = 3
