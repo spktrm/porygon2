@@ -12,16 +12,19 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
+from rl.environment.data import (
+    FLAT_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
+    SRC_MODALITY_MASK,
+    ModalityEnum,
+)
 from rl.environment.interfaces import (
-    LatentOpponentHeadOutput,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.features_pb2 import InfoFeature
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.learner import checkpoint
@@ -33,7 +36,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.latent_opponent import LatentOpponentModel
+from rl.model.modules import MLP
 from rl.model.utils import get_num_params
 
 
@@ -83,22 +86,78 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        if self.cfg.latent_opponent.enabled:
-            self.latent_opponent = LatentOpponentModel(
-                self.cfg.latent_opponent, name="latent_opponent"
-            )
+        # Per-modality mass head. Zero-init output layer: the bias starts as
+        # a no-op and the initial policy is the centered gram head alone.
+        self.modality_bias_mlp = MLP((self.cfg.entity_size,), name="modality_bias_mlp")
+        self.modality_bias_logits = nn.Dense(
+            NUM_MODALITY_FEATURES,
+            kernel_init=nn.initializers.zeros_init(),
+            name="modality_bias_logits",
+        )
 
-    def _forward_pi_head(self, action_embeddings: jax.Array):
-        """Gram-matrix logits.
+    def _modality_bias(
+        self,
+        action_embeddings: jax.Array,
+        valid_mask: jax.Array,
+        value_embeddings: jax.Array,
+    ):
+        """Per-modality mass logits, (NUM_MODALITY_FEATURES,).
+
+        The mass decision sees both the state (value stream) and who the
+        candidates are: every action embedding that participates in a valid
+        pair of a modality — from either side, so switches see the reserve
+        tgts, not just the shared switch src token — masked-mean pooled per
+        modality (zeros for modalities with no valid pair; those are masked
+        out of the softmax anyway).
+        """
+        dtype = action_embeddings.dtype
+        src_modality_oh = jax.nn.one_hot(
+            SRC_MODALITY_MASK, NUM_MODALITY_FEATURES, dtype=dtype
+        )
+        valid = valid_mask.astype(dtype)
+        src_part = valid.max(axis=-1, keepdims=True) * src_modality_oh  # (A, M)
+        tgt_part = (jnp.einsum("ab,am->bm", valid, src_modality_oh) > 0).astype(dtype)
+        weights = jnp.maximum(src_part, tgt_part)  # (A, M)
+        pooled = jnp.einsum("am,ad->md", weights, action_embeddings) / weights.sum(
+            axis=0
+        )[..., None].clip(min=1.0)
+        bias_input = jnp.concatenate((pooled.reshape(-1), value_embeddings), axis=-1)
+        return self.modality_bias_logits(self.modality_bias_mlp(bias_input))
+
+    def _forward_pi_head(
+        self,
+        action_embeddings: jax.Array,
+        valid_mask: jax.Array,
+        value_embeddings: jax.Array,
+    ):
+        """Gram-matrix logits, factored into per-modality mass + preference.
 
         action_embeddings: (NUM_ACTION_FEATURES, entity_size), already
-        normed by the encoder's out-norms. Returns
-        (NUM_ACTION_FEATURES**2,) src x tgt logits.
+        normed by the encoder's out-norms. The gram term is mean-centered
+        over the valid actions of each modality — zero-sum within a
+        modality, so it carries only "which action" — while the learned
+        per-modality bias carries "how much of each modality". Category-mass
+        gradients land on the bias instead of rotating every embedding of a
+        modality toward a common direction (which erodes within-modality
+        discrimination). Returns (NUM_ACTION_FEATURES**2,) src x tgt logits.
         """
         square_logits = jnp.einsum(
             "ae,be->ab", action_embeddings, action_embeddings
         ) / np.array(action_embeddings.shape[-1] ** 0.5)
-        return square_logits.reshape(-1)
+        logits = square_logits.reshape(-1)
+
+        flat_valid_mask = valid_mask.reshape(-1)
+        modality_oh = jax.nn.one_hot(
+            FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, dtype=logits.dtype
+        )
+        valid_oh = flat_valid_mask[..., None] * modality_oh  # (A**2, M)
+        # Differentiable through the mean: that is what makes the gram
+        # term's within-modality gradients exactly zero-sum.
+        modality_mean = (valid_oh * logits[..., None]).sum(axis=0) / valid_oh.sum(
+            axis=0
+        ).clip(min=1.0)
+        bias = self._modality_bias(action_embeddings, valid_mask, value_embeddings)
+        return logits + modality_oh @ (bias - modality_mean)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -160,15 +219,13 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        logit_bonus: jax.Array | None = None,
+        value_embeddings: jax.Array,
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        micro_logits = self._forward_pi_head(action_embeddings)
-        if logit_bonus is not None:
-            # Deliberately inside the temperature: the bonus is part of the
-            # policy logits, so eval-time sharpening applies to it too.
-            micro_logits = micro_logits + logit_bonus
+        micro_logits = self._forward_pi_head(
+            action_embeddings, valid_mask, value_embeddings
+        )
         micro_logits = micro_logits / temp
 
         # --- Hierarchical Prior & Metrics ---
@@ -223,107 +280,21 @@ class Porygon2PlayerModel(nn.Module):
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
-        prior_log_probs: jax.Array | None = None,
         *,
         head_params: HeadParams,
     ):
-        logit_bonus = None
-        latent_opponent = actor_output.latent_opponent
-        if self.cfg.latent_opponent.enabled:
-            flat_action_mask = env_step.action_mask.reshape(-1)
-            # Pre-bonus policy logits anchor my side of the solve; XLA CSE
-            # dedupes the recompute inside _forward_action_head.
-            base_logits = self._forward_pi_head(action_embeddings)
-            logit_bonus = self.latent_opponent.action_logit_bonus(
-                action_embeddings,
-                flat_action_mask,
-                prior_log_probs,
-                base_logits,
-            )
-            if self.cfg.train:
-                # Learner-only diagnostic (actors keep replay small): how
-                # hard is the gated bonus pushing the logits?
-                latent_opponent = LatentOpponentHeadOutput(
-                    bonus_mean_abs=jnp.abs(logit_bonus).sum()
-                    / flat_action_mask.sum().clip(min=1)
-                )
-
         action_head = self._forward_action_head(
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
-            logit_bonus=logit_bonus,
+            value_embeddings=value_embeddings,
         )
 
         return PlayerActorOutput(
             action_head=action_head,
             value_head=self._forward_value_head(value_embeddings),
-            latent_opponent=latent_opponent,
-        )
-
-    def _forward_latent_opponent(
-        self,
-        action_embeddings: jax.Array,
-        pooled_state: jax.Array,
-        env_step: PlayerEnvOutput,
-        actor_output: PlayerActorOutput,
-        prior_log_probs: jax.Array,
-        value_expectation: jax.Array,
-    ):
-        """Trajectory-level latent opponent losses (learner only).
-
-        The transition bracketed by the pooled world-model states at requests
-        t and t+1 is what the joint action at t caused; the taken action
-        embedding lets the posterior explain away our own contribution, so
-        the code is pushed toward the opponent's (plus RNG — see module
-        docstring). ``actor_output`` is the replayed behavior output (source
-        of the taken action); ``value_expectation`` is the *fresh* forward's
-        value head expectation, the value probe's regression target.
-        """
-        num_actions = action_embeddings.shape[-2]
-        action_index = actor_output.action_head.action_index
-        src_index = action_index // num_actions
-        tgt_index = action_index % num_actions
-        taken_src = jnp.take_along_axis(
-            action_embeddings, src_index[:, None, None], axis=-2
-        ).squeeze(-2)
-        taken_tgt = jnp.take_along_axis(
-            action_embeddings, tgt_index[:, None, None], axis=-2
-        ).squeeze(-2)
-
-        next_pooled_state = jnp.concatenate(
-            (pooled_state[1:], jnp.zeros_like(pooled_state[:1])), axis=0
-        )
-        # A pair is usable when step t is a real decision step and t+1 exists
-        # in the buffer: t+1 is then either mid-episode or the terminal
-        # observation. The terminal transition (the KO turn) carries the
-        # strongest consequences, so it stays in; post-episode padding is
-        # excluded by the learner's policy-mask AND.
-        valid = jnp.logical_not(env_step.done)
-        has_next = jnp.concatenate(
-            (jnp.ones_like(valid[:-1]), jnp.zeros_like(valid[:1])), axis=0
-        )
-        pair_valid = valid & has_next
-
-        # Pairs that don't span a turn boundary (forced switches and other
-        # same-turn sub-requests) contain no opponent decision: they are
-        # gated out of the intent KL and flagged to the posterior/forward
-        # model instead.
-        turn = env_step.info[..., InfoFeature.INFO_FEATURE__TURN]
-        next_turn = jnp.concatenate((turn[1:], turn[-1:]), axis=0)
-        turn_advanced = next_turn > turn
-
-        return self.latent_opponent.transition_outputs(
-            pooled_state,
-            next_pooled_state,
-            taken_src,
-            taken_tgt,
-            prior_log_probs,
-            pair_valid,
-            turn_advanced,
-            value_expectation,
         )
 
     def __call__(
@@ -335,52 +306,14 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings, wm_slot_states, wm_field_state = (
-            self.encoder(
-                actor_input.env, actor_input.packed_history, actor_input.history
-            )
+        action_embeddings, value_embeddings, *_ = self.encoder(
+            actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         head_fn = functools.partial(self.get_head_outputs, head_params=head_params)
-        if self.cfg.latent_opponent.enabled:
-            # Computed once at trajectory level; the per-step slices feed the
-            # decision-time bonus and the whole array feeds the KL below.
-            pooled_state = self.latent_opponent.pool_state(
-                wm_slot_states, wm_field_state
-            )
-            prior_log_probs = self.latent_opponent.prior_log_probs(
-                value_embeddings, pooled_state
-            )
-            output = jax.vmap(head_fn)(
-                action_embeddings,
-                value_embeddings,
-                actor_input.env,
-                actor_output,
-                prior_log_probs,
-            )
-        else:
-            output = jax.vmap(head_fn)(
-                action_embeddings, value_embeddings, actor_input.env, actor_output
-            )
-
-        if self.cfg.latent_opponent.enabled and self.cfg.train:
-            latent_opponent = self._forward_latent_opponent(
-                action_embeddings,
-                pooled_state,
-                actor_input.env,
-                actor_output,
-                prior_log_probs,
-                # Stop-gradient: the probe follows the value head, never the
-                # reverse.
-                jax.lax.stop_gradient(output.value_head.expectation),
-            )
-            output = output.replace(
-                latent_opponent=latent_opponent.replace(
-                    bonus_mean_abs=output.latent_opponent.bonus_mean_abs
-                )
-            )
-
-        return output
+        return jax.vmap(head_fn)(
+            action_embeddings, value_embeddings, actor_input.env, actor_output
+        )
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

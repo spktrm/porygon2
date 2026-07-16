@@ -1,5 +1,6 @@
 import functools
 import os
+from collections.abc import Mapping
 from pprint import pprint
 from typing import Any, Callable, Literal
 
@@ -147,49 +148,6 @@ class Porygon2LearnerConfig:
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
-    # Latent opponent-action model (active only when the model config has
-    # latent_opponent.enabled). Forward loss grounds the codebook in
-    # transition consequences; the balanced KL distills the posterior into
-    # the decision-time prior while taxing the intent posterior for
-    # unpredictable content; the noise KL (to uniform) taxes the noise
-    # channel. Routing invariant: noise tax < intent posterior tax
-    # (kl_coef * (1 - kl_balance)), so RNG routes to noise and predictable
-    # intent routes to the codes. The usage-entropy bonus (on the
-    # batch-marginal intent posterior) guards against codebook collapse.
-    # The payoff loss grounds the payoff matrix: the taken action's payoff
-    # against the inferred code mix regresses onto the realized (normalized)
-    # advantage, so payoffs carry outcome semantics before the zero-init
-    # bonus gate opens.
-    # Free bits: per-transition KL below the budget is untaxed (loss floor,
-    # zero gradient), so posteriors can escape the uniform fixed point where
-    # the per-code forward-loss spread is weaker than the tax. Budgets are
-    # in nats against max log(16) ≈ 2.77 intent / log(8) ≈ 2.08 noise.
-    # The variance hinge trains the pooler away from its constant-output
-    # optimum (all latent-opponent losses are simultaneously zero there —
-    # the pooler has no other consumer to keep it alive).
-    player_latent_opponent_forward_loss_coef: float = 1.0
-    player_latent_opponent_kl_loss_coef: float = 0.3
-    player_latent_opponent_kl_free_nats: float = 1.0
-    player_latent_opponent_noise_kl_loss_coef: float = 0.03
-    player_latent_opponent_noise_kl_free_nats: float = 0.5
-    player_latent_opponent_usage_entropy_coef: float = 0.01
-    player_latent_opponent_payoff_loss_coef: float = 0.1
-    player_latent_opponent_variance_loss_coef: float = 1.0
-    # Hinge on the per-dim std of pooled_{t+1} - pooled_t (pair-valid steps).
-    # The batch-variance hinge alone is satisfiable with static
-    # battle-identity content, leaving transitions invisible to the codes
-    # (forward model degenerates to a copy); this forces per-turn changes
-    # to be distinguishable.
-    player_latent_opponent_delta_variance_loss_coef: float = 1.0
-    # Payoff <-> forward-model consistency: the taken action's payoff row
-    # regresses onto the imagined per-code one-step value gain
-    # sg(Vp(f(s,a,z)) - Vp(s)), grounding the counterfactual code entries
-    # the piKL solve consults (the payoff loss above constrains only the
-    # realized code mix). The value probe Vp regresses onto the value
-    # head's expectation on real pooled states — also the pooler's external
-    # grounding signal.
-    player_latent_opponent_consistency_loss_coef: float = 0.1
-    player_latent_opponent_value_probe_loss_coef: float = 1.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5
@@ -508,6 +466,39 @@ def load_from_checkpoint(
     return player_state, builder_state, league
 
 
+def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
+    """Overlay checkpoint params onto a freshly initialized tree.
+
+    Keys present in both trees with matching leaf shapes take the loaded
+    (trained) value; keys only in the fresh tree (newly added modules) keep
+    their random/zero init; keys only in the checkpoint (removed modules)
+    are dropped; shape mismatches fall back to fresh init. Returns the
+    merged tree plus the paths that kept their fresh initialization, so a
+    resume across architecture changes is auditable.
+    """
+    kept_fresh: list[str] = []
+
+    def _merge(fresh_node, loaded_node, path: str):
+        if isinstance(fresh_node, Mapping):
+            out = {}
+            for key, fresh_child in fresh_node.items():
+                child_path = f"{path}/{key}"
+                if isinstance(loaded_node, Mapping) and key in loaded_node:
+                    out[key] = _merge(fresh_child, loaded_node[key], child_path)
+                else:
+                    out[key] = fresh_child
+                    kept_fresh.append(child_path)
+            return out
+        fresh_shape = getattr(fresh_node, "shape", None)
+        loaded_shape = getattr(loaded_node, "shape", None)
+        if fresh_shape is not None and fresh_shape == loaded_shape:
+            return loaded_node
+        kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
+        return fresh_node
+
+    return _merge(fresh, loaded, ""), kept_fresh
+
+
 def load_from_params(
     ckpt_path: str,
     learner_config: Porygon2LearnerConfig,
@@ -515,17 +506,36 @@ def load_from_params(
     builder_state: Porygon2BuilderTrainState,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
     """
-    Params only: Loads ckpt params into BOTH params.
-    Resets opt_state and counts (by keeping the input state's version of those).
+    Params only: merges ckpt params into the freshly initialized trees, so
+    modules added since the checkpoint keep their fresh init and everything
+    else keeps its trained weights. Sets BOTH params and target_params to
+    the merged tree. Resets opt_state and counts (by keeping the input
+    state's version of those) and starts a fresh league.
     """
-    print(f"Loading params only from {ckpt_path}")
-    # Load only the params components — opt_state stays the input state's
-    # (fresh), effectively resetting training progress.
-    player_params = checkpoint.load_component(ckpt_path, "player", "params")
-    builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
+    print(f"Loading (merging) params only from {ckpt_path}")
+    loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
+    loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    player_state = player_state.replace(params=player_params)
-    builder_state = builder_state.replace(params=builder_params)
+    player_params, player_kept_fresh = merge_params(
+        player_state.params, loaded_player_params
+    )
+    builder_params, builder_kept_fresh = merge_params(
+        builder_state.params, loaded_builder_params
+    )
+    for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
+        if kept:
+            print(f"{name}: {len(kept)} param subtrees kept fresh init:")
+            for path in kept:
+                print(f"  {path}")
+
+    # target_params gets the same merged tree: leaving it at fresh init
+    # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
+    player_state = player_state.replace(
+        params=player_params, target_params=player_params
+    )
+    builder_state = builder_state.replace(
+        params=builder_params, target_params=builder_params
+    )
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)
