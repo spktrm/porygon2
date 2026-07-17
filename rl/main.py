@@ -83,7 +83,10 @@ def run_eval_heuristic(
     with learner.gpu_lock:
         step_count = np.array(learner.player_state.step_count).item()
 
-    session_id = actor._env.username
+    # Metric identity comes from the eval thread's name (set at spawn:
+    # EvalActor-full-0, ...), not the env username, so renaming or reusing
+    # envs never renames the wandb series.
+    session_id = threading.current_thread().name
     swap = True
 
     while not stop_signal[0]:
@@ -129,17 +132,11 @@ def run_eval_heuristic(
                     @ CAT_VF_SUPPORT
                 )
 
-                if actor._agent.player_head_params.temp < 0.1:
-                    temp_str = "low_temp"
-                else:
-                    temp_str = "high_temp"
-
-                suffix = f"{session_id}-{temp_str}"
                 wandb_run.log(
                     {
                         "training_step": step_count,
-                        f"{prefix}-payoff-{suffix}": payoff,
-                        f"{prefix}-wr-{suffix}": payoff > 0,
+                        f"{prefix}-payoff-{session_id}": payoff,
+                        f"{prefix}-wr-{session_id}": payoff > 0,
                     }
                 )
 
@@ -185,7 +182,6 @@ def main(args: argparse.Namespace):
     actor_builder_model_config = get_builder_model_config(
         learner_config.generation, train=False
     )
-
     learner_player_network = get_player_model(learner_player_model_config)
     learner_builder_network = get_builder_model(learner_builder_model_config)
     actor_player_network = get_player_model(actor_player_model_config)
@@ -214,10 +210,14 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
-
     logger.info("Loading train state...")
+    # LOAD_STATE_MODE=params merges the latest checkpoint's params into the
+    # fresh init (new modules keep their init, trained modules keep their
+    # weights; opt_state/league reset) — use for the first launch after an
+    # architecture change instead of restarting from scratch.
+    load_mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
     player_state, builder_state, league = load_train_state(
-        learner_config, player_state, builder_state
+        learner_config, player_state, builder_state, mode=load_mode
     )
 
     player_state = jax.device_put(player_state)
@@ -257,7 +257,9 @@ def main(args: argparse.Namespace):
     )
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(learner_config.num_player_actors + learner_config.num_eval_actors)
+        max_workers=(
+            learner_config.num_player_actors + 2 * learner_config.num_eval_actors
+        )
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
             logger.info(
@@ -301,26 +303,33 @@ def main(args: argparse.Namespace):
                 )
             )
 
+        # Thread names carry the wandb series identity (run_eval_heuristic
+        # reads the current thread's name).
+        eval_variants = (("full", eval_agent),)
         logger.info(
-            f"Initializing {learner_config.num_eval_actors} evaluation actors..."
+            f"Initializing {learner_config.num_eval_actors} evaluation actor pairs "
+            f"({' + '.join(name for name, _ in eval_variants)})..."
         )
         for eval_id in range(learner_config.num_eval_actors):
-            actor = PlayerActor(
-                agent=eval_agent,
-                env=env_func(f"eval-heuristic:{eval_id:04d}"),
-                unroll_length=learner_config.unroll_length,
-                learner=learner,
-                rng_seed=len(actor_threads) + salt,
-                is_eval=True,
-            )
-            args = (actor, executor, stop_signal, wandb_run)
-            actor_threads.append(
-                threading.Thread(
-                    target=run_eval_heuristic,
-                    args=args,
-                    name=f"EvalActor-{eval_id}",
+            for variant_name, agent in eval_variants:
+                actor = PlayerActor(
+                    agent=agent,
+                    # The username MUST start with "eval-heuristic": the
+                    # service routes clients into games against the heuristic
+                    # bot by that prefix (service/src/server/utils.ts).
+                    env=env_func(f"eval-heuristic-{variant_name}:{eval_id:04d}"),
+                    unroll_length=learner_config.unroll_length,
+                    learner=learner,
+                    rng_seed=len(actor_threads) + salt,
+                    is_eval=True,
                 )
-            )
+                actor_threads.append(
+                    threading.Thread(
+                        target=run_eval_heuristic,
+                        args=(actor, executor, stop_signal, wandb_run),
+                        name=f"EvalActor-{variant_name}-{eval_id}",
+                    )
+                )
 
         # Start the actors and learner.
         for t in actor_threads:

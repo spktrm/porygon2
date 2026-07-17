@@ -345,6 +345,11 @@ def calculate_flat_modality_mask():
 
 
 FLAT_MODALITY_MASK = calculate_flat_modality_mask()
+# Modality is a function of the src half only, so any column of the
+# (src, tgt) grid gives the per-src-action modality.
+SRC_MODALITY_MASK = FLAT_MODALITY_MASK.reshape(
+    NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
+)[:, 0]
 
 for indices in [
     MOVE_INDICES,

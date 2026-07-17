@@ -1,5 +1,6 @@
 import functools
 import os
+from collections.abc import Mapping
 from pprint import pprint
 from typing import Any, Callable, Literal
 
@@ -38,7 +39,7 @@ class AdamWConfig:
 
 GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
 SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
-PolicyObjectiveT = Literal["spo", "ppo", "neurd"]
+PolicyObjectiveT = Literal["spo", "ppo"]
 
 
 @chex.dataclass(frozen=True)
@@ -94,17 +95,15 @@ class Porygon2LearnerConfig:
     plasticity_recovery_winrate: float = 0.6
     plasticity_cooldown_frames: int = int(1e6)
 
-    # Player magnet regularization (MMD/R-NaD style). The policy is pulled
-    # toward a magnet distribution: the EMA target policy mixed with
-    # eps-uniform over legal actions. Early in training the magnet is
-    # near-uniform (exploration); as self-play converges the magnet follows
-    # the policy wherever it is consistently confident, so per-state
-    # exploration/exploitation is set by the game rather than an entropy
-    # target. The coef sets the trust-region timescale, not an entropy level.
+    # Player magnet regularization (MMD-style). The policy is pulled toward a
+    # fixed uniform magnet over legal actions: KL(pi || uniform-over-legal) is
+    # per-state entropy regularization that scales with the legal set. The
+    # magnet is deliberately stationary — a fixed anchor is what gives the
+    # regularized self-play dynamics a stable fixed point (QRE), whereas an
+    # EMA magnet chases the policy and degenerates into a short-horizon trust
+    # region. The EMA target is reserved for the v-trace/IMPACT reference and
+    # plays no regularization role. The coef sets the softness level.
     player_magnet_kl_coef: float = 0.05
-    # Uniform mixing fraction in the magnet — the entropy floor. Scales with
-    # the number of legal actions automatically (uniform over the legal set).
-    player_magnet_uniform_eps: float = 0.03
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -130,19 +129,8 @@ class Porygon2LearnerConfig:
     builder_alpha: float = 1.0
     builder_lambda: float = 0.99
 
-    # Player policy objective: "spo"/"ppo" are ratio-based surrogates with a
-    # trust region; "neurd" is sample-based NeuRD — a logit-space update with
-    # no pi(a) attenuation, so actions the policy abandoned still learn at
-    # full strength when the behavior policy samples them. NeuRD has no ratio
-    # clip; its stabilizers are the is-weight clip, the logit force threshold
-    # (beta), and the anchor-KL reward.
+    # Player policy objective: ratio-based surrogates with a trust region.
     player_policy_objective: PolicyObjectiveT = "spo"
-    # Clip on the 1/mu importance weight (variance control; biases rare
-    # actions back toward ratio-style attenuation as it tightens).
-    player_neurd_is_clip: float = 10.0
-    # Centered logits beyond +/-beta receive no further outward force
-    # (R-NaD's apply_force_with_threshold, default beta=2).
-    player_neurd_beta: float = 2.0
 
     player_ppo_clip_threshold: float = 0.3
     builder_ppo_clip_threshold: float = 0.3
@@ -478,6 +466,39 @@ def load_from_checkpoint(
     return player_state, builder_state, league
 
 
+def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
+    """Overlay checkpoint params onto a freshly initialized tree.
+
+    Keys present in both trees with matching leaf shapes take the loaded
+    (trained) value; keys only in the fresh tree (newly added modules) keep
+    their random/zero init; keys only in the checkpoint (removed modules)
+    are dropped; shape mismatches fall back to fresh init. Returns the
+    merged tree plus the paths that kept their fresh initialization, so a
+    resume across architecture changes is auditable.
+    """
+    kept_fresh: list[str] = []
+
+    def _merge(fresh_node, loaded_node, path: str):
+        if isinstance(fresh_node, Mapping):
+            out = {}
+            for key, fresh_child in fresh_node.items():
+                child_path = f"{path}/{key}"
+                if isinstance(loaded_node, Mapping) and key in loaded_node:
+                    out[key] = _merge(fresh_child, loaded_node[key], child_path)
+                else:
+                    out[key] = fresh_child
+                    kept_fresh.append(child_path)
+            return out
+        fresh_shape = getattr(fresh_node, "shape", None)
+        loaded_shape = getattr(loaded_node, "shape", None)
+        if fresh_shape is not None and fresh_shape == loaded_shape:
+            return loaded_node
+        kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
+        return fresh_node
+
+    return _merge(fresh, loaded, ""), kept_fresh
+
+
 def load_from_params(
     ckpt_path: str,
     learner_config: Porygon2LearnerConfig,
@@ -485,17 +506,36 @@ def load_from_params(
     builder_state: Porygon2BuilderTrainState,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
     """
-    Params only: Loads ckpt params into BOTH params.
-    Resets opt_state and counts (by keeping the input state's version of those).
+    Params only: merges ckpt params into the freshly initialized trees, so
+    modules added since the checkpoint keep their fresh init and everything
+    else keeps its trained weights. Sets BOTH params and target_params to
+    the merged tree. Resets opt_state and counts (by keeping the input
+    state's version of those) and starts a fresh league.
     """
-    print(f"Loading params only from {ckpt_path}")
-    # Load only the params components — opt_state stays the input state's
-    # (fresh), effectively resetting training progress.
-    player_params = checkpoint.load_component(ckpt_path, "player", "params")
-    builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
+    print(f"Loading (merging) params only from {ckpt_path}")
+    loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
+    loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    player_state = player_state.replace(params=player_params)
-    builder_state = builder_state.replace(params=builder_params)
+    player_params, player_kept_fresh = merge_params(
+        player_state.params, loaded_player_params
+    )
+    builder_params, builder_kept_fresh = merge_params(
+        builder_state.params, loaded_builder_params
+    )
+    for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
+        if kept:
+            print(f"{name}: {len(kept)} param subtrees kept fresh init:")
+            for path in kept:
+                print(f"  {path}")
+
+    # target_params gets the same merged tree: leaving it at fresh init
+    # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
+    player_state = player_state.replace(
+        params=player_params, target_params=player_params
+    )
+    builder_state = builder_state.replace(
+        params=builder_params, target_params=builder_params
+    )
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)
