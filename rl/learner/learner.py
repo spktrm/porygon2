@@ -22,6 +22,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -36,7 +37,6 @@ from rl.learner.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
-    neurd_loss,
     policy_gradient_loss,
 )
 from rl.learner.plasticity import (
@@ -122,23 +122,19 @@ def train_step(
     else:
         player_advantages = player_targets.advantages
 
-    # Magnet policy for the KL regularizer: the EMA target policy mixed with
-    # eps-uniform over legal actions. The uniform mixing is the entropy floor —
-    # it scales with the number of legal actions, so no per-state entropy
-    # normalisation or target is needed.
+    # Magnet policy for the KL regularizer: uniform over legal actions. The
+    # magnet is deliberately stationary — a fixed anchor gives the regularized
+    # self-play dynamics a stable fixed point, whereas an EMA magnet chases
+    # the policy and degenerates into a short-horizon trust region. The EMA
+    # target's only remaining role is the v-trace/IMPACT reference.
+    # KL(pi || uniform-over-legal) = log(num_legal) - H(pi), so this is
+    # per-state entropy regularization that scales with the legal set.
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
     num_legal = jnp.maximum(flat_action_mask.sum(axis=-1, keepdims=True), 1).astype(
         float_dtype
     )
-    uniform_policy = flat_action_mask.astype(float_dtype) / num_legal
-    magnet_eps = config.player_magnet_uniform_eps
-    magnet_policy = (1.0 - magnet_eps) * jnp.exp(
-        player_target_pred.action_head.log_policy
-    ) + magnet_eps * uniform_policy
-    magnet_log_policy = jnp.where(
-        flat_action_mask, jnp.log(jnp.maximum(magnet_policy, 1e-9)), 0.0
-    )
+    magnet_log_policy = jnp.where(flat_action_mask, -jnp.log(num_legal), 0.0)
 
     def player_loss_fn(params: Params):
 
@@ -159,27 +155,15 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Calculate losses.
-        if config.player_policy_objective == "neurd":
-            loss_pg = neurd_loss(
-                centered_logits=learner_action_head.centered_logit,
-                advantages=player_advantages,
-                # 1/mu from the behavior policy's stored log-probs.
-                is_weights=jnp.exp(-player_actor_log_prob),
-                valid=policy_mask,
-                is_clip=config.player_neurd_is_clip,
-                beta=config.player_neurd_beta,
-            )
-        else:
-            # IMPACT surrogate: ratio recentered on the fast target via the
-            # clipped correction.
-            loss_pg = policy_gradient_loss(
-                policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-                advantages=player_advantages,
-                valid=policy_mask,
-                threshold=config.player_ppo_clip_threshold,
-                objective=config.player_policy_objective,
-            )
+        # IMPACT surrogate: ratio recentered on the fast target via the
+        # clipped correction.
+        loss_pg = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_advantages,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip_threshold,
+            objective=config.player_policy_objective,
+        )
 
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
@@ -240,7 +224,19 @@ def train_step(
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
+        # Learned mass-semantics scalars (see _forward_pi_head): tau per
+        # modality (1 = flat-softmax spread term, ->inf = best option),
+        # kappa per modality (0 = count-invariant, 1 = count-proportional).
+        mass_temp = jax.nn.softplus(params["params"]["mass_temp_raw"])
+        mass_count_coef = params["params"]["mass_count_coef"]
+        mass_logs = {}
+        for name, value in ModalityEnum.items():
+            suffix = name.split("__")[-1].lower().strip("_")
+            mass_logs[f"player_mass_temp_{suffix}"] = mass_temp[value]
+            mass_logs[f"player_mass_count_coef_{suffix}"] = mass_count_coef[value]
+
         return loss, dict(
+            **mass_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
@@ -254,16 +250,6 @@ def train_step(
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
-            # NeuRD diagnostics: drift of the taken action's centered logit
-            # toward the +/-beta force threshold, and how often the 1/mu
-            # importance weight is being clipped.
-            player_centered_logit=average(
-                jnp.abs(learner_action_head.centered_logit), policy_mask
-            ),
-            player_neurd_is_clip_fraction=average(
-                jnp.exp(-player_actor_log_prob) > config.player_neurd_is_clip,
-                policy_mask,
-            ),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             player_learner_actor_backward_kl=loss_actor_backward_kl,

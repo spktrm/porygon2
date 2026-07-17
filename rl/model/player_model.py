@@ -178,9 +178,6 @@ class Porygon2PlayerModel(nn.Module):
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
 
         mean_valid_logit = jnp.mean(micro_logits, where=flat_valid_mask)
-        centered_logit = (
-            jnp.take(micro_logits, action_index, axis=-1) - mean_valid_logit
-        )
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -203,7 +200,6 @@ class Porygon2PlayerModel(nn.Module):
             magnet_kl=policy_metrics.magnet_kl,
             logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
-            centered_logit=centered_logit,
         )
 
     def _forward_value_head(self, value_embeddings: jax.Array):
