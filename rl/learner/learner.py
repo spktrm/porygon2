@@ -16,13 +16,13 @@ from tqdm import tqdm
 
 import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.interfaces import (
     Batch,
     BuilderActorInput,
     PlayerActorInput,
     Trajectory,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore

@@ -1296,8 +1296,4 @@ class Encoder(nn.Module):
             env_step, wm_row_states, order_valid, wm_field_state
         )
 
-        # wm_slot_states (T, 12, D) and wm_field_state (T, D) ride along for
-        # the latent opponent model: consecutive snapshots bracket the
-        # transition each turn caused, and the slot states carry the
-        # per-pokemon consequences the pooled field state compresses away.
-        return action_embeddings, value_embeddings, wm_slot_states, wm_field_state
+        return action_embeddings, value_embeddings
