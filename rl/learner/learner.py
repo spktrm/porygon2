@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 import wandb
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.interfaces import (
     Batch,
     BuilderActorInput,
@@ -223,7 +224,19 @@ def train_step(
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
+        # Learned mass-semantics scalars (see _forward_pi_head): tau per
+        # modality (1 = flat-softmax spread term, ->inf = best option),
+        # kappa per modality (0 = count-invariant, 1 = count-proportional).
+        mass_temp = jax.nn.softplus(params["params"]["mass_temp_raw"])
+        mass_count_coef = params["params"]["mass_count_coef"]
+        mass_logs = {}
+        for name, value in ModalityEnum.items():
+            suffix = name.split("__")[-1].lower().strip("_")
+            mass_logs[f"player_mass_temp_{suffix}"] = mass_temp[value]
+            mass_logs[f"player_mass_count_coef_{suffix}"] = mass_count_coef[value]
+
         return loss, dict(
+            **mass_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
