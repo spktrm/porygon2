@@ -12,12 +12,7 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import (
-    FLAT_MODALITY_MASK,
-    NUM_MODALITY_FEATURES,
-    SRC_MODALITY_MASK,
-    ModalityEnum,
-)
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -36,7 +31,6 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.modules import MLP
 from rl.model.utils import get_num_params
 
 
@@ -86,130 +80,18 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        # Per-modality mass head. Zero-init output layer: the bias starts as
-        # a no-op and the initial policy is the centered gram head alone.
-        self.modality_bias_mlp = MLP(
-            (self.cfg.entity_size,), name="modality_bias_mlp"
-        )
-        self.modality_bias_logits = nn.Dense(
-            NUM_MODALITY_FEATURES,
-            kernel_init=nn.initializers.zeros_init(),
-            name="modality_bias_logits",
-        )
-        # Learnable mass semantics, per modality:
-        #   mass_logit(m) = b_m + LME_tau(c) + kappa * log N_m
-        # where LME_tau is the temperature-tau log-mean-exp of the centered
-        # gram logits. tau (softplus; init 1 = exact no-op) interpolates the
-        # mass score from "mean option" (tau -> 0) through the flat-softmax
-        # spread term (tau = 1) to "best option" (tau -> inf); kappa (init 0)
-        # restores count-proportional flat-softmax mass at 1.
-        self.mass_temp_raw = self.param(
-            "mass_temp_raw",
-            nn.initializers.constant(float(np.log(np.expm1(1.0)))),
-            (NUM_MODALITY_FEATURES,),
-        )
-        self.mass_count_coef = self.param(
-            "mass_count_coef",
-            nn.initializers.zeros_init(),
-            (NUM_MODALITY_FEATURES,),
-        )
 
-    def _modality_bias(
-        self,
-        action_embeddings: jax.Array,
-        valid_mask: jax.Array,
-        value_embeddings: jax.Array,
-    ):
-        """Per-modality mass logits, (NUM_MODALITY_FEATURES,).
-
-        The mass decision sees both the state (value stream) and who the
-        candidates are: every action embedding that participates in a valid
-        pair of a modality — from either side, so switches see the reserve
-        tgts, not just the shared switch src token — masked-mean pooled per
-        modality (zeros for modalities with no valid pair; those are masked
-        out of the softmax anyway).
-        """
-        dtype = action_embeddings.dtype
-        src_modality_oh = jax.nn.one_hot(
-            SRC_MODALITY_MASK, NUM_MODALITY_FEATURES, dtype=dtype
-        )
-        valid = valid_mask.astype(dtype)
-        src_part = valid.max(axis=-1, keepdims=True) * src_modality_oh  # (A, M)
-        tgt_part = (
-            jnp.einsum("ab,am->bm", valid, src_modality_oh) > 0
-        ).astype(dtype)
-        weights = jnp.maximum(src_part, tgt_part)  # (A, M)
-        pooled = jnp.einsum("am,ad->md", weights, action_embeddings) / weights.sum(
-            axis=0
-        )[..., None].clip(min=1.0)
-        bias_input = jnp.concatenate((pooled.reshape(-1), value_embeddings), axis=-1)
-        return self.modality_bias_logits(self.modality_bias_mlp(bias_input))
-
-    def _forward_pi_head(
-        self,
-        action_embeddings: jax.Array,
-        valid_mask: jax.Array,
-        value_embeddings: jax.Array,
-    ):
-        """Gram-matrix logits, factored into per-modality mass + preference.
+    def _forward_pi_head(self, action_embeddings: jax.Array):
+        """Gram-matrix logits.
 
         action_embeddings: (NUM_ACTION_FEATURES, entity_size), already
-        normed by the encoder's out-norms. The gram term is mean-centered
-        over the valid actions of each modality — zero-sum within a
-        modality, so it carries only "which action" — while the learned
-        per-modality bias carries "how much of each modality". Category-mass
-        gradients land on the bias instead of rotating every embedding of a
-        modality toward a common direction (which erodes within-modality
-        discrimination). Returns (NUM_ACTION_FEATURES**2,) src x tgt logits.
+        normed by the encoder's out-norms. Returns
+        (NUM_ACTION_FEATURES**2,) src x tgt logits.
         """
         square_logits = jnp.einsum(
             "ae,be->ab", action_embeddings, action_embeddings
         ) / np.array(action_embeddings.shape[-1] ** 0.5)
-        logits = square_logits.reshape(-1)
-
-        modality_oh = jax.nn.one_hot(
-            FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, dtype=logits.dtype
-        )
-        valid_bool = valid_mask.reshape(-1)
-        valid = valid_bool.astype(logits.dtype)
-        raw_counts = valid @ modality_oh  # (M,)
-        counts = raw_counts.clip(min=1.0)
-        # Differentiable through the mean: that is what makes the gram
-        # term's within-modality gradients exactly zero-sum.
-        modality_mean = ((valid * logits) @ modality_oh) / counts
-        bias = self._modality_bias(action_embeddings, valid_mask, value_embeddings)
-
-        # Mass semantics. Grouped by modality, the flat softmax over
-        # (c + b - log N) implicitly gives mass_logit(m) = b_m + LME_1(c):
-        # -log(count) cancels the +log N head start option-rich modalities
-        # would get (which also swings with the mask — bench faints shrink
-        # N_switch), scoring a modality by its mean option instead. The
-        # correction below then swaps LME_1 for LME_tau and adds
-        # kappa*log N, giving mass_logit(m) = b_m + LME_tau(c) + kappa*logN.
-        # It is computed on stop_gradient(c): the swap is forward-only
-        # calibration — within-modality gradients remain exactly those of
-        # the tau=1 flat softmax, and mass gradients reach tau/kappa but
-        # never the embeddings. log N is constant w.r.t. every parameter,
-        # so kappa's term only ever trains kappa.
-        log_counts32 = jnp.log(counts.astype(jnp.float32))
-        centered = logits - modality_mean[FLAT_MODALITY_MASK]
-        c_sg = jax.lax.stop_gradient(centered).astype(jnp.float32)
-        tau = jax.nn.softplus(self.mass_temp_raw.astype(jnp.float32))  # (M,)
-        member = valid_bool[:, None] & (modality_oh > 0)  # (A**2, M)
-        lse_tau = nn.logsumexp(jnp.where(member, c_sg[:, None] * tau, -1e9), axis=0)
-        lme_tau = (lse_tau - log_counts32) / tau
-        lse_one = nn.logsumexp(jnp.where(member, c_sg[:, None], -1e9), axis=0)
-        lme_one = lse_one - log_counts32
-        mass_corr = jnp.where(
-            raw_counts > 0,
-            lme_tau
-            - lme_one
-            + self.mass_count_coef.astype(jnp.float32) * log_counts32,
-            0.0,
-        ).astype(logits.dtype)
-
-        correction = bias - modality_mean - log_counts32.astype(logits.dtype) + mass_corr
-        return logits + correction[FLAT_MODALITY_MASK]
+        return square_logits.reshape(-1)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -271,14 +153,10 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        value_embeddings: jax.Array,
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        micro_logits = self._forward_pi_head(
-            action_embeddings, valid_mask, value_embeddings
-        )
-        micro_logits = micro_logits / temp
+        micro_logits = self._forward_pi_head(action_embeddings) / temp
 
         # --- Hierarchical Prior & Metrics ---
         # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
@@ -298,6 +176,8 @@ class Porygon2PlayerModel(nn.Module):
             )
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
+
+        mean_valid_logit = jnp.mean(micro_logits, where=flat_valid_mask)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -332,16 +212,15 @@ class Porygon2PlayerModel(nn.Module):
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
-        *,
         head_params: HeadParams,
     ):
+
         action_head = self._forward_action_head(
             action_embeddings,
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
-            value_embeddings=value_embeddings,
         )
 
         return PlayerActorOutput(
@@ -358,14 +237,13 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings, *_ = self.encoder(
+        action_embeddings, value_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        head_fn = functools.partial(self.get_head_outputs, head_params=head_params)
-        return jax.vmap(head_fn)(
-            action_embeddings, value_embeddings, actor_input.env, actor_output
-        )
+        return jax.vmap(
+            functools.partial(self.get_head_outputs, head_params=head_params)
+        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
