@@ -22,7 +22,6 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -47,6 +46,7 @@ from rl.learner.plasticity import (
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.model.heads import HeadParams
+from rl.model.search import sigreg_loss
 from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
@@ -216,27 +216,97 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
+        # Decision-time search-head aux losses (rl/model/search.py) —
+        # learner-only representation/prediction shaping; the solve itself
+        # never runs in training. Populated only when the model config
+        # enables the heads; the tuple check resolves at trace time.
+        search_head = learner_player_pred.search_head
+        search_enabled = not isinstance(search_head.my_policy_loss, tuple)
+        search_logs = {}
+        loss_search = 0.0
+        if search_enabled:
+            pair_mask = search_head.pair_valid & value_mask
+            loss_search_intent_prior = average(search_head.intent_prior_loss, pair_mask)
+            loss_search_my = average(search_head.my_policy_loss, policy_mask)
+            q_target = (player_targets.win_returns @ cat_vf_support).astype(jnp.float32)
+            loss_search_q = average(
+                jnp.square(search_head.q_taken - q_target), pair_mask
+            )
+            # E_{prior x mean-intent}[Q] should agree with the value head;
+            # this is the only supervision most off-support payoff cells get.
+            loss_search_q_mean = average(
+                jnp.square(
+                    search_head.q_prior_mean
+                    - jax.lax.stop_gradient(
+                        learner_value_head.expectation.astype(jnp.float32)
+                    )
+                ),
+                pair_mask,
+            )
+            loss_search_dynamics = average(search_head.dynamics_loss, pair_mask)
+            # SIGReg (LeJEPA) over the whole batch of transition posteriors
+            # ([intent; chance]): computed here rather than in the model so
+            # the goodness-of-fit test sees every trajectory at once (a
+            # marginal is a batch property) and can sketch directions from
+            # the batch rng. An isotropic joint also pushes intent and
+            # chance toward marginal independence.
+            num_posterior_dims = search_head.transition_posterior.shape[-1]
+            loss_search_sigreg = sigreg_loss(
+                search_head.transition_posterior.reshape(-1, num_posterior_dims),
+                pair_mask.reshape(-1),
+                batch.rng_key,
+                num_directions=config.player_search_sigreg_directions,
+            )
+            loss_search = (
+                config.player_search_intent_prior_coef * loss_search_intent_prior
+                + config.player_search_my_policy_coef * loss_search_my
+                + config.player_search_q_coef * loss_search_q
+                + config.player_search_q_mean_coef * loss_search_q_mean
+                + config.player_search_dynamics_coef * loss_search_dynamics
+                + config.player_search_sigreg_coef * loss_search_sigreg
+            )
+            search_logs = dict(
+                player_loss_search_intent_prior=loss_search_intent_prior,
+                player_loss_search_my_policy=loss_search_my,
+                player_loss_search_q=loss_search_q,
+                player_loss_search_q_mean=loss_search_q_mean,
+                player_loss_search_dynamics=loss_search_dynamics,
+                player_loss_search_sigreg=loss_search_sigreg,
+                # How unpredictable the opponent's latent action is at
+                # decision time (mean prior sigma; shrinks where behavior
+                # is anticipatable).
+                player_search_intent_prior_sigma=average(
+                    search_head.intent_prior_sigma, pair_mask
+                ),
+                # Ground-truth channel usage: excess prediction error when a
+                # transition gets a neighbour's latent. Positive and growing
+                # = the channel carries information; ~0 with a happy SIGReg
+                # = well-distributed but ignored. A dead intent gap means
+                # the payoff columns are vacuous and search degenerates to
+                # the anchor.
+                player_search_intent_usage_gap=average(
+                    search_head.dynamics_loss_shuffled_intent
+                    - search_head.dynamics_loss,
+                    pair_mask,
+                ),
+                player_search_chance_usage_gap=average(
+                    search_head.dynamics_loss_shuffled_chance
+                    - search_head.dynamics_loss,
+                    pair_mask,
+                ),
+            )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_magnet_kl_coef * loss_magnet_kl
             + config.player_logit_norm_loss_coef * loss_logit_l2_norm
+            + loss_search
         )
 
-        # Learned mass-semantics scalars (see _forward_pi_head): tau per
-        # modality (1 = flat-softmax spread term, ->inf = best option),
-        # kappa per modality (0 = count-invariant, 1 = count-proportional).
-        mass_temp = jax.nn.softplus(params["params"]["mass_temp_raw"])
-        mass_count_coef = params["params"]["mass_count_coef"]
-        mass_logs = {}
-        for name, value in ModalityEnum.items():
-            suffix = name.split("__")[-1].lower().strip("_")
-            mass_logs[f"player_mass_temp_{suffix}"] = mass_temp[value]
-            mass_logs[f"player_mass_count_coef_{suffix}"] = mass_count_coef[value]
-
         return loss, dict(
-            **mass_logs,
+            **search_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,

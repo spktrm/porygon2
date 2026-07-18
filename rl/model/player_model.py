@@ -31,7 +31,13 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_num_params
+from rl.model.search import (
+    FLAT_TO_MY_ABSTRACT,
+    SearchHeads,
+    compute_search_labels,
+    my_abstract_marginal,
+)
+from rl.model.utils import get_num_params, legal_log_policy
 
 
 def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
@@ -80,6 +86,8 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        if self.cfg.search.enabled:
+            self.search = SearchHeads(self.cfg.search, name="search")
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         """Gram-matrix logits.
@@ -241,9 +249,133 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        return jax.vmap(
+        output = jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+
+        # Search-head aux losses are learner-only (actors keep replay
+        # small); the deploy-time solve lives in search_step.
+        if self.cfg.search.enabled and self.cfg.train:
+            output = output.replace(
+                search_head=self._forward_search(
+                    value_embeddings, actor_input, actor_output, output
+                )
+            )
+
+        return output
+
+    def _forward_search(
+        self,
+        value_embeddings: jax.Array,
+        actor_input: PlayerActorInput,
+        actor_output: PlayerActorOutput,
+        output: PlayerActorOutput,
+    ):
+        """Trajectory-level search-head losses (learner only).
+
+        ``actor_output`` is the replayed behavior output (source of the
+        taken action); ``output`` is the fresh forward (source of the flat
+        policy whose abstract marginal the distill head chases). The
+        transition bracketed by the value latents at requests t and t+1 is
+        what the joint action at t caused; the opponent's half of that
+        action is inferred self-supervised (the intent latent), never
+        reconstructed from the log.
+        """
+        env_step = actor_input.env
+        labels = compute_search_labels(
+            env_step.done, actor_output.action_head.action_index
+        )
+        flat_mask = env_step.action_mask.reshape(env_step.action_mask.shape[0], -1)
+        my_marginal = my_abstract_marginal(output.action_head.log_policy, flat_mask)
+        # A pair is usable when step t is a real decision step and t+1
+        # exists in the buffer (pair_valid handles both); post-episode
+        # padding is excluded by the learner's masks.
+        next_value_embeddings = jnp.concatenate(
+            (value_embeddings[1:], jnp.zeros_like(value_embeddings[:1])), axis=0
+        )
+        return self.search.transition_outputs(
+            value_embeddings,
+            next_value_embeddings,
+            labels,
+            my_marginal,
+        )
+
+    def search_step(
+        self,
+        actor_input: PlayerActorInput,
+        actor_output: PlayerActorOutput,
+        head_params: HeadParams,
+    ):
+        """Decision-time anchored equilibrium search (deploy only).
+
+        Same calling convention as __call__ with a single request (T == 1).
+        Runs the encoder once, marginalizes the flat policy onto the
+        abstract action space, solves the depth-limited simultaneous-move
+        game against the opponent-policy prior (see SearchHeads.solve_tree),
+        and folds the solved abstract mix back into the flat policy —
+        reweighting each abstract class's total mass while keeping the gram
+        head's within-class targeting preferences. The search itself is
+        maskless (availability lives in the priors); the flat action mask
+        applies only at the final sampling step, which is the environment
+        interface. With near-zero payoff estimates the solve returns the
+        anchors and this degrades to the plain policy.
+
+        Outputs keep the [T=1] leading dim (mirroring __call__), so an
+        Agent built with apply(method="search_step") is a drop-in
+        replacement for the plain policy agent.
+        """
+        del actor_output  # parity with __call__; search picks its own action
+        action_embeddings, value_embeddings = self.encoder(
+            actor_input.env, actor_input.packed_history, actor_input.history
+        )
+        env_step = jax.tree.map(lambda x: x[0], actor_input.env)
+        action_embeddings = action_embeddings[0]
+        latent = value_embeddings[0]
+
+        flat_valid_mask = env_step.action_mask.reshape(-1)
+        micro_logits = self._forward_pi_head(action_embeddings) / head_params.temp
+        log_policy = legal_log_policy(micro_logits.astype(jnp.float32), flat_valid_mask)
+
+        my_marginal = my_abstract_marginal(log_policy, flat_valid_mask)
+        # The marginal's zeros are the legality signal: log(clip) turns them
+        # into a ~-21 anchor penalty, which the anchored solve never
+        # overcomes with the payoff scales the q head is trained on. The
+        # opponent side needs no prior here — solve_tree samples intents
+        # from the learned p(u | s) internally.
+        my_log_prior = jnp.log(my_marginal.clip(min=1e-9))
+
+        x_root, _, _ = self.search.solve_tree(latent, my_log_prior)
+
+        log_gain = jnp.log(x_root.clip(min=1e-9)) - jnp.log(my_marginal.clip(min=1e-9))
+        search_logits = log_policy + jnp.take(
+            log_gain, jnp.asarray(FLAT_TO_MY_ABSTRACT)
+        )
+        policy_metrics = compute_policy_metrics(
+            logits=search_logits, valid_mask=flat_valid_mask
+        )
+        action_index = sample_categorical(
+            jnp.where(flat_valid_mask, search_logits, -1e9),
+            self.make_rng("sampling"),
+        )
+        log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
+        mask_width = env_step.action_mask.shape[-1]
+
+        action_head = PlayerPolicyHeadOutput(
+            action_index=action_index,
+            log_prob=log_prob,
+            log_policy=policy_metrics.log_policy,
+            src_index=action_index // mask_width,
+            tgt_index=action_index % mask_width,
+            entropy=policy_metrics.entropy,
+            normalized_entropy=policy_metrics.normalized_entropy,
+            magnet_kl=policy_metrics.magnet_kl,
+            logit_l2_norm=policy_metrics.logit_l2_norm,
+        )
+        output = PlayerActorOutput(
+            action_head=action_head,
+            value_head=self.v_head(latent),
+        )
+        return jax.tree.map(lambda t: t[None, ...], output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

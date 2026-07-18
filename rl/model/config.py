@@ -143,6 +143,36 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp.layer_sizes = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
+    # Decision-time search heads (rl/model/search.py): auxiliary heads on
+    # the value latent (opponent policy, abstract self policy, joint payoff,
+    # chance-coded dynamics) trained from grounded self-play labels, plus a
+    # deploy-only anchored matrix-game search over them. Train-time this
+    # only adds learner-side aux losses; actors are untouched. Existing
+    # checkpoints can bolt the heads on via LOAD_STATE_MODE=params.
+    cfg.search = ConfigDict()
+    cfg.search.enabled = True
+    cfg.search.entity_size = entity_size
+    cfg.search.dtype = DEFAULT_DTYPE
+    cfg.search.qk_size = 64
+    # Continuous transition latents (LeJEPA/SIGReg): intent = the
+    # opponent's latent action (has a decision-time prior, indexes the
+    # payoff matrix), chance = prior-free residual. Both small on purpose —
+    # the dimensionality bottleneck is what keeps them to the unpredictable
+    # residual instead of the whole next latent.
+    cfg.search.intent_dim = 16
+    cfg.search.chance_dim = 8
+    # Deploy-time budget knobs (search_step only; static — changing them
+    # re-jits). depth=1 is the pure root solve on the payoff head against
+    # num_intent_samples prior draws; each extra level expands top_k_me x
+    # num_intent_samples x num_chance_samples children.
+    cfg.search.depth = 1
+    cfg.search.top_k_me = 4
+    cfg.search.num_intent_samples = 4
+    cfg.search.num_chance_samples = 2
+    cfg.search.solver_steps = 32
+    cfg.search.my_anchor_temp = 1.0
+    cfg.search.opp_anchor_temp = 1.0
+
     for head in [cfg.pi_head]:
         head.train = train
 

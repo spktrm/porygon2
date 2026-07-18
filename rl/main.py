@@ -148,6 +148,77 @@ def run_eval_heuristic(
         time.sleep(5)
 
 
+def run_eval_search_h2h(
+    search_actor: PlayerActor,
+    policy_actor: PlayerActor,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    stop_signal: list[bool],
+    wandb_run: wandb.wandb_run.Run,
+):
+    """Head-to-head decision-time-search vs plain-policy on identical params.
+
+    Both sides pull the current main params each game; one steps through
+    search_step, the other through the plain policy. Same weights, same
+    opponent, so the payoff series is the most direct live estimate of the
+    search improvement (0 = no edge; the two series vs the heuristic bot
+    measure the same thing with an extra confound). Trajectories never
+    enter replay (both actors are is_eval).
+    """
+    learner = search_actor._learner
+
+    with learner.gpu_lock:
+        step_count = np.array(learner.player_state.step_count).item()
+
+    session_id = threading.current_thread().name
+
+    while not stop_signal[0]:
+        try:
+            with learner.gpu_lock:
+                new_step_count = np.array(learner.player_state.step_count).item()
+            if new_step_count > step_count:
+                step_count = new_step_count
+
+                with learner.gpu_lock:
+                    player_params = jax.device_get(learner.player_state.params)
+                    builder_params = jax.device_get(learner.builder_state.params)
+
+                container = ParamsContainer(
+                    step_count=step_count,
+                    player_frame_count=0,
+                    builder_frame_count=0,
+                    player_params=player_params,
+                    builder_params=builder_params,
+                )
+
+                game_id = f"{session_id}-{step_count}"
+                for actor in (search_actor, policy_actor):
+                    actor.set_game_id(game_id)
+
+                future1 = executor.submit(search_actor.unroll_and_push, container)
+                future2 = executor.submit(policy_actor.unroll_and_push, container)
+                search_trajectory = future1.result()
+                future2.result()
+
+                payoff = (
+                    search_trajectory.player_transitions.env_output.win_reward[-1]
+                    @ CAT_VF_SUPPORT
+                )
+
+                wandb_run.log(
+                    {
+                        "training_step": step_count,
+                        f"search-h2h-payoff-{session_id}": payoff,
+                        f"search-h2h-wr-{session_id}": payoff > 0,
+                    }
+                )
+
+        except Exception:
+            logger.error("Error running search h2h eval", exc_info=True)
+            continue
+
+        time.sleep(5)
+
+
 def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
     while not stop_signal[0]:
         try:
@@ -210,6 +281,18 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
+    # Same network, but stepping through search_step: decision-time
+    # equilibrium search over the search heads (rl/model/search.py).
+    # Depth/branching come from the actor model config's cfg.search.
+    search_eval_agent = None
+    if actor_player_model_config.search.enabled:
+        search_eval_agent = Agent(
+            functools.partial(actor_player_network.apply, method="search_step"),
+            actor_builder_network.apply,
+            gpu_lock=gpu_lock,
+            player_head_params=HeadParams(temp=0.5),
+            builder_head_params=HeadParams(temp=1.0),
+        )
     logger.info("Loading train state...")
     # LOAD_STATE_MODE=params merges the latest checkpoint's params into the
     # fresh init (new modules keep their init, trained modules keep their
@@ -258,7 +341,10 @@ def main(args: argparse.Namespace):
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=(
-            learner_config.num_player_actors + 2 * learner_config.num_eval_actors
+            learner_config.num_player_actors
+            + 2 * learner_config.num_eval_actors
+            # The search-vs-policy head-to-head pair submits two unrolls.
+            + 2
         )
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
@@ -306,6 +392,10 @@ def main(args: argparse.Namespace):
         # Thread names carry the wandb series identity (run_eval_heuristic
         # reads the current thread's name).
         eval_variants = (("full", eval_agent),)
+        if search_eval_agent is not None:
+            # The gap between the search and full series (same params, same
+            # heuristic opponent) is the live search-improvement signal.
+            eval_variants = (*eval_variants, ("search", search_eval_agent))
         logger.info(
             f"Initializing {learner_config.num_eval_actors} evaluation actor pairs "
             f"({' + '.join(name for name, _ in eval_variants)})..."
@@ -330,6 +420,33 @@ def main(args: argparse.Namespace):
                         name=f"EvalActor-{variant_name}-{eval_id}",
                     )
                 )
+
+        if search_eval_agent is not None:
+            # Search-vs-policy head-to-head on identical params: the two
+            # actors share a game id each episode, so the service pairs
+            # them against each other (matchmaking is by game id).
+            logger.info("Initializing search-vs-policy head-to-head eval pair...")
+            h2h_actors = [
+                PlayerActor(
+                    agent=agent,
+                    env=env_func(f"h2h-{name}:{0:04d}"),
+                    unroll_length=learner_config.unroll_length,
+                    learner=learner,
+                    rng_seed=len(actor_threads) + salt,
+                    is_eval=True,
+                )
+                for name, agent in (
+                    ("search", search_eval_agent),
+                    ("policy", eval_agent),
+                )
+            ]
+            actor_threads.append(
+                threading.Thread(
+                    target=run_eval_search_h2h,
+                    args=(*h2h_actors, executor, stop_signal, wandb_run),
+                    name="EvalActor-h2h-0",
+                )
+            )
 
         # Start the actors and learner.
         for t in actor_threads:
