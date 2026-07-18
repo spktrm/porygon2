@@ -36,7 +36,6 @@ from rl.learner.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
-    neurd_loss,
     policy_gradient_loss,
 )
 from rl.learner.plasticity import (
@@ -46,7 +45,7 @@ from rl.learner.plasticity import (
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
-from rl.model.heads import HeadParams
+from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
@@ -122,22 +121,19 @@ def train_step(
     else:
         player_advantages = player_targets.advantages
 
-    # Magnet policy for the KL regularizer: the EMA target policy mixed with
-    # eps-uniform over legal actions. The uniform mixing is the entropy floor —
-    # it scales with the number of legal actions, so no per-state entropy
-    # normalisation or target is needed.
+    # Magnet policy for the KL regularizer: the hierarchical prior — uniform
+    # over valid modalities, uniform within each modality — which is the init
+    # policy of the hierarchically composed action head, so the KL decomposes
+    # into a modality-level KL plus the expected within-modality KLs. The
+    # magnet is deliberately stationary — a fixed anchor gives the regularized
+    # self-play dynamics a stable fixed point, whereas an EMA magnet chases
+    # the policy and degenerates into a short-horizon trust region. The EMA
+    # target's only remaining role is the v-trace/IMPACT reference.
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
-    num_legal = jnp.maximum(flat_action_mask.sum(axis=-1, keepdims=True), 1).astype(
-        float_dtype
-    )
-    uniform_policy = flat_action_mask.astype(float_dtype) / num_legal
-    magnet_eps = config.player_magnet_uniform_eps
-    magnet_policy = (1.0 - magnet_eps) * jnp.exp(
-        player_target_pred.action_head.log_policy
-    ) + magnet_eps * uniform_policy
+    magnet_prior = calculate_hierarchical_prior(flat_action_mask).astype(float_dtype)
     magnet_log_policy = jnp.where(
-        flat_action_mask, jnp.log(jnp.maximum(magnet_policy, 1e-9)), 0.0
+        flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
     )
 
     def player_loss_fn(params: Params):
@@ -159,27 +155,15 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Calculate losses.
-        if config.player_policy_objective == "neurd":
-            loss_pg = neurd_loss(
-                centered_logits=learner_action_head.centered_logit,
-                advantages=player_advantages,
-                # 1/mu from the behavior policy's stored log-probs.
-                is_weights=jnp.exp(-player_actor_log_prob),
-                valid=policy_mask,
-                is_clip=config.player_neurd_is_clip,
-                beta=config.player_neurd_beta,
-            )
-        else:
-            # IMPACT surrogate: ratio recentered on the fast target via the
-            # clipped correction.
-            loss_pg = policy_gradient_loss(
-                policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-                advantages=player_advantages,
-                valid=policy_mask,
-                threshold=config.player_ppo_clip_threshold,
-                objective=config.player_policy_objective,
-            )
+        # IMPACT surrogate: ratio recentered on the fast target via the
+        # clipped correction.
+        loss_pg = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_advantages,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip_threshold,
+            objective=config.player_policy_objective,
+        )
 
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
@@ -226,8 +210,6 @@ def train_step(
         ).sum(axis=-1)
         loss_magnet_kl = average(magnet_kl, valid=policy_mask)
 
-        loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
-
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
@@ -237,7 +219,6 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_magnet_kl_coef * loss_magnet_kl
-            + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
         return loss, dict(
@@ -246,7 +227,6 @@ def train_step(
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
-            player_loss_logit_l2_norm=loss_logit_l2_norm,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
@@ -254,16 +234,6 @@ def train_step(
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
-            # NeuRD diagnostics: drift of the taken action's centered logit
-            # toward the +/-beta force threshold, and how often the 1/mu
-            # importance weight is being clipped.
-            player_centered_logit=average(
-                jnp.abs(learner_action_head.centered_logit), policy_mask
-            ),
-            player_neurd_is_clip_fraction=average(
-                jnp.exp(-player_actor_log_prob) > config.player_neurd_is_clip,
-                policy_mask,
-            ),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             player_learner_actor_backward_kl=loss_actor_backward_kl,
