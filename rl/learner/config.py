@@ -149,6 +149,21 @@ class Porygon2LearnerConfig:
     player_value_head_loss_coef: float = 1.0
     player_logit_norm_loss_coef: float = 0.0
 
+    ## Decision-time search heads (rl/model/search.py). Learner-side aux
+    ## losses only — actors never run these. Deliberately small defaults:
+    ## the heads must reach useful prediction quality without reshaping the
+    ## trunk away from the main objective; scale after validating held-out
+    ## opponent-policy accuracy / q calibration.
+    player_search_intent_prior_coef: float = 0.1
+    player_search_my_policy_coef: float = 0.1
+    player_search_q_coef: float = 0.1
+    player_search_q_mean_coef: float = 0.01
+    player_search_dynamics_coef: float = 0.1
+    # SIGReg (LeJEPA): pins the chance posterior's batch marginal to
+    # N(0, I) — the anti-collapse guarantee for the chance channel.
+    player_search_sigreg_coef: float = 0.05
+    player_search_sigreg_directions: int = 64
+
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

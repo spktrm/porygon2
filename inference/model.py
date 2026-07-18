@@ -1,3 +1,5 @@
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -34,6 +36,8 @@ class InferenceModel:
         seed: int = 42,
         player_head_params: HeadParams = HeadParams(),
         builder_head_params: HeadParams = HeadParams(),
+        use_search: bool = False,
+        search_overrides: dict | None = None,
     ):
         self._learner_config = get_learner_config()
         self._player_model_config = get_player_model_config(
@@ -43,11 +47,28 @@ class InferenceModel:
             self._learner_config.generation, train=False
         )
 
+        # Deploy-time search budget knobs (depth, top_k_*, solver_steps, …)
+        # — see cfg.search in rl/model/config.py. Requires a checkpoint
+        # whose params include the search heads.
+        for key, value in (search_overrides or {}).items():
+            setattr(self._player_model_config.search, key, value)
+        self._use_search = use_search and self._player_model_config.search.enabled
+
         self._player_network = get_player_model(self._player_model_config)
         self._builder_network = get_builder_model(self._builder_model_config)
 
         self._agent = Agent(
             player_apply_fn=self._player_network.apply,
+            builder_apply_fn=self._builder_network.apply,
+            player_head_params=player_head_params,
+            builder_head_params=builder_head_params,
+        )
+        # search_step mirrors __call__'s signature and output shape, so the
+        # search path is just an Agent bound to a different apply method.
+        self._search_agent = Agent(
+            player_apply_fn=functools.partial(
+                self._player_network.apply, method="search_step"
+            ),
             builder_apply_fn=self._builder_network.apply,
             player_head_params=player_head_params,
             builder_head_params=builder_head_params,
@@ -115,7 +136,8 @@ class InferenceModel:
     def step(self, timestep: PlayerActorInput):
         rng_key = self.split_rng()
 
-        agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
+        agent = self._search_agent if self._use_search else self._agent
+        agent_output = agent.step_player(rng_key, self._player_params, timestep)
         actor_output = agent_output.actor_output
 
         floats = dict(
