@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PolicyHeadOutput,
@@ -24,17 +25,25 @@ class PolicyMetrics(NamedTuple):
     entropy: jax.Array
     normalized_entropy: jax.Array
     magnet_kl: jax.Array
-    logit_l2_norm: jax.Array
 
 
-def masked_mean_squared_penalty(logits: jax.Array, valid_mask: jax.Array) -> jax.Array:
-    mean_centered_logits = logits - jnp.mean(
-        logits, axis=-1, keepdims=True, where=valid_mask
+def calculate_hierarchical_prior(flat_valid_mask: jax.Array) -> jax.Array:
+    """Uniform over valid modalities times uniform within each modality.
+
+    This is the init policy of the hierarchically composed action head
+    (mean-pooled macro logits are zero when the square logits are zero), so
+    it is the consistent anchor for the magnet/exploration KLs. Supports any
+    leading batch dims.
+    """
+    modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
+    valid_per_modality = flat_valid_mask[..., :, None] & modality_oh
+    modality_counts = valid_per_modality.sum(axis=-2)
+    num_valid_modalities = jnp.maximum(
+        (modality_counts > 0).sum(axis=-1, keepdims=True), 1
     )
-    masked_logits = jnp.where(valid_mask, mean_centered_logits, 0.0)
-    sum_of_squares = jnp.sum(jnp.square(masked_logits), axis=-1)
-    valid_count = jnp.maximum(jnp.sum(valid_mask, axis=-1), 1.0)
-    return sum_of_squares / valid_count
+    counts_per_cell = jnp.maximum(modality_counts, 1)[..., FLAT_MODALITY_MASK]
+    prior = 1.0 / (num_valid_modalities * counts_per_cell)
+    return jnp.where(flat_valid_mask, prior, 0.0)
 
 
 def compute_policy_metrics(
@@ -78,7 +87,6 @@ def compute_policy_metrics(
         entropy=entropy,
         normalized_entropy=normalized_entropy,
         magnet_kl=magnet_kl,
-        logit_l2_norm=masked_mean_squared_penalty(logits, valid_mask),
     )
 
 
