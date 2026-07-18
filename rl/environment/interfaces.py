@@ -83,11 +83,38 @@ class PlayerAlphasOutput(PolicyHeadOutput):
 
 
 @dataclass
+class SearchHeadOutput:
+    """Learner-only outputs of the decision-time search heads (all (T,)).
+
+    Per-step loss terms and diagnostics; the learner averages them under
+    the masks below. Actors leave this empty so replay stays small.
+    """
+
+    my_policy_loss: ArrayLike = ()
+    q_taken: ArrayLike = ()
+    q_prior_mean: ArrayLike = ()
+    dynamics_loss: ArrayLike = ()
+    # Diagnostic twins of dynamics_loss with one transition latent swapped
+    # between transitions; each gap measures that channel's usage.
+    dynamics_loss_shuffled_intent: ArrayLike = ()
+    dynamics_loss_shuffled_chance: ArrayLike = ()
+    # Anticipation: Gaussian NLL of the inferred intent under the
+    # decision-time prior, and the prior's mean scale (unpredictability).
+    intent_prior_loss: ArrayLike = ()
+    intent_prior_sigma: ArrayLike = ()
+    # (T, intent_dim + chance_dim) — the learner applies SIGReg to the
+    # whole batch of these, pinning the joint marginal to N(0, I).
+    transition_posterior: ArrayLike = ()
+    pair_valid: ArrayLike = ()
+
+
+@dataclass
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    search_head: SearchHeadOutput = field(default_factory=SearchHeadOutput)
 
 
 @dataclass
