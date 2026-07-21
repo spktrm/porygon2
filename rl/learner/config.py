@@ -96,8 +96,10 @@ class Porygon2LearnerConfig:
     plasticity_cooldown_frames: int = int(1e6)
 
     # Player magnet regularization (MMD-style). The policy is pulled toward a
-    # fixed uniform magnet over legal actions: KL(pi || uniform-over-legal) is
-    # per-state entropy regularization that scales with the legal set. The
+    # fixed hierarchical magnet over legal actions (uniform over valid
+    # modalities, uniform within each modality — the composed head's init
+    # policy), so the KL is per-state entropy regularization that is
+    # invariant to per-modality option counts. The
     # magnet is deliberately stationary — a fixed anchor is what gives the
     # regularized self-play dynamics a stable fixed point (QRE), whereas an
     # EMA magnet chases the policy and degenerates into a short-horizon trust
@@ -147,7 +149,6 @@ class Porygon2LearnerConfig:
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
-    player_logit_norm_loss_coef: float = 0.0
 
     ## Builder
     builder_value_loss_coef: float = 0.5

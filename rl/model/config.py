@@ -92,16 +92,32 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.history_cross_decoder = ConfigDict()
     cfg.encoder.action_decoder = ConfigDict()
     cfg.encoder.value_decoder = ConfigDict()
+    cfg.encoder.intra_entity_encoder = ConfigDict()
+    cfg.encoder.intra_entity_pool = ConfigDict()
 
-    for encoder in [cfg.encoder.latent_encoder]:
+    for encoder in [cfg.encoder.latent_encoder, cfg.encoder.intra_entity_encoder]:
         set_attributes(encoder, **transformer_encoder_kwargs)
 
     for decoder in [
         cfg.encoder.history_cross_decoder,
         cfg.encoder.action_decoder,
         cfg.encoder.value_decoder,
+        cfg.encoder.intra_entity_pool,
     ]:
         set_attributes(decoder, **transformer_decoder_kwargs)
+
+    # Intra-entity attention: each pokemon is a short set of attribute tokens
+    # (species / ability / item / moves / state) mixed by a small
+    # self-attention block, then pooled back to one entity vector by a single
+    # learned query. Runs per-entity over ~10 tokens, so its cost is
+    # negligible next to the trunk. The pool's residual gate starts at 1.0 —
+    # unlike the trunk blocks, token content can only reach the entity vector
+    # through this read, so it must not start as a no-op.
+    cfg.encoder.intra_entity_encoder.need_pos = False
+    cfg.encoder.intra_entity_encoder.num_layers = 1
+    cfg.encoder.intra_entity_pool.need_pos = False
+    cfg.encoder.intra_entity_pool.num_layers = 1
+    cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
     cfg.encoder.latent_encoder.need_pos = False
     # The trunk is one round block — (latent self-attention, history
