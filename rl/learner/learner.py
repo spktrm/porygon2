@@ -685,7 +685,15 @@ class Learner:
                 # Process pure data outside lock
                 init_key, batch_key = jax.random.split(init_key)
                 stacked = _stack_and_pad_batch(batch, rng_key=batch_key)
-                self.device_q.put(stacked)
+                # Bounded put that re-checks done: an unbounded put can strand
+                # this thread forever if shutdown drains the queue between our
+                # done-check and the put.
+                while not self.done:
+                    try:
+                        self.device_q.put(stacked, timeout=1.0)
+                        break
+                    except queue.Full:
+                        continue
 
         logger.info("host_to_device_worker exiting.")
 
