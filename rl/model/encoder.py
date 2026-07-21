@@ -87,6 +87,75 @@ ACTION_DECODER_SLOT_GROUPS = (
     ("target", _TARGET_STATIC_SLOTS),
 )
 
+# Intra-entity attribute-token types: rows of the shared token-type bias
+# table, giving the (otherwise permutation-invariant) intra-entity attention
+# a field identity per token. The four moves share one type — movesets are
+# unordered. Public entities carry two state tokens: a persistent one
+# (survives switching: hp, status, level, ...) and an active-only one
+# (volatiles, boosts, typechange, trapped, ...) that is masked out for
+# benched entities, so "not applicable" is an absent token rather than a
+# default-valued vector.
+_TOKEN_SPECIES = 0
+_TOKEN_ABILITY = 1
+_TOKEN_ITEM = 2
+_TOKEN_MOVE = 3
+_TOKEN_LEARNSET = 4
+_TOKEN_PUBLIC_STATE = 5
+_TOKEN_ACTIVE_STATE = 6
+_TOKEN_PRIVATE_STATE = 7
+_NUM_TOKEN_TYPES = 8
+
+_PUBLIC_TOKEN_TYPES = np.array(
+    [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
+    + 4 * [_TOKEN_MOVE]
+    + [_TOKEN_LEARNSET, _TOKEN_PUBLIC_STATE, _TOKEN_ACTIVE_STATE]
+)
+_PRIVATE_TOKEN_TYPES = np.array(
+    [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
+    + 4 * [_TOKEN_MOVE]
+    + [_TOKEN_PRIVATE_STATE]
+)
+
+
+class EntityAttentionPool(nn.Module):
+    """Pool one entity's attribute tokens into a single entity vector.
+
+    Self-attends the (num_tokens, entity_size) set, then reads it out with a
+    single learned query. Invalid attributes (unrevealed, or the active-only
+    state token on a benched entity) are masked tokens; a fully masked set
+    pools to zeros. The token-type bias gives the permutation-invariant
+    attention a field identity per token.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self, tokens: jax.Array, token_mask: jax.Array, token_types: jax.Array
+    ) -> jax.Array:
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
+        token_bias = self.param(
+            "token_bias",
+            nn.initializers.zeros_init(),
+            (_NUM_TOKEN_TYPES, tokens.shape[-1]),
+        )
+        pool_query = self.param("pool_query", embedding_init, (1, tokens.shape[-1]))
+
+        tokens = tokens + token_bias[token_types].astype(tokens.dtype)
+        tokens = TransformerEncoder(
+            name="attention", **self.cfg.intra_entity_encoder.to_dict()
+        )(qkv=tokens, qkv_mask=token_mask)
+        pooled = TransformerDecoder(
+            name="pool", **self.cfg.intra_entity_pool.to_dict()
+        )(
+            q=pool_query.astype(tokens.dtype),
+            kv=tokens,
+            kv_mask=token_mask,
+        )
+        return jnp.squeeze(pooled, axis=0)
+
 
 def _binary_scale_encoding(
     to_encode: jax.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
@@ -377,13 +446,34 @@ class Encoder(nn.Module):
             name="learnset_linear", use_bias=False, **dense_kwargs
         )
 
+        # Intra-entity attention, shared between private and public entities:
+        # each entity is a short set of attribute tokens, a small
+        # self-attention block forms within-entity interactions (species x
+        # item x moveset, boosts x stats, ...) that a linear sum cannot
+        # express, and a single learned query pools the set back to one
+        # entity vector. Token provenance is carried by the token-type bias
+        # table; per-provenance input norms downstream keep the two entity
+        # kinds separable. Rematted with nothing_saveable (not the house
+        # checkpoint_dots, which saves the very matmul outputs that blow up):
+        # the block runs per entity token-set, including the 2 * NUM_HISTORY
+        # rows of the packed history cache, so storing its internals for the
+        # backward pass OOMs the train step, while recomputing a ~10-token
+        # block is cheap.
+        self.entity_attention_pool = nn.checkpoint(
+            EntityAttentionPool,
+            policy=jax.checkpoint_policies.nothing_saveable,
+        )(self.cfg, name="entity_attention_pool")
+        self.public_persistent_linear = nn.Dense(
+            name="public_persistent_linear", use_bias=False, **dense_kwargs
+        )
+        self.public_transient_linear = nn.Dense(
+            name="public_transient_linear", use_bias=False, **dense_kwargs
+        )
+        self.private_state_linear = nn.Dense(
+            name="private_state_linear", use_bias=False, **dense_kwargs
+        )
+
         # Initialize aggregation modules for combining feature embeddings.
-        self.private_entity_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="private_entity_sum"
-        )
-        self.public_entity_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="public_entity_sum"
-        )
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
@@ -559,52 +649,62 @@ class Encoder(nn.Module):
             )
         ]
 
-        encodings_list = [
-            _encode_sqrt_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL,
-                dtype=self.cfg.dtype,
-            ),
-            _encode_divided_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO,
-                MAX_RATIO_TOKEN / 32,
-            ),
-            _encode_one_hot_public_entity(
-                public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER
-            ),
-            _encode_one_hot_public_entity(
-                public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS
-            ),
-            _encode_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT,
-            ),
-            _encode_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK,
-            ),
-            _encode_one_hot_public_entity(
-                public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED
-            ),
-            _encode_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED,
-            ),
-            _encode_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS,
-            ),
-            _encode_one_hot_public_entity(
-                public,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS,
-            ),
-            _encode_one_hot_public_entity(
-                public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
-            ),
-        ]
-
-        boolean_code = one_hot_concat_jax(encodings_list, dtype=self.cfg.dtype)
+        # Persistent condition: survives switching out, meaningful on the
+        # bench. The active-only overlay (volatiles, boosts, typechange,
+        # trapped/called-back/newly-switched, toxic counter) all resets on
+        # switch, so it becomes its own token, masked by the ACTIVE flag.
+        persistent_code = one_hot_concat_jax(
+            [
+                _encode_sqrt_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL,
+                    dtype=self.cfg.dtype,
+                ),
+                _encode_divided_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO,
+                    MAX_RATIO_TOKEN / 32,
+                ),
+                _encode_one_hot_public_entity(
+                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER
+                ),
+                _encode_one_hot_public_entity(
+                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS
+                ),
+                _encode_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT,
+                ),
+                _encode_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS,
+                ),
+                _encode_one_hot_public_entity(
+                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
+                ),
+            ],
+            dtype=self.cfg.dtype,
+        )
+        transient_code = one_hot_concat_jax(
+            [
+                _encode_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK,
+                ),
+                _encode_one_hot_public_entity(
+                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED
+                ),
+                _encode_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED,
+                ),
+                _encode_one_hot_public_entity(
+                    public,
+                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS,
+                ),
+            ],
+            dtype=self.cfg.dtype,
+        )
 
         move_indices = np.array(
             [
@@ -651,24 +751,24 @@ class Encoder(nn.Module):
             EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
         ]
 
-        public_encoding = jnp.concatenate(
+        persistent_features = jnp.concatenate(
             [
-                jnp.concatenate(
-                    [
-                        boolean_code,
-                        volatiles_encoding,
-                        typechange_encoding,
-                        hp_features,
-                    ],
-                    axis=-1,
-                ),
+                persistent_code,
+                hp_features,
                 move_pp_onehot,
-                self._embed_learnset(species_token),
-                encode_reg_boosts(reg_boost_features),
-                encode_spe_boosts(spe_boost_features),
                 jax.nn.one_hot(
                     teratype_token, NUM_TYPECHART, dtype=move_embeddings.dtype
                 ),
+            ],
+            axis=-1,
+        )
+        transient_features = jnp.concatenate(
+            [
+                transient_code,
+                volatiles_encoding,
+                typechange_encoding,
+                encode_reg_boosts(reg_boost_features).astype(self.cfg.dtype),
+                encode_spe_boosts(spe_boost_features).astype(self.cfg.dtype),
             ],
             axis=-1,
         )
@@ -680,18 +780,55 @@ class Encoder(nn.Module):
             public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE]
         )
 
-        revealed_embedding = self.public_entity_sum(
-            self._embed_species(species_token),
-            self._embed_ability(ability_token),
-            self._embed_item(item_token),
-            move_embeddings.mean(axis=0),
-            public_encoding,
-            pos_bias,
-            side_bias,
+        tokens = jnp.concatenate(
+            (
+                jnp.stack(
+                    (
+                        self._embed_species(species_token),
+                        self._embed_ability(ability_token),
+                        self._embed_item(item_token),
+                    )
+                ),
+                move_embeddings,
+                jnp.stack(
+                    (
+                        self._embed_learnset(species_token),
+                        self.public_persistent_linear(persistent_features),
+                        self.public_transient_linear(transient_features),
+                    )
+                ),
+            ),
+            axis=0,
         )
 
-        # Apply mask to filter out invalid entities.
         mask = get_public_entity_mask(revealed)
+        is_active = (
+            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] > 0
+        )
+        ability_valid = ~(
+            (ability_token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
+            | (ability_token == AbilitiesEnum.ABILITIES_ENUM___PAD)
+            | (ability_token == AbilitiesEnum.ABILITIES_ENUM___NULL)
+        )
+        item_valid = ~(
+            (item_token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
+            | (item_token == ItemsEnum.ITEMS_ENUM___PAD)
+            | (item_token == ItemsEnum.ITEMS_ENUM___NULL)
+        )
+        token_mask = mask & jnp.concatenate(
+            (
+                jnp.stack((jnp.ones_like(mask), ability_valid, item_valid)),
+                is_valid_move & (move_tokens != MovesEnum.MOVES_ENUM___PAD),
+                jnp.stack((jnp.ones_like(mask), jnp.ones_like(mask), is_active)),
+            ),
+            axis=0,
+        )
+
+        revealed_embedding = (
+            self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES)
+            + pos_bias
+            + side_bias
+        )
 
         return revealed_embedding, mask
 
@@ -749,17 +886,51 @@ class Encoder(nn.Module):
             axis=-1,
         ).reshape(-1)
 
-        private_embedding = self.private_entity_sum(
-            self._embed_species(species_token),
-            self._embed_ability(ability_token),
-            self._embed_item(item_token),
-            move_embeddings.mean(axis=0),
-            boolean_code,
-            stat_encoding,
+        tokens = jnp.concatenate(
+            (
+                jnp.stack(
+                    (
+                        self._embed_species(species_token),
+                        self._embed_ability(ability_token),
+                        self._embed_item(item_token),
+                    )
+                ),
+                move_embeddings,
+                self.private_state_linear(
+                    jnp.concatenate((boolean_code, stat_encoding), axis=-1)
+                )[None],
+            ),
+            axis=0,
         )
 
-        # Apply mask to filter out invalid entities.
         mask = get_private_entity_mask(private)
+        ability_valid = ~(
+            (ability_token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
+            | (ability_token == AbilitiesEnum.ABILITIES_ENUM___PAD)
+            | (ability_token == AbilitiesEnum.ABILITIES_ENUM___NULL)
+        )
+        item_valid = ~(
+            (item_token == ItemsEnum.ITEMS_ENUM___UNSPECIFIED)
+            | (item_token == ItemsEnum.ITEMS_ENUM___PAD)
+            | (item_token == ItemsEnum.ITEMS_ENUM___NULL)
+        )
+        move_valid = ~(
+            (move_tokens == MovesEnum.MOVES_ENUM___UNSPECIFIED)
+            | (move_tokens == MovesEnum.MOVES_ENUM___PAD)
+            | (move_tokens == MovesEnum.MOVES_ENUM___NULL)
+        )
+        token_mask = mask & jnp.concatenate(
+            (
+                jnp.stack((jnp.ones_like(mask), ability_valid, item_valid)),
+                move_valid,
+                jnp.ones_like(mask)[None],
+            ),
+            axis=0,
+        )
+
+        private_embedding = self.entity_attention_pool(
+            tokens, token_mask, _PRIVATE_TOKEN_TYPES
+        )
 
         return private_embedding, mask
 
