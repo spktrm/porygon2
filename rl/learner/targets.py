@@ -45,21 +45,14 @@ def compute_player_targets(
 ) -> PlayerTargets:
     """Computes v-trace returns and advantages over stacked reward channels.
 
-    Channels: [0:n_bins] categorical win reward, [n_bins] heuristic potential,
-    [n_bins+1] the anchor-KL penalty reward ``-log(pi/pi_anchor)`` (R-NaD-style
-    reward transformation; ``kl_log_ratio`` is ``log pi_anchor - log pi`` at
-    the taken actions). The KL channel bootstraps from the separate scalar
-    kl_value_head and mixes into advantages via ``player_kl_reward_coef``.
+    Channels: [0:n_bins] categorical win reward, [n_bins] heuristic potential
+    (terminal-only, mixed into advantages via ``heuristic_advantage_coef``).
 
-    IMPACT-style: ``value_log_probs``/``kl_value`` are the *fast* EMA
-    target's predictions and ``isr = pi_target/mu`` its ratio to the behavior
-    policy, so v-trace estimates the target policy's values with off-policy
-    correction — stable under replay reuse because the fast target tracks
-    the learner within ~1k steps. The slow anchor must never be the value
-    reference here: it would bootstrap from a ~16k-step stale net while
-    ``rho = min(1, pi_anchor/mu)`` truncates the sampled outcome signal
-    wherever the policy has outrun the anchor. The anchor enters only through
-    ``kl_log_ratio``.
+    IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
+    and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
+    estimates the target policy's values with off-policy correction — stable
+    under replay reuse because the fast target tracks the learner within ~1k
+    steps.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
