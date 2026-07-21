@@ -12,7 +12,7 @@ import numpy as np
 import plotly.express as px
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES, ModalityEnum
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -20,7 +20,6 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.learner import checkpoint
 from rl.model.config import get_player_model_config
@@ -28,50 +27,11 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
+    calculate_hierarchical_prior,
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_num_params
-
-
-def calculate_hierarchical_prior(valid_mask: jax.Array) -> jax.Array:
-
-    valid_moves = valid_mask & (FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
-    valid_switches = valid_mask & (
-        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-    )
-    valid_wildcard = valid_mask & (
-        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__WILDCARD
-    )
-    valid_other = valid_mask & (FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__OTHER)
-
-    num_valid_moves = jnp.maximum(valid_moves.sum(), 1)
-    num_valid_switches = jnp.maximum(valid_switches.sum(), 1)
-    num_valid_wildcard = jnp.maximum(valid_wildcard.sum(), 1)
-    num_valid_other = jnp.maximum(valid_other.sum(), 1)
-
-    has_moves = valid_moves.any()
-    has_switches = valid_switches.any()
-    has_wildcard = valid_wildcard.any()
-    has_other = valid_other.any()
-
-    # Distribute probability mass equally among the *available* categories
-    total_active_categories = (
-        has_moves.astype(jnp.float32)
-        + has_switches.astype(jnp.float32)
-        + has_wildcard.astype(jnp.float32)
-        + has_other.astype(jnp.float32)
-    )
-
-    category_mass = 1.0 / jnp.maximum(total_active_categories, 1.0)
-
-    # Distribute the category mass evenly among the valid options inside it
-    move_prior = jnp.where(valid_moves, category_mass / num_valid_moves, 0.0)
-    switch_prior = jnp.where(valid_switches, category_mass / num_valid_switches, 0.0)
-    wildcard_prior = jnp.where(valid_wildcard, category_mass / num_valid_wildcard, 0.0)
-    other_prior = jnp.where(valid_other, category_mass / num_valid_other, 0.0)
-
-    return move_prior + switch_prior + wildcard_prior + other_prior
+from rl.model.utils import get_num_params, legal_log_policy
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -156,28 +116,48 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        micro_logits = self._forward_pi_head(action_embeddings) / temp
+        square_logits = self._forward_pi_head(action_embeddings) / temp
 
-        # --- Hierarchical Prior & Metrics ---
-        # hierarchical_prior = calculate_hierarchical_prior(flat_valid_mask)
-        # policy_metrics = compute_policy_metrics(
-        #     logits=pi_logits, valid_mask=flat_valid_mask, prior=hierarchical_prior
-        # )
+        # Hierarchical composition over the same square logits: a macro
+        # softmax over per-modality pooled logits times a micro softmax
+        # within each modality, multiplied in log space. Mean pooling is
+        # load-bearing — LSE pooling collapses the composition back to the
+        # flat softmax — and keeps the modality contest invariant to how
+        # many grid cells each modality owns, so the policy gradient splits
+        # into a within-modality term and a modality-level term like the
+        # hierarchical multi-head did.
+        modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
+        valid_per_modality = flat_valid_mask[:, None] & modality_oh
+        modality_counts = valid_per_modality.sum(axis=0)
+
+        micro_lse = nn.logsumexp(
+            jnp.where(valid_per_modality, square_logits[:, None], -1e9), axis=0
+        )
+        log_micro_policy = square_logits - micro_lse[FLAT_MODALITY_MASK]
+
+        macro_logits = jnp.sum(
+            jnp.where(valid_per_modality, square_logits[:, None], 0.0), axis=0
+        ) / jnp.maximum(modality_counts, 1)
+        log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
+
+        pi_logits = jnp.where(
+            flat_valid_mask,
+            log_macro_policy[FLAT_MODALITY_MASK] + log_micro_policy,
+            -1e9,
+        )
+
         policy_metrics = compute_policy_metrics(
-            logits=micro_logits, valid_mask=flat_valid_mask
+            logits=pi_logits,
+            valid_mask=flat_valid_mask,
+            prior=calculate_hierarchical_prior(flat_valid_mask),
         )
 
         if train:
             action_index = head.action_index
         else:
-            action_index = sample_categorical(
-                jnp.where(flat_valid_mask, micro_logits, -1e9),
-                self.make_rng("sampling"),
-            )
+            action_index = sample_categorical(pi_logits, self.make_rng("sampling"))
 
         log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
-
-        mean_valid_logit = jnp.mean(micro_logits, where=flat_valid_mask)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -198,7 +178,6 @@ class Porygon2PlayerModel(nn.Module):
             entropy=policy_metrics.entropy,
             normalized_entropy=policy_metrics.normalized_entropy,
             magnet_kl=policy_metrics.magnet_kl,
-            logit_l2_norm=policy_metrics.logit_l2_norm,
             normalized_modality_entropy=normalized_modality_entropy,
         )
 

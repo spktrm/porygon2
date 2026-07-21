@@ -46,7 +46,7 @@ from rl.learner.plasticity import (
 )
 from rl.learner.targets import compute_builder_targets, compute_player_targets
 from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
-from rl.model.heads import HeadParams
+from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
@@ -122,19 +122,20 @@ def train_step(
     else:
         player_advantages = player_targets.advantages
 
-    # Magnet policy for the KL regularizer: uniform over legal actions. The
+    # Magnet policy for the KL regularizer: the hierarchical prior — uniform
+    # over valid modalities, uniform within each modality — which is the init
+    # policy of the hierarchically composed action head, so the KL decomposes
+    # into a modality-level KL plus the expected within-modality KLs. The
     # magnet is deliberately stationary — a fixed anchor gives the regularized
     # self-play dynamics a stable fixed point, whereas an EMA magnet chases
     # the policy and degenerates into a short-horizon trust region. The EMA
     # target's only remaining role is the v-trace/IMPACT reference.
-    # KL(pi || uniform-over-legal) = log(num_legal) - H(pi), so this is
-    # per-state entropy regularization that scales with the legal set.
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
-    num_legal = jnp.maximum(flat_action_mask.sum(axis=-1, keepdims=True), 1).astype(
-        float_dtype
+    magnet_prior = calculate_hierarchical_prior(flat_action_mask).astype(float_dtype)
+    magnet_log_policy = jnp.where(
+        flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
     )
-    magnet_log_policy = jnp.where(flat_action_mask, -jnp.log(num_legal), 0.0)
 
     def player_loss_fn(params: Params):
 
@@ -210,8 +211,6 @@ def train_step(
         ).sum(axis=-1)
         loss_magnet_kl = average(magnet_kl, valid=policy_mask)
 
-        loss_logit_l2_norm = average(learner_action_head.logit_l2_norm, policy_mask)
-
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
@@ -221,7 +220,6 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_magnet_kl_coef * loss_magnet_kl
-            + config.player_logit_norm_loss_coef * loss_logit_l2_norm
         )
 
         # Learned mass-semantics scalars (see _forward_pi_head): tau per
@@ -242,7 +240,6 @@ def train_step(
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
-            player_loss_logit_l2_norm=loss_logit_l2_norm,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
