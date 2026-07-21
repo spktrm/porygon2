@@ -22,7 +22,6 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -222,19 +221,7 @@ def train_step(
             + config.player_magnet_kl_coef * loss_magnet_kl
         )
 
-        # Learned mass-semantics scalars (see _forward_pi_head): tau per
-        # modality (1 = flat-softmax spread term, ->inf = best option),
-        # kappa per modality (0 = count-invariant, 1 = count-proportional).
-        mass_temp = jax.nn.softplus(params["params"]["mass_temp_raw"])
-        mass_count_coef = params["params"]["mass_count_coef"]
-        mass_logs = {}
-        for name, value in ModalityEnum.items():
-            suffix = name.split("__")[-1].lower().strip("_")
-            mass_logs[f"player_mass_temp_{suffix}"] = mass_temp[value]
-            mass_logs[f"player_mass_count_coef_{suffix}"] = mass_count_coef[value]
-
         return loss, dict(
-            **mass_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
