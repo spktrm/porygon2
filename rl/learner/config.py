@@ -54,12 +54,18 @@ class Porygon2LearnerConfig:
     batch_size: int = 4
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 2
+    # Kept small on purpose: steady-state throughput is set entirely by
+    # replay_ratio (samples per trajectory), so capacity only controls how
+    # stale a trajectory is when sampled. 256 keeps mean sample age well
+    # inside one EMA-target time constant (1/player_ema_update_rate steps).
+    player_replay_buffer_capacity: int = 256
     player_replay_ratio: int = 8
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
-    # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
+    # starts. Valid range: [0.0, 1.0]. The formula works out to
+    # replay_ratio * batch_size trajectories — enough sample budget for the
+    # learner's first few batches without waiting on a full buffer.
     replay_buffer_min_fill_fraction: float = (
         player_replay_ratio * batch_size / player_replay_buffer_capacity
     )

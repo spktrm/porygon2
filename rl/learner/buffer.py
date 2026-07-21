@@ -25,8 +25,14 @@ class BuilderTrajectoryStore:
         self._max_size = max_size
         self._max_reuses = max_reuses
 
-        self._add_cv = threading.Condition()
-        self._sample_cv = threading.Condition()
+        # Both conditions share one lock: add and sample mutate the same
+        # arrays/dict, so they must be mutually exclusive — separate locks
+        # would only serialize adders against adders and samplers against
+        # samplers. Callers never nest the two conditions, and the RLock
+        # keeps notify-while-holding-the-sibling-condition legal.
+        lock = threading.RLock()
+        self._add_cv = threading.Condition(lock)
+        self._sample_cv = threading.Condition(lock)
 
         self._progress = tqdm(desc="builder_producer", smoothing=0.1)
 
@@ -125,8 +131,10 @@ class PlayerTrajectoryStore:
         self._max_size = max_size
         self._max_reuses = max_reuses
 
-        self._add_cv = threading.Condition()
-        self._sample_cv = threading.Condition()
+        # Single lock behind both conditions — see BuilderTrajectoryStore.
+        lock = threading.RLock()
+        self._add_cv = threading.Condition(lock)
+        self._sample_cv = threading.Condition(lock)
 
         self._progress = tqdm(desc="player_producer", smoothing=0.1)
 
@@ -169,10 +177,13 @@ class PlayerTrajectoryStore:
         )
 
     def reset_usage_counts(self):
-        self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
-        self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
-        self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
-        self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
+        # Called from the learner thread; takes the store lock so it can't
+        # interleave with _update_usage_counts running inside add().
+        with self._add_cv:
+            self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
+            self._item_counts = np.zeros(NUM_ITEMS, dtype=np.float32)
+            self._ability_counts = np.zeros(NUM_ABILITIES, dtype=np.float32)
+            self._move_counts = np.zeros(NUM_MOVES, dtype=np.float32)
 
     def _update_usage_counts(self, tokens: np.ndarray):
         """Updates EMA usage counts for species, items, abilities, and moves."""
