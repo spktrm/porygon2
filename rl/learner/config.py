@@ -111,7 +111,7 @@ class Porygon2LearnerConfig:
     # EMA magnet chases the policy and degenerates into a short-horizon trust
     # region. The EMA target is reserved for the v-trace/IMPACT reference and
     # plays no regularization role. The coef sets the softness level.
-    player_magnet_kl_coef: float = 0.05
+    player_magnet_kl_coef: float = 0.01
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
