@@ -5,7 +5,11 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
+from rl.environment.data import (
+    FLAT_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
+    SRC_MODALITY_MASK,
+)
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PolicyHeadOutput,
@@ -31,9 +35,9 @@ def calculate_hierarchical_prior(flat_valid_mask: jax.Array) -> jax.Array:
     """Uniform over valid modalities times uniform within each modality.
 
     This is the init policy of the hierarchically composed action head
-    (mean-pooled macro logits are zero when the square logits are zero), so
-    it is the consistent anchor for the magnet/exploration KLs. Supports any
-    leading batch dims.
+    (the macro head's zero-initialised output layer and the zero square
+    logits both give zero logits at init), so it is the consistent anchor
+    for the magnet/exploration KLs. Supports any leading batch dims.
     """
     modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
     valid_per_modality = flat_valid_mask[..., :, None] & modality_oh
@@ -92,6 +96,50 @@ def compute_policy_metrics(
 
 def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
+
+
+class MacroHead(nn.Module):
+    """Modality-level (macro) logits from per-modality pooled src slots.
+
+    One learned query per modality attention-pools that modality's live
+    src-slot embeddings, then a shared MLP with a zero-initialised output
+    layer maps each pooled vector to a scalar. Owning the modality contest
+    with dedicated parameters keeps the (per-modality shift-invariant)
+    micro gradient from moving the macro decision through gram-logit
+    magnitude, which the old mean-pool of the square logits allowed. Zero
+    output init keeps macro logits exactly zero at init, so
+    calculate_hierarchical_prior remains the exact init-policy anchor.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, src_embeddings: jax.Array, src_valid: jax.Array):
+        queries = self.param(
+            "modality_queries",
+            nn.initializers.lecun_normal(),
+            (NUM_MODALITY_FEATURES, src_embeddings.shape[-1]),
+        ).astype(src_embeddings.dtype)
+
+        attn_logits = PointerLogits(**self.cfg.qk_logits.to_dict())(
+            queries, src_embeddings
+        ).squeeze(-1)
+
+        valid_src_per_modality = (
+            SRC_MODALITY_MASK[None, :] == jnp.arange(NUM_MODALITY_FEATURES)[:, None]
+        ) & src_valid[None, :]
+        attn = jax.nn.softmax(
+            jnp.where(valid_src_per_modality, attn_logits, -1e9), axis=-1
+        )
+        pooled = attn @ src_embeddings
+
+        hidden = MLP(**self.cfg.mlp.to_dict())(pooled)
+        logits = nn.Dense(1, kernel_init=nn.initializers.zeros, dtype=hidden.dtype)(
+            hidden
+        )
+        # Modalities with no live src pool an arbitrary mixture; callers
+        # must mask them out via legal_log_policy(macro_logits, valid).
+        return logits.squeeze(-1)
 
 
 class PolicyQKHead(nn.Module):

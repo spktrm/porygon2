@@ -616,10 +616,15 @@ class Learner:
         if debug:
             self._train_step_jit = train_step
         else:
+            # Donation requires that no pytree leaf appears twice across the
+            # donated states (params/target_params are deep-copied at
+            # creation/restore) and that nothing reads a state object after
+            # the call is dispatched — all periodic readers run on this
+            # thread after the rebind in _train_step.
             self._train_step_jit = jax.jit(
                 train_step,
                 static_argnames=["config"],
-                # donate_argnames=["player_state", "builder_state"],
+                donate_argnames=["player_state", "builder_state"],
             )
 
     def enqueue_traj(self, traj: Trajectory):
@@ -738,13 +743,23 @@ class Learner:
 
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received. Saving checkpoint...")
-            save_train_state(
-                self.wandb_run,
-                self.config,
-                jax.device_get(self.player_state),
-                jax.device_get(self.builder_state),
-                self.league,
-            )
+            try:
+                save_train_state(
+                    self.wandb_run,
+                    self.config,
+                    jax.device_get(self.player_state),
+                    jax.device_get(self.builder_state),
+                    self.league,
+                )
+            except RuntimeError:
+                # An interrupt that lands mid train-step catches the state
+                # after its buffers were donated but before the rebind; the
+                # pre-step state is unrecoverable then, so skip the save
+                # rather than masking the interrupt with a donation error.
+                logger.exception(
+                    "Skipping interrupt checkpoint: train state was donated "
+                    "mid-step. Latest periodic checkpoint is unaffected."
+                )
             raise
         except Exception as e:
             logger.error(f"Learner training crashed: {e}")

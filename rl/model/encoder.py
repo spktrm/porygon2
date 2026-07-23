@@ -522,7 +522,7 @@ class Encoder(nn.Module):
         if DO_CHECKPOINT or self.num_rounds > 1:
             round_block = nn.checkpoint(
                 RoundBlock,
-                policy=jax.checkpoint_policies.checkpoint_dots,
+                policy=jax.checkpoint_policies.nothing_saveable,
             )
         variable_axes = {"params": 0}
         if COLLECT_INTERMEDIATES:
