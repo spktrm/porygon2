@@ -257,7 +257,10 @@ def create_train_state(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
-        target_params=initial_player_params,
+        # Deep-copied: params and target_params must not share buffers, or
+        # donating the train state to the jitted train step fails with a
+        # duplicate-donation error on the first step.
+        target_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
     )
 
@@ -290,7 +293,8 @@ def create_train_state(
         ),
         init_fn=builder_params_init_fn,
         params=inital_builder_params,
-        target_params=inital_builder_params,
+        # Deep-copied for the same donation-aliasing reason as the player state.
+        target_params=jax.tree.map(jnp.copy, inital_builder_params),
         tx=builder_optimizer,
     )
 
@@ -385,8 +389,12 @@ def _init_league(
             player_frame_count=np.array(player_state.frame_count).item(),
             builder_frame_count=np.array(builder_state.frame_count).item(),
             step_count=MAIN_KEY,
-            player_params=player_state.target_params,
-            builder_params=builder_state.target_params,
+            # Host copies, never the live state arrays: actors' device_put of
+            # an already-on-device tree is a no-op, so handing out live
+            # buffers has actors running inference on memory the donated
+            # train step deletes.
+            player_params=jax.device_get(player_state.target_params),
+            builder_params=jax.device_get(builder_state.target_params),
         ),
         players=[],
         league_size=learner_config.league_size,
@@ -537,11 +545,15 @@ def load_from_params(
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
+    # Deep-copied so params/target_params share no buffers — required for
+    # donating the train state to the jitted train step.
     player_state = player_state.replace(
-        params=player_params, target_params=player_params
+        params=player_params,
+        target_params=jax.tree.map(jnp.copy, player_params),
     )
     builder_state = builder_state.replace(
-        params=builder_params, target_params=builder_params
+        params=builder_params,
+        target_params=jax.tree.map(jnp.copy, builder_params),
     )
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights

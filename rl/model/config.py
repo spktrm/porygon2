@@ -128,7 +128,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # means every residual update (including history integration) starts as
     # a no-op, so extra rounds are stable to add; each round adds parameters
     # as well as compute.
-    cfg.encoder.num_rounds = 2
+    cfg.encoder.num_rounds = 3
     cfg.encoder.history_cross_decoder.need_pos = False
     cfg.encoder.history_cross_decoder.num_layers = 1
     cfg.encoder.latent_encoder.num_layers = 1
@@ -153,6 +153,17 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True
+
+    # Dedicated modality-level head: per-modality attention pooling over
+    # src-slot embeddings, shared MLP, zero-init output layer (keeps the
+    # init policy anchored to calculate_hierarchical_prior).
+    cfg.macro_head = ConfigDict()
+    cfg.macro_head.qk_logits = ConfigDict()
+    cfg.macro_head.qk_logits.num_heads = 1
+    cfg.macro_head.qk_logits.use_bias = True
+    cfg.macro_head.qk_logits.qk_layer_norm = True
+    cfg.macro_head.mlp = ConfigDict()
+    cfg.macro_head.mlp.layer_sizes = entity_size
 
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()

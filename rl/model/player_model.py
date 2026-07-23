@@ -27,6 +27,7 @@ from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
+    MacroHead,
     calculate_hierarchical_prior,
     compute_policy_metrics,
     sample_categorical,
@@ -39,6 +40,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
+        self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
@@ -118,14 +120,15 @@ class Porygon2PlayerModel(nn.Module):
 
         square_logits = self._forward_pi_head(action_embeddings) / temp
 
-        # Hierarchical composition over the same square logits: a macro
-        # softmax over per-modality pooled logits times a micro softmax
-        # within each modality, multiplied in log space. Mean pooling is
-        # load-bearing — LSE pooling collapses the composition back to the
-        # flat softmax — and keeps the modality contest invariant to how
-        # many grid cells each modality owns, so the policy gradient splits
-        # into a within-modality term and a modality-level term like the
-        # hierarchical multi-head did.
+        # Hierarchical composition: a macro softmax over modalities times a
+        # micro softmax within each modality, multiplied in log space. The
+        # macro logits come from a dedicated head over per-modality pooled
+        # src embeddings rather than a mean-pool of the square logits, so
+        # the gram logits only ever receive within-modality (per-modality
+        # shift-invariant) gradient — micro confidence cannot move the
+        # modality contest through logit magnitude. The policy gradient
+        # still splits into a within-modality term and a modality-level
+        # term like the hierarchical multi-head did.
         modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         valid_per_modality = flat_valid_mask[:, None] & modality_oh
         modality_counts = valid_per_modality.sum(axis=0)
@@ -135,9 +138,9 @@ class Porygon2PlayerModel(nn.Module):
         )
         log_micro_policy = square_logits - micro_lse[FLAT_MODALITY_MASK]
 
-        macro_logits = jnp.sum(
-            jnp.where(valid_per_modality, square_logits[:, None], 0.0), axis=0
-        ) / jnp.maximum(modality_counts, 1)
+        # A src slot is actionable iff its row has any valid tgt cell.
+        src_valid = valid_mask.any(axis=-1)
+        macro_logits = self.macro_head(action_embeddings, src_valid) / temp
         log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
 
         pi_logits = jnp.where(
