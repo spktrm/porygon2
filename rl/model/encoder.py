@@ -1333,6 +1333,9 @@ class Encoder(nn.Module):
         edge_slot_ids = packed_history_step.edge_cache[
             :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
         ]
+        node_sides = packed_history_step.public_cache[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
 
         # One pooled field vector per history step from the (field, my-side,
         # opp-side) token triple.
@@ -1353,6 +1356,7 @@ class Encoder(nn.Module):
             node_embedding_cache=node_embedding_cache,
             edge_embedding_cache=edge_embedding_cache,
             edge_slot_ids=edge_slot_ids,
+            node_sides=node_sides,
             field_step_embeddings=step_field_vec,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),

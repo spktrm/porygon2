@@ -204,6 +204,7 @@ class PerSlotHistoryEncoder(nn.Module):
         node_embedding_cache: jax.Array,
         edge_embedding_cache: jax.Array,
         edge_slot_ids: jax.Array,
+        node_sides: jax.Array,
         field_step_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
@@ -215,6 +216,7 @@ class PerSlotHistoryEncoder(nn.Module):
             node_embedding_cache: (P, D) embedded public-entity cache rows.
             edge_embedding_cache: (P, D) embedded edge cache rows.
             edge_slot_ids: (P,) ENTITY_EDGE_FEATURE__ENTITY_IDX per cache row.
+            node_sides: (P,) relative side (1 = mine) per cache row.
             field_step_embeddings: (H, D) pooled field embedding per step.
             step_request_count: (H,) request count of each history step.
             step_valid: (H,) bool.
@@ -230,6 +232,15 @@ class PerSlotHistoryEncoder(nn.Module):
             0, NUM_PUBLIC_SLOTS - 1
         )  # (H, K)
 
+        # Perspective is otherwise a whisper in these inputs (a single
+        # additive bias inside the node embeddings — edges and most field
+        # rows are perspective-blind). The outcome is inherently a
+        # side-differenced quantity, so hand each message an explicit
+        # "mine / theirs" tag instead of making the model excavate it.
+        side_onehot = jax.nn.one_hot(
+            jnp.take(node_sides, relevant, axis=0), 2, dtype=node_embeddings.dtype
+        )  # (H, K, 2)
+
         messages = self.message_projection(
             jnp.concatenate(
                 (
@@ -238,6 +249,7 @@ class PerSlotHistoryEncoder(nn.Module):
                     jnp.broadcast_to(
                         field_step_embeddings[:, None], node_embeddings.shape
                     ),
+                    side_onehot,
                 ),
                 axis=-1,
             )
