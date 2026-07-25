@@ -1,5 +1,6 @@
 import math
-from typing import Sequence, TypeVar
+from typing import TypeVar
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
@@ -204,15 +205,10 @@ def process_state(
         dtype=np.float32,
     )
 
-    state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / 1000).astype(
-        np.float32
-    )
-
     env_step = PlayerEnvOutput(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
-        state_potential=state_potential.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         revealed_team=revealed_team,

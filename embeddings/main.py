@@ -1,7 +1,8 @@
 import json
 import os
 import traceback
-from typing import Any, Dict, List, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 import networkx as nx
 import numpy as np
@@ -26,7 +27,7 @@ def to_id(string: str) -> str:
     return "".join(c for c in string if c.isalnum()).lower()
 
 
-def get_df(data: List[Dict[str, Any]], sortby: str = None):
+def get_df(data: list[dict[str, Any]], sortby: str = None):
     data = [
         d
         for d in data
@@ -73,7 +74,7 @@ def concat_encodings(dataframes: Sequence[pd.DataFrame]) -> pd.DataFrame:
     return df
 
 
-def get_encodings(df: pd.DataFrame, protocols: List[Protocol], verbose: bool = True):
+def get_encodings(df: pd.DataFrame, protocols: list[Protocol], verbose: bool = True):
     feature_vector_dfs = []
     feature_vector_categorical_dfs = []
     feature_vector_scalar_dfs = []
@@ -143,7 +144,7 @@ class VectorContainsNanError(Exception):
     pass
 
 
-def to_lookup_table(encodings_df: pd.DataFrame, stoi: Dict[str, int]) -> np.ndarray:
+def to_lookup_table(encodings_df: pd.DataFrame, stoi: dict[str, int]) -> np.ndarray:
 
     padding_keys = [s for s in stoi.keys() if s.startswith("_")]
     num_padding_keys = len(padding_keys)
@@ -171,7 +172,7 @@ def to_lookup_table(encodings_df: pd.DataFrame, stoi: Dict[str, int]) -> np.ndar
 class GenerationEncodings:
     NAMES = ["abilities", "items", "move", "species", "typechart"]
 
-    def __init__(self, gen: int, stoi: Dict[str, int] = None):
+    def __init__(self, gen: int, stoi: dict[str, int] = None):
         if stoi is None:
             with open("data/data.json", "r", encoding="utf-8") as f:
                 stoi = json.load(f)

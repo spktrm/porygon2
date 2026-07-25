@@ -2,7 +2,8 @@ import functools
 import os
 from collections.abc import Mapping
 from pprint import pprint
-from typing import Any, Callable, Literal
+from typing import Any, Literal
+from collections.abc import Callable
 
 import chex
 import flax.linen as nn
@@ -11,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb.wandb_run
-from flax import core, struct
+from flax import core, struct, traverse_util
 from flax.training import train_state
 
 from rl.environment.interfaces import (
@@ -20,30 +21,18 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
 )
+from rl.config.common import AdamWConfig, BaseTrainingConfig, GenT, SmogonFormatT
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 
-
-@chex.dataclass(frozen=True)
-class AdamWConfig:
-    """Adam optimizer related params."""
-
-    b1: float
-    b2: float
-    eps: float
-    weight_decay: float
-
-
-GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
-SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
 PolicyObjectiveT = Literal["spo", "ppo"]
 
 
 @chex.dataclass(frozen=True)
-class Porygon2LearnerConfig:
+class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
     num_player_actors: int = 12
     num_builder_actors: int = 4
@@ -147,8 +136,10 @@ class Porygon2LearnerConfig:
     # the EMA statistics keep updating either way so re-enabling is smooth.
     player_advantage_ema_enabled: bool = True
 
-    # Regularised reward params
-    player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
+    # Potential-based shaping: weight of the learned-critic potential
+    # advantage channel (requires offline_critic_ckpt_path). Anneal to zero
+    # to keep the asymptotic objective unchanged.
+    player_potential_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
 
     # Loss coefficients
     ## Player
@@ -169,16 +160,41 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    # Smogon Generation
-    generation: GenT = 9
-    smogon_format: SmogonFormatT = "randombattle"
+    # Warm-start source for LOAD_STATE_MODE=params. When set, params are
+    # merged from this checkpoint instead of the latest RL checkpoint —
+    # point it at an offline critic artifact (rl/offline/train.py) to
+    # initialize the encoder + value head from replay-trained weights while
+    # the policy heads keep their fresh init.
+    init_params_ckpt_path: str | None = None
 
-    # Logging params
-    log_artifacts_online: bool = False
+    # Frozen offline critic used as the learned state potential in
+    # compute_player_targets. Loaded once at learner startup; its params
+    # never enter the optimizer, so it stays frozen by construction. The
+    # potential advantage channel is still gated by
+    # player_potential_advantage_coef_fn.
+    offline_critic_ckpt_path: str | None = None
+
+    # Player param subtrees excluded from RL updates, matched by substring
+    # against the "/"-joined param path (e.g. "encoder/history_encoder" to
+    # pin the warm-started recurrent history encoder). Updates for matching
+    # leaves are zeroed after the optimizer, so Adam moments and the EMA
+    # target stay consistent.
+    player_frozen_param_patterns: tuple[str, ...] = ()
 
 
 def get_learner_config():
     return Porygon2LearnerConfig()
+
+
+def _frozen_param_mask(params: Params, patterns: tuple[str, ...]):
+    """True (frozen) for every param leaf whose "/"-joined path contains any
+    of the patterns."""
+    flat = traverse_util.flatten_dict(core.unfreeze(params))
+    mask = {
+        path: any(pattern in "/".join(path) for pattern in patterns)
+        for path in flat
+    }
+    return traverse_util.unflatten_dict(mask)
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
@@ -237,6 +253,7 @@ def create_train_state(
         actor_input=ex_player_actor_inp,
         actor_output=ex_player_actor_out,
     )
+    initial_player_params = player_params_init_fn(rng)
     player_optimizer = optax.chain(
         optax.clip_by_global_norm(config.player_clip_gradient),
         optax.adamw(
@@ -247,11 +264,22 @@ def create_train_state(
             weight_decay=config.adam.weight_decay,
         ),
     )
+    if config.player_frozen_param_patterns:
+        # Zero the final updates for frozen subtrees so they never train,
+        # regardless of what earlier transforms produce.
+        player_optimizer = optax.chain(
+            player_optimizer,
+            optax.masked(
+                optax.set_to_zero(),
+                _frozen_param_mask(
+                    initial_player_params, config.player_frozen_param_patterns
+                ),
+            ),
+        )
     if config.gradient_accumulation_steps > 1:
         player_optimizer = optax.MultiSteps(
             player_optimizer, config.gradient_accumulation_steps
         )
-    initial_player_params = player_params_init_fn(rng)
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
@@ -575,16 +603,22 @@ def load_train_state(
     if mode == "scratch":
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 2. No checkpoint found -> Fallback to Scratch
+    # 2. Load Params Only. An explicit init_params_ckpt_path (e.g. an
+    # offline critic artifact) takes precedence over the latest RL
+    # checkpoint and works even when no RL checkpoint exists yet.
+    if mode == "params":
+        params_ckpt = learner_config.init_params_ckpt_path or latest_ckpt
+        if not params_ckpt:
+            print("No checkpoint found. Defaulting to scratch.")
+            return load_from_scratch(learner_config, player_state, builder_state)
+        return load_from_params(
+            params_ckpt, learner_config, player_state, builder_state
+        )
+
+    # 3. No checkpoint found -> Fallback to Scratch
     if not latest_ckpt:
         print("No checkpoint found. Defaulting to scratch.")
         return load_from_scratch(learner_config, player_state, builder_state)
-
-    # 3. Load Params Only
-    if mode == "params":
-        return load_from_params(
-            latest_ckpt, learner_config, player_state, builder_state
-        )
 
     # 4. Standard Checkpoint Load (Default)
     return load_from_checkpoint(

@@ -4,7 +4,7 @@ import json
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 import aiohttp
 from aiohttp import ClientSession
@@ -63,7 +63,7 @@ class RateLimitedClient:
         self._cooldown_until = max(self._cooldown_until, loop.time() + seconds)
 
     @staticmethod
-    def _retry_after(resp: aiohttp.ClientResponse) -> Optional[float]:
+    def _retry_after(resp: aiohttp.ClientResponse) -> float | None:
         value = resp.headers.get("Retry-After")
         if value is None:
             return None
@@ -73,8 +73,8 @@ class RateLimitedClient:
             return None  # HTTP-date form; fall back to our own backoff
 
     async def get_json(
-        self, url: str, params: Optional[Dict[str, Any]] = None
-    ) -> Optional[Any]:
+        self, url: str, params: dict[str, Any] | None = None
+    ) -> Any | None:
         for attempt in range(MAX_ATTEMPTS):
             await self._wait_turn()
             try:
@@ -119,23 +119,23 @@ class Stats:
     skipped_rating: int = 0
     downloaded: int = 0
     failed: int = 0
-    seen_ids: Set[str] = field(default_factory=set)
+    seen_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
 class Filters:
     limit: int
     min_rating: int
-    before: Optional[int]
-    after: Optional[int]
-    existing_ids: Set[str]
+    before: int | None
+    after: int | None
+    existing_ids: set[str]
 
 
 async def _crawl_search(
     client: RateLimitedClient,
-    queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+    queue: "asyncio.Queue[dict[str, Any] | None]",
     stats: Stats,
-    base_params: Dict[str, Any],
+    base_params: dict[str, Any],
     filters: Filters,
 ) -> bool:
     """Paginate one search query newest-to-oldest via the `before` cursor,
@@ -189,7 +189,7 @@ async def _crawl_search(
 
 async def produce_from_ladder(
     client: RateLimitedClient,
-    queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+    queue: "asyncio.Queue[dict[str, Any] | None]",
     stats: Stats,
     format_id: str,
     filters: Filters,
@@ -225,7 +225,7 @@ async def produce_from_ladder(
 
 async def produce_from_format(
     client: RateLimitedClient,
-    queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+    queue: "asyncio.Queue[dict[str, Any] | None]",
     stats: Stats,
     format_id: str,
     filters: Filters,
@@ -234,7 +234,7 @@ async def produce_from_format(
     await _crawl_search(client, queue, stats, {"format": format_id}, filters)
 
 
-def save_replay(format_dir: str, replay: Dict[str, Any]) -> None:
+def save_replay(format_dir: str, replay: dict[str, Any]) -> None:
     """Atomic write so an interrupted run never leaves truncated JSON."""
     replay_path = os.path.join(format_dir, replay["id"] + ".json")
     tmp_path = replay_path + ".tmp"
@@ -245,7 +245,7 @@ def save_replay(format_dir: str, replay: Dict[str, Any]) -> None:
 
 async def download_worker(
     client: RateLimitedClient,
-    queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+    queue: "asyncio.Queue[dict[str, Any] | None]",
     stats: Stats,
     format_dir: str,
     bar: tqdm,
@@ -266,8 +266,8 @@ async def download_worker(
             queue.task_done()
 
 
-def load_existing_ids(format_dir: str) -> Set[str]:
-    existing_ids: Set[str] = set()
+def load_existing_ids(format_dir: str) -> set[str]:
+    existing_ids: set[str] = set()
     if os.path.exists(format_dir):
         for filename in os.listdir(format_dir):
             if filename.endswith(".json"):
@@ -343,7 +343,7 @@ async def main() -> None:
         existing_ids=existing_ids,
     )
     stats = Stats()
-    queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue(maxsize=200)
+    queue: "asyncio.Queue[dict[str, Any] | None]" = asyncio.Queue(maxsize=200)
 
     timeout = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
     headers = {"User-Agent": USER_AGENT}

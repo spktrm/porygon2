@@ -40,7 +40,7 @@ _RELEVANT_ENTITY_FEATURES = np.array(
 
 
 @chex.dataclass
-class WorldModelOutput:
+class PerSlotHistoryOutput:
     # Per-history-step snapshots: (H, 12, D) / (H, D).
     slot_snapshots: ArrayLike = ()
     field_snapshots: ArrayLike = ()
@@ -48,7 +48,7 @@ class WorldModelOutput:
     step_request_count: ArrayLike = ()
 
 
-class PerSlotWorldModel(nn.Module):
+class PerSlotHistoryEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
@@ -163,7 +163,7 @@ class PerSlotWorldModel(nn.Module):
         field_step_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
-    ) -> WorldModelOutput:
+    ) -> PerSlotHistoryOutput:
         """Scan the slot bank along the history axis.
 
         Args:
@@ -213,7 +213,7 @@ class PerSlotWorldModel(nn.Module):
             (field_step_embeddings, messages, slot_ids, edge_mask, step_valid),
         )
 
-        return WorldModelOutput(
+        return PerSlotHistoryOutput(
             slot_snapshots=slot_snapshots,
             field_snapshots=field_snapshots,
             step_valid=step_valid,
@@ -221,21 +221,21 @@ class PerSlotWorldModel(nn.Module):
         )
 
     def state_at_requests(
-        self, wm_output: WorldModelOutput, request_counts: jax.Array
+        self, history_output: PerSlotHistoryOutput, request_counts: jax.Array
     ) -> tuple[jax.Array, jax.Array]:
         """For each request, gather the state after the last history step whose
         request_count <= the request's. (T,) -> ((T, 12, D), (T, D))."""
         h0_slots, h0_field = self.initial_state()
-        step_indices = jnp.arange(wm_output.step_valid.shape[0])
+        step_indices = jnp.arange(history_output.step_valid.shape[0])
 
         def gather_one(request_count: jax.Array):
-            ok = wm_output.step_valid & (wm_output.step_request_count <= request_count)
+            ok = history_output.step_valid & (history_output.step_request_count <= request_count)
             idx = jnp.where(ok, step_indices, -1).max()
             has_history = idx >= 0
             safe_idx = jnp.maximum(idx, 0)
-            slots = jnp.where(has_history, wm_output.slot_snapshots[safe_idx], h0_slots)
+            slots = jnp.where(has_history, history_output.slot_snapshots[safe_idx], h0_slots)
             field = jnp.where(
-                has_history, wm_output.field_snapshots[safe_idx], h0_field
+                has_history, history_output.field_snapshots[safe_idx], h0_field
             )
             return slots, field
 

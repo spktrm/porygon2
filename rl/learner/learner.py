@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import queue
@@ -57,6 +58,9 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
+    potential_params: Params | None = None,
+    *,
+    potential_apply_fn=None,
 ):
     """Train for a single step."""
 
@@ -71,6 +75,16 @@ def train_step(
         packed_history=player_packed_history,
         history=player_history,
     )
+
+    # Learned state potential: the frozen offline critic's Φ(s). The params
+    # live outside the train state (never donated, never in the optimizer),
+    # so the critic cannot drift during RL training.
+    if potential_apply_fn is not None:
+        state_potential = potential_apply_fn(potential_params, player_actor_input)
+    else:
+        state_potential = jnp.zeros(
+            player_transitions.env_output.done.shape, dtype=jnp.float32
+        )
 
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
@@ -88,7 +102,7 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    heuristic_advantage_coef = config.player_heuristic_advantage_coef_fn(
+    potential_advantage_coef = config.player_potential_advantage_coef_fn(
         player_state.step_count
     )
 
@@ -107,7 +121,8 @@ def train_step(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
-        heuristic_advantage_coef=heuristic_advantage_coef,
+        state_potential=state_potential,
+        potential_advantage_coef=potential_advantage_coef,
         config=config,
     )
     policy_mask = player_targets.policy_mask
@@ -283,7 +298,7 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_advantage_mixing_alpha=heuristic_advantage_coef,
+            player_advantage_mixing_alpha=potential_advantage_coef,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -612,9 +627,31 @@ class Learner:
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
+        # Frozen offline critic supplying the learned state potential. Its
+        # params are held here, outside the train states — they are never
+        # donated and never touched by the optimizer, so the critic stays
+        # frozen for the lifetime of the run.
+        self.potential_params: Params | None = None
+        potential_apply_fn = None
+        if config.offline_critic_ckpt_path:
+            from rl.offline.artifact import load_critic_params, make_potential_apply
+
+            self.potential_params = jax.device_put(
+                load_critic_params(config.offline_critic_ckpt_path)
+            )
+            potential_apply_fn = make_potential_apply(config.generation)
+            logging.info(
+                "Loaded offline critic potential from %s",
+                config.offline_critic_ckpt_path,
+            )
+
+        train_step_fn = functools.partial(
+            train_step, potential_apply_fn=potential_apply_fn
+        )
+
         # JIT Compile
         if debug:
-            self._train_step_jit = train_step
+            self._train_step_jit = train_step_fn
         else:
             # Donation requires that no pytree leaf appears twice across the
             # donated states (params/target_params are deep-copied at
@@ -622,7 +659,7 @@ class Learner:
             # the call is dispatched — all periodic readers run on this
             # thread after the rebind in _train_step.
             self._train_step_jit = jax.jit(
-                train_step,
+                train_step_fn,
                 static_argnames=["config"],
                 donate_argnames=["player_state", "builder_state"],
             )
@@ -802,6 +839,7 @@ class Learner:
             self.builder_state,
             batch,
             self.config,
+            self.potential_params,
         )
 
         return logs

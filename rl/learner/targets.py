@@ -40,13 +40,16 @@ def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
-    heuristic_advantage_coef: float,
+    state_potential: jax.Array,
+    potential_advantage_coef: float,
     config: Porygon2LearnerConfig,
 ) -> PlayerTargets:
     """Computes v-trace returns and advantages over stacked reward channels.
 
-    Channels: [0:n_bins] categorical win reward, [n_bins] heuristic potential
-    (terminal-only, mixed into advantages via ``heuristic_advantage_coef``).
+    Channels: [0:n_bins] categorical win reward, [n_bins] learned potential
+    (``state_potential``, the frozen offline critic's Φ(s) in [-1, 1];
+    terminal-only reward, mixed into advantages via
+    ``potential_advantage_coef``).
 
     IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
     and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
@@ -57,7 +60,7 @@ def compute_player_targets(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
     dones = batch.player_transitions.env_output.done
-    state_potential = batch.player_transitions.env_output.state_potential
+    state_potential = state_potential.astype(isr.dtype)
 
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
@@ -73,9 +76,9 @@ def compute_player_targets(
 
     player_reward = batch.player_transitions.env_output.win_reward
 
-    terminal_heuristic_reward = jnp.where(dones, state_potential, 0.0)
+    terminal_potential_reward = jnp.where(dones, state_potential, 0.0)
     r_t = jnp.concatenate(
-        (player_reward, terminal_heuristic_reward[..., None]), axis=-1
+        (player_reward, terminal_potential_reward[..., None]), axis=-1
     )
 
     value_probs = jnp.exp(value_log_probs)
@@ -104,7 +107,7 @@ def compute_player_targets(
 
     combined_advantage = (
         pg_advantages[..., :n_bins] @ cat_vf_support
-        + heuristic_advantage_coef * pg_advantages[..., n_bins]
+        + potential_advantage_coef * pg_advantages[..., n_bins]
     )
 
     win_returns = targets_tm1[..., :n_bins]
