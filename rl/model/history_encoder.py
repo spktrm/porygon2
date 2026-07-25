@@ -22,6 +22,7 @@ from jaxtyping import ArrayLike
 from ml_collections import ConfigDict
 
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
 NUM_PUBLIC_SLOTS = 12
 
@@ -46,6 +47,49 @@ class PerSlotHistoryOutput:
     field_snapshots: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
+
+
+class HistoryAttentionPool(nn.Module):
+    """Cross-attention pooling of the recurrent history states into a fixed
+    bank of learned latent summaries.
+
+    A set of num_latents learned queries attends over the 13 history tokens
+    (12 slot states + field state), yielding (num_latents, D) latents. The
+    module lives in the shared history pathway so its capacity is trained
+    by the offline outcome critic (which reads the flattened latents
+    through a linear probe) and reused by the RL trunk (which reads the
+    same latents as extra history-context tokens) — readout capacity
+    accumulates here, where RL warm-starts it, not in offline-only heads.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, tokens: jax.Array) -> jax.Array:
+        """(S, D) history tokens -> (num_latents, D) latent summaries."""
+        pcfg = self.cfg.history_pool
+        queries = self.param(
+            "latent_queries",
+            nn.initializers.normal(0.02),
+            (pcfg.num_latents, self.cfg.entity_size),
+        ).astype(tokens.dtype)
+        attended = MultiHeadAttention(
+            name="latent_cross",
+            num_heads=pcfg.num_heads,
+            qk_size=pcfg.qk_size,
+            v_size=pcfg.qk_size,
+            model_size=self.cfg.entity_size,
+            use_bias=pcfg.use_bias,
+            dtype=tokens.dtype,
+        )(
+            q=layer_norm(queries),
+            kv=layer_norm(tokens),
+            mask=create_attention_mask(
+                jnp.ones(queries.shape[0], dtype=jnp.bool_),
+                jnp.ones(tokens.shape[0], dtype=jnp.bool_),
+            ),
+        )
+        return queries + attended
 
 
 class PerSlotHistoryEncoder(nn.Module):

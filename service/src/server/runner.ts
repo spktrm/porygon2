@@ -267,13 +267,15 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     override receiveRequest(request: ChoiceRequest) {}
 
-    createGameState(): EnvironmentState {
+    createGameState(includeHistory: boolean = true): EnvironmentState {
         const stateHandler = new StateHandler(this);
-        return stateHandler.build();
+        return stateHandler.build(includeHistory);
     }
 
     getRequest(): AnyObject {
-        if (this.firstRequest === undefined) {
+        // Guard the snapshot: battle.request is undefined until the first
+        // |request| line, and JSON.stringify(undefined) is not parseable.
+        if (this.firstRequest === undefined && this.privateBattle.request) {
             this.firstRequest = JSON.parse(
                 JSON.stringify(this.privateBattle.request),
             );

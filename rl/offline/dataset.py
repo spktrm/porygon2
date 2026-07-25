@@ -109,14 +109,15 @@ def trajectory_to_example(payload: bytes) -> OfflineExample | None:
 
 
 def _pad_env_to(env, length: int):
-    """Pads the time axis by repeating the terminal step with done=1, the
-    same convention as rl.environment.utils.get_ex_batch, so the loss mask
-    (built from cumsum(done)) zeroes the padding."""
+    """Pads the time axis by repeating the terminal step with done=0 — the
+    RL actor's padding convention (see rl/actor/player_actor.py): exactly
+    one done=1 per trajectory, so cumsum(done)-based masks zero everything
+    after the terminal step."""
     t = env.done.shape[0]
     if t >= length:
         return jax.tree.map(lambda x: x[:length], env)
     last = jax.tree.map(lambda x: x[-1:], env)
-    last = last.replace(done=np.ones_like(last.done))
+    last = last.replace(done=np.zeros_like(last.done))
     pad = jax.tree.map(lambda x: np.repeat(x, length - t, axis=0), last)
     return jax.tree.map(lambda a, b: np.concatenate([a, b], axis=0), env, pad)
 

@@ -61,7 +61,11 @@ from rl.model.features import (
     get_private_entity_mask,
     get_public_entity_mask,
 )
-from rl.model.history_encoder import NUM_PUBLIC_SLOTS, PerSlotHistoryEncoder
+from rl.model.history_encoder import (
+    NUM_PUBLIC_SLOTS,
+    HistoryAttentionPool,
+    PerSlotHistoryEncoder,
+)
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     FFWMLP,
@@ -367,6 +371,7 @@ class Encoder(nn.Module):
         # read the state as of that request and let every trunk round
         # cross-attend to it.
         self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
+        self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
         self.history_field_step_linear = nn.Dense(
             name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
@@ -1110,6 +1115,7 @@ class Encoder(nn.Module):
         history_row_states: jax.Array,
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
+        history_latents: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1224,13 +1230,20 @@ class Encoder(nn.Module):
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
-        # the public team, masked to mapped rows) plus the field history
-        # state; every trunk round cross-reads it.
+        # the public team, masked to mapped rows), the field history state,
+        # and the attention-pooled latent summaries (shared with — and
+        # warm-startable from — the offline outcome critic); every trunk
+        # round cross-reads it.
         history_context = jnp.concatenate(
-            (history_row_states, history_field_state[None]), axis=0
+            (history_row_states, history_field_state[None], history_latents),
+            axis=0,
         )
         history_mask = jnp.concatenate(
-            (history_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
+            (
+                history_row_valid,
+                jnp.ones(1 + history_latents.shape[0], dtype=jnp.bool_),
+            ),
+            axis=0,
         )
 
         # Warm-start the action tokens with their per-provenance input norms.
@@ -1350,6 +1363,12 @@ class Encoder(nn.Module):
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         return self.history_encoder.state_at_requests(history_output, request_count)
 
+    def pool_history(self, slot_states: jax.Array, field_state: jax.Array) -> jax.Array:
+        """Pools the per-request history states into learned latent
+        summaries: (T, 12, D), (T, D) -> (T, num_latents, D)."""
+        tokens = jnp.concatenate((slot_states, field_state[..., None, :]), axis=-2)
+        return jax.vmap(self.history_pool)(tokens)
+
     def __call__(
         self,
         env_step: PlayerEnvOutput,
@@ -1359,6 +1378,7 @@ class Encoder(nn.Module):
         slot_states, field_state = self.encode_history(
             env_step, packed_history_step, history_step
         )
+        history_latents = self.pool_history(slot_states, field_state)
 
         # History-encoder slots are keyed by the stable entity index that
         # edges carry (revelation order across both sides), while public team
@@ -1379,7 +1399,7 @@ class Encoder(nn.Module):
         )
 
         action_embeddings, value_embeddings = jax.vmap(self._batched_forward)(
-            env_step, row_states, order_valid, field_state
+            env_step, row_states, order_valid, field_state, history_latents
         )
 
         return action_embeddings, value_embeddings

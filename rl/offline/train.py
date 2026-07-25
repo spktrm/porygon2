@@ -33,9 +33,11 @@ from rl.offline.model import Porygon2OfflineCritic
 
 
 def _value_mask(dones: jax.Array) -> jax.Array:
-    """Valid steps: everything up to and including the terminal step, the
-    same convention as the RL learner's value mask."""
-    return (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
+    """Valid steps: everything up to and including the FIRST done step.
+    Written as an equality (not the learner's `1 - (cumsum - dones)`) so it
+    stays in {0, 1} even if a trajectory somehow carries repeated dones."""
+    dones = dones.astype(jnp.int32)
+    return ((jnp.cumsum(dones, axis=0) - dones) == 0).astype(jnp.float32)
 
 
 def _metrics_from_logits(
