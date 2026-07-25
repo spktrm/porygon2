@@ -20,9 +20,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 from flax.training import train_state
 
-import wandb
 from rl.environment.utils import get_ex_trajectory
 from rl.learner import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
@@ -41,11 +41,18 @@ def _value_mask(dones: jax.Array) -> jax.Array:
 
 
 def _metrics_from_logits(
-    logits: jax.Array, labels: jax.Array, mask: jax.Array
+    logits: jax.Array,
+    labels: jax.Array,
+    mask: jax.Array,
+    label_smoothing: float = 0.0,
 ) -> dict[str, jax.Array]:
     logits = logits.astype(jnp.float32)
     labels = jnp.broadcast_to(labels[None], logits.shape)
-    ce = optax.softmax_cross_entropy(logits=logits, labels=labels)
+    if label_smoothing:
+        smoothed = labels * (1.0 - label_smoothing) + label_smoothing / 3.0
+    else:
+        smoothed = labels
+    ce = optax.softmax_cross_entropy(logits=logits, labels=smoothed)
     denom = mask.sum().clip(min=1.0)
     loss = (ce * mask).sum() / denom
     correct = logits.argmax(axis=-1) == labels.argmax(axis=-1)
@@ -58,10 +65,20 @@ def _metrics_from_logits(
     last_idx = jnp.maximum(mask.sum(axis=0).astype(jnp.int32) - 1, 0)
     batch_idx = jnp.arange(logits.shape[1])
     accuracy_last_step = correct[last_idx, batch_idx].mean()
+    # Degeneracy canary: masked std of the win-loss logit margin. A model
+    # that has collapsed to a constant (input-independent) prediction shows
+    # ~0 here while loss sits at ln2 and accuracy tracks batch label
+    # composition — catch it at step 100, not after a full run.
+    margin = logits[..., 2] - logits[..., 0]
+    margin_mean = (margin * mask).sum() / denom
+    margin_std = jnp.sqrt(
+        ((margin - margin_mean) ** 2 * mask).sum() / denom
+    )
     return dict(
         loss=loss,
         accuracy=accuracy,
         accuracy_last_step=accuracy_last_step,
+        margin_std=margin_std,
         num_valid_steps=mask.sum(),
     )
 
@@ -72,10 +89,17 @@ def make_train_step(config: Porygon2OfflineConfig):
         def loss_fn(params):
             value_head = state.apply_fn(params, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
-            metrics = _metrics_from_logits(value_head.logits, batch.labels, mask)
+            metrics = _metrics_from_logits(
+                value_head.logits,
+                batch.labels,
+                mask,
+                label_smoothing=config.label_smoothing,
+            )
             return metrics["loss"], metrics
 
-        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            state.params
+        )
         metrics["gradient_norm"] = optax.global_norm(grads)
         return state.apply_gradients(grads=grads), metrics
 
@@ -95,13 +119,17 @@ def make_eval_step():
 def evaluate(
     eval_step, state: train_state.TrainState, batches: Iterator[OfflineBatch]
 ) -> dict[str, float]:
-    all_metrics = [jax.device_get(eval_step(state, batch)) for batch in batches]
+    all_metrics = [
+        jax.device_get(eval_step(state, batch)) for batch in batches
+    ]
     if not all_metrics:
         return {}
     weights = np.array([m["num_valid_steps"] for m in all_metrics])
     return {
-        f"eval_{key}": float(np.average([m[key] for m in all_metrics], weights=weights))
-        for key in ("loss", "accuracy", "accuracy_last_step")
+        f"eval_{key}": float(
+            np.average([m[key] for m in all_metrics], weights=weights)
+        )
+        for key in ("loss", "accuracy", "accuracy_last_step", "margin_std")
     }
 
 
@@ -153,6 +181,7 @@ _CLI_FIELDS: dict[str, type] = dict(
     max_trajectory_length=int,
     num_steps=int,
     learning_rate=float,
+    label_smoothing=float,
     clip_gradient=float,
     log_interval_steps=int,
     eval_interval_steps=int,
@@ -169,7 +198,9 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     for name, arg_type in _CLI_FIELDS.items():
         parser.add_argument("--" + name.replace("_", "-"), type=arg_type)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--debug", action="store_true", help="Disable wandb logging")
+    parser.add_argument(
+        "--debug", action="store_true", help="Disable wandb logging"
+    )
     args = parser.parse_args()
     overrides = {
         name: getattr(args, name)
@@ -191,7 +222,9 @@ def main():
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     params = model.init(jax.random.key(seed), ex_actor_input)
     if config.resume_from is not None:
-        params = checkpoint_lib.load_component(config.resume_from, "player", "params")
+        params = checkpoint_lib.load_component(
+            config.resume_from, "player", "params"
+        )
         print(f"Resumed params from {config.resume_from}")
 
     optimizer = optax.chain(
@@ -231,7 +264,9 @@ def main():
     )
     start_time = time.monotonic()
     last_save_path = None
-    for step, batch in enumerate(itertools.islice(batches, config.num_steps), start=1):
+    for step, batch in enumerate(
+        itertools.islice(batches, config.num_steps), start=1
+    ):
         dispatch_start = time.monotonic()
         state, metrics = train_step(state, batch)
         # jit compiles synchronously at dispatch, so a slow dispatch on an
@@ -263,6 +298,7 @@ def main():
                 f"step {step} | loss {logs['loss']:.4f} | "
                 f"acc {logs['accuracy']:.3f} | "
                 f"last-step acc {logs['accuracy_last_step']:.3f} | "
+                f"margin std {logs['margin_std']:.2e} | "
                 f"grad norm {logs['gradient_norm']:.2e}"
             )
         if step % config.eval_interval_steps == 0:
