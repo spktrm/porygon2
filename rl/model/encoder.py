@@ -61,10 +61,15 @@ from rl.model.features import (
     get_private_entity_mask,
     get_public_entity_mask,
 )
+from rl.model.history_encoder import (
+    NUM_PUBLIC_SLOTS,
+    HistoryAttentionPool,
+    PerSlotHistoryEncoder,
+)
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
-    MLP,
     FFWMLP,
+    MLP,
     MultiHeadAttention,
     SumEmbeddings,
     TransformerDecoder,
@@ -72,11 +77,6 @@ from rl.model.modules import (
     create_attention_mask,
     layer_norm,
     one_hot_concat_jax,
-)
-from rl.model.history_encoder import (
-    NUM_PUBLIC_SLOTS,
-    HistoryAttentionPool,
-    PerSlotHistoryEncoder,
 )
 
 # Action-decoder slot groups, segregated by input provenance rather than by
@@ -170,7 +170,6 @@ class EntityAttentionPool(nn.Module):
             kv_mask=token_mask,
         )
         return jnp.squeeze(pooled, axis=0)
-
 
 
 class RoundBlock(nn.Module):
@@ -371,9 +370,7 @@ class Encoder(nn.Module):
         # (one per public slot) scanned along the history axis; per request we
         # read the state as of that request and let every trunk round
         # cross-attend to it.
-        self.history_encoder = PerSlotHistoryEncoder(
-            self.cfg, name="history_encoder"
-        )
+        self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
         self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
         self.history_field_step_linear = nn.Dense(
             name="history_field_step_linear", use_bias=False, **dense_kwargs
@@ -962,9 +959,7 @@ class Encoder(nn.Module):
             + 1
         ]
         my_side_condition_encoding = encode_hex(my_side_condition_indices).reshape(-1)
-        opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(
-            -1
-        )
+        opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(-1)
 
         # Aggregate embeddings for the absolute edge.
         field_encoding = one_hot_concat_jax(
@@ -1089,9 +1084,7 @@ class Encoder(nn.Module):
                     action, MovesetFeature.MOVESET_FEATURE__MAXPP, dtype=self.cfg.dtype
                 ),
                 encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
-                encode_one_hot_action(
-                    action, MovesetFeature.MOVESET_FEATURE__DISABLED
-                ),
+                encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__DISABLED),
                 encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__IS_WILDCARD
                 ),
