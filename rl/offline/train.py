@@ -48,8 +48,22 @@ def _metrics_from_logits(
     ce = optax.softmax_cross_entropy(logits=logits, labels=labels)
     denom = mask.sum().clip(min=1.0)
     loss = (ce * mask).sum() / denom
-    accuracy = ((logits.argmax(axis=-1) == labels.argmax(axis=-1)) * mask).sum() / denom
-    return dict(loss=loss, accuracy=accuracy, num_valid_steps=mask.sum())
+    correct = logits.argmax(axis=-1) == labels.argmax(axis=-1)
+    accuracy = (correct * mask).sum() / denom
+    # Late-game diagnostic: the last valid step of each trajectory is
+    # near-decisive, so accuracy here should climb toward ~0.9 quickly if
+    # the history pathway is wired correctly — long before the trajectory-
+    # average loss visibly moves (early-game states are irreducible
+    # coin-flips that dominate the mean).
+    last_idx = jnp.maximum(mask.sum(axis=0).astype(jnp.int32) - 1, 0)
+    batch_idx = jnp.arange(logits.shape[1])
+    accuracy_last_step = correct[last_idx, batch_idx].mean()
+    return dict(
+        loss=loss,
+        accuracy=accuracy,
+        accuracy_last_step=accuracy_last_step,
+        num_valid_steps=mask.sum(),
+    )
 
 
 def make_train_step(config: Porygon2OfflineConfig):
@@ -87,7 +101,7 @@ def evaluate(
     weights = np.array([m["num_valid_steps"] for m in all_metrics])
     return {
         f"eval_{key}": float(np.average([m[key] for m in all_metrics], weights=weights))
-        for key in ("loss", "accuracy")
+        for key in ("loss", "accuracy", "accuracy_last_step")
     }
 
 
@@ -218,13 +232,27 @@ def main():
     start_time = time.monotonic()
     last_save_path = None
     for step, batch in enumerate(itertools.islice(batches, config.num_steps), start=1):
+        dispatch_start = time.monotonic()
         state, metrics = train_step(state, batch)
+        # jit compiles synchronously at dispatch, so a slow dispatch on an
+        # already-warm loop means this batch hit a new shape bucket.
+        dispatch_time = time.monotonic() - dispatch_start
         if step == 1:
             jax.block_until_ready(metrics)
             print(
                 f"First step done in {time.monotonic() - start_time:.1f}s. "
-                "Expect a few more pauses early on: each new (time, history) "
-                "bucket shape triggers one JIT recompile, then it's warm."
+                f"Logs print every {config.log_interval_steps} steps. Early "
+                "steps stall whenever a new (time, history) batch shape "
+                "triggers a one-off recompile — announced below as they "
+                "happen, then it's warm."
+            )
+        elif dispatch_time > 2.0:
+            time_bucket = batch.actor_input.env.done.shape[0]
+            history_bucket = batch.actor_input.history.field.shape[0]
+            print(
+                f"step {step}: one-off recompile for new batch shape "
+                f"(T={time_bucket}, history={history_bucket}) "
+                f"took {dispatch_time:.0f}s"
             )
 
         if step % config.log_interval_steps == 0:
@@ -233,7 +261,9 @@ def main():
             wandb_run.log(logs, step=step)
             print(
                 f"step {step} | loss {logs['loss']:.4f} | "
-                f"acc {logs['accuracy']:.3f}"
+                f"acc {logs['accuracy']:.3f} | "
+                f"last-step acc {logs['accuracy_last_step']:.3f} | "
+                f"grad norm {logs['gradient_norm']:.2e}"
             )
         if step % config.eval_interval_steps == 0:
             eval_metrics = evaluate(

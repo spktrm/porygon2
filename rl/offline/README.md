@@ -21,8 +21,11 @@ Replays each spectator log through the **same** state encoder as live
 self-play (`TrainablePlayerAI` + `StateHandler`), from **both** players'
 perspectives, on a `worker_threads` pool. Output shards live at
 `replays/shards/{format_id}/shard-*.bin`; each record is
-`[uint32-LE length][EnvironmentTrajectory proto]`, one per
-(replay, perspective), plus a `manifest.json`. Trajectories follow the RL
+`[uint32-LE length][EnvironmentBatch proto]`, **one per replay**, holding
+both perspectives' trajectories — so the trainer's per-record holdout
+split is per game and can never leak a game's mirrored, label-flipped
+twin across the train/eval boundary. A `manifest.json` records filters
+and counts. Trajectories follow the RL
 `Trajectory` convention: **only the terminal state carries the history
 caches** (shared across all of that trajectory's steps), so records are
 O(T) instead of O(T²) and the trainer consumes each full-history

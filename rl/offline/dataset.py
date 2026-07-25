@@ -23,7 +23,7 @@ import numpy as np
 from jaxtyping import ArrayLike
 
 from rl.environment.interfaces import PlayerActorInput
-from rl.environment.protos.service_pb2 import EnvironmentTrajectory
+from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
 from rl.environment.utils import (
     clip_history,
     clip_packed_history,
@@ -81,8 +81,18 @@ def _is_holdout(shard_path: str, record_index: int, holdout_modulus: int) -> boo
     return int.from_bytes(digest[:4], "little") % holdout_modulus == 0
 
 
-def trajectory_to_example(payload: bytes) -> OfflineExample | None:
-    trajectory = EnvironmentTrajectory.FromString(payload)
+def record_to_examples(payload: bytes) -> list[OfflineExample]:
+    """One shard record = one replay (EnvironmentBatch holding both
+    perspectives). Grouping them keeps a game and its mirrored,
+    label-flipped twin on the same side of the train/eval split."""
+    batch = EnvironmentBatch.FromString(payload)
+    examples = [trajectory_to_example(t) for t in batch.trajectories]
+    return [e for e in examples if e is not None]
+
+
+def trajectory_to_example(
+    trajectory: EnvironmentTrajectory,
+) -> OfflineExample | None:
     if len(trajectory.states) < 2:
         return None
     # Only the final state's (large) history caches are kept per
@@ -164,11 +174,10 @@ class OfflineDataset:
     def _iter_examples(self, holdout: bool) -> Iterator[OfflineExample]:
         for shard in self.shards:
             for index, payload in enumerate(iter_shard_payloads(shard)):
+                # Records are whole replays, so this split is per game.
                 if _is_holdout(shard, index, self.config.holdout_modulus) != holdout:
                     continue
-                example = trajectory_to_example(payload)
-                if example is not None:
-                    yield example
+                yield from record_to_examples(payload)
 
     def train_batches(self, seed: int = 0) -> Iterator[OfflineBatch]:
         """Infinite iterator: reshuffles shard order each epoch and mixes
