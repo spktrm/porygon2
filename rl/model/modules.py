@@ -114,7 +114,7 @@ class MultiHeadAttention(nn.Module):
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
-    implementation: Optional[str] = None  # "cudnn"
+    implementation: str | None = None  # "cudnn"
     collect_intermediates: bool = False
 
     @nn.compact
@@ -239,11 +239,11 @@ def create_attention_mask(
     Create a combined attention mask for cross-attention.
 
     Args:
-        mask1 (Optional[jax.Array], optional): First mask array. Defaults to None.
-        mask2 (Optional[jax.Array], optional): Second mask array. Defaults to None.
+        mask1 (jax.Array | None, optional): First mask array. Defaults to None.
+        mask2 (jax.Array | None, optional): Second mask array. Defaults to None.
 
     Returns:
-        Optional[jax.Array]: Combined attention mask.
+        jax.Array | None: Combined attention mask.
     """
     if mask1 is None:
         return None
@@ -663,7 +663,7 @@ class ZeroEmbedding:
 
 
 def simple_sum_embeddings(
-    *embeddings: list[jax.Array], divisor: Optional[int] = None
+    *embeddings: list[jax.Array], divisor: int | None = None
 ) -> jax.Array:
     """
     Get the sum of the embeddings.

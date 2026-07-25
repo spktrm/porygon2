@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Callable, NamedTuple, TypeVar
+from typing import NamedTuple, TypeVar
+from collections.abc import Callable
 
 import chex
 import jax

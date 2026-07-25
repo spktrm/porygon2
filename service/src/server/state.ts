@@ -69,7 +69,6 @@ import {
 import { TrainablePlayerAI } from "./runner";
 import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
-import { getStatePotential } from "./statePotential";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
 type MajorArgNames =
@@ -4306,10 +4305,16 @@ export class StateHandler {
 
     getPrivateTeam(playerIndex: number): Int16Array {
         const request = this.player.getRequest();
-        const firstRequest = this.player.firstRequest!;
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
+        if (request === null) {
+            // Spectator-log replay (offline exporter): private info does
+            // not exist, so the private team stays all-unspecified and the
+            // encoding is public-view only.
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
+        }
+        const firstRequest = this.player.firstRequest!;
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4466,20 +4471,6 @@ export class StateHandler {
         return hp / maxHp;
     }
 
-    getStatePotential() {
-        const playerIndex = this.player.getPlayerIndex();
-        if (playerIndex === undefined) {
-            throw new Error("Player index is undefined");
-        }
-
-        const battle = this.player.publicBattle;
-        const sides = battle.sides;
-        return getStatePotential(
-            sides[playerIndex],
-            sides[1 - playerIndex],
-            battle.gen.num,
-        );
-    }
 
     getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
@@ -4512,10 +4503,13 @@ export class StateHandler {
             throw new Error("Request is undefined");
         }
 
-        if (request.teamPreview) {
+        // request is null (not undefined) when replaying a spectator log
+        // offline — those logs carry no |request| lines. Treat a null
+        // request as a plain move decision point.
+        if (request?.teamPreview) {
             infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
                 RequestType.REQUEST_TYPE__TEAM;
-        } else if (request.forceSwitch) {
+        } else if (request?.forceSwitch) {
             infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_TYPE] =
                 RequestType.REQUEST_TYPE__SWITCH;
         } else {
@@ -4524,7 +4518,7 @@ export class StateHandler {
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
-        if (!request.teamPreview && this.player.actions.length > 0) {
+        if (!request?.teamPreview && this.player.actions.length > 0) {
             infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 1;
             const lastAction = this.player.actions.at(-1)!;
             infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] =
@@ -4533,8 +4527,10 @@ export class StateHandler {
                 lastAction.getTgt();
         }
 
-        const statePotential = this.getStatePotential();
-        infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = statePotential;
+        // INFO_FEATURE__STATE_POTENTIAL is left at 0: the hand-crafted
+        // heuristic was replaced by a learned critic evaluated learner-side
+        // (rl/offline/artifact.py); the feature slot is kept so the proto
+        // layout is unchanged.
 
         const publicOrder = this.getPublicTeamOrder(playerIndex);
         infoBuffer.set(publicOrder, InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0);

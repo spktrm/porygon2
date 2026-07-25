@@ -73,7 +73,7 @@ from rl.model.modules import (
     layer_norm,
     one_hot_concat_jax,
 )
-from rl.model.world_model import NUM_PUBLIC_SLOTS, PerSlotWorldModel
+from rl.model.history_encoder import NUM_PUBLIC_SLOTS, PerSlotHistoryEncoder
 
 # Action-decoder slot groups, segregated by input provenance rather than by
 # behavioural modality. Move slots (regular + wildcard) are move-feature-derived
@@ -367,9 +367,11 @@ class Encoder(nn.Module):
         # (one per public slot) scanned along the history axis; per request we
         # read the state as of that request and let every trunk round
         # cross-attend to it.
-        self.world_model = PerSlotWorldModel(self.cfg, name="world_model")
-        self.wm_field_step_linear = nn.Dense(
-            name="wm_field_step_linear", use_bias=False, **dense_kwargs
+        self.history_encoder = PerSlotHistoryEncoder(
+            self.cfg, name="history_encoder"
+        )
+        self.history_field_step_linear = nn.Dense(
+            name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
 
         # Per-modality input projections: each input-token modality comes
@@ -1112,9 +1114,9 @@ class Encoder(nn.Module):
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
-        wm_row_states: jax.Array,
-        wm_row_valid: jax.Array,
-        wm_field_state: jax.Array,
+        history_row_states: jax.Array,
+        history_row_valid: jax.Array,
+        history_field_state: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1231,9 +1233,11 @@ class Encoder(nn.Module):
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
         # the public team, masked to mapped rows) plus the field history
         # state; every trunk round cross-reads it.
-        history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
+        history_context = jnp.concatenate(
+            (history_row_states, history_field_state[None]), axis=0
+        )
         history_mask = jnp.concatenate(
-            (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
+            (history_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
         )
 
         # Warm-start the action tokens with their per-provenance input norms.
@@ -1323,11 +1327,11 @@ class Encoder(nn.Module):
         ) = jax.vmap(
             self._embed_field
         )(history_step.field)
-        step_field_vec = self.wm_field_step_linear(
+        step_field_vec = self.history_field_step_linear(
             step_field_embeddings.reshape(step_field_embeddings.shape[0], -1)
         )
 
-        wm_output = self.world_model(
+        history_output = self.history_encoder(
             history_field=history_step.field,
             node_embedding_cache=node_embedding_cache,
             edge_embedding_cache=edge_embedding_cache,
@@ -1340,15 +1344,15 @@ class Encoder(nn.Module):
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        wm_slot_states, wm_field_state = self.world_model.state_at_requests(
-            wm_output, request_count
+        slot_states, field_state = self.history_encoder.state_at_requests(
+            history_output, request_count
         )
 
-        # World-model slots are keyed by the stable entity index that edges
-        # carry (revelation order across both sides), while public team rows
-        # are per-side and re-sorted actives-first every state. PUBLIC_ORDER
-        # is the server-provided permutation between the two: row i of the
-        # public team holds the pokemon in world-model slot public_order[i],
+        # History-encoder slots are keyed by the stable entity index that
+        # edges carry (revelation order across both sides), while public team
+        # rows are per-side and re-sorted actives-first every state.
+        # PUBLIC_ORDER is the server-provided permutation between the two:
+        # row i of the public team holds the pokemon in slot public_order[i],
         # or -1 for unrevealed fillers (masked out of the cross-attention).
         public_order = env_step.info[
             ...,
@@ -1356,14 +1360,14 @@ class Encoder(nn.Module):
             + 1,
         ]
         order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
-        wm_row_states = jnp.take_along_axis(
-            wm_slot_states,
+        row_states = jnp.take_along_axis(
+            slot_states,
             public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None],
             axis=1,
         )
 
         action_embeddings, value_embeddings = jax.vmap(self._batched_forward)(
-            env_step, wm_row_states, order_valid, wm_field_state
+            env_step, row_states, order_valid, field_state
         )
 
         return action_embeddings, value_embeddings
