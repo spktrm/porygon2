@@ -24,8 +24,12 @@ import numpy as np
 import optax
 
 from rl.offline.config import get_offline_config
-from rl.offline.dataset import OfflineDataset, collate, record_to_examples
-from rl.offline.dataset import iter_shard_payloads, list_shards
+from rl.offline.dataset import (
+    collate,
+    iter_shard_payloads,
+    list_shards,
+    record_to_examples,
+)
 from rl.offline.model import get_offline_critic
 from rl.offline.train import _metrics_from_logits, _value_mask
 
@@ -63,8 +67,10 @@ def main():
     assert examples, "no examples decoded from shards"
     batch = collate(examples, config)
     labels = np.asarray(batch.labels)
-    print(f"batch: B={labels.shape[0]}, label counts "
-          f"loss/tie/win = {labels.sum(axis=0).astype(int).tolist()}")
+    print(
+        f"batch: B={labels.shape[0]}, label counts "
+        f"loss/tie/win = {labels.sum(axis=0).astype(int).tolist()}"
+    )
 
     model = get_offline_critic(config.generation)
     apply_fn = jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
@@ -201,7 +207,8 @@ def generalization_probe(args, config, model, apply_fn):
             if len(chunk) < config.batch_size:
                 break
             m = jax.device_get(eval_metrics_jit(params, collate(chunk, config)))
-            losses.append(m["loss"]); accs.append(m["accuracy"])
+            losses.append(m["loss"])
+            accs.append(m["accuracy"])
             last_accs.append(m["accuracy_last_step"])
             weights.append(m["num_valid_steps"])
         return (
