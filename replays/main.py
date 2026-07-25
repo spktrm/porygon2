@@ -129,6 +129,11 @@ class Filters:
     before: int | None
     after: int | None
     existing_ids: set[str]
+    # End a crawl stream after this many consecutive already-downloaded
+    # results — it has paged back into previously-synced territory, so
+    # incremental runs only spend search requests on genuinely new games.
+    # 0 disables (full re-scan).
+    stop_after_existing: int = 100
 
 
 async def _crawl_search(
@@ -143,6 +148,7 @@ async def _crawl_search(
     limit is reached. `page=` pagination is poorly supported upstream, so it
     is not used."""
     cursor = filters.before
+    existing_streak = 0
     while True:
         params = dict(base_params)
         if cursor is not None:
@@ -173,9 +179,16 @@ async def _crawl_search(
                 continue
             if battle_id in filters.existing_ids:
                 stats.skipped_existing += 1
+                existing_streak += 1
+                if (
+                    filters.stop_after_existing
+                    and existing_streak >= filters.stop_after_existing
+                ):
+                    return False  # reached previously-synced territory
                 continue
             await queue.put(battle)
             stats.enqueued += 1
+            existing_streak = 0
             if stats.enqueued >= filters.limit:
                 return True
 
@@ -327,6 +340,16 @@ async def main() -> None:
         default=10.0,
         help="Maximum requests per second across all workers (default: 10)",
     )
+    parser.add_argument(
+        "--stop-after-existing",
+        type=int,
+        default=100,
+        help=(
+            "End a crawl stream after this many consecutive already-"
+            "downloaded results (default: 100, i.e. two full pages of known "
+            "games means that stream is synced; 0 forces a full re-scan)"
+        ),
+    )
     args = parser.parse_args()
 
     format_dir = os.path.join(ROOT_DIR, args.format_id)
@@ -341,6 +364,7 @@ async def main() -> None:
         before=args.before,
         after=args.after,
         existing_ids=existing_ids,
+        stop_after_existing=args.stop_after_existing,
     )
     stats = Stats()
     queue: "asyncio.Queue[dict[str, Any] | None]" = asyncio.Queue(maxsize=200)

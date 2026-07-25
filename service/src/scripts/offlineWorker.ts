@@ -24,6 +24,7 @@ import { AnyObject } from "@pkmn/sim";
 
 import { TrainablePlayerAI } from "../server/runner";
 import {
+    EnvironmentBatch,
     EnvironmentState,
     EnvironmentTrajectory,
 } from "../../protos/service_pb";
@@ -32,12 +33,14 @@ interface ReplayFile {
     id: string;
     players: string[];
     log: string;
+    formatid?: string;
     rating?: number;
 }
 
 interface OfflineWorkerData {
     files: string[];
     shardPath: string;
+    formatId: string;
     minRating: number;
     minTurns: number;
     progressEvery: number;
@@ -49,6 +52,7 @@ export interface OfflineWorkerStats {
     states: number;
     skippedRating: number;
     skippedShort: number;
+    skippedFormat: number;
     failed: number;
 }
 
@@ -74,7 +78,7 @@ function encodePerspective(
     replay: ReplayFile,
     lines: string[],
     playerIndex: 0 | 1,
-): { record: Uint8Array; states: number } | null {
+): { trajectory: EnvironmentTrajectory; states: number } | null {
     const player = new OfflinePlayerAI(
         replay.players[playerIndex],
         noopStream,
@@ -116,11 +120,11 @@ function encodePerspective(
 
     const trajectory = new EnvironmentTrajectory();
     trajectory.setStatesList(states);
-    return { record: trajectory.serializeBinary(), states: states.length };
+    return { trajectory, states: states.length };
 }
 
 async function run() {
-    const { files, shardPath, minRating, minTurns, progressEvery } =
+    const { files, shardPath, formatId, minRating, minTurns, progressEvery } =
         workerData as OfflineWorkerData;
 
     const stats: OfflineWorkerStats = {
@@ -129,6 +133,7 @@ async function run() {
         states: 0,
         skippedRating: 0,
         skippedShort: 0,
+        skippedFormat: 0,
         failed: 0,
     };
 
@@ -152,6 +157,12 @@ async function run() {
             const replay: ReplayFile = JSON.parse(
                 fs.readFileSync(file, "utf-8"),
             );
+            // A stray file from another format would silently poison the
+            // dataset with a different observation distribution.
+            if (replay.formatid !== undefined && replay.formatid !== formatId) {
+                stats.skippedFormat += 1;
+                continue;
+            }
             if ((replay.rating ?? 0) < minRating) {
                 stats.skippedRating += 1;
                 continue;
@@ -166,13 +177,23 @@ async function run() {
                 stats.skippedShort += 1;
                 continue;
             }
+            const batch = new EnvironmentBatch();
+            let maxLength = 0;
             for (const playerIndex of [0, 1] as const) {
                 const encoded = encodePerspective(replay, lines, playerIndex);
                 if (encoded !== null) {
-                    await write(encoded.record);
+                    batch.addTrajectories(encoded.trajectory);
+                    maxLength = Math.max(maxLength, encoded.states);
                     stats.trajectories += 1;
                     stats.states += encoded.states;
                 }
+            }
+            if (batch.getTrajectoriesList().length > 0) {
+                // One record per replay: both perspectives travel together
+                // so the trainer's train/eval split is by game, never
+                // separating a game from its mirrored (label-flipped) twin.
+                batch.setMaxTrajectoryLength(maxLength);
+                await write(batch.serializeBinary());
             }
         } catch (err) {
             stats.failed += 1;

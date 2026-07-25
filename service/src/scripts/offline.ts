@@ -62,6 +62,7 @@ function emptyStats(): OfflineWorkerStats {
         states: 0,
         skippedRating: 0,
         skippedShort: 0,
+        skippedFormat: 0,
         failed: 0,
     };
 }
@@ -102,6 +103,7 @@ async function main() {
                 states: acc.states + s.states,
                 skippedRating: acc.skippedRating + s.skippedRating,
                 skippedShort: acc.skippedShort + s.skippedShort,
+                skippedFormat: acc.skippedFormat + s.skippedFormat,
                 failed: acc.failed + s.failed,
             }),
             emptyStats(),
@@ -131,6 +133,7 @@ async function main() {
                 workerData: {
                     files: workerFiles,
                     shardPath,
+                    formatId: args.formatId,
                     minRating: args.minRating,
                     minTurns: args.minTurns,
                     progressEvery: 25,
@@ -173,10 +176,12 @@ async function main() {
         num_failed: total.failed,
         num_skipped_rating: total.skippedRating,
         num_skipped_short: total.skippedShort,
+        num_skipped_format: total.skippedFormat,
         shards: numWorkers,
         created_at: new Date().toISOString(),
         record_format:
-            "repeated [uint32-LE length][EnvironmentTrajectory proto bytes]",
+            "repeated [uint32-LE length][EnvironmentBatch proto bytes] — " +
+            "one record per replay holding both perspectives",
         history: "terminal state only — shared per trajectory (RL convention)",
         perspective: "both players; public-view only (no private info)",
     };
