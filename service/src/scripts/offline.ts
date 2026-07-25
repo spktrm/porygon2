@@ -9,7 +9,7 @@
  *
  * Usage (from service/, after tsc):
  *   node dist/scripts/offline.js gen9randombattle \
- *     [--workers N] [--min-rating R] [--limit K] [--out DIR]
+ *     [--workers N] [--min-rating R] [--min-turns T] [--limit K] [--out DIR]
  */
 
 import * as fs from "fs";
@@ -26,6 +26,7 @@ interface Args {
     formatId: string;
     workers: number;
     minRating: number;
+    minTurns: number;
     limit: number;
     outDir: string;
 }
@@ -48,6 +49,7 @@ function parseArgs(argv: string[]): Args {
             parseInt(flags["workers"] ?? "") ||
             Math.max(1, os.availableParallelism() - 1),
         minRating: parseInt(flags["min-rating"] ?? "") || 0,
+        minTurns: parseInt(flags["min-turns"] ?? "") || 5,
         limit: parseInt(flags["limit"] ?? "") || Infinity,
         outDir: flags["out"] ?? path.join(PROJECT_ROOT, "replays", "shards"),
     };
@@ -59,6 +61,7 @@ function emptyStats(): OfflineWorkerStats {
         trajectories: 0,
         states: 0,
         skippedRating: 0,
+        skippedShort: 0,
         failed: 0,
     };
 }
@@ -98,6 +101,7 @@ async function main() {
                 trajectories: acc.trajectories + s.trajectories,
                 states: acc.states + s.states,
                 skippedRating: acc.skippedRating + s.skippedRating,
+                skippedShort: acc.skippedShort + s.skippedShort,
                 failed: acc.failed + s.failed,
             }),
             emptyStats(),
@@ -128,6 +132,7 @@ async function main() {
                     files: workerFiles,
                     shardPath,
                     minRating: args.minRating,
+                    minTurns: args.minTurns,
                     progressEvery: 25,
                 },
             });
@@ -161,15 +166,18 @@ async function main() {
         format_id: args.formatId,
         source: path.relative(PROJECT_ROOT, replayDir),
         min_rating: args.minRating,
+        min_turns: args.minTurns,
         num_replays: total.processed,
         num_trajectories: total.trajectories,
         num_states: total.states,
         num_failed: total.failed,
         num_skipped_rating: total.skippedRating,
+        num_skipped_short: total.skippedShort,
         shards: numWorkers,
         created_at: new Date().toISOString(),
         record_format:
             "repeated [uint32-LE length][EnvironmentTrajectory proto bytes]",
+        history: "terminal state only — shared per trajectory (RL convention)",
         perspective: "both players; public-view only (no private info)",
     };
     fs.writeFileSync(

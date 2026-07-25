@@ -20,6 +20,7 @@
 
 import * as fs from "fs";
 import { parentPort, workerData } from "worker_threads";
+import { AnyObject } from "@pkmn/sim";
 
 import { TrainablePlayerAI } from "../server/runner";
 import {
@@ -38,6 +39,7 @@ interface OfflineWorkerData {
     files: string[];
     shardPath: string;
     minRating: number;
+    minTurns: number;
     progressEvery: number;
 }
 
@@ -46,6 +48,7 @@ export interface OfflineWorkerStats {
     trajectories: number;
     states: number;
     skippedRating: number;
+    skippedShort: number;
     failed: number;
 }
 
@@ -57,12 +60,22 @@ const noopStream = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
+class OfflinePlayerAI extends TrainablePlayerAI {
+    override getRequest(): AnyObject {
+        // Spectator logs carry no |request| lines, so battle.request stays
+        // undefined forever. StateHandler distinguishes null ("legitimately
+        // absent — offline replay") from undefined ("live-path invariant
+        // violation"), so normalize to null here.
+        return this.privateBattle.request ?? (null as unknown as AnyObject);
+    }
+}
+
 function encodePerspective(
     replay: ReplayFile,
     lines: string[],
     playerIndex: 0 | 1,
 ): { record: Uint8Array; states: number } | null {
-    const player = new TrainablePlayerAI(
+    const player = new OfflinePlayerAI(
         replay.players[playerIndex],
         noopStream,
         {},
@@ -83,7 +96,11 @@ function encodePerspective(
         }
         player.addLine(cmd, line);
         if (cmd === "turn" && !player.done) {
-            states.push(player.createGameState());
+            // History caches are shared per trajectory (RL Trajectory
+            // convention): only the terminal state carries them, so
+            // non-terminal states skip the O(history) snapshot and records
+            // stay O(T) instead of O(T^2).
+            states.push(player.createGameState(false));
             player.requestCount += 1;
         }
     }
@@ -103,7 +120,7 @@ function encodePerspective(
 }
 
 async function run() {
-    const { files, shardPath, minRating, progressEvery } =
+    const { files, shardPath, minRating, minTurns, progressEvery } =
         workerData as OfflineWorkerData;
 
     const stats: OfflineWorkerStats = {
@@ -111,6 +128,7 @@ async function run() {
         trajectories: 0,
         states: 0,
         skippedRating: 0,
+        skippedShort: 0,
         failed: 0,
     };
 
@@ -139,6 +157,15 @@ async function run() {
                 continue;
             }
             const lines = replay.log.split("\n");
+            // Very short games are where the outcome stops correlating with
+            // position quality (early forfeits, disconnects), so they make
+            // poor critic targets. Turn count is perspective-independent —
+            // check it once before paying for any encoding.
+            const numTurns = lines.filter((l) => l.startsWith("|turn|")).length;
+            if (numTurns < minTurns) {
+                stats.skippedShort += 1;
+                continue;
+            }
             for (const playerIndex of [0, 1] as const) {
                 const encoded = encodePerspective(replay, lines, playerIndex);
                 if (encoded !== null) {

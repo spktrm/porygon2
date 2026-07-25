@@ -4641,7 +4641,7 @@ export class StateHandler {
         return new Uint8Array(fieldBuffer.buffer);
     }
 
-    build(): EnvironmentState {
+    build(includeHistory: boolean = true): EnvironmentState {
         this.player.rewardTracker.updateFaintedCount(this.player.privateBattle);
 
         const request = this.player.getRequest();
@@ -4653,6 +4653,10 @@ export class StateHandler {
             throw new Error("Player index is undefined");
         }
 
+        // includeHistory=false (offline exporter, non-terminal states) skips
+        // the O(history) cache snapshot entirely: like an RL Trajectory, an
+        // exported trajectory shares ONE history — the terminal state's —
+        // across all of its steps.
         const {
             historyEntityPublic,
             historyEntityRevealed,
@@ -4660,7 +4664,16 @@ export class StateHandler {
             historyField,
             historyLength,
             historyPackedLength,
-        } = this.getHistory(NUM_HISTORY);
+        } = includeHistory
+            ? this.getHistory(NUM_HISTORY)
+            : {
+                  historyEntityPublic: new Uint8Array(0),
+                  historyEntityRevealed: new Uint8Array(0),
+                  historyEntityEdges: new Uint8Array(0),
+                  historyField: new Uint8Array(0),
+                  historyLength: 0,
+                  historyPackedLength: 0,
+              };
 
         const state = new EnvironmentState();
         const info = this.getInfo(historyLength);

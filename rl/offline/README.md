@@ -22,7 +22,11 @@ self-play (`TrainablePlayerAI` + `StateHandler`), from **both** players'
 perspectives, on a `worker_threads` pool. Output shards live at
 `replays/shards/{format_id}/shard-*.bin`; each record is
 `[uint32-LE length][EnvironmentTrajectory proto]`, one per
-(replay, perspective), plus a `manifest.json`.
+(replay, perspective), plus a `manifest.json`. Trajectories follow the RL
+`Trajectory` convention: **only the terminal state carries the history
+caches** (shared across all of that trajectory's steps), so records are
+O(T) instead of O(T²) and the trainer consumes each full-history
+trajectory in one history-encoder scan.
 
 Spectator logs contain no `|request|` lines, so exported states differ from
 live observations in these ways (all deterministic):
@@ -42,9 +46,13 @@ player's name — trajectories without a decided outcome are dropped.
 ## Stage 3 — trainer (rl/offline/train.py)
 
 `Porygon2OfflineCritic` = the player model's recurrent **history pathway
-only** (`Encoder.encode_history` → `PerSlotHistoryEncoder`, shared module
-code and param paths with the RL model) plus an offline-only 3-bin outcome
-head over the pooled slot/field states. It reads nothing but the public
+only** (`Encoder.encode_history` → `PerSlotHistoryEncoder` →
+`Encoder.pool_history`, shared module code and param paths with the RL
+model) plus an offline-only **linear** 3-bin probe over the flattened
+attention-pooled latents. The `HistoryAttentionPool` (n learned latent
+queries over the 12 slot states + field state; `history_pool` config) is
+read by the RL trunk as extra history-context tokens, so the outcome
+readout capacity trained offline is exactly what warm-starts RL. It reads nothing but the public
 event stream — private team, own moveset, and action masks are
 architecturally unreachable, and the history inputs are identical between
 replay exports and live play, so the frozen Φ carries no train/serve bias
