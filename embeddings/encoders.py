@@ -1,6 +1,6 @@
 import math
-from typing import Any
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd

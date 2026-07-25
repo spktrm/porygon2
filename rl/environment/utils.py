@@ -1,6 +1,6 @@
 import math
-from typing import TypeVar
 from collections.abc import Sequence
+from typing import TypeVar
 
 import jax
 import jax.numpy as jnp

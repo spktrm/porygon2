@@ -1,9 +1,8 @@
 import functools
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pprint import pprint
 from typing import Any, Literal
-from collections.abc import Callable
 
 import chex
 import flax.linen as nn
@@ -15,13 +14,13 @@ import wandb.wandb_run
 from flax import core, struct, traverse_util
 from flax.training import train_state
 
+from rl.config.common import AdamWConfig, BaseTrainingConfig
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
 )
-from rl.config.common import AdamWConfig, BaseTrainingConfig, GenT, SmogonFormatT
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
@@ -191,8 +190,7 @@ def _frozen_param_mask(params: Params, patterns: tuple[str, ...]):
     of the patterns."""
     flat = traverse_util.flatten_dict(core.unfreeze(params))
     mask = {
-        path: any(pattern in "/".join(path) for pattern in patterns)
-        for path in flat
+        path: any(pattern in "/".join(path) for pattern in patterns) for path in flat
     }
     return traverse_util.unflatten_dict(mask)
 

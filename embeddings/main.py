@@ -1,8 +1,8 @@
 import json
 import os
 import traceback
-from typing import Any
 from collections.abc import Sequence
+from typing import Any
 
 import networkx as nx
 import numpy as np

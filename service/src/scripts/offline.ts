@@ -49,8 +49,7 @@ function parseArgs(argv: string[]): Args {
             Math.max(1, os.availableParallelism() - 1),
         minRating: parseInt(flags["min-rating"] ?? "") || 0,
         limit: parseInt(flags["limit"] ?? "") || Infinity,
-        outDir:
-            flags["out"] ?? path.join(PROJECT_ROOT, "replays", "shards"),
+        outDir: flags["out"] ?? path.join(PROJECT_ROOT, "replays", "shards"),
     };
 }
 
@@ -67,12 +66,7 @@ function emptyStats(): OfflineWorkerStats {
 async function main() {
     const args = parseArgs(process.argv.slice(2));
 
-    const replayDir = path.join(
-        PROJECT_ROOT,
-        "replays",
-        "data",
-        args.formatId,
-    );
+    const replayDir = path.join(PROJECT_ROOT, "replays", "data", args.formatId);
     if (!fs.existsSync(replayDir)) {
         console.error(`No replay directory at ${replayDir}`);
         process.exit(1);
@@ -142,9 +136,13 @@ async function main() {
                     perWorker[workerIndex] = msg.stats;
                     logProgress();
                 } else if (msg.type === "error") {
-                    console.error(`\n[worker ${workerIndex}] ${msg.file}: ${msg.message}`);
+                    console.error(
+                        `\n[worker ${workerIndex}] ${msg.file}: ${msg.message}`,
+                    );
                 } else if (msg.type === "fatal") {
-                    console.error(`\n[worker ${workerIndex}] fatal: ${msg.message}`);
+                    console.error(
+                        `\n[worker ${workerIndex}] fatal: ${msg.message}`,
+                    );
                 }
             });
             worker.on("error", reject);
