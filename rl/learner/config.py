@@ -54,12 +54,18 @@ class Porygon2LearnerConfig:
     batch_size: int = 4
 
     # Replay buffer params
-    player_replay_buffer_capacity: int = 1024 * 2
+    # Kept small on purpose: steady-state throughput is set entirely by
+    # replay_ratio (samples per trajectory), so capacity only controls how
+    # stale a trajectory is when sampled. 256 keeps mean sample age well
+    # inside one EMA-target time constant (1/player_ema_update_rate steps).
+    player_replay_buffer_capacity: int = 256
     player_replay_ratio: int = 8
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training
-    # starts. Valid range: [0.0, 1.0]. Defaults to 0.5 (50%).
+    # starts. Valid range: [0.0, 1.0]. The formula works out to
+    # replay_ratio * batch_size trajectories — enough sample budget for the
+    # learner's first few batches without waiting on a full buffer.
     replay_buffer_min_fill_fraction: float = (
         player_replay_ratio * batch_size / player_replay_buffer_capacity
     )
@@ -105,7 +111,7 @@ class Porygon2LearnerConfig:
     # EMA magnet chases the policy and degenerates into a short-horizon trust
     # region. The EMA target is reserved for the v-trace/IMPACT reference and
     # plays no regularization role. The coef sets the softness level.
-    player_magnet_kl_coef: float = 0.05
+    player_magnet_kl_coef: float = 0.01
 
     # Learning params
     adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
@@ -251,7 +257,10 @@ def create_train_state(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
-        target_params=initial_player_params,
+        # Deep-copied: params and target_params must not share buffers, or
+        # donating the train state to the jitted train step fails with a
+        # duplicate-donation error on the first step.
+        target_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
     )
 
@@ -284,7 +293,8 @@ def create_train_state(
         ),
         init_fn=builder_params_init_fn,
         params=inital_builder_params,
-        target_params=inital_builder_params,
+        # Deep-copied for the same donation-aliasing reason as the player state.
+        target_params=jax.tree.map(jnp.copy, inital_builder_params),
         tx=builder_optimizer,
     )
 
@@ -379,8 +389,12 @@ def _init_league(
             player_frame_count=np.array(player_state.frame_count).item(),
             builder_frame_count=np.array(builder_state.frame_count).item(),
             step_count=MAIN_KEY,
-            player_params=player_state.target_params,
-            builder_params=builder_state.target_params,
+            # Host copies, never the live state arrays: actors' device_put of
+            # an already-on-device tree is a no-op, so handing out live
+            # buffers has actors running inference on memory the donated
+            # train step deletes.
+            player_params=jax.device_get(player_state.target_params),
+            builder_params=jax.device_get(builder_state.target_params),
         ),
         players=[],
         league_size=learner_config.league_size,
@@ -531,11 +545,15 @@ def load_from_params(
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
+    # Deep-copied so params/target_params share no buffers — required for
+    # donating the train state to the jitted train step.
     player_state = player_state.replace(
-        params=player_params, target_params=player_params
+        params=player_params,
+        target_params=jax.tree.map(jnp.copy, player_params),
     )
     builder_state = builder_state.replace(
-        params=builder_params, target_params=builder_params
+        params=builder_params,
+        target_params=jax.tree.map(jnp.copy, builder_params),
     )
 
     # Initialize a fresh league since we are effectively starting a new run with existing weights

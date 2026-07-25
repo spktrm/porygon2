@@ -1,8 +1,5 @@
 import functools
-import math
-from functools import partial
 
-import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -11,14 +8,9 @@ from ml_collections import ConfigDict
 
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
-    ACTION_MAX_VALUES,
     ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
-    ENTITY_EDGE_MAX_VALUES,
-    ENTITY_PRIVATE_MAX_VALUES,
-    ENTITY_PUBLIC_MAX_VALUES,
-    FIELD_MAX_VALUES,
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
@@ -53,13 +45,32 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
     MovesetFeature,
 )
+from rl.model.features import (
+    binary_scale_encoding,
+    encode_divided_one_hot_edge,
+    encode_divided_one_hot_public_entity,
+    encode_one_hot_action,
+    encode_one_hot_edge,
+    encode_one_hot_field,
+    encode_one_hot_private_entity,
+    encode_one_hot_public_entity,
+    encode_reg_boosts,
+    encode_spe_boosts,
+    encode_sqrt_one_hot_action,
+    encode_sqrt_one_hot_public_entity,
+    get_private_entity_mask,
+    get_public_entity_mask,
+)
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
-    DO_CHECKPOINT,
     MLP,
+    FFWMLP,
+    MultiHeadAttention,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
+    create_attention_mask,
+    layer_norm,
     one_hot_concat_jax,
 )
 from rl.model.world_model import NUM_PUBLIC_SLOTS, PerSlotWorldModel
@@ -157,158 +168,20 @@ class EntityAttentionPool(nn.Module):
         return jnp.squeeze(pooled, axis=0)
 
 
-def _binary_scale_encoding(
-    to_encode: jax.Array, world_dim: int, dtype: jnp.dtype = jnp.float32
-) -> jax.Array:
-    """Encode the feature using its binary representation."""
-    chex.assert_rank(to_encode, 0)
-    chex.assert_type(to_encode, jnp.int32)
-    num_bits = (world_dim - 1).bit_length()
-    bit_mask = 1 << np.arange(num_bits)
-    pos = jnp.broadcast_to(to_encode[jnp.newaxis], num_bits)
-    result = jnp.not_equal(jnp.bitwise_and(pos, bit_mask), 0)
-    return result.astype(dtype)
-
-
-def _encode_one_hot(
-    entity: jax.Array,
-    feature_idx: int,
-    max_values: dict[int, int],
-    value_offset: int = 0,
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
-
-
-def _encode_capped_one_hot(
-    entity: jax.Array, feature_idx: int, max_values: dict[int, int]
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    max_value = max_values[feature_idx]
-    return jnp.minimum(entity[feature_idx], max_value), max_value + 1
-
-
-def _encode_sqrt_one_hot(
-    entity: jax.Array,
-    feature_idx: int,
-    max_values: dict[int, int],
-    dtype: jnp.dtype = jnp.int32,
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    max_value = max_values[feature_idx]
-    max_sqrt_value = int(math.floor(math.sqrt(max_value)))
-    x = jnp.floor(jnp.sqrt(entity[feature_idx].astype(dtype)))
-    x = jnp.minimum(x.astype(jnp.int32), max_sqrt_value)
-    return x, max_sqrt_value + 1
-
-
-def _encode_divided_one_hot(
-    entity: jax.Array, feature_idx: int, divisor: int, max_values: dict[int, int]
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    max_value = max_values[feature_idx]
-    max_divided_value = max_value // divisor
-    x = jnp.floor_divide(entity[feature_idx], divisor)
-    x = jnp.minimum(x, max_divided_value)
-    return x, max_divided_value + 1
-
-
-_encode_one_hot_public_entity = partial(
-    _encode_one_hot, max_values=ENTITY_PUBLIC_MAX_VALUES
-)
-_encode_one_hot_private_entity = partial(
-    _encode_one_hot, max_values=ENTITY_PRIVATE_MAX_VALUES
-)
-_encode_one_hot_action = partial(_encode_one_hot, max_values=ACTION_MAX_VALUES)
-_encode_one_hot_edge = partial(_encode_one_hot, max_values=ENTITY_EDGE_MAX_VALUES)
-_encode_one_hot_field = partial(_encode_one_hot, max_values=FIELD_MAX_VALUES)
-_encode_sqrt_one_hot_public_entity = partial(
-    _encode_sqrt_one_hot, max_values=ENTITY_PUBLIC_MAX_VALUES
-)
-_encode_sqrt_one_hot_action = partial(
-    _encode_sqrt_one_hot, max_values=ACTION_MAX_VALUES
-)
-_encode_divided_one_hot_public_entity = partial(
-    _encode_divided_one_hot, max_values=ENTITY_PUBLIC_MAX_VALUES
-)
-_encode_divided_one_hot_edge = partial(
-    _encode_divided_one_hot, max_values=ENTITY_EDGE_MAX_VALUES
-)
-
-
-def get_public_entity_mask(revealed: jax.Array) -> jax.Array:
-    """
-    Generate a mask to identify valid entities based on species tokens.
-    """
-    species_token = revealed[
-        EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
-    ]
-    return ~(
-        (species_token == SpeciesEnum.SPECIES_ENUM___NULL)
-        | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
-        | (species_token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
-    )
-
-
-def get_private_entity_mask(private: jax.Array) -> jax.Array:
-    """
-    Generate a mask to identify valid entities based on species tokens.
-    """
-    species_token = private[
-        EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
-    ]
-    return ~(
-        (species_token == SpeciesEnum.SPECIES_ENUM___NULL)
-        | (species_token == SpeciesEnum.SPECIES_ENUM___PAD)
-        | (species_token == SpeciesEnum.SPECIES_ENUM___UNSPECIFIED)
-    )
-
-
-def encode_boosts(boosts: jax.Array, offset: int):
-    return jnp.where(
-        boosts > 0,
-        (offset + boosts) / offset,
-        offset / (offset - boosts),
-    )
-
-
-def encode_reg_boosts(boosts: jax.Array):
-    """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
-    return (1 / math.log(2)) * jnp.log(encode_boosts(boosts, 2))
-
-
-def encode_spe_boosts(boosts: jax.Array):
-    """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
-    return (2 / math.log(3)) * jnp.log(encode_boosts(boosts, 3))
-
-
-def _mean_pool(x: jax.Array, m: jax.Array) -> jax.Array:
-    """Mean pool over axis=0 with mask m (same shape as x)."""
-    denom = m.sum(axis=0, keepdims=True).clip(min=1)
-    return jnp.where(m, x, 0).sum(axis=0, keepdims=True) / denom
-
-
-def _max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
-    """Masked max pool over axis=0; returns minimum dtype value where mask is False."""
-    dtype_finfo = jnp.finfo(x.dtype)
-    return m.any(axis=0, keepdims=True) * jnp.where(m, x, dtype_finfo.min).max(
-        axis=0, keepdims=True
-    )
-
 
 class RoundBlock(nn.Module):
-    """One trunk round, nn.scan-ned num_rounds times with stacked params.
+    """One trunk round over the unified [state | action | value] sequence.
 
-    Self-attends the latents, cross-attends them to the per-entity history
-    states, then lets each provenance group's action queries and the value
-    queries cross-read the freshly updated latents. The carry holds the raw
-    residual streams (latents, per-group action queries, value queries);
-    masks and history context are broadcast across rounds. Scanned with
-    variable_axes={"params": 0}, so every round has its own weights.
+    Canonical decoder-layer shape: masked self-attention, a gated
+    cross-read of the world-model history states, then one wide FFW — the
+    attention sublayers are attention-only, so a round carries a single
+    FFW instead of one per block. Information-flow rules live in the
+    attention mask rather than in module topology: state tokens attend
+    state only (never the action or value streams), action tokens attend
+    state + actions (options can compare with each other), value tokens
+    attend state only. Every residual write is behind a zero-init gate so
+    a round starts as a no-op; nn.scan-ned num_rounds times with stacked
+    params so every round has its own weights.
     """
 
     cfg: ConfigDict
@@ -316,49 +189,52 @@ class RoundBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        carry: tuple[jax.Array, tuple[jax.Array, ...], jax.Array],
-        input_state_mask: jax.Array,
+        seq: jax.Array,
+        attn_mask: jax.Array,
+        seq_valid: jax.Array,
         history_context: jax.Array,
         history_mask: jax.Array,
-        group_masks: tuple[jax.Array, ...],
     ):
-        latent_queries, action_queries, value_queries = carry
-
-        latent_queries = TransformerEncoder(
-            name="latent_self", **self.cfg.latent_encoder.to_dict()
-        )(qkv=latent_queries, qkv_mask=input_state_mask)
-        latent_queries = TransformerDecoder(
-            name="history_cross", **self.cfg.history_cross_decoder.to_dict()
-        )(
-            q=latent_queries,
-            kv=history_context,
-            q_mask=input_state_mask,
-            kv_mask=history_mask,
+        rcfg = self.cfg.round
+        mha_kwargs = dict(
+            num_heads=rcfg.num_heads,
+            qk_size=rcfg.qk_size,
+            v_size=rcfg.v_size,
+            model_size=rcfg.model_size,
+            qk_layer_norm=rcfg.qk_layer_norm,
+            use_bias=rcfg.use_bias,
+            dtype=seq.dtype,
+            collect_intermediates=COLLECT_INTERMEDIATES,
         )
 
-        # Information flow is one-way (latents never attend to action
-        # queries), and each group reads with its own weights, so the
-        # per-group decode-in-isolation property holds round by round.
-        action_queries = tuple(
-            TransformerDecoder(
-                name=f"action_decoder_{group_name}",
-                **self.cfg.action_decoder.to_dict(),
-            )(
-                q=queries,
-                kv=latent_queries,
-                q_mask=group_mask,
-                kv_mask=input_state_mask,
+        def gate(name: str) -> jax.Array:
+            return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
+                seq.dtype
             )
-            for queries, group_mask, (group_name, _) in zip(
-                action_queries, group_masks, ACTION_DECODER_SLOT_GROUPS
-            )
+
+        seq_ln = layer_norm(seq)
+        self_attn = MultiHeadAttention(name="self_attn", **mha_kwargs)(
+            q=seq_ln, kv=seq_ln, mask=attn_mask
         )
+        seq = seq + gate("self_gate") * self_attn
 
-        value_queries = TransformerDecoder(
-            name="value_decoder", **self.cfg.value_decoder.to_dict()
-        )(q=value_queries, kv=latent_queries, kv_mask=input_state_mask)
+        # Every row (state, action and value tokens alike) reads the
+        # per-entity recurrent history states directly.
+        history_attn = MultiHeadAttention(name="history_cross", **mha_kwargs)(
+            q=layer_norm(seq),
+            kv=layer_norm(history_context),
+            mask=create_attention_mask(seq_valid, history_mask),
+        )
+        seq = seq + gate("history_gate") * history_attn
 
-        return (latent_queries, action_queries, value_queries), None
+        ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)(
+            layer_norm(seq)
+        )
+        seq = seq + gate("ffw_gate") * ffw
+
+        # Hard-zero invalid rows so padded tokens never accumulate content.
+        seq = jnp.where(seq_valid[..., None], seq, 0)
+        return seq, None
 
 
 class Encoder(nn.Module):
@@ -489,19 +365,19 @@ class Encoder(nn.Module):
 
         # Recurrent history encoder over history edges. Twelve GRU states
         # (one per public slot) scanned along the history axis; per request we
-        # read the state as of that request and let the latent sequence
+        # read the state as of that request and let every trunk round
         # cross-attend to it.
         self.world_model = PerSlotWorldModel(self.cfg, name="world_model")
         self.wm_field_step_linear = nn.Dense(
             name="wm_field_step_linear", use_bias=False, **dense_kwargs
         )
 
-        # Per-modality input projections (replaces the single shared
-        # input_seq_mlp): each input-token modality comes from a different
-        # generative process (its own SumEmbeddings / linears upstream), so
-        # each gets its own norm+MLP into the shared latent space. The
-        # prev-action tokens especially need this — they are borrowed
-        # mixed-provenance action-slot embeddings with only an additive bias.
+        # Per-modality input projections: each input-token modality comes
+        # from a different generative process (its own SumEmbeddings /
+        # linears upstream), so each gets its own norm+MLP into the shared
+        # trunk space. The prev-action tokens especially need this — they
+        # are borrowed mixed-provenance action-slot embeddings with only an
+        # additive bias.
         input_mlp_shape = (4 * self.entity_size, self.entity_size)
         self.input_norm_private = MLP(input_mlp_shape, name="input_norm_private")
         self.input_norm_public = MLP(input_mlp_shape, name="input_norm_public")
@@ -509,21 +385,27 @@ class Encoder(nn.Module):
         self.input_norm_prev_action = MLP(
             input_mlp_shape, name="input_norm_prev_action"
         )
+        # Moveset tokens carry the per-move battle state (pp, disabled,
+        # wildcard availability) that the entity move tokens (move-ID only)
+        # lack; without them the trunk — and therefore the value estimate —
+        # is blind to pp, locks and spent tera.
+        self.input_norm_my_moves = MLP(input_mlp_shape, name="input_norm_my_moves")
+        self.input_norm_opp_moves = MLP(input_mlp_shape, name="input_norm_opp_moves")
 
-        # Round trunk: one RoundBlock — (latent self-attention, history
-        # cross-attention, per-group action cross-attention, value
-        # cross-attention) — scanned num_rounds times with stacked params,
-        # so every round has its own weights and rounds can specialize
-        # instead of iterating one shared refinement operator. The cross
-        # blocks' residual gates are zero-init, so every round's history
-        # integration starts as a no-op.
+        # Round trunk: one RoundBlock over the unified
+        # [state | action | value] sequence, scanned num_rounds times with
+        # stacked params, so every round has its own weights and rounds can
+        # specialize instead of iterating one shared refinement operator.
+        # All residual gates are zero-init, so each round starts as a no-op.
+        # Rematted with nothing_saveable — checkpoint_dots would save the
+        # very matmul outputs (the wide FFW hiddens) that dominate trunk
+        # activation memory, while recomputing a round on the backward pass
+        # is cheap.
         self.num_rounds = self.cfg.num_rounds
-        round_block = RoundBlock
-        if DO_CHECKPOINT or self.num_rounds > 1:
-            round_block = nn.checkpoint(
-                RoundBlock,
-                policy=jax.checkpoint_policies.checkpoint_dots,
-            )
+        round_block = nn.checkpoint(
+            RoundBlock,
+            policy=jax.checkpoint_policies.nothing_saveable,
+        )
         variable_axes = {"params": 0}
         if COLLECT_INTERMEDIATES:
             variable_axes["intermediates"] = 0
@@ -545,9 +427,10 @@ class Encoder(nn.Module):
             )
             for group_name, _ in ACTION_DECODER_SLOT_GROUPS
         ]
-        # Head-facing output norms, hoisted out of the decoders (norm_output
-        # is off) so the trunk carries raw residual streams; applied once to
-        # the final round's action queries for the policy head.
+        # Head-facing output norms, hoisted out of the trunk so it carries
+        # raw residual streams; applied once to the final round's action
+        # tokens, keeping the move/switch/target slots in their own spaces
+        # for the pointer and macro heads.
         self.action_out_norms = [
             MLP(name=f"action_out_norm_{group_name}")
             for group_name, _ in ACTION_DECODER_SLOT_GROUPS
@@ -600,22 +483,22 @@ class Encoder(nn.Module):
 
     def _embed_public_entity(self, public: jax.Array, revealed: jax.Array):
         # Encode volatile and type-change indices using the binary encoder.
-        _encode_hex = jax.vmap(
+        encode_hex = jax.vmap(
             functools.partial(
-                _binary_scale_encoding, dtype=self.cfg.dtype, world_dim=65535
+                binary_scale_encoding, dtype=self.cfg.dtype, world_dim=65535
             )
         )
         volatiles_indices = public[
             EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0 : EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8
             + 1
         ]
-        volatiles_encoding = _encode_hex(volatiles_indices).reshape(-1)
+        volatiles_encoding = encode_hex(volatiles_indices).reshape(-1)
 
         typechange_indices = public[
             EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0 : EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1
             + 1
         ]
-        typechange_encoding = _encode_hex(typechange_indices).reshape(-1)
+        typechange_encoding = encode_hex(typechange_indices).reshape(-1)
 
         hp_ratio = (
             public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO]
@@ -655,31 +538,31 @@ class Encoder(nn.Module):
         # switch, so it becomes its own token, masked by the ACTIVE flag.
         persistent_code = one_hot_concat_jax(
             [
-                _encode_sqrt_one_hot_public_entity(
+                encode_sqrt_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL,
                     dtype=self.cfg.dtype,
                 ),
-                _encode_divided_one_hot_public_entity(
+                encode_divided_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT,
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS,
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
                 ),
             ],
@@ -687,18 +570,18 @@ class Encoder(nn.Module):
         )
         transient_code = one_hot_concat_jax(
             [
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK,
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED,
                 ),
-                _encode_one_hot_public_entity(
+                encode_one_hot_public_entity(
                     public,
                     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS,
                 ),
@@ -857,7 +740,7 @@ class Encoder(nn.Module):
 
         boolean_code = one_hot_concat_jax(
             [
-                _encode_one_hot_private_entity(
+                encode_one_hot_private_entity(
                     private,
                     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE,
                 ),
@@ -935,9 +818,9 @@ class Encoder(nn.Module):
         return private_embedding, mask
 
     def _embed_edge(self, edge: jax.Array):
-        _encode_hex = jax.vmap(
+        encode_hex = jax.vmap(
             functools.partial(
-                _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
+                binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
             )
         )
 
@@ -945,26 +828,26 @@ class Encoder(nn.Module):
             EntityEdgeFeature.ENTITY_EDGE_FEATURE__MINOR_ARG0 : EntityEdgeFeature.ENTITY_EDGE_FEATURE__MINOR_ARG3
             + 1
         ]
-        minor_args_encoding = _encode_hex(minor_args_indices).reshape(-1)
+        minor_args_encoding = encode_hex(minor_args_indices).reshape(-1)
 
         # Aggregate embeddings for the relative edge.
         boolean_code = one_hot_concat_jax(
             [
-                _encode_one_hot_edge(
+                encode_one_hot_edge(
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG,
                 ),
-                _encode_divided_one_hot_edge(
+                encode_divided_one_hot_edge(
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_divided_one_hot_edge(
+                encode_divided_one_hot_edge(
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__HEAL_RATIO,
                     MAX_RATIO_TOKEN / 32,
                 ),
-                _encode_one_hot_edge(
+                encode_one_hot_edge(
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN,
                 ),
@@ -1057,9 +940,9 @@ class Encoder(nn.Module):
         turn_order_value = field[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE]
         request_count = field[FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
 
-        _encode_hex = jax.vmap(
+        encode_hex = jax.vmap(
             functools.partial(
-                _binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
+                binary_scale_encoding, world_dim=65535, dtype=self.cfg.dtype
             )
         )
 
@@ -1071,47 +954,47 @@ class Encoder(nn.Module):
             FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS0 : FieldFeature.FIELD_FEATURE__OPP_SIDECONDITIONS1
             + 1
         ]
-        my_side_condition_encoding = _encode_hex(my_side_condition_indices).reshape(-1)
-        opp_side_condition_encoding = _encode_hex(opp_side_condition_indices).reshape(
+        my_side_condition_encoding = encode_hex(my_side_condition_indices).reshape(-1)
+        opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(
             -1
         )
 
         # Aggregate embeddings for the absolute edge.
         field_encoding = one_hot_concat_jax(
             [
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__WEATHER_ID,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__WEATHER_MAX_DURATION,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__WEATHER_MIN_DURATION,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__TERRAIN_ID,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__TERRAIN_MAX_DURATION,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__TERRAIN_MIN_DURATION,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_ID,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_MAX_DURATION,
                 ),
-                _encode_one_hot_field(
+                encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_MIN_DURATION,
                 ),
@@ -1124,11 +1007,11 @@ class Encoder(nn.Module):
                 my_side_condition_encoding,
                 one_hot_concat_jax(
                     [
-                        _encode_one_hot_field(
+                        encode_one_hot_field(
                             field,
                             FieldFeature.FIELD_FEATURE__MY_SPIKES,
                         ),
-                        _encode_one_hot_field(
+                        encode_one_hot_field(
                             field,
                             FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES,
                         ),
@@ -1143,11 +1026,11 @@ class Encoder(nn.Module):
                 opp_side_condition_encoding,
                 one_hot_concat_jax(
                     [
-                        _encode_one_hot_field(
+                        encode_one_hot_field(
                             field,
                             FieldFeature.FIELD_FEATURE__OPP_SPIKES,
                         ),
-                        _encode_one_hot_field(
+                        encode_one_hot_field(
                             field,
                             FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES,
                         ),
@@ -1192,17 +1075,17 @@ class Encoder(nn.Module):
         """
         boolean_code = one_hot_concat_jax(
             [
-                _encode_sqrt_one_hot_action(
+                encode_sqrt_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__PP, dtype=self.cfg.dtype
                 ),
-                _encode_sqrt_one_hot_action(
+                encode_sqrt_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__MAXPP, dtype=self.cfg.dtype
                 ),
-                _encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
-                _encode_one_hot_action(
+                encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
+                encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__DISABLED
                 ),
-                _encode_one_hot_action(
+                encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__IS_WILDCARD
                 ),
             ],
@@ -1239,12 +1122,10 @@ class Encoder(nn.Module):
             revealed_entity_mask,
         ) = self._embed_public_entities(env_step)
 
+        # Existence masks (move revealed / set), not action legality: a
+        # disabled or pp-locked move is still state the trunk should see.
         my_move_embeddings, my_move_mask = self._embed_moves(env_step.my_moveset)
         opp_move_embeddings, opp_move_mask = self._embed_moves(env_step.opp_moveset)
-
-        my_move_mask = my_move_mask & jnp.take(
-            env_step.action_mask, MOVE_INDICES, axis=0
-        ).any(axis=-1)
 
         private_entity_embeddings, private_entity_mask = self._embed_private_entities(
             env_step.private_team
@@ -1311,14 +1192,20 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        # Project each modality into the shared latent space with its own
-        # norm+MLP before concatenating into one sequence.
-        input_state_sequence = jnp.concatenate(
+        # Project each input modality into the shared trunk space with its
+        # own norm+MLP before concatenating into one sequence. The moveset
+        # tokens (mine and the opponent's revealed set) are state content,
+        # distinct from the move action slots below: they let the state
+        # stream — and through it the value estimate — see pp, disabled
+        # moves and wildcard availability.
+        state_sequence = jnp.concatenate(
             (
                 self.input_norm_private(private_entity_embeddings),
                 self.input_norm_public(revealed_entity_embeddings),
                 self.input_norm_field(field_embeddings),
                 self.input_norm_prev_action(prev_action_tokens),
+                self.input_norm_my_moves(my_move_embeddings),
+                self.input_norm_opp_moves(opp_move_embeddings),
             ),
             axis=0,
         )
@@ -1331,8 +1218,9 @@ class Encoder(nn.Module):
             dtype=jnp.bool,
         )
 
-        input_state_mask = jnp.concatenate(
-            (input_mask, prev_action_doubles_mask), axis=0
+        state_mask = jnp.concatenate(
+            (input_mask, prev_action_doubles_mask, my_move_mask, opp_move_mask),
+            axis=0,
         )
 
         output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
@@ -1340,54 +1228,65 @@ class Encoder(nn.Module):
         )
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
-        # bulk of computation: the round trunk, scanned num_rounds times
-        # with per-round (stacked) weights. Each round self-attends the
-        # latent sequence, cross-attends it to the per-entity history states
-        # (12 rows, PUBLIC_ORDER-aligned with the public team, masked to
-        # mapped rows) plus the field history state, then lets each
-        # provenance group's action queries and the value queries cross-read
-        # the freshly updated latents.
+        # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
+        # the public team, masked to mapped rows) plus the field history
+        # state; every trunk round cross-reads it.
         history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
         history_mask = jnp.concatenate(
             (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
         )
 
-        latent_queries = input_state_sequence
-
-        # Warm-start the action queries with their per-provenance input norms.
-        action_queries = tuple(
-            q_norm(output_state_sequence[slot_indices])
-            for q_norm, (_, slot_indices) in zip(
-                self.action_norms, ACTION_DECODER_SLOT_GROUPS
+        # Warm-start the action tokens with their per-provenance input norms.
+        action_tokens = jnp.zeros_like(output_state_sequence)
+        for q_norm, (_, slot_indices) in zip(
+            self.action_norms, ACTION_DECODER_SLOT_GROUPS
+        ):
+            action_tokens = action_tokens.at[slot_indices].set(
+                q_norm(output_state_sequence[slot_indices])
             )
-        )
-        group_masks = tuple(
-            output_state_mask[slot_indices]
-            for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
+        value_tokens = self.value_embeddings.astype(self.cfg.dtype)
+
+        # Unified trunk sequence [state | action | value]. Information-flow
+        # rules are declarative — one static block mask instead of
+        # per-stream decoder topology: state rows attend state only (they
+        # never read the action or value streams), action rows attend
+        # state + actions (options can compare with each other), value rows
+        # attend state only. Combined with per-token validity for keys.
+        n_state = state_sequence.shape[0]
+        n_action = action_tokens.shape[0]
+        n_value = value_tokens.shape[0]
+
+        seq = jnp.concatenate((state_sequence, action_tokens, value_tokens), axis=0)
+        seq_valid = jnp.concatenate(
+            (state_mask, output_state_mask, jnp.ones(n_value, dtype=jnp.bool_)),
+            axis=0,
         )
 
-        # Value queries join the same scan: each round's value-decoder block
-        # reads that round's latents and the query stream carries across
-        # rounds, mirroring the action queries.
-        value_queries = self.value_embeddings.astype(self.cfg.dtype)
+        allowed = np.zeros((n_state + n_action + n_value,) * 2, dtype=bool)
+        allowed[:n_state, :n_state] = True
+        allowed[n_state : n_state + n_action, : n_state + n_action] = True
+        allowed[n_state + n_action :, :n_state] = True
+        attn_mask = allowed[None] & create_attention_mask(seq_valid, seq_valid)
 
-        (_, action_queries, value_queries), _ = self.round_trunk(
-            (latent_queries, action_queries, value_queries),
-            input_state_mask,
-            history_context,
-            history_mask,
-            group_masks,
+        # Bulk of computation: the round trunk, scanned num_rounds times
+        # with per-round (stacked) weights.
+        seq, _ = self.round_trunk(
+            seq, attn_mask, seq_valid, history_context, history_mask
         )
 
-        # Head-facing embeddings from the final round's raw residual streams:
-        # the per-group out-norms (hoisted out of the decoders) norm the
-        # action queries and scatter them into the full action-slot layout.
+        action_queries = seq[n_state : n_state + n_action]
+        value_queries = seq[n_state + n_action :]
+
+        # Head-facing embeddings from the final round's raw residual
+        # streams: the per-group out-norms (hoisted out of the trunk) keep
+        # the move/switch/target slots in their own spaces for the pointer
+        # and macro heads.
         action_embeddings = jnp.zeros_like(output_state_sequence)
-        for out_norm, group_queries, (_, slot_indices) in zip(
-            self.action_out_norms, action_queries, ACTION_DECODER_SLOT_GROUPS
+        for out_norm, (_, slot_indices) in zip(
+            self.action_out_norms, ACTION_DECODER_SLOT_GROUPS
         ):
             action_embeddings = action_embeddings.at[slot_indices].set(
-                out_norm(group_queries)
+                out_norm(action_queries[slot_indices])
             )
         value_embeddings = value_queries.reshape(-1)
 

@@ -2,14 +2,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import functools
-import os
 from pprint import pprint
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import numpy as np
-import plotly.express as px
 from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
@@ -21,12 +18,13 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
-from rl.learner import checkpoint
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
+    MacroHead,
+    PairPolicyHead,
     calculate_hierarchical_prior,
     compute_policy_metrics,
     sample_categorical,
@@ -39,19 +37,18 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
+        self.pi_head = PairPolicyHead(self.cfg.pi_head)
+        self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
-        """Gram-matrix logits.
+        """Untied src x tgt pointer logits.
 
         action_embeddings: (NUM_ACTION_FEATURES, entity_size), already
         normed by the encoder's out-norms. Returns
         (NUM_ACTION_FEATURES**2,) src x tgt logits.
         """
-        square_logits = jnp.einsum(
-            "ae,be->ab", action_embeddings, action_embeddings
-        ) / np.array(action_embeddings.shape[-1] ** 0.5)
-        return square_logits.reshape(-1)
+        return self.pi_head(action_embeddings)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -118,14 +115,15 @@ class Porygon2PlayerModel(nn.Module):
 
         square_logits = self._forward_pi_head(action_embeddings) / temp
 
-        # Hierarchical composition over the same square logits: a macro
-        # softmax over per-modality pooled logits times a micro softmax
-        # within each modality, multiplied in log space. Mean pooling is
-        # load-bearing — LSE pooling collapses the composition back to the
-        # flat softmax — and keeps the modality contest invariant to how
-        # many grid cells each modality owns, so the policy gradient splits
-        # into a within-modality term and a modality-level term like the
-        # hierarchical multi-head did.
+        # Hierarchical composition: a macro softmax over modalities times a
+        # micro softmax within each modality, multiplied in log space. The
+        # macro logits come from a dedicated head over per-modality pooled
+        # src embeddings rather than a mean-pool of the square logits, so
+        # the gram logits only ever receive within-modality (per-modality
+        # shift-invariant) gradient — micro confidence cannot move the
+        # modality contest through logit magnitude. The policy gradient
+        # still splits into a within-modality term and a modality-level
+        # term like the hierarchical multi-head did.
         modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         valid_per_modality = flat_valid_mask[:, None] & modality_oh
         modality_counts = valid_per_modality.sum(axis=0)
@@ -135,9 +133,9 @@ class Porygon2PlayerModel(nn.Module):
         )
         log_micro_policy = square_logits - micro_lse[FLAT_MODALITY_MASK]
 
-        macro_logits = jnp.sum(
-            jnp.where(valid_per_modality, square_logits[:, None], 0.0), axis=0
-        ) / jnp.maximum(modality_counts, 1)
+        # A src slot is actionable iff its row has any valid tgt cell.
+        src_valid = valid_mask.any(axis=-1)
+        macro_logits = self.macro_head(action_embeddings, src_valid) / temp
         log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
 
         pi_logits = jnp.where(
@@ -231,121 +229,19 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
     return Porygon2PlayerModel(config)
 
 
-def create_attention_graph(path, value):
-    # Extract string/integer keys from the JAX path tuple
-    path_keys = [p.key for p in path[:-1]]
-
-    if len(path_keys) > 0 and path_keys[-1] == "attn_weights":
-        path_str = " -> ".join(str(k) for k in path_keys)
-
-        if getattr(value, "val", None) is not None:
-            value = value.val
-
-        avg_attn = jnp.max(value[:, :20], axis=1)  # Shape: (H, S, S)
-        if avg_attn.ndim > 3:
-            avg_attn = jnp.max(avg_attn, 0)
-
-        assert (
-            avg_attn.ndim == 3
-        ), f"Expected 3D array for {path_str} attention weights, got shape {avg_attn.shape}"
-
-        avg_attn_np = np.asarray(avg_attn)
-
-        # Use Plotly Express to facet the 3D array along the 0th dimension (Heads)
-        fig = px.imshow(
-            avg_attn_np,
-            facet_col=0,
-            facet_col_wrap=4,
-            text_auto=True,
-            aspect="auto",
-            labels=dict(color="Attn Prob", facet_col="Head"),
-            title=path_str,
-        )
-
-        fig.for_each_annotation(
-            lambda a: a.update(text=a.text.replace("facet_col=", "Head "))
-        )
-
-        # --- File Saving Logic ---
-        base_dir = "attn_weights"
-        os.makedirs(base_dir, exist_ok=True)
-
-        module_name = "_".join(str(k) for k in path_keys[:-1])
-
-        save_path = os.path.join(base_dir, f"{module_name}.html")
-        fig.write_html(save_path)
-
-        print(f"Saved concatenated attention maps to {save_path}")
-        # -------------------------
-
-        return fig
-
-    return value
-
-
-def get_attention_maps(
-    model: nn.Module,
-    params: dict,
-    actor_input: PlayerActorInput,
-    actor_output: PlayerActorOutput,
-    head_params: HeadParams,
-    rng_key: jax.Array,
-) -> dict:
-    # Calling apply with mutable=['intermediates'] collects all variables sown to that collection
-    outputs, state = model.apply(
-        params,
-        actor_input,
-        actor_output,
-        head_params,
-        rngs={"sampling": rng_key},
-        mutable=["intermediates"],
-    )
-
-    # Extract the nested dictionary of attention weights
-    intermediates = state.get("intermediates", {})
-    return jax.tree.map_with_path(create_attention_graph, intermediates)
-
-
 def main(generation: int = 9):
-    actor_network = get_player_model(get_player_model_config(generation, train=False))
+    """Init the learner network on an example step and print param counts.
+
+    Attention-map dumps and cost analysis live in rl.model.viz.
+    """
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 
     ex_actor_input, ex_actor_output = jax.device_put(
         jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     )
     key = jax.random.key(42)
-
-    latest_ckpt = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
-    if latest_ckpt:
-        print(f"loading checkpoint from {latest_ckpt}")
-        params = checkpoint.load_component(latest_ckpt, "player", "params")
-    else:
-        params = learner_network.init(
-            key, ex_actor_input, ex_actor_output, HeadParams()
-        )
-
-    actor_output = actor_network.apply(
-        params,
-        ex_actor_input,
-        PlayerActorOutput(),
-        HeadParams(temp=0.8),
-        rngs={"sampling": key},
-    )
-    pprint(actor_output)
-
-    attention_data = get_attention_maps(
-        model=actor_network,
-        params=params,
-        actor_input=ex_actor_input,
-        actor_output=actor_output,
-        head_params=HeadParams(temp=0.8),
-        rng_key=key,
-    )
-
-    try:
-        pprint(get_num_params(params), sort_dicts=False)
-    except Exception as e:
-        print(f"Error calculating number of parameters: {e}")
+    params = learner_network.init(key, ex_actor_input, ex_actor_output, HeadParams())
+    pprint(get_num_params(params), sort_dicts=False)
 
 
 if __name__ == "__main__":

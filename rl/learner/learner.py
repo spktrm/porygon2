@@ -22,7 +22,6 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl.learner import checkpoint
 from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -222,19 +221,7 @@ def train_step(
             + config.player_magnet_kl_coef * loss_magnet_kl
         )
 
-        # Learned mass-semantics scalars (see _forward_pi_head): tau per
-        # modality (1 = flat-softmax spread term, ->inf = best option),
-        # kappa per modality (0 = count-invariant, 1 = count-proportional).
-        mass_temp = jax.nn.softplus(params["params"]["mass_temp_raw"])
-        mass_count_coef = params["params"]["mass_count_coef"]
-        mass_logs = {}
-        for name, value in ModalityEnum.items():
-            suffix = name.split("__")[-1].lower().strip("_")
-            mass_logs[f"player_mass_temp_{suffix}"] = mass_temp[value]
-            mass_logs[f"player_mass_count_coef_{suffix}"] = mass_count_coef[value]
-
         return loss, dict(
-            **mass_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
@@ -615,6 +602,11 @@ class Learner:
 
         # Threading
         self.device_q: queue.Queue[Batch] = queue.Queue(maxsize=1)
+        # Log dicts still hold device arrays when enqueued; the log worker
+        # pays the device sync so the train loop never blocks on the GPU.
+        # Bounded so a stalled wandb client applies backpressure instead of
+        # accumulating unbounded device references.
+        self._log_q: queue.Queue[dict | None] = queue.Queue(maxsize=64)
 
         # Progress Bars
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
@@ -624,10 +616,15 @@ class Learner:
         if debug:
             self._train_step_jit = train_step
         else:
+            # Donation requires that no pytree leaf appears twice across the
+            # donated states (params/target_params are deep-copied at
+            # creation/restore) and that nothing reads a state object after
+            # the call is dispatched — all periodic readers run on this
+            # thread after the rebind in _train_step.
             self._train_step_jit = jax.jit(
                 train_step,
                 static_argnames=["config"],
-                # donate_argnames=["player_state", "builder_state"],
+                donate_argnames=["player_state", "builder_state"],
             )
 
     def enqueue_traj(self, traj: Trajectory):
@@ -685,13 +682,31 @@ class Learner:
                 # Process pure data outside lock
                 init_key, batch_key = jax.random.split(init_key)
                 stacked = _stack_and_pad_batch(batch, rng_key=batch_key)
-                self.device_q.put(stacked)
+                # Bounded put that re-checks done: an unbounded put can strand
+                # this thread forever if shutdown drains the queue between our
+                # done-check and the put.
+                while not self.done:
+                    try:
+                        self.device_q.put(stacked, timeout=1.0)
+                        break
+                    except queue.Full:
+                        continue
 
         logger.info("host_to_device_worker exiting.")
 
-    def _post_step_callback(self, logs: dict):
-        step = logs["training_step"].item()
-        self._handle_periodic_tasks(step, logs)
+    def _wandb_log_worker(self):
+        """Background thread: drains log dicts, paying the device->host
+        transfer and wandb serialization here so the train loop never has to
+        synchronize with the GPU per step. A single consumer preserves wandb's
+        step ordering."""
+        while True:
+            logs = self._log_q.get()
+            if logs is None:
+                break
+            try:
+                self.wandb_run.log(jax.device_get(logs))
+            except Exception:
+                logger.exception("wandb logging failed")
 
     def train(self):
         """
@@ -702,6 +717,13 @@ class Learner:
             target=self.host_to_device_worker, daemon=True
         )
         transfer_thread.start()
+        log_thread = threading.Thread(target=self._wandb_log_worker, daemon=True)
+        log_thread.start()
+
+        # Host-side mirror of player_state.step_count: train_step increments
+        # the device counter by exactly one per call, so tracking it here
+        # keeps periodic-task scheduling free of per-step device syncs.
+        host_step = int(jax.device_get(self.player_state.step_count))
 
         try:
             for _ in range(self.config.num_steps):
@@ -716,18 +738,28 @@ class Learner:
                     if logs is None:
                         continue  # Skip this step if update failed
 
-                # jax.debug.callback(self._post_step_callback, logs)
-                self._post_step_callback(logs)
+                host_step += 1
+                self._handle_periodic_tasks(host_step, logs)
 
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received. Saving checkpoint...")
-            save_train_state(
-                self.wandb_run,
-                self.config,
-                jax.device_get(self.player_state),
-                jax.device_get(self.builder_state),
-                self.league,
-            )
+            try:
+                save_train_state(
+                    self.wandb_run,
+                    self.config,
+                    jax.device_get(self.player_state),
+                    jax.device_get(self.builder_state),
+                    self.league,
+                )
+            except RuntimeError:
+                # An interrupt that lands mid train-step catches the state
+                # after its buffers were donated but before the rebind; the
+                # pre-step state is unrecoverable then, so skip the save
+                # rather than masking the interrupt with a donation error.
+                logger.exception(
+                    "Skipping interrupt checkpoint: train state was donated "
+                    "mid-step. Latest periodic checkpoint is unaffected."
+                )
             raise
         except Exception as e:
             logger.error(f"Learner training crashed: {e}")
@@ -752,6 +784,11 @@ class Learner:
                     cond.notify_all()
 
             transfer_thread.join(timeout=10)
+
+            # Sentinel stops the log worker after it drains pending logs. The
+            # worker is a daemon, so a wedged wandb client can't hang exit.
+            self._log_q.put(None)
+            log_thread.join(timeout=30)
             print("Training Finished.")
 
     def _train_step(self, batch: Batch) -> dict | None:
@@ -785,7 +822,9 @@ class Learner:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
 
-        self.wandb_run.log(logs)
+        # Hand off to the log worker; values may still be device arrays and
+        # are synced there, off the critical path.
+        self._log_q.put(logs)
 
         # Main Player Update & Checkpoint
         if step % self.config.main_player_update_steps == 0:
