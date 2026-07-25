@@ -217,14 +217,19 @@ class OfflineDataset:
 def prefetch(
     iterator: Iterator[OfflineBatch], buffer_size: int = 4
 ) -> Iterator[OfflineBatch]:
-    """Runs proto parsing + collation in a background thread."""
+    """Runs proto parsing + collation in a background thread. Exceptions in
+    the worker are re-raised in the consumer — a data error must crash the
+    run loudly, not silently end it early."""
     q: "queue.Queue" = queue.Queue(maxsize=buffer_size)
     sentinel = object()
+    error: list[BaseException] = []
 
     def _worker():
         try:
             for item in iterator:
                 q.put(item)
+        except BaseException as e:  # noqa: BLE001 — re-raised in consumer
+            error.append(e)
         finally:
             q.put(sentinel)
 
@@ -233,5 +238,7 @@ def prefetch(
     while True:
         item = q.get()
         if item is sentinel:
+            if error:
+                raise error[0]
             return
         yield item
