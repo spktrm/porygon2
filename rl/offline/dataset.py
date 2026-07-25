@@ -20,6 +20,7 @@ from collections.abc import Iterator, Sequence
 import chex
 import jax
 import numpy as np
+from jaxtyping import ArrayLike
 
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.service_pb2 import EnvironmentTrajectory
@@ -37,13 +38,13 @@ _LENGTH_STRUCT = struct.Struct("<I")
 @chex.dataclass(frozen=True)
 class OfflineExample:
     actor_input: PlayerActorInput  # env leaves (T, ...), histories unbatched
-    label: chex.ArrayLike  # (3,) one-hot [loss, tie, win]
+    label: ArrayLike  # (3,) one-hot [loss, tie, win]
 
 
 @chex.dataclass(frozen=True)
 class OfflineBatch:
     actor_input: PlayerActorInput  # leaves (T, B, ...)
-    labels: chex.ArrayLike  # (B, 3)
+    labels: ArrayLike  # (B, 3)
 
 
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
@@ -84,7 +85,12 @@ def trajectory_to_example(payload: bytes) -> OfflineExample | None:
     trajectory = EnvironmentTrajectory.FromString(payload)
     if len(trajectory.states) < 2:
         return None
-    steps = [process_state(state) for state in trajectory.states]
+    # Only the final state's (large) history caches are kept per
+    # trajectory, so skip materialising them for every other state.
+    steps = [
+        process_state(state, with_history=False) for state in trajectory.states[:-1]
+    ]
+    steps.append(process_state(trajectory.states[-1]))
     final = steps[-1]
     label = final.env.win_reward
     # A trajectory without a decided outcome (no |win|/|tie| in the log,
