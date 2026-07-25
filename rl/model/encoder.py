@@ -1291,13 +1291,24 @@ class Encoder(nn.Module):
         # final round drives the acting policy and value estimate.
         return action_embeddings, value_embeddings
 
-    def __call__(
+    def encode_history(
         self,
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
-    ):
-        # --- Recurrent world model over the shared trajectory history ---
+    ) -> tuple[jax.Array, jax.Array]:
+        """Recurrent history pathway over the shared trajectory history.
+
+        Consumes ONLY the public event stream — packed public entity/edge
+        caches, the field history, and INFO_FEATURE__REQUEST_COUNT — no
+        private observation fields, movesets, or action masks. This makes
+        it safe to train against replay exports (which contain exactly the
+        same inputs) and reuse live without any distribution projection;
+        the offline outcome critic (rl/offline/model.py) builds on it.
+
+        Returns the recurrent state as of each request:
+        ((T, NUM_PUBLIC_SLOTS, D) slot states, (T, D) field state).
+        """
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = jax.vmap(self._embed_public_entity)(
@@ -1337,8 +1348,16 @@ class Encoder(nn.Module):
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        slot_states, field_state = self.history_encoder.state_at_requests(
-            history_output, request_count
+        return self.history_encoder.state_at_requests(history_output, request_count)
+
+    def __call__(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ):
+        slot_states, field_state = self.encode_history(
+            env_step, packed_history_step, history_step
         )
 
         # History-encoder slots are keyed by the stable entity index that

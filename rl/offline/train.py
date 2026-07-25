@@ -13,6 +13,7 @@ import argparse
 import itertools
 import json
 import os
+import time
 from collections.abc import Iterator
 
 import jax
@@ -170,6 +171,7 @@ def main():
     model_config = get_player_model_config(config.generation, train=False)
     model = Porygon2OfflineCritic(model_config)
 
+    print("Initializing model (traces the full encoder — takes a minute)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     params = model.init(jax.random.key(seed), ex_actor_input)
     if config.resume_from is not None:
@@ -207,9 +209,21 @@ def main():
     eval_step = make_eval_step()
 
     batches = prefetch(dataset.train_batches(seed=seed))
+    print(
+        f"Filling shuffle buffer ({config.shuffle_buffer_size} trajectories) "
+        "and JIT-compiling the first step — one-time startup cost..."
+    )
+    start_time = time.monotonic()
     last_save_path = None
     for step, batch in enumerate(itertools.islice(batches, config.num_steps), start=1):
         state, metrics = train_step(state, batch)
+        if step == 1:
+            jax.block_until_ready(metrics)
+            print(
+                f"First step done in {time.monotonic() - start_time:.1f}s. "
+                "Expect a few more pauses early on: each new (time, history) "
+                "bucket shape triggers one JIT recompile, then it's warm."
+            )
 
         if step % config.log_interval_steps == 0:
             logs = {k: float(v) for k, v in jax.device_get(metrics).items()}
