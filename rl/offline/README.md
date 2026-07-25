@@ -51,11 +51,16 @@ player's name — trajectories without a decided outcome are dropped.
 `Porygon2OfflineCritic` = the player model's recurrent **history pathway
 only** (`Encoder.encode_history` → `PerSlotHistoryEncoder` →
 `Encoder.pool_history`, shared module code and param paths with the RL
-model) plus an offline-only **linear** 3-bin probe over the flattened
-attention-pooled latents. The `HistoryAttentionPool` (n learned latent
-queries over the 12 slot states + field state; `history_pool` config) is
-read by the RL trunk as extra history-context tokens, so the outcome
-readout capacity trained offline is exactly what warm-starts RL. It reads nothing but the public
+model) plus an offline-only **antisymmetric linear probe**: the pool runs
+twice with side masks (shared params) — my-side slots + field, opponent
+slots + field — and a single weight vector scores the flattened latent
+difference, with logits `[-z, tie_bias, z]`. Mirror-antisymmetry
+Φ(mirror(s)) = −Φ(s) therefore holds by construction; combined with
+pair-aware batching (both perspectives of a game always share a batch,
+see dataset.py) this makes game-identity memorization unable to reduce
+the loss — only side-differenced structure can. The RL trunk reads the
+same (unmasked) pooled latents as history-context tokens, so the
+capacity trained offline is exactly what warm-starts RL. It reads nothing but the public
 event stream — private team, own moveset, and action masks are
 architecturally unreachable, and the history inputs are identical between
 replay exports and live play, so the frozen Φ carries no train/serve bias

@@ -23,7 +23,10 @@ import numpy as np
 from jaxtyping import ArrayLike
 
 from rl.environment.interfaces import PlayerActorInput
-from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
+from rl.environment.protos.service_pb2 import (
+    EnvironmentBatch,
+    EnvironmentTrajectory,
+)
 from rl.environment.utils import (
     clip_history,
     clip_packed_history,
@@ -55,7 +58,9 @@ def list_shards(config: Porygon2OfflineConfig) -> list[str]:
             f"(service/src/scripts/offline.ts) first."
         )
     shards = sorted(
-        os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
+        os.path.join(shard_dir, f)
+        for f in os.listdir(shard_dir)
+        if f.endswith(".bin")
     )
     if not shards:
         raise FileNotFoundError(f"No .bin shards in {shard_dir}")
@@ -98,7 +103,8 @@ def trajectory_to_example(
     # Only the final state's (large) history caches are kept per
     # trajectory, so skip materialising them for every other state.
     steps = [
-        process_state(state, with_history=False) for state in trajectory.states[:-1]
+        process_state(state, with_history=False)
+        for state in trajectory.states[:-1]
     ]
     steps.append(process_state(trajectory.states[-1]))
     final = steps[-1]
@@ -171,38 +177,57 @@ class OfflineDataset:
         self.config = config
         self.shards = list_shards(config)
 
-    def _iter_examples(self, holdout: bool) -> Iterator[OfflineExample]:
+    def _iter_records(
+        self, holdout: bool, pairs_only: bool = False
+    ) -> Iterator[list[OfflineExample]]:
         for shard in self.shards:
             for index, payload in enumerate(iter_shard_payloads(shard)):
                 # Records are whole replays, so this split is per game.
                 if _is_holdout(shard, index, self.config.holdout_modulus) != holdout:
                     continue
-                yield from record_to_examples(payload)
+                examples = record_to_examples(payload)
+                if pairs_only and len(examples) != 2:
+                    continue
+                if examples:
+                    yield examples
+
+    def _iter_examples(self, holdout: bool) -> Iterator[OfflineExample]:
+        for record in self._iter_records(holdout):
+            yield from record
 
     def train_batches(self, seed: int = 0) -> Iterator[OfflineBatch]:
-        """Infinite iterator: reshuffles shard order each epoch and mixes
-        examples through a shuffle buffer."""
+        """Infinite pair-aware iterator: both perspectives of a game always
+        share a batch.
+
+        Mirrored perspective pairs have identical non-side features and
+        opposite labels, so within a batch they cancel every gradient
+        direction EXCEPT the side-differenced signal the critic must
+        learn. With unpaired batches, spurious in-batch correlations offer
+        easier descent directions that cancel across batches, and training
+        random-walks at the constant symmetric predictor (loss pinned at
+        ln 2) — observed empirically on a full 50k-step run.
+        """
         rng = np.random.default_rng(seed)
-        buffer: list[OfflineExample] = []
+        games_per_batch = max(1, self.config.batch_size // 2)
+        buffer: list[list[OfflineExample]] = []
         while True:
             rng.shuffle(self.shards)
-            for example in self._iter_examples(holdout=False):
-                buffer.append(example)
+            for record in self._iter_records(holdout=False, pairs_only=True):
+                buffer.append(record)
                 if len(buffer) < max(
-                    self.config.shuffle_buffer_size, self.config.batch_size
+                    self.config.shuffle_buffer_size // 2, games_per_batch
                 ):
                     continue
-                picks = rng.choice(
-                    len(buffer), size=self.config.batch_size, replace=False
-                )
-                batch = [buffer[i] for i in picks]
+                picks = rng.choice(len(buffer), size=games_per_batch, replace=False)
+                batch = [example for i in picks for example in buffer[i]]
                 for i in sorted(picks, reverse=True):
                     buffer.pop(i)
-                yield collate(batch, self.config)
+                yield collate(batch[: self.config.batch_size], self.config)
             # Flush what remains at epoch end so small datasets still train.
-            while len(buffer) >= self.config.batch_size:
-                batch = [buffer.pop() for _ in range(self.config.batch_size)]
-                yield collate(batch, self.config)
+            while len(buffer) >= games_per_batch:
+                records = [buffer.pop() for _ in range(games_per_batch)]
+                batch = [example for record in records for example in record]
+                yield collate(batch[: self.config.batch_size], self.config)
 
     def eval_batches(self) -> Iterator[OfflineBatch]:
         """Single pass over the holdout split."""

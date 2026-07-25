@@ -1,3 +1,5 @@
+from typing import Optional
+
 import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
@@ -32,10 +34,16 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     num_steps: int = 50_000
 
     # Learning params. Supervised training wants momentum, unlike the RL
-    # learner's b1=0.
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-5)
+    # learner's b1=0. Weight decay is deliberately strong: with a
+    # high-capacity encoder and identity-rich embeddings, the failure mode
+    # is confident per-game memorization (held-out loss exploding), not
+    # underfitting.
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-2)
     learning_rate: float = 3e-4
     clip_gradient: float = 10.0
+    # Caps target confidence, directly penalising the memorization mode
+    # (huge |logit| on train games). 0 disables.
+    label_smoothing: float = 0.05
 
     # Eval / checkpoint cadence
     log_interval_steps: int = 100
