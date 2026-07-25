@@ -172,7 +172,8 @@ async function run() {
 run().catch((err) => {
     parentPort?.postMessage({
         type: "fatal",
-        message: err instanceof Error ? (err.stack ?? err.message) : String(err),
+        message:
+            err instanceof Error ? (err.stack ?? err.message) : String(err),
     });
     process.exit(1);
 });

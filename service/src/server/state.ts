@@ -4471,7 +4471,6 @@ export class StateHandler {
         return hp / maxHp;
     }
 
-
     getInfo(historyLength: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {

@@ -54,9 +54,7 @@ def list_shards(config: Porygon2OfflineConfig) -> list[str]:
             f"(service/src/scripts/offline.ts) first."
         )
     shards = sorted(
-        os.path.join(shard_dir, f)
-        for f in os.listdir(shard_dir)
-        if f.endswith(".bin")
+        os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
     )
     if not shards:
         raise FileNotFoundError(f"No .bin shards in {shard_dir}")

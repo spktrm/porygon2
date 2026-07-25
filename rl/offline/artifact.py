@@ -29,11 +29,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.enums_pb2 import MovesEnum
-from rl.environment.protos.features_pb2 import (
-    InfoFeature,
-    MovesetFeature,
-    RequestType,
-)
+from rl.environment.protos.features_pb2 import InfoFeature, MovesetFeature, RequestType
 from rl.learner import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params
@@ -51,9 +47,9 @@ def mask_to_public_view(actor_input: PlayerActorInput) -> PlayerActorInput:
     env = actor_input.env
 
     my_moveset = jnp.zeros_like(env.my_moveset)
-    my_moveset = my_moveset.at[
-        ..., MovesetFeature.MOVESET_FEATURE__MOVE_ID
-    ].set(MovesEnum.MOVES_ENUM___PAD)
+    my_moveset = my_moveset.at[..., MovesetFeature.MOVESET_FEATURE__MOVE_ID].set(
+        MovesEnum.MOVES_ENUM___PAD
+    )
 
     info = env.info
     info = info.at[..., InfoFeature.INFO_FEATURE__REQUEST_TYPE].set(
@@ -83,8 +79,6 @@ def make_potential_apply(
 
     def potential(params: Params, actor_input: PlayerActorInput) -> jax.Array:
         value_head = apply_fn(params, mask_to_public_view(actor_input))
-        return jax.lax.stop_gradient(
-            value_head.expectation.astype(jnp.float32)
-        )
+        return jax.lax.stop_gradient(value_head.expectation.astype(jnp.float32))
 
     return potential

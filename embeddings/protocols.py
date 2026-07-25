@@ -1,6 +1,6 @@
+from collections.abc import Callable
 from enum import Enum, auto
 from typing import TypedDict
-from collections.abc import Callable
 
 import pandas as pd
 
