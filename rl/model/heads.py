@@ -98,6 +98,28 @@ def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
 
 
+class PairPolicyHead(nn.Module):
+    """Src x tgt pointer logits with untied role projections.
+
+    Replaces the parameter-free gram head. Separate src/tgt projections
+    make the bilinear form asymmetric, so transposed grid cells (both
+    simultaneously valid during team preview) and diagonal cells (pass)
+    are no longer tied to each other / to a squared norm, and a slot's
+    embedding stops doing double duty as query and key through the same
+    vector. One residual block per role restores the head-local depth the
+    November per-modality heads had (resnet + pointer projections).
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
+        src = action_embeddings + MLP(**self.cfg.src_mlp.to_dict())(action_embeddings)
+        tgt = action_embeddings + MLP(**self.cfg.tgt_mlp.to_dict())(action_embeddings)
+        logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
+        return logits.squeeze(-1).reshape(-1)
+
+
 class MacroHead(nn.Module):
     """Modality-level (macro) logits from per-modality pooled src slots.
 

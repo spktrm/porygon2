@@ -41,9 +41,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = DEFAULT_DTYPE
 
-    # Params for scaling
-    cfg.encoder.num_latent_embeddings = 32
-
     encoder_num_layers = 1
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4
@@ -88,23 +85,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         init_residual_scale=decoder_init_residual_scale,
     )
 
-    cfg.encoder.latent_encoder = ConfigDict()
-    cfg.encoder.history_cross_decoder = ConfigDict()
-    cfg.encoder.action_decoder = ConfigDict()
-    cfg.encoder.value_decoder = ConfigDict()
     cfg.encoder.intra_entity_encoder = ConfigDict()
     cfg.encoder.intra_entity_pool = ConfigDict()
-
-    for encoder in [cfg.encoder.latent_encoder, cfg.encoder.intra_entity_encoder]:
-        set_attributes(encoder, **transformer_encoder_kwargs)
-
-    for decoder in [
-        cfg.encoder.history_cross_decoder,
-        cfg.encoder.action_decoder,
-        cfg.encoder.value_decoder,
-        cfg.encoder.intra_entity_pool,
-    ]:
-        set_attributes(decoder, **transformer_decoder_kwargs)
+    set_attributes(cfg.encoder.intra_entity_encoder, **transformer_encoder_kwargs)
+    set_attributes(cfg.encoder.intra_entity_pool, **transformer_decoder_kwargs)
 
     # Intra-entity attention: each pokemon is a short set of attribute tokens
     # (species / ability / item / moves / state) mixed by a small
@@ -119,40 +103,35 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.intra_entity_pool.num_layers = 1
     cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
-    cfg.encoder.latent_encoder.need_pos = False
-    # The trunk is one round block — (latent self-attention, history
-    # cross-attention, per-group action cross-attention, value
-    # cross-attention) — nn.scan-ned num_rounds times with stacked params,
-    # so every round has its own weights and rounds can specialize instead
-    # of iterating one shared refinement operator. Zero init_residual_scale
-    # means every residual update (including history integration) starts as
-    # a no-op, so extra rounds are stable to add; each round adds parameters
-    # as well as compute.
-    cfg.encoder.num_rounds = 3
-    cfg.encoder.history_cross_decoder.need_pos = False
-    cfg.encoder.history_cross_decoder.num_layers = 1
-    cfg.encoder.latent_encoder.num_layers = 1
-    cfg.encoder.action_decoder.need_pos = False
-    # cfg.encoder.action_decoder.resblocks_hidden_size = encoder_hidden_size
-    cfg.encoder.value_decoder.need_pos = False
+    # Round trunk over the unified [state | action | value] sequence: each
+    # round is masked self-attention, a gated cross-read of the world-model
+    # history states, then one wide FFW (attention sublayers are
+    # attention-only, canonical decoder-layer shape). nn.scan-ned
+    # num_rounds times with stacked params, so every round has its own
+    # weights and rounds can specialize instead of iterating one shared
+    # refinement operator. All residual gates are zero-init, so extra
+    # rounds are stable to add; each round adds parameters as well as
+    # compute. 4 rounds matches the Nov 2025 everything-transformer depth.
+    cfg.encoder.num_rounds = 4
+    cfg.encoder.round = ConfigDict()
+    cfg.encoder.round.num_heads = num_heads
+    cfg.encoder.round.qk_size = encoder_qkv_size
+    cfg.encoder.round.v_size = encoder_qkv_size
+    cfg.encoder.round.model_size = entity_size
+    cfg.encoder.round.hidden_size = encoder_hidden_size
+    cfg.encoder.round.use_bias = encoder_use_bias
+    cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
 
-    # One block per provenance group inside the scanned round block (untied
-    # across both groups and rounds). The output norm is hoisted out of the
-    # decoder (norm_output=False) so the raw residual stream carries across
-    # rounds; per-group out-norms in the encoder produce the head-facing
-    # embeddings from the final round.
-    cfg.encoder.action_decoder.num_layers = 1
-    cfg.encoder.action_decoder.norm_output = False
-    # The value decoder likewise lives inside the scanned round block; the
-    # value head's leading layer norm handles the growing residual scale, so
-    # no hoisted out-norm is needed.
-    cfg.encoder.value_decoder.num_layers = 1
-    cfg.encoder.value_decoder.norm_output = False
-
+    # Untied src/tgt pointer head over the action-slot embeddings: one
+    # residual block per role, then separate q/k projections. Asymmetric
+    # bilinear form — transposed and diagonal grid cells are independent.
     cfg.pi_head = ConfigDict()
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True
+    cfg.pi_head.qk_logits.qk_layer_norm = True
+    cfg.pi_head.src_mlp = ConfigDict()
+    cfg.pi_head.tgt_mlp = ConfigDict()
 
     # Dedicated modality-level head: per-modality attention pooling over
     # src-slot embeddings, shared MLP, zero-init output layer (keeps the
