@@ -2,11 +2,11 @@
 
 A shard file is a flat sequence of records, each:
 
-    [uint32 little-endian payload length][EnvironmentTrajectory proto bytes]
+    [uint32 little-endian payload length][EnvironmentBatch proto bytes]
 
-one record per (replay, perspective). The final state of each trajectory
-carries the game outcome in its info buffer (win_reward one-hot), exactly
-like a live self-play trajectory, so rl.environment.utils.process_state is
+one record per replay (both perspectives). Labels are 13-bin one-hots over
+the final alive-mon margin, derived from the terminal state's caches and
+sign-clamped to the recorded result; rl.environment.utils.process_state is
 reused unchanged.
 """
 
@@ -23,7 +23,14 @@ import numpy as np
 from jaxtyping import ArrayLike
 
 from rl.environment.interfaces import PlayerActorInput
-from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
+from rl.environment.protos.features_pb2 import (
+    EntityEdgeFeature,
+    EntityPublicNodeFeature,
+)
+from rl.environment.protos.service_pb2 import (
+    EnvironmentBatch,
+    EnvironmentTrajectory,
+)
 from rl.environment.utils import (
     clip_history,
     clip_packed_history,
@@ -34,17 +41,21 @@ from rl.offline.config import Porygon2OfflineConfig
 
 _LENGTH_STRUCT = struct.Struct("<I")
 
+# Margin bins: final alive-mon differential in [-6, +6], 13 classes.
+MAX_MARGIN = 6
+NUM_MARGIN_BINS = 2 * MAX_MARGIN + 1
+
 
 @chex.dataclass(frozen=True)
 class OfflineExample:
     actor_input: PlayerActorInput  # env leaves (T, ...), histories unbatched
-    label: ArrayLike  # (3,) one-hot [loss, tie, win]
+    label: ArrayLike  # (NUM_MARGIN_BINS,) one-hot over final margin
 
 
 @chex.dataclass(frozen=True)
 class OfflineBatch:
     actor_input: PlayerActorInput  # leaves (T, B, ...)
-    labels: ArrayLike  # (B, 3)
+    labels: ArrayLike  # (B, NUM_MARGIN_BINS)
 
 
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
@@ -55,7 +66,9 @@ def list_shards(config: Porygon2OfflineConfig) -> list[str]:
             f"(service/src/scripts/offline.ts) first."
         )
     shards = sorted(
-        os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
+        os.path.join(shard_dir, f)
+        for f in os.listdir(shard_dir)
+        if f.endswith(".bin")
     )
     if not shards:
         raise FileNotFoundError(f"No .bin shards in {shard_dir}")
@@ -81,6 +94,48 @@ def _is_holdout(shard_path: str, record_index: int, holdout_modulus: int) -> boo
     return int.from_bytes(digest[:4], "little") % holdout_modulus == 0
 
 
+def _ensemble_bucket(shard_path: str, record_index: int, num_splits: int) -> int:
+    """Disjoint per-game split for ensemble members (salted independently
+    of the holdout hash). All members share the same holdout set."""
+    key = f"ens:{os.path.basename(shard_path)}:{record_index}".encode()
+    digest = hashlib.md5(key).digest()
+    return int.from_bytes(digest[:4], "little") % num_splits
+
+
+def _final_margin(final: PlayerActorInput, win_reward: np.ndarray) -> int:
+    """Final alive-mon differential from the terminal cache (every fainted
+    mon is revealed, so alive = 6 - faints exactly). The sign is clamped to
+    the recorded result: a mid-game forfeit can leave the winner behind on
+    mons, and the result is the ground truth."""
+    public = np.asarray(final.packed_history.public_cache)
+    edges = np.asarray(final.packed_history.edge_cache)
+    real_rows = np.nonzero(public.any(axis=1))[0]
+    slots = edges[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX]
+    last_row_per_slot: dict[int, int] = {}
+    for row in real_rows:
+        slot = int(slots[row])
+        if 0 <= slot < 12:
+            last_row_per_slot[slot] = int(row)
+    my_faints = opp_faints = 0
+    for row in last_row_per_slot.values():
+        fainted = int(
+            public[row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED]
+        )
+        side = int(
+            public[row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE]
+        )
+        if side == 1:
+            my_faints += fainted
+        else:
+            opp_faints += fainted
+    alive_diff = opp_faints - my_faints
+    if win_reward[2] == 1:
+        return max(min(alive_diff, MAX_MARGIN), 1)
+    if win_reward[0] == 1:
+        return min(max(alive_diff, -MAX_MARGIN), -1)
+    return 0
+
+
 def record_to_examples(payload: bytes) -> list[OfflineExample]:
     """One shard record = one replay (EnvironmentBatch holding both
     perspectives). Grouping them keeps a game and its mirrored,
@@ -98,7 +153,8 @@ def trajectory_to_example(
     # Only the final state's (large) history caches are kept per
     # trajectory, so skip materialising them for every other state.
     steps = [
-        process_state(state, with_history=False) for state in trajectory.states[:-1]
+        process_state(state, with_history=False)
+        for state in trajectory.states[:-1]
     ]
     steps.append(process_state(trajectory.states[-1]))
     final = steps[-1]
@@ -107,6 +163,9 @@ def trajectory_to_example(
     # e.g. a forfeited-by-disconnect fragment) carries no training signal.
     if not final.env.done or label.sum() == 0:
         return None
+    margin = _final_margin(final, label)
+    margin_onehot = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
+    margin_onehot[margin + MAX_MARGIN] = 1.0
     env = jax.tree.map(lambda *xs: np.stack(xs), *[s.env for s in steps])
     return OfflineExample(
         actor_input=PlayerActorInput(
@@ -114,7 +173,7 @@ def trajectory_to_example(
             packed_history=final.packed_history,
             history=final.history,
         ),
-        label=label,
+        label=margin_onehot,
     )
 
 
@@ -178,6 +237,18 @@ class OfflineDataset:
             for index, payload in enumerate(iter_shard_payloads(shard)):
                 # Records are whole replays, so this split is per game.
                 if _is_holdout(shard, index, self.config.holdout_modulus) != holdout:
+                    continue
+                # Ensemble members train on disjoint games but share the
+                # holdout, so member disagreement on eval states measures
+                # epistemic uncertainty, not split luck.
+                if (
+                    not holdout
+                    and self.config.ensemble_index >= 0
+                    and _ensemble_bucket(
+                        shard, index, self.config.num_ensemble_splits
+                    )
+                    != self.config.ensemble_index
+                ):
                     continue
                 examples = record_to_examples(payload)
                 if pairs_only and len(examples) != 2:

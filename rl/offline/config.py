@@ -1,3 +1,5 @@
+from typing import Optional
+
 import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
@@ -47,6 +49,12 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # Caps target confidence, directly penalising the memorization mode
     # (huge |logit| on train games). 0 disables.
     label_smoothing: float = 0.01
+
+    # Ensemble training for uncertainty-gated shaping: run K times with
+    # ensemble_index = 0..K-1; each member trains on a disjoint per-game
+    # split (shared holdout). -1 trains one model on everything.
+    ensemble_index: int = -1
+    num_ensemble_splits: int = 4
 
     # Eval / checkpoint cadence
     log_interval_steps: int = 100

@@ -64,8 +64,13 @@ capacity stays in the critic's own history pathway. It reads nothing but the pub
 event stream — private team, own moveset, and action masks are
 architecturally unreachable, and the history inputs are identical between
 replay exports and live play, so the frozen Φ carries no train/serve bias
-into RL. Loss is softmax cross-entropy (`[-1, 0, 1]` support) against the
-final outcome at every pre-terminal step. Config is
+into RL. Loss is softmax cross-entropy over **13 margin bins** (final
+alive-mon differential in [-6, +6], sign-clamped to the recorded result —
+forfeits keep the true winner) at every valid step, so Φ = expected
+margin ∈ [-1, 1] grades positions by decisiveness instead of only
+win-probability. For uncertainty-gated shaping, train an ensemble:
+`--ensemble-index k` (k = 0..K-1) trains member k on a disjoint per-game
+split with a shared holdout, saving to `{format_id}-ensk/`. Config is
 `Porygon2OfflineConfig` (rl/offline/config.py) — composed from the same
 `BaseTrainingConfig` as the RL learner config but fully independent of it.
 
@@ -78,10 +83,13 @@ The offline critic is a **standalone model** — it shares Encoder code with
 the RL model, but its trained params never enter the RL network, and the
 RL model trains fully from scratch (no frozen or warm-started subtrees).
 The single consumption mode is the **learned potential**: set
-`Porygon2LearnerConfig.offline_critic_ckpt_path`. The learner loads the
-critic once at startup, keeps its params outside the train state (frozen
-by construction — never donated, never in the optimizer, stop-gradient at
-use), and computes Φ(s) ∈ [-1, 1] per batch. Because the critic operates
+`Porygon2LearnerConfig.offline_critic_ckpt_path` — a single path, or a
+tuple of ensemble-member paths for uncertainty gating
+(Φ = mean · exp(−`potential_uncertainty_scale` · std): shaping speaks
+where members agree and goes quiet off the human data distribution). The
+learner loads the critic(s) once at startup, keeps params outside the
+train state (frozen by construction — never donated, never in the
+optimizer, stop-gradient at use), and computes Φ(s) ∈ [-1, 1] per batch. Because the critic operates
 on the history pathway only, no input projection is needed and none
 exists. Φ feeds the potential advantage channel in
 `compute_player_targets`, gated by `player_potential_advantage_coef_fn`

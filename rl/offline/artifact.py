@@ -18,7 +18,7 @@ events offline and live — the frozen Φ carries no train/serve
 distribution bias into RL training.
 """
 
-from typing import Callable
+from collections.abc import Callable, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -30,24 +30,43 @@ from rl.model.utils import Params
 from rl.offline.model import Porygon2OfflineCritic
 
 
-def load_critic_params(artifact_path: str) -> Params:
-    return checkpoint_lib.load_component(artifact_path, "player", "params")
+def load_critic_params(artifact_paths: str | Sequence[str]) -> Params:
+    """Loads one artifact or an ensemble, stacking param trees along a
+    leading ensemble axis (K=1 for a single path — one unified code path)."""
+    if isinstance(artifact_paths, str):
+        artifact_paths = (artifact_paths,)
+    trees = [
+        checkpoint_lib.load_component(path, "player", "params")
+        for path in artifact_paths
+    ]
+    return jax.tree.map(lambda *leaves: jnp.stack(leaves), *trees)
 
 
 def make_potential_apply(
     generation: int,
+    uncertainty_scale: float = 0.0,
 ) -> Callable[[Params, PlayerActorInput], jax.Array]:
-    """Builds the frozen-critic potential: (params, (T, B, ...) actor input)
-    -> Φ in [-1, 1] with shape (T, B), float32, stop-gradient. The critic
-    reads only the public history pathway, so no input projection exists
-    or is needed."""
+    """Builds the frozen-critic potential: (stacked params, (T, B, ...)
+    actor input) -> Φ in [-1, 1] with shape (T, B), float32, stop-gradient.
+
+    Params carry a leading ensemble axis (see load_critic_params). With
+    uncertainty_scale > 0, Φ = mean_k(Φ_k) * exp(-scale * std_k(Φ_k)):
+    where the ensemble members (trained on disjoint replay splits) agree,
+    shaping speaks at full strength; where they disagree — off the human
+    data distribution, exactly where the critic is extrapolating — it goes
+    quiet. Each Φ_k is mirror-antisymmetric and std is mirror-invariant,
+    so the gated Φ stays exactly zero-sum. A confidence-scaled potential
+    is still a state potential, so PBRS invariance is untouched."""
     model = Porygon2OfflineCritic(get_player_model_config(generation, train=False))
-    apply_fn = jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
+    single = jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
+    ensemble = jax.vmap(single, in_axes=(0, None))
 
     def potential(params: Params, actor_input: PlayerActorInput) -> jax.Array:
-        value_head = apply_fn(params, actor_input)
-        return jax.lax.stop_gradient(
-            value_head.expectation.astype(jnp.float32)
-        )
+        value_head = ensemble(params, actor_input)
+        phi = value_head.expectation.astype(jnp.float32)  # (K, T, B)
+        mean = phi.mean(axis=0)
+        if uncertainty_scale > 0.0:
+            mean = mean * jnp.exp(-uncertainty_scale * phi.std(axis=0))
+        return jax.lax.stop_gradient(mean)
 
     return potential
