@@ -1,26 +1,21 @@
-"""Loading offline critic artifacts outside the offline trainer.
+"""Loading offline critic artifacts for the RL learner.
 
-Two consumption modes:
-
-1. Warm start: set ``Porygon2LearnerConfig.init_params_ckpt_path`` to an
-   artifact directory and launch the RL learner with
-   ``LOAD_STATE_MODE=params``. The artifact's encoder + v_head subtrees
-   merge into the fresh RL init via merge_params; the policy heads keep
-   their fresh initialization. Combine with
-   ``player_frozen_param_patterns`` to pin warm-started subtrees.
-
-2. Learned state potential: set
-   ``Porygon2LearnerConfig.offline_critic_ckpt_path``. The learner loads
-   the critic once, keeps its params outside the optimizer (frozen by
-   construction), and feeds Φ(s) into compute_player_targets' potential
-   advantage channel, gated by ``player_potential_advantage_coef_fn``.
+The offline critic is a STANDALONE model: it shares Encoder code with the
+RL model for convenience, but its trained params never enter the RL
+network. The single consumption mode is the learned state potential — set
+``Porygon2LearnerConfig.offline_critic_ckpt_path`` and the learner loads
+the critic once, holds its params outside the train state (never in the
+optimizer, never donated, stop-gradient at use), and feeds Φ(s) into
+compute_player_targets' potential advantage channel, gated by
+``player_potential_advantage_coef_fn``. The RL model itself trains fully
+from scratch — no frozen or warm-started subtrees.
 
 The critic is public-only by construction: it operates exclusively on the
-recurrent history pathway (Encoder.encode_history -> PerSlotHistoryEncoder)
-plus an offline-only outcome head. Private fields, movesets, and action
-masks are architecturally unreachable, and the history inputs are built
-from the same protocol events offline and live, so the frozen Φ carries no
-train/serve distribution bias into RL training.
+recurrent history pathway plus an offline-only antisymmetric probe, so
+private fields, movesets, and action masks are architecturally
+unreachable, and the history inputs are built from the same protocol
+events offline and live — the frozen Φ carries no train/serve
+distribution bias into RL training.
 """
 
 from typing import Callable
@@ -51,6 +46,8 @@ def make_potential_apply(
 
     def potential(params: Params, actor_input: PlayerActorInput) -> jax.Array:
         value_head = apply_fn(params, actor_input)
-        return jax.lax.stop_gradient(value_head.expectation.astype(jnp.float32))
+        return jax.lax.stop_gradient(
+            value_head.expectation.astype(jnp.float32)
+        )
 
     return potential
