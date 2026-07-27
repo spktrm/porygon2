@@ -9,9 +9,8 @@ something happened to that Pokemon. Carry is O(12 * entity_size) regardless
 of history length.
 
 The per-request states are residual-injected into the encoder's public
-entity tokens. One auxiliary loss exists: a per-slot state probe
-(deep supervision) reconstructing each touched entity's current
-hp/fainted, so board state stays linearly readable in the slot states.
+entity tokens; the per-request states are trained end-to-end by the
+task gradients alone.
 """
 
 import chex
@@ -46,11 +45,12 @@ class PerSlotHistoryOutput:
     # Per-history-step snapshots: (H, 12, D) / (H, D).
     slot_snapshots: ArrayLike = ()
     field_snapshots: ArrayLike = ()
+    # Latest raw node embedding per slot as of each step (H, 12, D): the
+    # entity's current snapshot, unmixed by GRU gating — what a hand
+    # evaluator reads. Parameter-free carry.
+    node_snapshots: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
-    # Deep-supervision scalar: masked MSE of the per-slot state probe
-    # reconstructing each touched entity's current hp/fainted.
-    aux_state_loss: ArrayLike = ()
 
 
 class HistoryAttentionPool(nn.Module):
@@ -103,6 +103,51 @@ class HistoryAttentionPool(nn.Module):
         return queries + attended
 
 
+class NodeHistoryRead(nn.Module):
+    """Residual cross-read of the diaries by the photos.
+
+    Each slot's current snapshot (node state) queries the recurrent slot
+    states + field state — the same current-obs-reads-history pattern as
+    the RL trunk's gated history_cross rounds. The residual gate is
+    zero-init, so at initialization the output IS the raw snapshots
+    (hand-rule parity is the floor) and history context blends in only as
+    training finds it useful.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        node_states: jax.Array,
+        slot_states: jax.Array,
+        field_state: jax.Array,
+    ) -> jax.Array:
+        """(12, D) snapshots, (12, D) slot states, (D,) field -> (12, D)."""
+        pcfg = self.cfg.history_pool
+        kv = jnp.concatenate((slot_states, field_state[None]), axis=0)
+        gate = self.param("gate", nn.initializers.zeros_init(), (1,)).astype(
+            node_states.dtype
+        )
+        attended = MultiHeadAttention(
+            name="diary_cross",
+            num_heads=pcfg.num_heads,
+            qk_size=pcfg.qk_size,
+            v_size=pcfg.qk_size,
+            model_size=self.cfg.entity_size,
+            use_bias=pcfg.use_bias,
+            dtype=node_states.dtype,
+        )(
+            q=layer_norm(node_states),
+            kv=layer_norm(kv),
+            mask=create_attention_mask(
+                jnp.ones(node_states.shape[0], dtype=jnp.bool_),
+                jnp.ones(kv.shape[0], dtype=jnp.bool_),
+            ),
+        )
+        return node_states + gate * attended
+
+
 class PerSlotHistoryEncoder(nn.Module):
     cfg: ConfigDict
 
@@ -126,13 +171,6 @@ class PerSlotHistoryEncoder(nn.Module):
             name="message_projection",
         )
         self.slot_cell = nn.GRUCell(entity_size, dtype=self.cfg.dtype, name="slot_cell")
-        # Deep supervision: touched slot states must linearly encode the
-        # entity's current (hp_ratio, fainted). Without this pressure the
-        # decisive board state dilutes into the identity-rich embedding and
-        # outcome readouts memorize instead of generalizing.
-        self.state_probe = nn.Dense(
-            features=2, dtype=self.cfg.dtype, name="state_probe"
-        )
         self.field_cell = nn.GRUCell(
             entity_size, dtype=self.cfg.dtype, name="field_cell"
         )
@@ -189,24 +227,34 @@ class PerSlotHistoryEncoder(nn.Module):
 
     def _observe_step(self, carry, xs):
         """One real history step: scatter edges into the slot bank."""
-        h_slots, h_field = carry
-        field_vec, messages, slot_ids, edge_mask, valid = xs
+        h_slots, h_field, latest_nodes = carry
+        field_vec, messages, node_embs, slot_ids, edge_mask, valid = xs
 
         # Padded / invalid edges scatter into a 13th bin that is dropped.
         seg = jnp.where(edge_mask & valid, slot_ids, NUM_PUBLIC_SLOTS)
         slot_messages = jax.ops.segment_sum(
             messages, seg, num_segments=NUM_PUBLIC_SLOTS + 1
         )[:-1]
-        touched = (
-            jax.ops.segment_sum(
-                (edge_mask & valid).astype(jnp.int32),
-                seg,
-                num_segments=NUM_PUBLIC_SLOTS + 1,
-            )[:-1]
-            > 0
+        counts = jax.ops.segment_sum(
+            (edge_mask & valid).astype(jnp.int32),
+            seg,
+            num_segments=NUM_PUBLIC_SLOTS + 1,
+        )[:-1]
+        touched = counts > 0
+
+        # Keep each touched slot's LATEST node snapshot verbatim. The GRU
+        # state integrates history; this preserves the entity's current
+        # state (hp/fainted/status) unmixed — empirically the GRU-only
+        # readout loses it (a raw hand rule over snapshots beat the model
+        # on late-game states).
+        node_means = jax.ops.segment_sum(
+            node_embs, seg, num_segments=NUM_PUBLIC_SLOTS + 1
+        )[:-1] / counts.clip(min=1)[..., None].astype(node_embs.dtype)
+        latest_nodes = jnp.where(
+            touched[..., None], node_means.astype(latest_nodes.dtype), latest_nodes
         )
 
-        carry = self._advance(
+        h_slots, h_field = self._advance(
             h_slots,
             h_field,
             slot_messages,
@@ -214,6 +262,7 @@ class PerSlotHistoryEncoder(nn.Module):
             field_vec,
             valid.astype(h_slots.dtype),
         )
+        carry = (h_slots, h_field, latest_nodes)
         return carry, carry
 
     def __call__(
@@ -223,7 +272,6 @@ class PerSlotHistoryEncoder(nn.Module):
         edge_embedding_cache: jax.Array,
         edge_slot_ids: jax.Array,
         node_sides: jax.Array,
-        node_state_targets: jax.Array,
         field_step_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
@@ -236,8 +284,6 @@ class PerSlotHistoryEncoder(nn.Module):
             edge_embedding_cache: (P, D) embedded edge cache rows.
             edge_slot_ids: (P,) ENTITY_EDGE_FEATURE__ENTITY_IDX per cache row.
             node_sides: (P,) relative side (1 = mine) per cache row.
-            node_state_targets: (P, 2) raw (hp_ratio, fainted) per row —
-                deep-supervision targets for the slot state probe.
             field_step_embeddings: (H, D) pooled field embedding per step.
             step_request_count: (H,) request count of each history step.
             step_valid: (H,) bool.
@@ -284,41 +330,36 @@ class PerSlotHistoryEncoder(nn.Module):
             out_axes=0,
             unroll=SCAN_UNROLL,
         )
-        _, (slot_snapshots, field_snapshots) = observe(
+        h0_slots, h0_field = self.initial_state()
+        latest0 = jnp.zeros_like(h0_slots)
+        _, (slot_snapshots, field_snapshots, node_snapshots) = observe(
             self,
-            self.initial_state(),
-            (field_step_embeddings, messages, slot_ids, edge_mask, step_valid),
+            (h0_slots, h0_field, latest0),
+            (
+                field_step_embeddings,
+                messages,
+                node_embeddings,
+                slot_ids,
+                edge_mask,
+                step_valid,
+            ),
         )
-
-        # Deep supervision: reconstruct each touched entity's current
-        # (hp_ratio, fainted) from its post-update slot state.
-        touched_states = jnp.take_along_axis(
-            slot_snapshots,
-            slot_ids[..., None].clip(0, NUM_PUBLIC_SLOTS - 1),
-            axis=1,
-        )  # (H, K, D)
-        state_preds = self.state_probe(touched_states).astype(jnp.float32)
-        state_targets = jnp.take(node_state_targets, relevant, axis=0).astype(
-            jnp.float32
-        )  # (H, K, 2)
-        aux_mask = (edge_mask & step_valid[:, None]).astype(jnp.float32)[..., None]
-        aux_state_loss = (
-            ((state_preds - state_targets) ** 2) * aux_mask
-        ).sum() / aux_mask.sum().clip(min=1.0)
 
         return PerSlotHistoryOutput(
             slot_snapshots=slot_snapshots,
             field_snapshots=field_snapshots,
+            node_snapshots=node_snapshots,
             step_valid=step_valid,
             step_request_count=step_request_count,
-            aux_state_loss=aux_state_loss,
         )
 
     def state_at_requests(
         self, history_output: PerSlotHistoryOutput, request_counts: jax.Array
-    ) -> tuple[jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """For each request, gather the state after the last history step whose
-        request_count <= the request's. (T,) -> ((T, 12, D), (T, D))."""
+        request_count <= the request's.
+        (T,) -> ((T, 12, D) slot states, (T, D) field state,
+        (T, 12, D) latest node snapshots)."""
         h0_slots, h0_field = self.initial_state()
         step_indices = jnp.arange(history_output.step_valid.shape[0])
 
@@ -335,6 +376,11 @@ class PerSlotHistoryEncoder(nn.Module):
             field = jnp.where(
                 has_history, history_output.field_snapshots[safe_idx], h0_field
             )
-            return slots, field
+            nodes = jnp.where(
+                has_history,
+                history_output.node_snapshots[safe_idx],
+                jnp.zeros_like(h0_slots),
+            )
+            return slots, field, nodes
 
         return jax.vmap(gather_one)(request_counts)

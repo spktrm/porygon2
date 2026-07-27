@@ -81,7 +81,7 @@ def main():
     # Read the value-head expectation across time — if the input pathway is
     # broken (bad gather stamps, constant pooling), it is constant across
     # timesteps and/or trajectories even at init.
-    out, _ = apply_fn(params, batch.actor_input)
+    out = apply_fn(params, batch.actor_input)
     expectation = np.asarray(out.expectation, dtype=np.float32)  # (T, B)
     mask = np.asarray(_value_mask(jnp.asarray(batch.actor_input.env.done)))
     per_traj_std = [
@@ -97,10 +97,9 @@ def main():
 
     # --- 2. Gradient flow per subtree ---
     def loss_fn(params):
-        value_head, aux = apply_fn(params, batch.actor_input)
+        value_head = apply_fn(params, batch.actor_input)
         m = _value_mask(batch.actor_input.env.done)
-        ce = _metrics_from_logits(value_head.logits, batch.labels, m)["loss"]
-        return ce + aux.astype(jnp.float32).mean()
+        return _metrics_from_logits(value_head.logits, batch.labels, m)["loss"]
 
     loss0, grads = jax.value_and_grad(loss_fn)(params)
     print(f"initial loss = {float(loss0):.4f} (untrained ~ln3=1.099)")
@@ -180,18 +179,15 @@ def generalization_probe(args, config, model, apply_fn):
     tx = optax.adamw(args.learning_rate, b1=0.9)
     opt_state = tx.init(params)
 
-    def batch_metrics(params, batch, with_aux: bool = False):
-        value_head, aux = apply_fn(params, batch.actor_input)
+    def batch_metrics(params, batch):
+        value_head = apply_fn(params, batch.actor_input)
         m = _value_mask(batch.actor_input.env.done)
-        metrics = _metrics_from_logits(value_head.logits, batch.labels, m)
-        if with_aux:
-            metrics["loss"] = metrics["loss"] + aux.astype(jnp.float32).mean()
-        return metrics
+        return _metrics_from_logits(value_head.logits, batch.labels, m)
 
     @jax.jit
     def step(params, opt_state, batch):
         def loss_fn(p):
-            return batch_metrics(p, batch, with_aux=True)["loss"]
+            return batch_metrics(p, batch)["loss"]
 
         loss, grads = jax.value_and_grad(loss_fn)(params)
         updates, opt_state = tx.update(grads, opt_state, params)

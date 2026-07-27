@@ -32,16 +32,21 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     num_steps: int = 50_000
 
     # Learning params. Supervised training wants momentum, unlike the RL
-    # learner's b1=0. Weight decay is deliberately strong: with a
-    # high-capacity encoder and identity-rich embeddings, the failure mode
-    # is confident per-game memorization (held-out loss exploding), not
-    # underfitting.
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-2)
+    # learner's b1=0. Regularization is sized to constrain without eroding:
+    # 1e-2 decay + 0.05 smoothing produced a peak-then-decay-to-plateau
+    # accuracy curve (smoothed CE saturates once fit; decay keeps shrinking
+    # the solution until CE re-engages — a stable equilibrium below the
+    # peak). The structural defenses (antisymmetric probe, pair batching,
+    # deep supervision) carry the anti-memorization burden instead.
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-3)
     learning_rate: float = 3e-4
+    # Cosine-decay the LR to this fraction over num_steps, freezing the
+    # found solution instead of letting late-run noise/decay erode it.
+    lr_final_fraction: float = 0.1
     clip_gradient: float = 10.0
     # Caps target confidence, directly penalising the memorization mode
     # (huge |logit| on train games). 0 disables.
-    label_smoothing: float = 0.05
+    label_smoothing: float = 0.01
 
     # Eval / checkpoint cadence
     log_interval_steps: int = 100
