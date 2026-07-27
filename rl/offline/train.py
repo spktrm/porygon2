@@ -126,10 +126,14 @@ def evaluate(
 
 
 def save_artifact(
-    config: Porygon2OfflineConfig, state: train_state.TrainState, step: int
+    config: Porygon2OfflineConfig,
+    state: train_state.TrainState,
+    step: int,
+    best: bool = False,
 ) -> str:
+    ckpt_name = "ckpt_best" if best else f"ckpt_{step:08}"
     save_path = os.path.abspath(
-        os.path.join(config.artifact_root, config.format_id, f"ckpt_{step:08}")
+        os.path.join(config.artifact_root, config.format_id, ckpt_name)
     )
     player_components = dict(
         params=state.params,
@@ -173,6 +177,7 @@ _CLI_FIELDS: dict[str, type] = dict(
     max_trajectory_length=int,
     num_steps=int,
     learning_rate=float,
+    lr_final_fraction=float,
     label_smoothing=float,
     clip_gradient=float,
     log_interval_steps=int,
@@ -218,7 +223,11 @@ def main():
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.clip_gradient),
         optax.adamw(
-            learning_rate=config.learning_rate,
+            learning_rate=optax.cosine_decay_schedule(
+                init_value=config.learning_rate,
+                decay_steps=config.num_steps,
+                alpha=config.lr_final_fraction,
+            ),
             b1=config.adam.b1,
             b2=config.adam.b2,
             eps=config.adam.eps,
@@ -245,6 +254,7 @@ def main():
     train_step = make_train_step(config)
     eval_step = make_eval_step()
 
+    best_eval_loss = float("inf")
     batches = prefetch(dataset.train_batches(seed=seed))
     print(
         f"Filling shuffle buffer ({config.shuffle_buffer_size} trajectories) "
@@ -297,8 +307,18 @@ def main():
                 wandb_run.log(eval_metrics, step=step)
                 print(
                     f"step {step} | eval loss {eval_metrics['eval_loss']:.4f} "
-                    f"| eval acc {eval_metrics['eval_accuracy']:.3f}"
+                    f"| eval acc {eval_metrics['eval_accuracy']:.3f} "
+                    f"| eval last-step acc "
+                    f"{eval_metrics['eval_accuracy_last_step']:.3f}"
                 )
+                # A later plateau must never cost us an earlier peak.
+                if eval_metrics["eval_loss"] < best_eval_loss:
+                    best_eval_loss = eval_metrics["eval_loss"]
+                    best_path = save_artifact(config, state, step, best=True)
+                    print(
+                        f"New best eval loss {best_eval_loss:.4f} — "
+                        f"saved {best_path}"
+                    )
         if step % config.save_interval_steps == 0:
             last_save_path = save_artifact(config, state, step)
             print(f"Saved artifact to {last_save_path}")

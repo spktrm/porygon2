@@ -12,10 +12,10 @@ from rl.model.heads import CategoricalValueHeadOutput
 class AntisymmetricOutcomeProbe(nn.Module):
     """Linear outcome probe with mirror-antisymmetry by construction.
 
-    win_logit = w · (my − opp), loss_logit = −win_logit, tie a lone bias.
+    win_logit = w · (my - opp), loss_logit = -win_logit, tie a lone bias.
     Mirroring the perspective swaps the pooled summaries, negates the
     difference, and exactly swaps the win/loss logits — so
-    Φ(mirror(s)) = −Φ(s) holds for every parameter setting, and SGD cannot
+    Φ(mirror(s)) = -Φ(s) holds for every parameter setting, and SGD cannot
     satisfy the loss by memorizing game identity: only side-differenced
     structure reduces it. (Empirically necessary: with a free-form probe
     the critic memorizes pairs and generalizes at chance.)
@@ -25,7 +25,7 @@ class AntisymmetricOutcomeProbe(nn.Module):
 
     @nn.compact
     def __call__(self, diff: jax.Array) -> CategoricalValueHeadOutput:
-        # diff: (T, num_latents * D) = flattened (my − opp) pooled latents.
+        # diff: (T, num_latents * D) = flattened (my - opp) pooled latents.
         z = nn.Dense(1, use_bias=False, name="win_score")(diff)[..., 0]
         tie_bias = self.param("tie_bias", nn.initializers.zeros_init(), ())
         logits = jnp.stack(
@@ -52,10 +52,12 @@ class Porygon2OfflineCritic(nn.Module):
     """Antisymmetric linear outcome probe over the recurrent history
     pathway only.
 
-    Pathway: Encoder.encode_history -> PerSlotHistoryEncoder ->
-    Encoder.pool_history twice with side masks (shared pool params): once
-    over my-side slots + field, once over opponent-side slots + field. The
-    flattened difference of the two latent banks feeds
+    Pathway: Encoder.encode_history (GRU slot states + latest node
+    snapshots) -> Encoder.read_history_into_nodes (snapshots make a
+    zero-init-gated cross-read of the recurrent states, mirroring the RL
+    trunk's history reads) -> Encoder.pool_history twice with side masks
+    (shared pool params): my-side tokens + field, opponent tokens + field.
+    The flattened difference of the two latent banks feeds
     AntisymmetricOutcomeProbe. All learnable capacity sits in the shared
     history pathway (encoder + pool), which the RL trunk reuses and
     warm-starts; the probe is a single weight vector.
@@ -77,20 +79,27 @@ class Porygon2OfflineCritic(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
         self.outcome_head = AntisymmetricOutcomeProbe(self.cfg)
 
-    def __call__(
-        self, actor_input: PlayerActorInput
-    ) -> tuple[CategoricalValueHeadOutput, jax.Array]:
-        slot_states, field_state, aux_state_loss = self.encoder.encode_history(
+    def __call__(self, actor_input: PlayerActorInput) -> CategoricalValueHeadOutput:
+        slot_states, field_state, node_states = self.encoder.encode_history(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
         slot_sides = self.encoder.history_slot_sides(actor_input.packed_history)
         field_token = jnp.ones(1, dtype=jnp.bool_)
         my_mask = jnp.concatenate((slot_sides == 1, field_token))
         opp_mask = jnp.concatenate((slot_sides == 0, field_token))
-        my_latents = self.encoder.pool_history(slot_states, field_state, my_mask)
-        opp_latents = self.encoder.pool_history(slot_states, field_state, opp_mask)
+        # Photos attend to diaries, trunk-style: each slot's current
+        # snapshot makes a zero-init-gated cross-read of the recurrent
+        # states, so at init the tokens ARE the raw snapshots (hand-rule
+        # parity is the floor — GRU-only tokens lost current hp/faint info
+        # to gating and were beaten by a raw hand rule late-game) and
+        # history context blends in only where it helps.
+        tokens = self.encoder.read_history_into_nodes(
+            node_states, slot_states, field_state
+        )
+        my_latents = self.encoder.pool_history(tokens, field_state, my_mask)
+        opp_latents = self.encoder.pool_history(tokens, field_state, opp_mask)
         diff = (my_latents - opp_latents).reshape(slot_states.shape[0], -1)
-        return self.outcome_head(diff), aux_state_loss
+        return self.outcome_head(diff)
 
 
 def get_offline_critic(generation: int) -> nn.Module:

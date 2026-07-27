@@ -64,6 +64,7 @@ from rl.model.features import (
 from rl.model.history_encoder import (
     NUM_PUBLIC_SLOTS,
     HistoryAttentionPool,
+    NodeHistoryRead,
     PerSlotHistoryEncoder,
 )
 from rl.model.modules import (
@@ -372,6 +373,7 @@ class Encoder(nn.Module):
         # cross-attend to it.
         self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
         self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
+        self.history_node_read = NodeHistoryRead(self.cfg, name="history_node_read")
         self.history_field_step_linear = nn.Dense(
             name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
@@ -1319,9 +1321,10 @@ class Encoder(nn.Module):
         same inputs) and reuse live without any distribution projection;
         the offline outcome critic (rl/offline/model.py) builds on it.
 
-        Returns the recurrent state as of each request plus the
-        deep-supervision scalar: ((T, NUM_PUBLIC_SLOTS, D) slot states,
-        (T, D) field state, () aux_state_loss).
+        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) GRU slot states,
+        (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
+        snapshot per slot — the entity's current state unmixed by GRU
+        gating, which outcome readouts need verbatim).
         """
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
@@ -1337,20 +1340,6 @@ class Encoder(nn.Module):
         node_sides = packed_history_step.public_cache[
             :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
         ]
-        # Raw deep-supervision targets for the slot state probe.
-        node_state_targets = jnp.stack(
-            (
-                packed_history_step.public_cache[
-                    :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
-                ]
-                / MAX_RATIO_TOKEN,
-                packed_history_step.public_cache[
-                    :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
-                ],
-            ),
-            axis=-1,
-        )
-
         # One pooled field vector per history step from the (field, my-side,
         # opp-side) token triple.
         (
@@ -1371,7 +1360,6 @@ class Encoder(nn.Module):
             edge_embedding_cache=edge_embedding_cache,
             edge_slot_ids=edge_slot_ids,
             node_sides=node_sides,
-            node_state_targets=node_state_targets,
             field_step_embeddings=step_field_vec,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
@@ -1380,10 +1368,18 @@ class Encoder(nn.Module):
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        slot_states, field_state = self.history_encoder.state_at_requests(
-            history_output, request_count
-        )
-        return slot_states, field_state, history_output.aux_state_loss
+        return self.history_encoder.state_at_requests(history_output, request_count)
+
+    def read_history_into_nodes(
+        self,
+        node_states: jax.Array,
+        slot_states: jax.Array,
+        field_state: jax.Array,
+    ) -> jax.Array:
+        """Per request, enrich each slot's current snapshot with a gated
+        cross-read of the recurrent states: (T, 12, D) x (T, 12, D) x
+        (T, D) -> (T, 12, D)."""
+        return jax.vmap(self.history_node_read)(node_states, slot_states, field_state)
 
     def pool_history(
         self,
