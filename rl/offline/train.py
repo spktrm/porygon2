@@ -20,16 +20,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import wandb
 from flax.training import train_state
 
-import wandb
 from rl.environment.utils import get_ex_trajectory
 from rl.learner import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2OfflineConfig, get_offline_config
-from rl.offline.dataset import OfflineBatch, OfflineDataset, prefetch
-from rl.offline.model import Porygon2OfflineCritic
+from rl.offline.dataset import MAX_MARGIN, OfflineBatch, OfflineDataset, prefetch
+from rl.offline.model import MARGIN_SUPPORT, Porygon2OfflineCritic
 
 
 def _value_mask(dones: jax.Array) -> jax.Array:
@@ -47,35 +47,45 @@ def _metrics_from_logits(
     label_smoothing: float = 0.0,
 ) -> dict[str, jax.Array]:
     logits = logits.astype(jnp.float32)
+    num_bins = logits.shape[-1]
     labels = jnp.broadcast_to(labels[None], logits.shape)
     if label_smoothing:
-        smoothed = labels * (1.0 - label_smoothing) + label_smoothing / 3.0
+        smoothed = labels * (1.0 - label_smoothing) + label_smoothing / num_bins
     else:
         smoothed = labels
     ce = optax.softmax_cross_entropy(logits=logits, labels=smoothed)
     denom = mask.sum().clip(min=1.0)
     loss = (ce * mask).sum() / denom
-    correct = logits.argmax(axis=-1) == labels.argmax(axis=-1)
+
+    support = jnp.asarray(MARGIN_SUPPORT, dtype=jnp.float32)
+    expectation = jax.nn.softmax(logits, axis=-1) @ support  # in [-1, 1]
+    true_margin = labels.argmax(axis=-1).astype(jnp.int32) - MAX_MARGIN
+    # Sign accuracy: comparable to the previous win/loss accuracy.
+    correct = (expectation > 0) == (true_margin > 0)
     accuracy = (correct * mask).sum() / denom
+    # What the margin head buys beyond sign: mean |error| in mons.
+    margin_mae = (
+        jnp.abs(expectation * MAX_MARGIN - true_margin) * mask
+    ).sum() / denom
     # Late-game diagnostic: the last valid step of each trajectory is
-    # near-decisive, so accuracy here should climb toward ~0.9 quickly if
-    # the history pathway is wired correctly — long before the trajectory-
-    # average loss visibly moves (early-game states are irreducible
-    # coin-flips that dominate the mean).
+    # near-decisive, so sign accuracy here should climb toward ~0.9 quickly
+    # if the pathway is wired correctly — long before the trajectory-average
+    # loss visibly moves (early-game states are irreducible coin-flips).
     last_idx = jnp.maximum(mask.sum(axis=0).astype(jnp.int32) - 1, 0)
     batch_idx = jnp.arange(logits.shape[1])
     accuracy_last_step = correct[last_idx, batch_idx].mean()
-    # Degeneracy canary: masked std of the win-loss logit margin. A model
-    # that has collapsed to a constant (input-independent) prediction shows
-    # ~0 here while loss sits at ln2 and accuracy tracks batch label
-    # composition — catch it at step 100, not after a full run.
-    margin = logits[..., 2] - logits[..., 0]
-    margin_mean = (margin * mask).sum() / denom
-    margin_std = jnp.sqrt(((margin - margin_mean) ** 2 * mask).sum() / denom)
+    # Degeneracy canary: masked std of the expected margin. A model that
+    # has collapsed to a constant (input-independent) prediction shows ~0
+    # here while accuracy tracks batch label composition.
+    exp_mean = (expectation * mask).sum() / denom
+    margin_std = jnp.sqrt(
+        ((expectation - exp_mean) ** 2 * mask).sum() / denom
+    )
     return dict(
         loss=loss,
         accuracy=accuracy,
         accuracy_last_step=accuracy_last_step,
+        margin_mae=margin_mae,
         margin_std=margin_std,
         num_valid_steps=mask.sum(),
     )
@@ -95,7 +105,9 @@ def make_train_step(config: Porygon2OfflineConfig):
             )
             return metrics["loss"], metrics
 
-        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            state.params
+        )
         metrics["gradient_norm"] = optax.global_norm(grads)
         return state.apply_gradients(grads=grads), metrics
 
@@ -115,13 +127,23 @@ def make_eval_step():
 def evaluate(
     eval_step, state: train_state.TrainState, batches: Iterator[OfflineBatch]
 ) -> dict[str, float]:
-    all_metrics = [jax.device_get(eval_step(state, batch)) for batch in batches]
+    all_metrics = [
+        jax.device_get(eval_step(state, batch)) for batch in batches
+    ]
     if not all_metrics:
         return {}
     weights = np.array([m["num_valid_steps"] for m in all_metrics])
     return {
-        f"eval_{key}": float(np.average([m[key] for m in all_metrics], weights=weights))
-        for key in ("loss", "accuracy", "accuracy_last_step", "margin_std")
+        f"eval_{key}": float(
+            np.average([m[key] for m in all_metrics], weights=weights)
+        )
+        for key in (
+            "loss",
+            "accuracy",
+            "accuracy_last_step",
+            "margin_mae",
+            "margin_std",
+        )
     }
 
 
@@ -132,8 +154,11 @@ def save_artifact(
     best: bool = False,
 ) -> str:
     ckpt_name = "ckpt_best" if best else f"ckpt_{step:08}"
+    format_dir = config.format_id
+    if config.ensemble_index >= 0:
+        format_dir = f"{config.format_id}-ens{config.ensemble_index}"
     save_path = os.path.abspath(
-        os.path.join(config.artifact_root, config.format_id, ckpt_name)
+        os.path.join(config.artifact_root, format_dir, ckpt_name)
     )
     player_components = dict(
         params=state.params,
@@ -186,6 +211,8 @@ _CLI_FIELDS: dict[str, type] = dict(
     save_interval_steps=int,
     artifact_root=str,
     resume_from=str,
+    ensemble_index=int,
+    num_ensemble_splits=int,
 )
 
 
@@ -195,7 +222,9 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     for name, arg_type in _CLI_FIELDS.items():
         parser.add_argument("--" + name.replace("_", "-"), type=arg_type)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--debug", action="store_true", help="Disable wandb logging")
+    parser.add_argument(
+        "--debug", action="store_true", help="Disable wandb logging"
+    )
     args = parser.parse_args()
     overrides = {
         name: getattr(args, name)
@@ -217,7 +246,9 @@ def main():
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     params = model.init(jax.random.key(seed), ex_actor_input)
     if config.resume_from is not None:
-        params = checkpoint_lib.load_component(config.resume_from, "player", "params")
+        params = checkpoint_lib.load_component(
+            config.resume_from, "player", "params"
+        )
         print(f"Resumed params from {config.resume_from}")
 
     optimizer = optax.chain(
@@ -262,7 +293,9 @@ def main():
     )
     start_time = time.monotonic()
     last_save_path = None
-    for step, batch in enumerate(itertools.islice(batches, config.num_steps), start=1):
+    for step, batch in enumerate(
+        itertools.islice(batches, config.num_steps), start=1
+    ):
         dispatch_start = time.monotonic()
         state, metrics = train_step(state, batch)
         # jit compiles synchronously at dispatch, so a slow dispatch on an
@@ -294,6 +327,7 @@ def main():
                 f"step {step} | loss {logs['loss']:.4f} | "
                 f"acc {logs['accuracy']:.3f} | "
                 f"last-step acc {logs['accuracy_last_step']:.3f} | "
+                f"margin mae {logs['margin_mae']:.2f} | "
                 f"margin std {logs['margin_std']:.2e} | "
                 f"grad norm {logs['gradient_norm']:.2e}"
             )

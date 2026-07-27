@@ -166,7 +166,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # enter the optimizer or the RL network, so the RL model trains fully
     # from scratch with no frozen or warm-started subtrees. The potential
     # advantage channel is gated by player_potential_advantage_coef_fn.
-    offline_critic_ckpt_path: str | None = None
+    # A tuple of paths loads an ensemble (members trained with
+    # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
+    offline_critic_ckpt_path: str | tuple[str, ...] | None = None
+    # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
+    # members disagree (off the human data distribution) shaping goes
+    # quiet. 0 disables; irrelevant for single-member critics.
+    potential_uncertainty_scale: float = 5.0
 
 
 def get_learner_config():
