@@ -58,12 +58,11 @@ class HistoryAttentionPool(nn.Module):
     bank of learned latent summaries.
 
     A set of num_latents learned queries attends over the 13 history tokens
-    (12 slot states + field state), yielding (num_latents, D) latents. The
-    module lives in the shared history pathway so its capacity is trained
-    by the offline outcome critic (which reads the flattened latents
-    through a linear probe) and reused by the RL trunk (which reads the
-    same latents as extra history-context tokens) — readout capacity
-    accumulates here, where RL warm-starts it, not in offline-only heads.
+    (12 slot states + field state), yielding (num_latents, D) latents.
+    Shared module code, separately trained instances: the offline critic
+    reads the flattened latents through its linear probe; the RL trunk
+    reads its own instance's latents as extra history-context tokens,
+    trained from scratch by RL gradients.
     """
 
     cfg: ConfigDict
@@ -364,15 +363,11 @@ class PerSlotHistoryEncoder(nn.Module):
         step_indices = jnp.arange(history_output.step_valid.shape[0])
 
         def gather_one(request_count: jax.Array):
-            ok = history_output.step_valid & (
-                history_output.step_request_count <= request_count
-            )
+            ok = history_output.step_valid & (history_output.step_request_count <= request_count)
             idx = jnp.where(ok, step_indices, -1).max()
             has_history = idx >= 0
             safe_idx = jnp.maximum(idx, 0)
-            slots = jnp.where(
-                has_history, history_output.slot_snapshots[safe_idx], h0_slots
-            )
+            slots = jnp.where(has_history, history_output.slot_snapshots[safe_idx], h0_slots)
             field = jnp.where(
                 has_history, history_output.field_snapshots[safe_idx], h0_field
             )
