@@ -12,10 +12,10 @@ from rl.model.heads import CategoricalValueHeadOutput
 class AntisymmetricOutcomeProbe(nn.Module):
     """Linear outcome probe with mirror-antisymmetry by construction.
 
-    win_logit = w · (my - opp), loss_logit = -win_logit, tie a lone bias.
+    win_logit = w · (my − opp), loss_logit = −win_logit, tie a lone bias.
     Mirroring the perspective swaps the pooled summaries, negates the
     difference, and exactly swaps the win/loss logits — so
-    Φ(mirror(s)) = -Φ(s) holds for every parameter setting, and SGD cannot
+    Φ(mirror(s)) = −Φ(s) holds for every parameter setting, and SGD cannot
     satisfy the loss by memorizing game identity: only side-differenced
     structure reduces it. (Empirically necessary: with a free-form probe
     the critic memorizes pairs and generalizes at chance.)
@@ -25,7 +25,7 @@ class AntisymmetricOutcomeProbe(nn.Module):
 
     @nn.compact
     def __call__(self, diff: jax.Array) -> CategoricalValueHeadOutput:
-        # diff: (T, num_latents * D) = flattened (my - opp) pooled latents.
+        # diff: (T, num_latents * D) = flattened (my − opp) pooled latents.
         z = nn.Dense(1, use_bias=False, name="win_score")(diff)[..., 0]
         tie_bias = self.param("tie_bias", nn.initializers.zeros_init(), ())
         logits = jnp.stack(
@@ -58,19 +58,18 @@ class Porygon2OfflineCritic(nn.Module):
     trunk's history reads) -> Encoder.pool_history twice with side masks
     (shared pool params): my-side tokens + field, opponent tokens + field.
     The flattened difference of the two latent banks feeds
-    AntisymmetricOutcomeProbe. All learnable capacity sits in the shared
-    history pathway (encoder + pool), which the RL trunk reuses and
-    warm-starts; the probe is a single weight vector.
+    AntisymmetricOutcomeProbe; the probe is a single weight vector.
 
     Public-only by construction: the pathway reads packed public
     entity/edge caches, field history, and request counts — private team,
     own moveset, and action masks are architecturally unreachable, and
     replay-exported inputs match live inputs exactly.
 
-    The "encoder" attribute matches Porygon2PlayerModel, so trained
-    history-pathway subtrees (history_encoder, history_pool, public
-    embedders) merge into an RL init via load_from_params; the
-    offline-only probe has no RL counterpart and is dropped by the merge.
+    This model is a standalone artifact: it shares Encoder code with the
+    RL model for convenience, but its trained params never enter the RL
+    network. The RL learner consumes it only as a frozen, stop-gradient
+    potential Φ (offline_critic_ckpt_path), so RL trains fully from
+    scratch with no frozen or warm-started subtrees.
     """
 
     cfg: ConfigDict
