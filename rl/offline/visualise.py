@@ -470,6 +470,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .viz-root .tick-label { font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
   .viz-root .side-label { font-size: 10px; fill: var(--text-secondary); font-weight: 600; }
   .viz-root .chart-title { font-size: 12px; color: var(--text-secondary); margin: 10px 0 4px; }
+  .viz-root .key-turns { margin-top: 4px; }
+  .viz-root .key-turns .row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 4px 7px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  }
+  .viz-root .key-turns .row:hover {
+    background: color-mix(in oklab, var(--text-primary) 7%, transparent);
+  }
+  .viz-root .key-turns .badge {
+    display: inline-block; min-width: 22px; text-align: center;
+    font-weight: 700; font-size: 11px; border-radius: 10px;
+    padding: 1px 6px; color: #fff;
+  }
+  .viz-root .key-turns .delta { font-variant-numeric: tabular-nums; }
+  .viz-root .note { color: var(--muted); font-size: 11px; margin: 8px 0 0; }
   #phi-tooltip {
     position: fixed; pointer-events: none; display: none; z-index: 10;
     background: var(--surface-1); color: var(--text-primary);
@@ -494,8 +509,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <p class="sub" id="viz-sub"></p>
     <svg id="phi-chart" viewBox="0 0 640 300"></svg>
     <div class="legend" id="phi-legend"></div>
+    <div class="chart-title" id="delta-title"></div>
+    <svg id="delta-chart" viewBox="0 0 640 110"></svg>
     <div class="chart-title" id="margin-title"></div>
     <svg id="margin-chart" viewBox="0 0 640 130"></svg>
+    <div class="chart-title" id="key-title"></div>
+    <div class="key-turns" id="key-turns"></div>
+    <p class="note" id="key-note"></p>
     <div id="phi-tooltip"></div>
   </div>
 </div>
@@ -808,6 +828,88 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     legendEl.appendChild(div);
   });
 
+  // --- Per-turn Φ swing lane ---------------------------------------------
+  // Δ_j = Φ(step j+1) − Φ(step j) covers exactly the events of turn j+1
+  // (states sit at |turn| boundaries). This is the PBRS signal itself; it
+  // includes chance — a big blue bar can be a crit, not a good decision.
+  var deltaChart = document.getElementById("delta-chart");
+  var deltas = [];
+  for (var di = 0; di + 1 < N; di++) deltas.push(D.mean[di + 1] - D.mean[di]);
+  if (deltas.length) {
+    var DH = 110;
+    var DPAD = { t: 16, b: 18 };
+    document.getElementById("delta-title").innerHTML =
+      "Per-turn Φ swing — <b>" + esc(anchorName) +
+      "</b> gained (blue) / lost (red) ground · includes luck, not just " +
+      "skill · click a bar to watch that turn";
+    var maxAbs = Math.max(1e-6, Math.max.apply(null, deltas.map(Math.abs)));
+    var zeroY = DPAD.t + (DH - DPAD.t - DPAD.b) / 2;
+    var scaleY = (DH - DPAD.t - DPAD.b) / 2 / maxAbs;
+    el("line", {
+      x1: PAD.l, x2: W - PAD.r, y1: zeroY, y2: zeroY,
+      stroke: "var(--baseline)", "stroke-width": 1,
+    }, deltaChart);
+    var bestJ = deltas.indexOf(Math.max.apply(null, deltas));
+    var worstJ = deltas.indexOf(Math.min.apply(null, deltas));
+    var deltaBars = deltas.map(function (d, j) {
+      var mid = (xOf(j) + xOf(j + 1)) / 2;
+      var barW = Math.max(1.5, xOf(1) - xOf(0) - 2);
+      var h = Math.max(Math.abs(d) * scaleY, 0.5);
+      return el("rect", {
+        x: mid - barW / 2,
+        y: d >= 0 ? zeroY - h : zeroY,
+        width: barW, height: h, rx: 1.5,
+        fill: d >= 0 ? "var(--pos-pole)" : "var(--neg-pole)",
+        opacity: 0.85,
+      }, deltaChart);
+    });
+    [[bestJ, "▲", -4], [worstJ, "▼", 12]].forEach(function (mark) {
+      var j = mark[0];
+      var tipY = deltas[j] >= 0 ? zeroY - Math.abs(deltas[j]) * scaleY : zeroY + Math.abs(deltas[j]) * scaleY;
+      var label = el("text", {
+        x: (xOf(j) + xOf(j + 1)) / 2, y: tipY + mark[2],
+        "text-anchor": "middle", "class": "side-label",
+      }, deltaChart);
+      label.textContent = mark[1] + " turn " + (j + 1);
+    });
+
+    function deltaAt(clientX) {
+      var rect = deltaChart.getBoundingClientRect();
+      var frac = (clientX - rect.left) / rect.width * W;
+      var j = Math.round((frac - PAD.l) / (W - PAD.l - PAD.r) * (N - 1) - 0.5);
+      return Math.max(0, Math.min(deltas.length - 1, j));
+    }
+    var deltaHover = null;
+    deltaChart.style.cursor = "pointer";
+    deltaChart.addEventListener("mousemove", function (evt) {
+      var j = deltaAt(evt.clientX);
+      if (deltaHover !== null && deltaHover !== j) {
+        deltaBars[deltaHover].setAttribute("opacity", 0.85);
+      }
+      deltaHover = j;
+      deltaBars[j].setAttribute("opacity", 1);
+      var d = deltas[j];
+      tooltip.innerHTML =
+        "<b>turn " + (j + 1) + "</b><br />" +
+        '<span class="k">ΔΦ</span> ' + (d >= 0 ? "+" : "") + d.toFixed(3) +
+        " (≈ " + fmtSigned(+(d * D.maxMargin).toFixed(1)) + " mons)<br />" +
+        '<span class="k">Φ</span> ' + D.mean[j].toFixed(2) +
+        " → " + D.mean[j + 1].toFixed(2);
+      tooltip.style.display = "block";
+      tooltip.style.left = (evt.clientX + 14) + "px";
+      tooltip.style.top = (evt.clientY - 10) + "px";
+    });
+    deltaChart.addEventListener("mouseleave", function () {
+      if (deltaHover !== null) deltaBars[deltaHover].setAttribute("opacity", 0.85);
+      deltaHover = null;
+      tooltip.style.display = "none";
+    });
+    deltaChart.addEventListener("click", function (evt) {
+      // Seek to the start of the swing's turn so playing shows its events.
+      if (window.battle) window.battle.seekTurn(deltaAt(evt.clientX) + 1);
+    });
+  }
+
   // --- Margin distribution ---------------------------------------------
   var MW = 640, MH = 130;
   var MPAD = { l: 40, r: 14, t: 12, b: 24 };
@@ -881,6 +983,73 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     expectLine.setAttribute("x2", ex);
   }
 
+  // --- Key turns: chess.com-style swing annotations ----------------------
+  // ΔΦ over turn s's events = mean[s] − mean[s−1] (state s−1 is the start
+  // of turn s). Attribution caveat: a Pokemon turn contains BOTH players'
+  // moves plus the dice — Φ sees what happened, not who to credit.
+  var SWING_MAJOR = 0.30, SWING_MINOR = 0.15;
+  var swings = [];
+  for (var s = 1; s < N; s++) {
+    var d = D.mean[s] - D.mean[s - 1];
+    var tier = Math.abs(d) >= SWING_MAJOR ? 2 : Math.abs(d) >= SWING_MINOR ? 1 : 0;
+    if (tier) swings.push({ step: s, delta: d, tier: tier });
+  }
+  function swingColor(sw) {
+    return sw.delta > 0 ? "var(--pos-pole)" : "var(--neg-pole)";
+  }
+  function swingGlyph(sw) {
+    if (sw.delta > 0) return sw.tier === 2 ? "!!" : "!";
+    return sw.tier === 2 ? "??" : "?";
+  }
+  function swingLabel(sw) {
+    return sw.step === N - 1 ? "final turn" : "turn " + sw.step;
+  }
+  swings.forEach(function (sw) {
+    el("circle", {
+      cx: xOf(sw.step), cy: yOf(D.mean[sw.step]), r: sw.tier === 2 ? 5 : 3.5,
+      fill: swingColor(sw), stroke: "var(--surface-1)", "stroke-width": 1.5,
+    }, chart);
+    var glyph = el("text", {
+      x: xOf(sw.step),
+      y: yOf(D.mean[sw.step]) + (sw.delta > 0 ? -9 : 16),
+      "text-anchor": "middle", "font-size": "11", "font-weight": "700",
+      fill: swingColor(sw),
+    }, chart);
+    glyph.textContent = swingGlyph(sw);
+  });
+
+  var keyTurns = swings
+    .slice()
+    .sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); })
+    .slice(0, 8);
+  if (keyTurns.length) {
+    document.getElementById("key-title").textContent = "Key turns";
+    document.getElementById("key-note").textContent =
+      "Swings measure what happened during a turn — both players' moves " +
+      "and the dice. A blunder, an opponent's best move, and a crit look " +
+      "the same to Φ; watch the turn to judge which it was.";
+    var keyEl = document.getElementById("key-turns");
+    keyTurns.forEach(function (sw) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var toward = sw.delta > 0 ? anchorName : oppName;
+      var disagree = K > 1 && D.std[sw.step] > 0.12
+        ? ' <span style="color:var(--muted)">· members disagree</span>'
+        : "";
+      row.innerHTML =
+        '<span class="badge" style="background:' + swingColor(sw) + '">' +
+        swingGlyph(sw) + "</span><b>" + esc(swingLabel(sw)) + "</b>" +
+        '<span class="delta">ΔΦ ' + (sw.delta > 0 ? "+" : "") +
+        sw.delta.toFixed(2) + "</span><span>swing toward " + esc(toward) +
+        "</span>" + disagree;
+      row.addEventListener("click", function () {
+        var battle = window.battle;
+        if (battle) battle.seekTurn(Math.min(sw.step, N - 1));
+      });
+      keyEl.appendChild(row);
+    });
+  }
+
   // --- Interaction: hover, click-to-seek, playback sync ------------------
   var tooltip = document.getElementById("phi-tooltip");
   var hoverStep = null;
@@ -906,6 +1075,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       '<span class="k">mean Φ</span> ' + D.mean[step].toFixed(3);
     if (K > 1) rows += ' <span class="k">±</span> ' + D.std[step].toFixed(3);
     rows += '<br /><span class="k">win Φ</span> ' + D.winMean[step].toFixed(3);
+    if (step > 0) {
+      var turnDelta = D.mean[step] - D.mean[step - 1];
+      rows += '<br /><span class="k">ΔΦ turn ' + step + "</span> " +
+        (turnDelta > 0 ? "+" : "") + turnDelta.toFixed(3);
+    }
     if (D.gated) {
       rows += '<br /><span class="k">gated Φ</span> ' + D.gated[step].toFixed(3);
     }
