@@ -278,18 +278,19 @@ def build_payload(
     }
 
 
-def render_replay(
-    replay: dict, stats: dict, payload: bytes, runner: CriticRunner, args
+def render_page(
+    replay: dict,
+    stats: dict,
+    payload: bytes,
+    runner: CriticRunner,
+    uncertainty_scale: float = 0.0,
 ) -> tuple[str, dict]:
-    """Scores one exported replay and writes its HTML page. Returns
-    (output path, payload dict for the batch index)."""
-    ckpt_paths = runner.ckpt_paths
+    """Scores one exported replay and renders the standalone HTML page.
+    Returns (html, index-payload dict). Pure — no filesystem writes; also
+    the entry point for the serverless app (serve/modal_app.py)."""
     outputs, examples = runner.run(payload)
     data = build_payload(
-        replay, stats, outputs, examples, ckpt_paths, args.uncertainty_scale
-    )
-    output = args.output or os.path.join(
-        args.output_dir, f"{data['replayId'] or 'replay'}.phi.html"
+        replay, stats, outputs, examples, runner.ckpt_paths, uncertainty_scale
     )
     # The page bootstrap un-escapes \/ back to / (Showdown replay-file
     # convention), so </script> in the log (and the embedded JSON) can't
@@ -298,6 +299,18 @@ def render_replay(
         HTML_TEMPLATE.replace("__PHI_TITLE__", f"Φ — {data['replayId']}")
         .replace("__PHI_DATA__", json.dumps(data).replace("</", "<\\/"))
         .replace("__PHI_LOG__", replay["log"].replace("</", "<\\/"))
+    )
+    return html, data
+
+
+def render_replay(
+    replay: dict, stats: dict, payload: bytes, runner: CriticRunner, args
+) -> tuple[str, dict]:
+    """CLI wrapper: renders and writes the page. Returns
+    (output path, payload dict for the batch index)."""
+    html, data = render_page(replay, stats, payload, runner, args.uncertainty_scale)
+    output = args.output or os.path.join(
+        args.output_dir, f"{data['replayId'] or 'replay'}.phi.html"
     )
     with open(output, "w") as f:
         f.write(html)
