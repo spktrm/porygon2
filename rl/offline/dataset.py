@@ -27,10 +27,7 @@ from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
     EntityPublicNodeFeature,
 )
-from rl.environment.protos.service_pb2 import (
-    EnvironmentBatch,
-    EnvironmentTrajectory,
-)
+from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
 from rl.environment.utils import (
     clip_history,
     clip_packed_history,
@@ -66,9 +63,7 @@ def list_shards(config: Porygon2OfflineConfig) -> list[str]:
             f"(service/src/scripts/offline.ts) first."
         )
     shards = sorted(
-        os.path.join(shard_dir, f)
-        for f in os.listdir(shard_dir)
-        if f.endswith(".bin")
+        os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
     )
     if not shards:
         raise FileNotFoundError(f"No .bin shards in {shard_dir}")
@@ -153,8 +148,7 @@ def trajectory_to_example(
     # Only the final state's (large) history caches are kept per
     # trajectory, so skip materialising them for every other state.
     steps = [
-        process_state(state, with_history=False)
-        for state in trajectory.states[:-1]
+        process_state(state, with_history=False) for state in trajectory.states[:-1]
     ]
     steps.append(process_state(trajectory.states[-1]))
     final = steps[-1]
@@ -244,9 +238,7 @@ class OfflineDataset:
                 if (
                     not holdout
                     and self.config.ensemble_index >= 0
-                    and _ensemble_bucket(
-                        shard, index, self.config.num_ensemble_splits
-                    )
+                    and _ensemble_bucket(shard, index, self.config.num_ensemble_splits)
                     != self.config.ensemble_index
                 ):
                     continue

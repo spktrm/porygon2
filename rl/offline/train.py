@@ -20,9 +20,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb
 from flax.training import train_state
 
+import wandb
 from rl.environment.utils import get_ex_trajectory
 from rl.learner import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
@@ -64,9 +64,7 @@ def _metrics_from_logits(
     correct = (expectation > 0) == (true_margin > 0)
     accuracy = (correct * mask).sum() / denom
     # What the margin head buys beyond sign: mean |error| in mons.
-    margin_mae = (
-        jnp.abs(expectation * MAX_MARGIN - true_margin) * mask
-    ).sum() / denom
+    margin_mae = (jnp.abs(expectation * MAX_MARGIN - true_margin) * mask).sum() / denom
     # Late-game diagnostic: the last valid step of each trajectory is
     # near-decisive, so sign accuracy here should climb toward ~0.9 quickly
     # if the pathway is wired correctly — long before the trajectory-average
@@ -78,9 +76,7 @@ def _metrics_from_logits(
     # has collapsed to a constant (input-independent) prediction shows ~0
     # here while accuracy tracks batch label composition.
     exp_mean = (expectation * mask).sum() / denom
-    margin_std = jnp.sqrt(
-        ((expectation - exp_mean) ** 2 * mask).sum() / denom
-    )
+    margin_std = jnp.sqrt(((expectation - exp_mean) ** 2 * mask).sum() / denom)
     return dict(
         loss=loss,
         accuracy=accuracy,
@@ -105,9 +101,7 @@ def make_train_step(config: Porygon2OfflineConfig):
             )
             return metrics["loss"], metrics
 
-        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-            state.params
-        )
+        (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         metrics["gradient_norm"] = optax.global_norm(grads)
         return state.apply_gradients(grads=grads), metrics
 
@@ -127,16 +121,12 @@ def make_eval_step():
 def evaluate(
     eval_step, state: train_state.TrainState, batches: Iterator[OfflineBatch]
 ) -> dict[str, float]:
-    all_metrics = [
-        jax.device_get(eval_step(state, batch)) for batch in batches
-    ]
+    all_metrics = [jax.device_get(eval_step(state, batch)) for batch in batches]
     if not all_metrics:
         return {}
     weights = np.array([m["num_valid_steps"] for m in all_metrics])
     return {
-        f"eval_{key}": float(
-            np.average([m[key] for m in all_metrics], weights=weights)
-        )
+        f"eval_{key}": float(np.average([m[key] for m in all_metrics], weights=weights))
         for key in (
             "loss",
             "accuracy",
@@ -222,9 +212,7 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     for name, arg_type in _CLI_FIELDS.items():
         parser.add_argument("--" + name.replace("_", "-"), type=arg_type)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--debug", action="store_true", help="Disable wandb logging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Disable wandb logging")
     args = parser.parse_args()
     overrides = {
         name: getattr(args, name)
@@ -246,9 +234,7 @@ def main():
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     params = model.init(jax.random.key(seed), ex_actor_input)
     if config.resume_from is not None:
-        params = checkpoint_lib.load_component(
-            config.resume_from, "player", "params"
-        )
+        params = checkpoint_lib.load_component(config.resume_from, "player", "params")
         print(f"Resumed params from {config.resume_from}")
 
     optimizer = optax.chain(
@@ -293,9 +279,7 @@ def main():
     )
     start_time = time.monotonic()
     last_save_path = None
-    for step, batch in enumerate(
-        itertools.islice(batches, config.num_steps), start=1
-    ):
+    for step, batch in enumerate(itertools.islice(batches, config.num_steps), start=1):
         dispatch_start = time.monotonic()
         state, metrics = train_step(state, batch)
         # jit compiles synchronously at dispatch, so a slow dispatch on an
