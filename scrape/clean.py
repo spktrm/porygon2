@@ -2,7 +2,6 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import requests
 from pokepastes_scraper import team_from_url
@@ -17,7 +16,7 @@ def url_is_alive(url: str, timeout: int = 10) -> bool:
         return False
 
 
-def extract_team(url: str) -> Optional[Dict]:
+def extract_team(url: str) -> dict | None:
     """
     Return a team (dict) only if it has exactly 6 Pokémon, otherwise None.
     Any exception from team_from_url is caught and treated as invalid.
@@ -33,7 +32,7 @@ def extract_team(url: str) -> Optional[Dict]:
     return None
 
 
-def process_url(url: str) -> Optional[Dict]:
+def process_url(url: str) -> dict | None:
     """
     Wrapper executed in each thread:
     1. Check URL liveness.
@@ -53,7 +52,7 @@ def process_url(url: str) -> Optional[Dict]:
     return team_dict
 
 
-def build_dataset(txt_path: Path, max_workers: int = 20) -> List[Dict]:
+def build_dataset(txt_path: Path, max_workers: int = 20) -> list[dict]:
     """
     Read all URLs, dispatch them to a thread pool, de-duplicate identical teams,
     and return the ordered list of unique team dicts.
@@ -62,7 +61,7 @@ def build_dataset(txt_path: Path, max_workers: int = 20) -> List[Dict]:
         urls = [line.strip() for line in fh if line.strip()]
 
     seen_hashes: set[str] = set()
-    dataset: List[Dict] = []
+    dataset: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as tp:
         # submit returns futures; we iterate them as they complete

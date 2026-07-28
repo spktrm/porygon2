@@ -112,6 +112,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # refinement operator. All residual gates are zero-init, so extra
     # rounds are stable to add; each round adds parameters as well as
     # compute. 4 rounds matches the Nov 2025 everything-transformer depth.
+    # Attention pooling of the recurrent history states into a fixed bank of
+    # learned latents. Shared between the RL trunk (extra history-context
+    # tokens) and the offline outcome critic (flattened latents -> linear
+    # probe), so outcome-readout capacity lands in warm-startable params.
+    cfg.encoder.history_pool = ConfigDict()
+    cfg.encoder.history_pool.num_latents = 4
+    cfg.encoder.history_pool.num_heads = num_heads
+    cfg.encoder.history_pool.qk_size = encoder_qkv_size
+    cfg.encoder.history_pool.use_bias = encoder_use_bias
+
     cfg.encoder.num_rounds = 4
     cfg.encoder.round = ConfigDict()
     cfg.encoder.round.num_heads = num_heads

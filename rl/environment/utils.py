@@ -1,5 +1,6 @@
 import math
-from typing import Sequence, TypeVar
+from collections.abc import Sequence
+from typing import TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -127,38 +128,48 @@ def get_action_mask(state: EnvironmentState):
 
 
 def process_state(
-    state: EnvironmentState, max_history: int = NUM_HISTORY
+    state: EnvironmentState,
+    max_history: int = NUM_HISTORY,
+    with_history: bool = True,
 ) -> PlayerActorInput:
-    history_length = state.history_length
-    history_packed_length = max(1, state.history_packed_length)
+    """Decodes an EnvironmentState proto into a PlayerActorInput.
 
+    with_history=False skips materialising the (large, padded) history
+    caches and returns empty history pytrees — use it when only the env
+    fields are needed (e.g. the offline dataset keeps just the final
+    state's histories per trajectory).
+    """
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
-    max_packed_history = 2 * max_history
 
-    history_entity_public_cache = padnstack(
-        np.frombuffer(state.history_entity_public_cache, dtype=np.int16).reshape(
-            (history_packed_length, NUM_ENTITY_PUBLIC_FEATURES)
-        ),
-        max_packed_history,
-    ).astype(np.int32)
-    history_entity_revealed_cache = padnstack(
-        np.frombuffer(state.history_entity_revealed_cache, dtype=np.int16).reshape(
-            (history_packed_length, NUM_ENTITY_REVEALED_FEATURES)
-        ),
-        max_packed_history,
-    ).astype(np.int32)
-    history_entity_edge_cache = padnstack(
-        np.frombuffer(state.history_entity_edge_cache, dtype=np.int16).reshape(
-            (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
-        ),
-        max_packed_history,
-    ).astype(np.int32)
-    history_field = padnstack(
-        np.frombuffer(state.history_field, dtype=np.int16).reshape(
-            (history_length, NUM_FIELD_FEATURES)
-        ),
-        max_history,
-    ).astype(np.int32)
+    if with_history:
+        history_length = state.history_length
+        history_packed_length = max(1, state.history_packed_length)
+        max_packed_history = 2 * max_history
+
+        history_entity_public_cache = padnstack(
+            np.frombuffer(state.history_entity_public_cache, dtype=np.int16).reshape(
+                (history_packed_length, NUM_ENTITY_PUBLIC_FEATURES)
+            ),
+            max_packed_history,
+        ).astype(np.int32)
+        history_entity_revealed_cache = padnstack(
+            np.frombuffer(state.history_entity_revealed_cache, dtype=np.int16).reshape(
+                (history_packed_length, NUM_ENTITY_REVEALED_FEATURES)
+            ),
+            max_packed_history,
+        ).astype(np.int32)
+        history_entity_edge_cache = padnstack(
+            np.frombuffer(state.history_entity_edge_cache, dtype=np.int16).reshape(
+                (history_packed_length, NUM_ENTITY_EDGE_FEATURES)
+            ),
+            max_packed_history,
+        ).astype(np.int32)
+        history_field = padnstack(
+            np.frombuffer(state.history_field, dtype=np.int16).reshape(
+                (history_length, NUM_FIELD_FEATURES)
+            ),
+            max_history,
+        ).astype(np.int32)
 
     my_moveset = (
         np.frombuffer(state.my_moveset, dtype=np.int16)
@@ -204,15 +215,10 @@ def process_state(
         dtype=np.float32,
     )
 
-    state_potential = (info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] / 1000).astype(
-        np.float32
-    )
-
     env_step = PlayerEnvOutput(
         info=info,
         done=is_done,
         win_reward=win_reward.astype(np.float32),
-        state_potential=state_potential.astype(np.float32),
         private_team=private_team,
         public_team=public_team,
         revealed_team=revealed_team,
@@ -221,12 +227,16 @@ def process_state(
         opp_moveset=opp_moveset,
         action_mask=get_action_mask(state),
     )
-    packed_history_step = PlayerPackedHistoryOutput(
-        public_cache=history_entity_public_cache,
-        revealed_cache=history_entity_revealed_cache,
-        edge_cache=history_entity_edge_cache,
-    )
-    history_step = PlayerHistoryOutput(field=history_field)
+    if with_history:
+        packed_history_step = PlayerPackedHistoryOutput(
+            public_cache=history_entity_public_cache,
+            revealed_cache=history_entity_revealed_cache,
+            edge_cache=history_entity_edge_cache,
+        )
+        history_step = PlayerHistoryOutput(field=history_field)
+    else:
+        packed_history_step = PlayerPackedHistoryOutput()
+        history_step = PlayerHistoryOutput()
 
     return PlayerActorInput(
         env=env_step, packed_history=packed_history_step, history=history_step

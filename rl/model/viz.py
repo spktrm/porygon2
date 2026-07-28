@@ -106,7 +106,9 @@ def _load_or_init_params(learner_network: nn.Module, generation: int, key: jax.A
         print(f"loading checkpoint from {latest_ckpt}")
         params = checkpoint.load_component(latest_ckpt, "player", "params")
     else:
-        params = learner_network.init(key, ex_actor_input, ex_actor_output, HeadParams())
+        params = learner_network.init(
+            key, ex_actor_input, ex_actor_output, HeadParams()
+        )
     return params, ex_actor_input, ex_actor_output
 
 
