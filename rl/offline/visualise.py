@@ -13,16 +13,19 @@ The replay is encoded through the SAME exporter path as training shards
 Φ is evaluated on here are exactly the states it would see in training.
 
 Usage:
-    python -m rl.offline.visualize <replay> \
+    python -m rl.offline.visualize <replay> [<replay> ...] \
         [--ckpt ckpts/offline/gen9randombattle/ckpt_00050000 [--ckpt ...]] \
-        [--uncertainty-scale 2.0] [--output out.html]
+        [--uncertainty-scale 2.0] [--output-dir viz] [--limit N]
 
-<replay> is a local replay JSON (replays/data/...), a replay id
-(gen9randombattle-2654504071), or a replay.pokemonshowdown.com URL — ids and
-URLs are fetched. With no --ckpt, the latest checkpoint under
-ckpts/offline/{format_id}*/ is used (all ensemble member dirs, if present).
-Requires node + a compiled service/ (npx tsc is run automatically if
-dist/scripts/exportReplay.js is missing).
+Each <replay> is a local replay JSON (replays/data/...), a replay id
+(gen9randombattle-2654504071), a replay.pokemonshowdown.com URL (ids and
+URLs are fetched), or a directory of replay JSONs. Pages land in
+--output-dir (default viz/) as {replay_id}.phi.html; batches also get an
+index.html linking every page. --output overrides the path for a single
+replay. Checkpoints load and compile once for the whole batch. With no
+--ckpt, the latest checkpoint under ckpts/offline/{format_id}*/ is used
+(all ensemble member dirs, if present). Requires node + a compiled
+service/ (npx tsc is run automatically if the exporter is missing/stale).
 """
 
 import argparse
@@ -95,7 +98,9 @@ def export_record(replay_json_path: str, tmpdir: str) -> tuple[bytes, dict]:
         print("compiling service/ (dist exporter missing or older than src) ...")
         # --noEmitOnError: a failed compile must not leave a half-updated
         # dist/ that a later run would mistake for current.
-        subprocess.run(["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True)
+        subprocess.run(
+            ["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True
+        )
     out_bin = os.path.join(tmpdir, "record.bin")
     result = subprocess.run(
         ["node", exporter, replay_json_path, out_bin],
@@ -120,12 +125,12 @@ def discover_ckpts(format_id: str) -> list[str]:
         for name in sorted(os.listdir(root)):
             if name == format_id or name.startswith(f"{format_id}-ens"):
                 ckpt_dir = os.path.join(root, name)
-                steps = sorted(d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_"))
+                steps = sorted(
+                    d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_")
+                )
                 if steps:
                     candidates.append(os.path.join(ckpt_dir, steps[-1]))
-    ensembles = [
-        c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))
-    ]
+    ensembles = [c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))]
     if ensembles:
         return ensembles
     if not candidates:
@@ -135,40 +140,70 @@ def discover_ckpts(format_id: str) -> list[str]:
     return candidates
 
 
-def run_critic(payload: bytes, ckpt_paths: list[str]) -> tuple[dict, list]:
-    """Runs every ensemble member over both perspectives. Returns
-    (per-trajectory outputs, examples). Outputs: phi (K, T, B), probs
-    (K, T, B, 13), valid-step mask (T, B)."""
-    # No config: raw view — keep clamped-forfeit games and exact one-hot
-    # labels so every replay stays inspectable regardless of the training
-    # forfeit policy.
-    examples = record_to_examples(payload)
-    if not examples:
-        raise ValueError("replay produced no usable trajectories")
-    config = get_offline_config()
-    max_t = max(e.actor_input.env.done.shape[0] for e in examples)
-    if max_t > config.max_trajectory_length:
-        print(
-            f"WARNING: game has {max_t} states, truncated to "
-            f"{config.max_trajectory_length} (config.max_trajectory_length)"
+class CriticRunner:
+    """Loads offline critic checkpoint(s) and compiles the apply once, then
+    scores any number of exported records. Used here for one record, and by
+    the causality check (rl/offline/causality.py) which scores many
+    truncated variants of one replay — checkpoint loading and jit
+    compilation must not repeat per variant."""
+
+    def __init__(self, ckpt_paths: list[str]):
+        self.config = get_offline_config()
+        self.ckpt_paths = list(ckpt_paths)
+        model = get_offline_critic(self.config.generation)
+        self.params = load_critic_params(ckpt_paths)  # leading ensemble axis K
+        self.num_members = jax.tree.leaves(self.params)[0].shape[0]
+        self._apply_fn = jax.jit(
+            jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
         )
-    batch = collate(examples, config)
 
-    model = get_offline_critic(config.generation)
-    params = load_critic_params(ckpt_paths)  # leading ensemble axis K
-    num_members = jax.tree.leaves(params)[0].shape[0]
-    apply_fn = jax.jit(jax.vmap(model.apply, in_axes=(None, 1), out_axes=1))
+    def run(self, payload: bytes) -> tuple[dict, list]:
+        """Runs every ensemble member over both perspectives. Returns
+        (per-trajectory outputs, examples). Outputs: phi (K, T, B), probs
+        (K, T, B, 13), valid-step mask (T, B)."""
+        # No config: raw view — keep clamped-forfeit games and exact one-hot
+        # labels so every replay stays inspectable regardless of the
+        # training forfeit policy.
+        examples = record_to_examples(payload)
+        if not examples:
+            raise ValueError("replay produced no usable trajectories")
+        max_t = max(e.actor_input.env.done.shape[0] for e in examples)
+        if max_t > self.config.max_trajectory_length:
+            print(
+                f"WARNING: game has {max_t} states, truncated to "
+                f"{self.config.max_trajectory_length} "
+                "(config.max_trajectory_length)"
+            )
+        batch = collate(examples, self.config)
 
-    phis, probs = [], []
-    for k in range(num_members):
-        member_params = jax.tree.map(lambda x: x[k], params)  # noqa: B023
-        out = jax.device_get(apply_fn(member_params, batch.actor_input))
-        phis.append(np.asarray(out.expectation, dtype=np.float32))
-        probs.append(np.exp(np.asarray(out.log_probs, dtype=np.float32)))
+        phis, probs = [], []
+        for k in range(self.num_members):
+            member_params = jax.tree.map(lambda x: x[k], self.params)  # noqa: B023
+            out = jax.device_get(self._apply_fn(member_params, batch.actor_input))
+            phis.append(np.asarray(out.expectation, dtype=np.float32))
+            probs.append(np.exp(np.asarray(out.log_probs, dtype=np.float32)))
 
-    done = np.asarray(batch.actor_input.env.done).astype(np.int32)
-    mask = (np.cumsum(done, axis=0) - done) == 0  # (T, B)
-    return {"phi": np.stack(phis), "probs": np.stack(probs), "mask": mask}, examples
+        done = np.asarray(batch.actor_input.env.done).astype(np.int32)
+        mask = (np.cumsum(done, axis=0) - done) == 0  # (T, B)
+        return {"phi": np.stack(phis), "probs": np.stack(probs), "mask": mask}, examples
+
+
+def expand_replay_specs(specs: list[str], limit: int | None) -> list[str]:
+    """Directories expand to their sorted *.json contents; everything else
+    (paths, ids, URLs) passes through. ``limit`` caps the total."""
+    expanded: list[str] = []
+    for spec in specs:
+        if os.path.isdir(spec):
+            expanded.extend(
+                sorted(
+                    os.path.join(spec, name)
+                    for name in os.listdir(spec)
+                    if name.endswith(".json")
+                )
+            )
+        else:
+            expanded.append(spec)
+    return expanded[:limit] if limit else expanded
 
 
 def build_payload(
@@ -243,32 +278,19 @@ def build_payload(
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("replay", help="replay JSON path, replay id, or replay URL")
-    parser.add_argument(
-        "--ckpt",
-        action="append",
-        default=None,
-        help="offline critic checkpoint dir (repeat for an ensemble); "
-        "default: latest under ckpts/offline/{format_id}*/",
-    )
-    parser.add_argument("--uncertainty-scale", type=float, default=0.0)
-    parser.add_argument("--output", default=None, help="output HTML path")
-    args = parser.parse_args()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        replay, replay_json_path = resolve_replay(args.replay, tmpdir)
-        payload, stats = export_record(replay_json_path, tmpdir)
-
-    ckpt_paths = args.ckpt or discover_ckpts(replay.get("formatid", "gen9randombattle"))
-    print(f"checkpoints: {ckpt_paths}")
-    outputs, examples = run_critic(payload, ckpt_paths)
+def render_replay(
+    replay: dict, stats: dict, payload: bytes, runner: CriticRunner, args
+) -> tuple[str, dict]:
+    """Scores one exported replay and writes its HTML page. Returns
+    (output path, payload dict for the batch index)."""
+    ckpt_paths = runner.ckpt_paths
+    outputs, examples = runner.run(payload)
     data = build_payload(
         replay, stats, outputs, examples, ckpt_paths, args.uncertainty_scale
     )
-
-    output = args.output or f"{data['replayId'] or 'replay'}.phi.html"
+    output = args.output or os.path.join(
+        args.output_dir, f"{data['replayId'] or 'replay'}.phi.html"
+    )
     # The page bootstrap un-escapes \/ back to / (Showdown replay-file
     # convention), so </script> in the log (and the embedded JSON) can't
     # terminate the enclosing script tag.
@@ -279,7 +301,100 @@ def main():
     )
     with open(output, "w") as f:
         f.write(html)
-    print(f"wrote {output} ({len(html) // 1024} KB) — open it in a browser")
+    print(f"wrote {output} ({len(html) // 1024} KB)")
+    return output, data
+
+
+def write_index(output_dir: str, entries: list[tuple[str, dict]]) -> str:
+    rows = "".join(
+        '<tr><td><a href="{file}">{rid}</a></td><td>{players}</td>'
+        "<td>{rating}</td><td>{margin:+d}</td><td>{ending}</td></tr>".format(
+            file=os.path.basename(path),
+            rid=data["replayId"],
+            players=" vs ".join(data["players"]),
+            rating=data["rating"] or "—",
+            margin=data["actualMargin"],
+            ending=data["endingLabel"],
+        )
+        for path, data in entries
+    )
+    html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<title>Φ index ({len(entries)} replays)</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:24px;}"
+        "table{border-collapse:collapse;}td,th{padding:6px 14px;"
+        "border-bottom:1px solid #ddd;text-align:left;font-size:14px;}"
+        "th{color:#666;}</style></head><body>"
+        f"<h1>Φ visualizations ({len(entries)} replays)</h1><table>"
+        "<tr><th>replay</th><th>players</th><th>rating</th>"
+        "<th>margin</th><th>ending</th></tr>"
+        f"{rows}</table></body></html>"
+    )
+    index_path = os.path.join(output_dir, "index.html")
+    with open(index_path, "w") as f:
+        f.write(html)
+    return index_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "replays",
+        nargs="+",
+        help="replay JSON paths, replay ids, URLs, or directories of "
+        "replay JSONs",
+    )
+    parser.add_argument(
+        "--ckpt",
+        action="append",
+        default=None,
+        help="offline critic checkpoint dir (repeat for an ensemble); "
+        "default: latest under ckpts/offline/{format_id}*/",
+    )
+    parser.add_argument("--uncertainty-scale", type=float, default=0.0)
+    parser.add_argument(
+        "--output", default=None, help="output HTML path (single replay only)"
+    )
+    parser.add_argument(
+        "--output-dir", default="viz", help="directory for generated pages"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="max replays to render"
+    )
+    args = parser.parse_args()
+
+    specs = expand_replay_specs(args.replays, args.limit)
+    if not specs:
+        parser.error("no replays found")
+    if args.output and len(specs) > 1:
+        parser.error("--output is for a single replay; use --output-dir for batches")
+    if not args.output:
+        os.makedirs(args.output_dir, exist_ok=True)
+
+    runner = None
+    entries: list[tuple[str, dict]] = []
+    for spec in specs:
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                replay, replay_json_path = resolve_replay(spec, tmpdir)
+                payload, stats = export_record(replay_json_path, tmpdir)
+            if runner is None:
+                # Checkpoints load and jit-compile once for the whole batch.
+                ckpt_paths = args.ckpt or discover_ckpts(
+                    replay.get("formatid", "gen9randombattle")
+                )
+                print(f"checkpoints: {ckpt_paths}")
+                runner = CriticRunner(ckpt_paths)
+            entries.append(render_replay(replay, stats, payload, runner, args))
+        except (SystemExit, ValueError, OSError) as err:
+            # One undecided/corrupt replay must not kill the batch.
+            print(f"SKIPPED {spec}: {err}")
+
+    if len(entries) > 1:
+        index_path = write_index(args.output_dir, entries)
+        print(f"\n{len(entries)}/{len(specs)} replays rendered — index: {index_path}")
+    elif entries:
+        print("open it in a browser")
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
