@@ -15,6 +15,16 @@ while the RL model itself trains fully from scratch.
 4. Consume in RL             set offline_critic_ckpt_path + potential coef schedule
 ```
 
+To eyeball what a trained Φ says about one game,
+`python -m rl.offline.visualize <replay json | replay id | replay URL>`
+writes a standalone HTML page: the rendered battle (official Showdown
+replay player) next to per-turn Φ — ensemble members, mean ± std, the
+uncertainty-gated potential, a mirror-antisymmetry check, and the 13-bin
+margin distribution — with click-to-seek sync between chart and replay.
+It encodes the log through the same exporter as the shards
+(service/src/scripts/exportReplay.ts), so the states scored are exactly
+the training-time states.
+
 ## Stage 2 — exporter (service/src/scripts/offline.ts)
 
 Replays each spectator log through the **same** state encoder as live
@@ -68,7 +78,17 @@ into RL. Loss is softmax cross-entropy over **13 margin bins** (final
 alive-mon differential in [-6, +6], sign-clamped to the recorded result —
 forfeits keep the true winner) at every valid step, so Φ = expected
 margin ∈ [-1, 1] grades positions by decisiveness instead of only
-win-probability. For uncertainty-gated shaping, train an ensemble:
+win-probability. Forfeits get special handling (measured on 50k rated
+games: ~48% played out, ~41% conceded, ~11% forfeited with the winner not
+ahead on mons): games where the sign-clamp engages are **dropped**
+(`drop_clamped_forfeits` — the result contradicts the position, and the
+noise is perspective-consistent and side-differenced, exactly what the
+antisymmetric probe would otherwise learn), and concessions are treated
+as **right-censored margins** (`concession_censor_decay` — label mass
+decays geometrically from the concession margin toward ±6, countering the
+compression of conceded margins toward ±1..3 relative to played-out
+games). Both apply at label-construction time in dataset.py, so changing
+them needs no shard re-export. For uncertainty-gated shaping, train an ensemble:
 `--ensemble-index k` (k = 0..K-1) trains member k on a disjoint per-game
 split with a shared holdout, saving to `{format_id}-ensk/`. Config is
 `Porygon2OfflineConfig` (rl/offline/config.py) — composed from the same

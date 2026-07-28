@@ -97,11 +97,30 @@ def _ensemble_bucket(shard_path: str, record_index: int, num_splits: int) -> int
     return int.from_bytes(digest[:4], "little") % num_splits
 
 
-def _final_margin(final: PlayerActorInput, win_reward: np.ndarray) -> int:
+def _final_margin(
+    final: PlayerActorInput, win_reward: np.ndarray
+) -> tuple[int, str, int]:
     """Final alive-mon differential from the terminal cache (every fainted
-    mon is revealed, so alive = 6 - faints exactly). The sign is clamped to
-    the recorded result: a mid-game forfeit can leave the winner behind on
-    mons, and the result is the ground truth."""
+    mon is revealed, so alive = 6 - faints exactly), plus how the game
+    ended. The sign is clamped to the recorded result: a mid-game forfeit
+    can leave the winner behind on mons, and the result is the ground truth.
+
+    Endings (measured on 50k rated gen9randombattle games, July 2026):
+    - "played_out" (~48%): the loser's six mons all fainted — exact margin.
+    - "conceded" (~41%): forfeit/timeout with the winner ahead on mons —
+      the margin is the count at concession, a compressed lower bound on
+      the played-out margin (concessions cluster at 1-3, played-out games
+      reach 4-6 far more often).
+    - "clamped" (~11%): forfeit/timeout with the winner NOT ahead (rage
+      quit / timer / disconnect) — the position contradicts the result, so
+      the ±1 margin is pure label noise.
+    - "tie": rare, margin 0.
+
+    Also returns the |margin| cap: the winner's alive-mon count at game
+    end. Mons never return (Revival Blessing aside), so no played-out
+    continuation of a conceded game could have exceeded that margin — the
+    censored label spreads only up to it, never to ±MAX_MARGIN.
+    """
     public = np.asarray(final.packed_history.public_cache)
     edges = np.asarray(final.packed_history.edge_cache)
     real_rows = np.nonzero(public.any(axis=1))[0]
@@ -125,23 +144,62 @@ def _final_margin(final: PlayerActorInput, win_reward: np.ndarray) -> int:
             opp_faints += fainted
     alive_diff = opp_faints - my_faints
     if win_reward[2] == 1:
-        return max(min(alive_diff, MAX_MARGIN), 1)
+        margin = max(min(alive_diff, MAX_MARGIN), 1)
+        cap = min(6 - my_faints, MAX_MARGIN)
+        if alive_diff <= 0:
+            return margin, "clamped", cap
+        return margin, ("played_out" if opp_faints == 6 else "conceded"), cap
     if win_reward[0] == 1:
-        return min(max(alive_diff, -MAX_MARGIN), -1)
-    return 0
+        margin = min(max(alive_diff, -MAX_MARGIN), -1)
+        cap = min(6 - opp_faints, MAX_MARGIN)
+        if alive_diff >= 0:
+            return margin, "clamped", cap
+        return margin, ("played_out" if my_faints == 6 else "conceded"), cap
+    return 0, "tie", 0
 
 
-def record_to_examples(payload: bytes) -> list[OfflineExample]:
+def _margin_label(
+    margin: int, ending: str, censor_decay: float, margin_cap: int
+) -> np.ndarray:
+    """One-hot margin label, except conceded games with censoring on: a
+    concession at |margin| mons down right-censors the played-out margin
+    (it would have been at least that), so the mass spreads geometrically
+    over the bins from the observed margin up to ``margin_cap`` — the
+    winner's alive count, the hardest possible played-out margin from that
+    position. The mode stays at the observed bin, and the two perspectives
+    of a game remain exact mirror flips of each other (the cap is
+    perspective-independent), so pair-aware batching is undisturbed."""
+    label = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
+    if ending == "conceded" and censor_decay > 0.0 and abs(margin) < margin_cap:
+        sign = 1 if margin > 0 else -1
+        weight = 1.0
+        for k in range(abs(margin), margin_cap + 1):
+            label[sign * k + MAX_MARGIN] = weight
+            weight *= censor_decay
+        label /= label.sum()
+    else:
+        label[margin + MAX_MARGIN] = 1.0
+    return label
+
+
+def record_to_examples(
+    payload: bytes, config: "Porygon2OfflineConfig | None" = None
+) -> list[OfflineExample]:
     """One shard record = one replay (EnvironmentBatch holding both
     perspectives). Grouping them keeps a game and its mirrored,
-    label-flipped twin on the same side of the train/eval split."""
+    label-flipped twin on the same side of the train/eval split.
+
+    With a config, its forfeit policy applies (drop_clamped_forfeits /
+    concession_censor_decay); without one, every decided game is kept with
+    its exact one-hot label — the raw view (used by the visualizer)."""
     batch = EnvironmentBatch.FromString(payload)
-    examples = [trajectory_to_example(t) for t in batch.trajectories]
+    examples = [trajectory_to_example(t, config) for t in batch.trajectories]
     return [e for e in examples if e is not None]
 
 
 def trajectory_to_example(
     trajectory: EnvironmentTrajectory,
+    config: "Porygon2OfflineConfig | None" = None,
 ) -> OfflineExample | None:
     if len(trajectory.states) < 2:
         return None
@@ -157,9 +215,14 @@ def trajectory_to_example(
     # e.g. a forfeited-by-disconnect fragment) carries no training signal.
     if not final.env.done or label.sum() == 0:
         return None
-    margin = _final_margin(final, label)
-    margin_onehot = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
-    margin_onehot[margin + MAX_MARGIN] = 1.0
+    margin, ending, margin_cap = _final_margin(final, label)
+    # A forfeit where the "winner" wasn't ahead contradicts the position at
+    # every step of the game — deep supervision would train the whole
+    # trajectory toward an outcome the states never indicated.
+    if config is not None and config.drop_clamped_forfeits and ending == "clamped":
+        return None
+    censor_decay = config.concession_censor_decay if config is not None else 0.0
+    margin_label = _margin_label(margin, ending, censor_decay, margin_cap)
     env = jax.tree.map(lambda *xs: np.stack(xs), *[s.env for s in steps])
     return OfflineExample(
         actor_input=PlayerActorInput(
@@ -167,7 +230,7 @@ def trajectory_to_example(
             packed_history=final.packed_history,
             history=final.history,
         ),
-        label=margin_onehot,
+        label=margin_label,
     )
 
 
@@ -242,7 +305,7 @@ class OfflineDataset:
                     != self.config.ensemble_index
                 ):
                     continue
-                examples = record_to_examples(payload)
+                examples = record_to_examples(payload, self.config)
                 if pairs_only and len(examples) != 2:
                     continue
                 if examples:

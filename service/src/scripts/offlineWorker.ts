@@ -29,7 +29,7 @@ import {
     EnvironmentTrajectory,
 } from "../../protos/service_pb";
 
-interface ReplayFile {
+export interface ReplayFile {
     id: string;
     players: string[];
     log: string;
@@ -74,7 +74,7 @@ class OfflinePlayerAI extends TrainablePlayerAI {
     }
 }
 
-function encodePerspective(
+export function encodePerspective(
     replay: ReplayFile,
     lines: string[],
     playerIndex: 0 | 1,
@@ -217,11 +217,15 @@ async function run() {
     parentPort?.postMessage({ type: "done", stats });
 }
 
-run().catch((err) => {
-    parentPort?.postMessage({
-        type: "fatal",
-        message:
-            err instanceof Error ? (err.stack ?? err.message) : String(err),
+// Only run when loaded as a worker thread — the encode helpers above are
+// also imported directly by one-shot tools (scripts/exportReplay.ts).
+if (parentPort) {
+    run().catch((err) => {
+        parentPort?.postMessage({
+            type: "fatal",
+            message:
+                err instanceof Error ? (err.stack ?? err.message) : String(err),
+        });
+        process.exit(1);
     });
-    process.exit(1);
-});
+}

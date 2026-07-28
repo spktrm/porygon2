@@ -38,7 +38,13 @@ import numpy as np
 
 from rl.offline.artifact import load_critic_params
 from rl.offline.config import get_offline_config
-from rl.offline.dataset import MAX_MARGIN, collate, iter_shard_payloads, record_to_examples
+from rl.offline.dataset import (
+    MAX_MARGIN,
+    _final_margin,
+    collate,
+    iter_shard_payloads,
+    record_to_examples,
+)
 from rl.offline.model import get_offline_critic
 
 REPLAY_URL = "https://replay.pokemonshowdown.com/{replay_id}.json"
@@ -66,13 +72,32 @@ def resolve_replay(spec: str, tmpdir: str) -> tuple[dict, str]:
     return replay, path
 
 
+def _exporter_is_stale(exporter: str) -> bool:
+    """True if the compiled exporter is missing or older than any TypeScript
+    source (src/ or the generated protos/)."""
+    if not os.path.exists(exporter):
+        return True
+    built = os.path.getmtime(exporter)
+    for root in ("src", "protos"):
+        for dirpath, _, files in os.walk(os.path.join(SERVICE_DIR, root)):
+            for name in files:
+                if name.endswith(".ts"):
+                    if os.path.getmtime(os.path.join(dirpath, name)) > built:
+                        return True
+    return False
+
+
 def export_record(replay_json_path: str, tmpdir: str) -> tuple[bytes, dict]:
     """Encodes one replay through the shard exporter; returns the
     EnvironmentBatch payload and the exporter's stats ({perspectives, states})."""
     exporter = os.path.join(SERVICE_DIR, "dist", "scripts", "exportReplay.js")
-    if not os.path.exists(exporter):
-        print("compiling service/ (dist/scripts/exportReplay.js missing) ...")
-        subprocess.run(["npx", "tsc"], cwd=SERVICE_DIR, check=True)
+    if _exporter_is_stale(exporter):
+        print("compiling service/ (dist exporter missing or older than src) ...")
+        # --noEmitOnError: a failed compile must not leave a half-updated
+        # dist/ that a later run would mistake for current.
+        subprocess.run(
+            ["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True
+        )
     out_bin = os.path.join(tmpdir, "record.bin")
     result = subprocess.run(
         ["node", exporter, replay_json_path, out_bin],
@@ -116,6 +141,9 @@ def run_critic(payload: bytes, ckpt_paths: list[str]) -> tuple[dict, list]:
     """Runs every ensemble member over both perspectives. Returns
     (per-trajectory outputs, examples). Outputs: phi (K, T, B), probs
     (K, T, B, 13), valid-step mask (T, B)."""
+    # No config: raw view — keep clamped-forfeit games and exact one-hot
+    # labels so every replay stays inspectable regardless of the training
+    # forfeit policy.
     examples = record_to_examples(payload)
     if not examples:
         raise ValueError("replay produced no usable trajectories")
@@ -174,8 +202,26 @@ def build_payload(
         m = min(n, n_other)
         mirror = (-phi_other.mean(axis=0)[:m]).tolist()
 
-    probs = outputs["probs"][:, :n, anchor].mean(axis=0)  # (n, 13)
-    actual_margin = int(np.argmax(examples[anchor].label)) - MAX_MARGIN
+    member_probs = outputs["probs"][:, :n, anchor]  # (K, n, 13)
+    probs = member_probs.mean(axis=0)  # (n, 13)
+    # Win readout of the same head: P(win) − P(loss), the signed sign-mass
+    # of the margin bins — what potential_readout="win" feeds the learner.
+    win_phi = (
+        member_probs[..., MAX_MARGIN + 1 :].sum(-1)
+        - member_probs[..., :MAX_MARGIN].sum(-1)
+    ).mean(axis=0)
+    final_reward = np.asarray(examples[anchor].actor_input.env.win_reward)[-1]
+    actual_margin, ending, margin_cap = _final_margin(
+        examples[anchor].actor_input, final_reward
+    )
+    signed_cap = margin_cap if actual_margin > 0 else -margin_cap
+    ending_labels = {
+        "played_out": "played out — exact margin",
+        "conceded": f"conceded — played-out margin would be in "
+        f"[{min(actual_margin, signed_cap):+d}, {max(actual_margin, signed_cap):+d}]",
+        "clamped": "forfeit with winner not ahead — margin label is noise",
+        "tie": "tie",
+    }
 
     return {
         "replayId": replay.get("id", ""),
@@ -186,11 +232,13 @@ def build_payload(
         "numSteps": n,
         "members": np.round(phi, 4).tolist(),
         "mean": np.round(mean, 4).tolist(),
+        "winMean": np.round(win_phi, 4).tolist(),
         "std": np.round(std, 4).tolist(),
         "gated": np.round(gated, 4).tolist() if gated is not None else None,
         "mirror": [round(v, 4) for v in mirror] if mirror is not None else None,
         "probs": np.round(probs, 4).tolist(),
         "actualMargin": actual_margin,
+        "endingLabel": ending_labels[ending],
         "maxMargin": MAX_MARGIN,
         "uncertaintyScale": uncertainty_scale,
         "ckpts": [os.path.relpath(p, REPO_ROOT) for p in ckpt_paths],
@@ -250,8 +298,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --muted: #898781;
     --grid: #e1e0d9;
     --baseline: #c3c2b7;
-    --series-1: #2a78d6;   /* mean Φ */
+    --series-1: #2a78d6;   /* mean Φ (margin readout) */
     --series-2: #eb6834;   /* gated Φ */
+    --series-3: #1baf7a;   /* win readout P(w)−P(l) */
     --pos-pole: #2a78d6;   /* diverging: anchor ahead */
     --neg-pole: #e34948;   /* diverging: opponent ahead */
     --mid: #f0efec;
@@ -277,6 +326,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --baseline: #383835;
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
     --pos-pole: #3987e5;
     --neg-pole: #e66767;
     --mid: #383835;
@@ -483,7 +533,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   document.getElementById("viz-sub").innerHTML =
     "Φ = expected final alive-mon margin / " + D.maxMargin +
     ", from <b>" + esc(anchorName) + "</b>'s perspective · " +
-    "actual margin " + fmtSigned(D.actualMargin) + " · " +
+    "actual margin " + fmtSigned(D.actualMargin) +
+    " (" + esc(D.endingLabel) + ") · " +
     K + " ensemble member" + (K > 1 ? "s" : "") +
     (D.uncertaintyScale > 0 ? " · gate scale " + D.uncertaintyScale : "") +
     "<br /><code>" + D.ckpts.map(esc).join("</code>, <code>") + "</code>";
@@ -587,6 +638,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       "stroke-width": 2, "stroke-dasharray": "6 4",
     }, chart);
   }
+  // Win readout of the same head: saturates once the game is decided,
+  // where the margin readout keeps grading decisiveness.
+  el("path", {
+    d: linePath(D.winMean), fill: "none", stroke: "var(--series-3)",
+    "stroke-width": 2, "stroke-linejoin": "round",
+  }, chart);
   el("path", {
     d: linePath(D.mean), fill: "none", stroke: "var(--series-1)",
     "stroke-width": 2, "stroke-linejoin": "round",
@@ -612,7 +669,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   // Legend.
   var legendItems = [
-    ["Mean Φ", "var(--series-1)", "solid"],
+    ["Mean Φ (margin)", "var(--series-1)", "solid"],
+    ["Win readout P(w)−P(l)", "var(--series-3)", "solid"],
     K > 1 ? ["± std (" + K + " members)", "var(--muted)", "band"] : null,
     D.gated ? ["Gated Φ", "var(--series-2)", "dashed"] : null,
     D.mirror ? ["−Φ mirror check", "var(--text-secondary)", "dotted"] : null,
@@ -734,6 +792,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       "<b>" + esc(stepLabel(step)) + "</b><br />" +
       '<span class="k">mean Φ</span> ' + D.mean[step].toFixed(3);
     if (K > 1) rows += ' <span class="k">±</span> ' + D.std[step].toFixed(3);
+    rows += '<br /><span class="k">win Φ</span> ' + D.winMean[step].toFixed(3);
     if (D.gated) {
       rows += '<br /><span class="k">gated Φ</span> ' + D.gated[step].toFixed(3);
     }

@@ -201,6 +201,13 @@ class Trajectory:
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
+    # Frozen offline critic potential Φ(s), (T,) per trajectory — (T, B)
+    # once batched. Precomputed at buffer insert (Learner.enqueue_traj):
+    # the critic never changes during RL, so computing Φ per train step
+    # would redo identical work replay_ratio × ensemble-size times per
+    # trajectory. () when no offline critic is configured.
+    state_potential: ArrayLike = ()
+
 
 @dataclass
 class Batch(Trajectory):
