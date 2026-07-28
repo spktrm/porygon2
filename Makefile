@@ -20,3 +20,6 @@ kill:
 
 attach:
 	tmux attach -t train
+
+ensemble:
+	for k in 0 1 2 3; do python -m rl.offline.train --ensemble-index $k --num-steps 10000; done

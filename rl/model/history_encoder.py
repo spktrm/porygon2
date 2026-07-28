@@ -363,11 +363,15 @@ class PerSlotHistoryEncoder(nn.Module):
         step_indices = jnp.arange(history_output.step_valid.shape[0])
 
         def gather_one(request_count: jax.Array):
-            ok = history_output.step_valid & (history_output.step_request_count <= request_count)
+            ok = history_output.step_valid & (
+                history_output.step_request_count <= request_count
+            )
             idx = jnp.where(ok, step_indices, -1).max()
             has_history = idx >= 0
             safe_idx = jnp.maximum(idx, 0)
-            slots = jnp.where(has_history, history_output.slot_snapshots[safe_idx], h0_slots)
+            slots = jnp.where(
+                has_history, history_output.slot_snapshots[safe_idx], h0_slots
+            )
             field = jnp.where(
                 has_history, history_output.field_snapshots[safe_idx], h0_field
             )

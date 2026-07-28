@@ -8,7 +8,7 @@ from rl.environment.interfaces import PlayerActorInput
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import CategoricalValueHeadOutput
-from rl.offline.dataset import MAX_MARGIN, NUM_MARGIN_BINS
+from rl.offline.dataset import MAX_MARGIN
 
 # Bin values as normalized potentials: expected margin in [-1, 1].
 MARGIN_SUPPORT = np.arange(-MAX_MARGIN, MAX_MARGIN + 1) / MAX_MARGIN

@@ -1,5 +1,3 @@
-from typing import Optional
-
 import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig

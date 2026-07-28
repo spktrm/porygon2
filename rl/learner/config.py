@@ -1,9 +1,8 @@
 import functools
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pprint import pprint
 from typing import Any, Literal
-from collections.abc import Callable
 
 import chex
 import flax.linen as nn
@@ -15,13 +14,13 @@ import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 
+from rl.config.common import AdamWConfig, BaseTrainingConfig
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
     PlayerActorInput,
     PlayerActorOutput,
 )
-from rl.config.common import AdamWConfig, BaseTrainingConfig, GenT, SmogonFormatT
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.learner import checkpoint
 from rl.learner.league import MAIN_KEY, League
@@ -134,12 +133,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Advantage EMA normalization. When disabled, raw advantages are used;
     # the EMA statistics keep updating either way so re-enabling is smooth.
-    player_advantage_ema_enabled: bool = True
+    player_advantage_ema_enabled: bool = False
 
     # Potential-based shaping: weight of the learned-critic potential
     # advantage channel (requires offline_critic_ckpt_path). Anneal to zero
     # to keep the asymptotic objective unchanged.
-    player_potential_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
+    player_potential_advantage_coef_fn: Callable[[int], float] = (
+        lambda step: jnp.maximum(0.0, 1.0 - step / 200_000)
+    )
 
     # Loss coefficients
     ## Player
@@ -168,7 +169,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # advantage channel is gated by player_potential_advantage_coef_fn.
     # A tuple of paths loads an ensemble (members trained with
     # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
-    offline_critic_ckpt_path: str | tuple[str, ...] | None = None
+    offline_critic_ckpt_path: str | tuple[str, ...] | None = tuple(
+        f"ckpts/offline/gen9randombattle-ens{k}/ckpt_best" for k in range(4)
+    )
     # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
     # members disagree (off the human data distribution) shaping goes
     # quiet. 0 disables; irrelevant for single-member critics.
