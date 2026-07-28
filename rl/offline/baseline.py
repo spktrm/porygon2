@@ -159,7 +159,7 @@ def main():
         for index, payload in enumerate(iter_shard_payloads(shard)):
             if _is_holdout(shard, index, config.holdout_modulus) != holdout:
                 continue
-            examples.extend(record_to_examples(payload))
+            examples.extend(record_to_examples(payload, config))
             if len(examples) >= 2 * args.num_records:
                 break
         if len(examples) >= 2 * args.num_records:

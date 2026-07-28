@@ -58,7 +58,7 @@ def main():
     examples = []
     for shard in list_shards(config):
         for payload in iter_shard_payloads(shard):
-            examples.extend(record_to_examples(payload))
+            examples.extend(record_to_examples(payload, config))
             if len(examples) >= config.batch_size:
                 break
         if len(examples) >= config.batch_size:
@@ -152,7 +152,7 @@ def generalization_probe(args, config, model, apply_fn):
     records = []
     for shard in list_shards(config):
         for payload in iter_shard_payloads(shard):
-            examples = record_to_examples(payload)
+            examples = record_to_examples(payload, config)
             if examples:
                 records.append(examples)
             if len(records) >= args.num_records:
