@@ -95,9 +95,7 @@ def export_record(replay_json_path: str, tmpdir: str) -> tuple[bytes, dict]:
         print("compiling service/ (dist exporter missing or older than src) ...")
         # --noEmitOnError: a failed compile must not leave a half-updated
         # dist/ that a later run would mistake for current.
-        subprocess.run(
-            ["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True
-        )
+        subprocess.run(["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True)
     out_bin = os.path.join(tmpdir, "record.bin")
     result = subprocess.run(
         ["node", exporter, replay_json_path, out_bin],
@@ -122,12 +120,12 @@ def discover_ckpts(format_id: str) -> list[str]:
         for name in sorted(os.listdir(root)):
             if name == format_id or name.startswith(f"{format_id}-ens"):
                 ckpt_dir = os.path.join(root, name)
-                steps = sorted(
-                    d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_")
-                )
+                steps = sorted(d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_"))
                 if steps:
                     candidates.append(os.path.join(ckpt_dir, steps[-1]))
-    ensembles = [c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))]
+    ensembles = [
+        c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))
+    ]
     if ensembles:
         return ensembles
     if not candidates:

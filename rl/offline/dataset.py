@@ -279,6 +279,33 @@ def collate(
     )
 
 
+def collate_ensemble(
+    member_examples: Sequence[Sequence[OfflineExample]],
+    config: Porygon2OfflineConfig,
+) -> OfflineBatch:
+    """Collates K members' example lists into one batch with a leading
+    member axis: actor-input leaves (K, T, B, ...), labels (K, B, bins).
+
+    A single combined collate over all K·B examples guarantees every
+    member shares the same time/history buckets (so the member axis is
+    stackable); the batch axis is then regrouped member-major."""
+    num_members = len(member_examples)
+    batch_size = len(member_examples[0])
+    assert all(len(m) == batch_size for m in member_examples)
+    combined = collate([e for member in member_examples for e in member], config)
+
+    def regroup(x: np.ndarray, axis: int) -> np.ndarray:
+        x = np.asarray(x)
+        shape = x.shape
+        x = x.reshape(shape[:axis] + (num_members, batch_size) + shape[axis + 1 :])
+        return np.moveaxis(x, axis, 0)
+
+    return OfflineBatch(
+        actor_input=jax.tree.map(lambda x: regroup(x, 1), combined.actor_input),
+        labels=regroup(combined.labels, 0),
+    )
+
+
 class OfflineDataset:
     """Streaming dataset over replay shards with a shuffle buffer and a
     deterministic hash-based train/eval split."""
@@ -348,6 +375,50 @@ class OfflineDataset:
                 records = [buffer.pop() for _ in range(games_per_batch)]
                 batch = [example for record in records for example in record]
                 yield collate(batch[: self.config.batch_size], self.config)
+
+    def train_batches_ensemble(self, seed: int = 0) -> Iterator[OfflineBatch]:
+        """Infinite iterator for simultaneous ensemble training: leaves
+        carry a leading (num_ensemble_splits,) member axis.
+
+        One shard pass feeds every member — each record is parsed once and
+        routed to its member by the same salted hash as --ensemble-index
+        runs, so member k trains on exactly the games it would see in a
+        separate run. Each member's stream is pair-aware like
+        train_batches; a batch is emitted only when every member's buffer
+        is filled, keeping per-member shuffle quality equal to a separate
+        run (total buffered records are K× a single run's)."""
+        config = self.config
+        num_members = config.num_ensemble_splits
+        rng = np.random.default_rng(seed)
+        games_per_batch = max(1, config.batch_size // 2)
+        fill = max(config.shuffle_buffer_size // 2, games_per_batch)
+        buffers: list[list[list[OfflineExample]]] = [[] for _ in range(num_members)]
+
+        def pop_member_batch(buffer: list[list[OfflineExample]]):
+            picks = rng.choice(len(buffer), size=games_per_batch, replace=False)
+            batch = [e for i in picks for e in buffer[i]][: config.batch_size]
+            for i in sorted(picks, reverse=True):
+                buffer.pop(i)
+            return batch
+
+        while True:
+            rng.shuffle(self.shards)
+            for shard in self.shards:
+                for index, payload in enumerate(iter_shard_payloads(shard)):
+                    if _is_holdout(shard, index, config.holdout_modulus):
+                        continue
+                    member = _ensemble_bucket(shard, index, num_members)
+                    examples = record_to_examples(payload, config)
+                    if len(examples) != 2:  # pairs only, as in train_batches
+                        continue
+                    buffers[member].append(examples)
+                    if all(len(b) >= fill for b in buffers):
+                        yield collate_ensemble(
+                            [pop_member_batch(b) for b in buffers], config
+                        )
+            # Flush what remains at epoch end so small datasets still train.
+            while all(len(b) >= games_per_batch for b in buffers):
+                yield collate_ensemble([pop_member_batch(b) for b in buffers], config)
 
     def eval_batches(self) -> Iterator[OfflineBatch]:
         """Single pass over the holdout split."""

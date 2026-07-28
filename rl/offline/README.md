@@ -85,12 +85,20 @@ ahead on mons): games where the sign-clamp engages are **dropped**
 noise is perspective-consistent and side-differenced, exactly what the
 antisymmetric probe would otherwise learn), and concessions are treated
 as **right-censored margins** (`concession_censor_decay` — label mass
-decays geometrically from the concession margin toward ±6, countering the
-compression of conceded margins toward ±1..3 relative to played-out
-games). Both apply at label-construction time in dataset.py, so changing
+decays geometrically from the concession margin up to the winner's
+alive-mon count, the hardest margin any played-out continuation could
+have reached, countering the compression of conceded margins toward ±1..3
+relative to played-out games). Both apply at label-construction time in dataset.py, so changing
 them needs no shard re-export. For uncertainty-gated shaping, train an ensemble:
-`--ensemble-index k` (k = 0..K-1) trains member k on a disjoint per-game
-split with a shared holdout, saving to `{format_id}-ensk/`. Config is
+`--ensemble` trains all `num_ensemble_splits` members **simultaneously**
+in one process — stacked params/optimizer with a vmapped member step
+(pure parallelism, gradients never mix across members), one shard pass
+routing each game to its member, and shared-holdout evals that log live
+gate diagnostics (per-member metrics side by side, member std, gated
+sign accuracy). Artifacts stay per-member (`{format_id}-ensk/`), so
+consumption is unchanged. `--ensemble-index k` (k = 0..K-1) still trains
+a single member on the identical split (same salted hash) — use it to
+retrain one bad member without touching the others. Config is
 `Porygon2OfflineConfig` (rl/offline/config.py) — composed from the same
 `BaseTrainingConfig` as the RL learner config but fully independent of it.
 
@@ -109,7 +117,12 @@ tuple of ensemble-member paths for uncertainty gating
 where members agree and goes quiet off the human data distribution). The
 learner loads the critic(s) once at startup, keeps params outside the
 train state (frozen by construction — never donated, never in the
-optimizer, stop-gradient at use), and computes Φ(s) ∈ [-1, 1] per batch. Because the critic operates
+optimizer, stop-gradient at use), and evaluates Φ(s) ∈ [-1, 1] **once per
+trajectory** as it enters the replay buffer (`Learner.enqueue_traj`),
+storing the gated scalar per step on the trajectory — the frozen critic
+makes Φ immutable data, so recomputing it inside the train step would
+redo identical work replay_ratio × ensemble-size times, and caching
+decouples learner step time from ensemble size entirely. Because the critic operates
 on the history pathway only, no input projection is needed and none
 exists. Φ feeds the potential advantage channel in
 `compute_player_targets`, gated by `player_potential_advantage_coef_fn`

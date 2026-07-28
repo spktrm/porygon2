@@ -72,6 +72,16 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # split (shared holdout). -1 trains one model on everything.
     ensemble_index: int = -1
     num_ensemble_splits: int = 4
+    # Train all num_ensemble_splits members simultaneously in one process
+    # (--ensemble): stacked params/optimizer with a vmapped member step —
+    # pure parallelism, gradients are never mixed across members — and one
+    # shard pass routing each game to its member. Statistically equivalent
+    # to K separate --ensemble-index runs, substantially faster on one
+    # GPU, and shared-holdout evals log live gate metrics.
+    train_ensemble: bool = False
+    # Gate scale used only for eval-time gate logging in --ensemble runs;
+    # mirror of the learner's potential_uncertainty_scale.
+    eval_gate_scale: float = 5.0
 
     # Eval / checkpoint cadence
     log_interval_steps: int = 100
