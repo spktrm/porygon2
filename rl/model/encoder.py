@@ -61,10 +61,16 @@ from rl.model.features import (
     get_private_entity_mask,
     get_public_entity_mask,
 )
+from rl.model.history_encoder import (
+    NUM_PUBLIC_SLOTS,
+    HistoryAttentionPool,
+    NodeHistoryRead,
+    PerSlotHistoryEncoder,
+)
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
-    MLP,
     FFWMLP,
+    MLP,
     MultiHeadAttention,
     SumEmbeddings,
     TransformerDecoder,
@@ -73,7 +79,6 @@ from rl.model.modules import (
     layer_norm,
     one_hot_concat_jax,
 )
-from rl.model.world_model import NUM_PUBLIC_SLOTS, PerSlotWorldModel
 
 # Action-decoder slot groups, segregated by input provenance rather than by
 # behavioural modality. Move slots (regular + wildcard) are move-feature-derived
@@ -166,7 +171,6 @@ class EntityAttentionPool(nn.Module):
             kv_mask=token_mask,
         )
         return jnp.squeeze(pooled, axis=0)
-
 
 
 class RoundBlock(nn.Module):
@@ -367,9 +371,11 @@ class Encoder(nn.Module):
         # (one per public slot) scanned along the history axis; per request we
         # read the state as of that request and let every trunk round
         # cross-attend to it.
-        self.world_model = PerSlotWorldModel(self.cfg, name="world_model")
-        self.wm_field_step_linear = nn.Dense(
-            name="wm_field_step_linear", use_bias=False, **dense_kwargs
+        self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
+        self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
+        self.history_node_read = NodeHistoryRead(self.cfg, name="history_node_read")
+        self.history_field_step_linear = nn.Dense(
+            name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
 
         # Per-modality input projections: each input-token modality comes
@@ -955,9 +961,7 @@ class Encoder(nn.Module):
             + 1
         ]
         my_side_condition_encoding = encode_hex(my_side_condition_indices).reshape(-1)
-        opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(
-            -1
-        )
+        opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(-1)
 
         # Aggregate embeddings for the absolute edge.
         field_encoding = one_hot_concat_jax(
@@ -1082,9 +1086,7 @@ class Encoder(nn.Module):
                     action, MovesetFeature.MOVESET_FEATURE__MAXPP, dtype=self.cfg.dtype
                 ),
                 encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__HAS_PP),
-                encode_one_hot_action(
-                    action, MovesetFeature.MOVESET_FEATURE__DISABLED
-                ),
+                encode_one_hot_action(action, MovesetFeature.MOVESET_FEATURE__DISABLED),
                 encode_one_hot_action(
                     action, MovesetFeature.MOVESET_FEATURE__IS_WILDCARD
                 ),
@@ -1112,9 +1114,10 @@ class Encoder(nn.Module):
     def _batched_forward(
         self,
         env_step: PlayerEnvOutput,
-        wm_row_states: jax.Array,
-        wm_row_valid: jax.Array,
-        wm_field_state: jax.Array,
+        history_row_states: jax.Array,
+        history_row_valid: jax.Array,
+        history_field_state: jax.Array,
+        history_latents: jax.Array,
     ):
         (
             revealed_entity_embeddings,
@@ -1229,11 +1232,20 @@ class Encoder(nn.Module):
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
-        # the public team, masked to mapped rows) plus the field history
-        # state; every trunk round cross-reads it.
-        history_context = jnp.concatenate((wm_row_states, wm_field_state[None]), axis=0)
+        # the public team, masked to mapped rows), the field history state,
+        # and the attention-pooled latent summaries (shared with — and
+        # warm-startable from — the offline outcome critic); every trunk
+        # round cross-reads it.
+        history_context = jnp.concatenate(
+            (history_row_states, history_field_state[None], history_latents),
+            axis=0,
+        )
         history_mask = jnp.concatenate(
-            (wm_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
+            (
+                history_row_valid,
+                jnp.ones(1 + history_latents.shape[0], dtype=jnp.bool_),
+            ),
+            axis=0,
         )
 
         # Warm-start the action tokens with their per-provenance input norms.
@@ -1294,13 +1306,26 @@ class Encoder(nn.Module):
         # final round drives the acting policy and value estimate.
         return action_embeddings, value_embeddings
 
-    def __call__(
+    def encode_history(
         self,
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
-    ):
-        # --- Recurrent world model over the shared trajectory history ---
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Recurrent history pathway over the shared trajectory history.
+
+        Consumes ONLY the public event stream — packed public entity/edge
+        caches, the field history, and INFO_FEATURE__REQUEST_COUNT — no
+        private observation fields, movesets, or action masks. This makes
+        it safe to train against replay exports (which contain exactly the
+        same inputs) and reuse live without any distribution projection;
+        the offline outcome critic (rl/offline/model.py) builds on it.
+
+        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) GRU slot states,
+        (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
+        snapshot per slot — the entity's current state unmixed by GRU
+        gating, which outcome readouts need verbatim).
+        """
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = jax.vmap(self._embed_public_entity)(
@@ -1312,7 +1337,9 @@ class Encoder(nn.Module):
         edge_slot_ids = packed_history_step.edge_cache[
             :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
         ]
-
+        node_sides = packed_history_step.public_cache[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
         # One pooled field vector per history step from the (field, my-side,
         # opp-side) token triple.
         (
@@ -1323,15 +1350,16 @@ class Encoder(nn.Module):
         ) = jax.vmap(
             self._embed_field
         )(history_step.field)
-        step_field_vec = self.wm_field_step_linear(
+        step_field_vec = self.history_field_step_linear(
             step_field_embeddings.reshape(step_field_embeddings.shape[0], -1)
         )
 
-        wm_output = self.world_model(
+        history_output = self.history_encoder(
             history_field=history_step.field,
             node_embedding_cache=node_embedding_cache,
             edge_embedding_cache=edge_embedding_cache,
             edge_slot_ids=edge_slot_ids,
+            node_sides=node_sides,
             field_step_embeddings=step_field_vec,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
@@ -1340,15 +1368,64 @@ class Encoder(nn.Module):
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        wm_slot_states, wm_field_state = self.world_model.state_at_requests(
-            wm_output, request_count
-        )
+        return self.history_encoder.state_at_requests(history_output, request_count)
 
-        # World-model slots are keyed by the stable entity index that edges
-        # carry (revelation order across both sides), while public team rows
-        # are per-side and re-sorted actives-first every state. PUBLIC_ORDER
-        # is the server-provided permutation between the two: row i of the
-        # public team holds the pokemon in world-model slot public_order[i],
+    def read_history_into_nodes(
+        self,
+        node_states: jax.Array,
+        slot_states: jax.Array,
+        field_state: jax.Array,
+    ) -> jax.Array:
+        """Per request, enrich each slot's current snapshot with a gated
+        cross-read of the recurrent states: (T, 12, D) x (T, 12, D) x
+        (T, D) -> (T, 12, D)."""
+        return jax.vmap(self.history_node_read)(node_states, slot_states, field_state)
+
+    def pool_history(
+        self,
+        slot_states: jax.Array,
+        field_state: jax.Array,
+        token_mask: jax.Array | None = None,
+    ) -> jax.Array:
+        """Pools the per-request history states into learned latent
+        summaries: (T, 12, D), (T, D) -> (T, num_latents, D). token_mask
+        (13,) optionally restricts which tokens are readable (constant
+        across T)."""
+        tokens = jnp.concatenate((slot_states, field_state[..., None, :]), axis=-2)
+        if token_mask is None:
+            return jax.vmap(self.history_pool)(tokens)
+        return jax.vmap(self.history_pool, in_axes=(0, None))(tokens, token_mask)
+
+    def history_slot_sides(
+        self, packed_history_step: PlayerPackedHistoryOutput
+    ) -> jax.Array:
+        """Relative side of the entity occupying each history slot
+        (1 = mine, 0 = opponent's). Slots with no cache rows resolve to the
+        int minimum and match neither side's mask."""
+        slot_ids = packed_history_step.edge_cache[
+            :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
+        ].clip(0, NUM_PUBLIC_SLOTS - 1)
+        sides = packed_history_step.public_cache[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
+        return jax.ops.segment_max(sides, slot_ids, num_segments=NUM_PUBLIC_SLOTS)
+
+    def __call__(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ):
+        slot_states, field_state, _ = self.encode_history(
+            env_step, packed_history_step, history_step
+        )
+        history_latents = self.pool_history(slot_states, field_state)
+
+        # History-encoder slots are keyed by the stable entity index that
+        # edges carry (revelation order across both sides), while public team
+        # rows are per-side and re-sorted actives-first every state.
+        # PUBLIC_ORDER is the server-provided permutation between the two:
+        # row i of the public team holds the pokemon in slot public_order[i],
         # or -1 for unrevealed fillers (masked out of the cross-attention).
         public_order = env_step.info[
             ...,
@@ -1356,14 +1433,14 @@ class Encoder(nn.Module):
             + 1,
         ]
         order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
-        wm_row_states = jnp.take_along_axis(
-            wm_slot_states,
+        row_states = jnp.take_along_axis(
+            slot_states,
             public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None],
             axis=1,
         )
 
         action_embeddings, value_embeddings = jax.vmap(self._batched_forward)(
-            env_step, wm_row_states, order_valid, wm_field_state
+            env_step, row_states, order_valid, field_state, history_latents
         )
 
         return action_embeddings, value_embeddings

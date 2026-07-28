@@ -1,4 +1,4 @@
-from typing import Any, Dict, TypeVar
+from typing import Any, TypeVar
 
 import chex
 import jax
@@ -32,7 +32,7 @@ def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
 
 def collect_batch_telemetry_data(
     batch: Trajectory, config: Porygon2LearnerConfig
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     done = batch.player_transitions.env_output.done
     player_valid = 1 - (jnp.cumsum(done, axis=0) - done)
     player_lengths = player_valid.sum(0)

@@ -1,8 +1,8 @@
 import functools
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pprint import pprint
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import chex
 import flax.linen as nn
@@ -14,6 +14,7 @@ import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 
+from rl.config.common import AdamWConfig, BaseTrainingConfig
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
@@ -26,24 +27,11 @@ from rl.learner.league import MAIN_KEY, League
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 
-
-@chex.dataclass(frozen=True)
-class AdamWConfig:
-    """Adam optimizer related params."""
-
-    b1: float
-    b2: float
-    eps: float
-    weight_decay: float
-
-
-GenT = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9]
-SmogonFormatT = Literal["ou", "uu", "ru", "nu", "pu", "ubers", "randombattle"]
 PolicyObjectiveT = Literal["spo", "ppo"]
 
 
 @chex.dataclass(frozen=True)
-class Porygon2LearnerConfig:
+class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
     num_player_actors: int = 12
     num_builder_actors: int = 4
@@ -145,10 +133,14 @@ class Porygon2LearnerConfig:
 
     # Advantage EMA normalization. When disabled, raw advantages are used;
     # the EMA statistics keep updating either way so re-enabling is smooth.
-    player_advantage_ema_enabled: bool = True
+    player_advantage_ema_enabled: bool = False
 
-    # Regularised reward params
-    player_heuristic_advantage_coef_fn: Callable[[int], float] = lambda step: 0.0
+    # Potential-based shaping: weight of the learned-critic potential
+    # advantage channel (requires offline_critic_ckpt_path). Anneal to zero
+    # to keep the asymptotic objective unchanged.
+    player_potential_advantage_coef_fn: Callable[[int], float] = (
+        lambda step: jnp.maximum(0.0, 1.0 - step / 200_000)
+    )
 
     # Loss coefficients
     ## Player
@@ -169,12 +161,21 @@ class Porygon2LearnerConfig:
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    # Smogon Generation
-    generation: GenT = 9
-    smogon_format: SmogonFormatT = "randombattle"
-
-    # Logging params
-    log_artifacts_online: bool = False
+    # Standalone offline critic (rl/offline/train.py artifact) used as the
+    # learned state potential in compute_player_targets. Loaded once at
+    # learner startup and held OUTSIDE the train state: its params never
+    # enter the optimizer or the RL network, so the RL model trains fully
+    # from scratch with no frozen or warm-started subtrees. The potential
+    # advantage channel is gated by player_potential_advantage_coef_fn.
+    # A tuple of paths loads an ensemble (members trained with
+    # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
+    offline_critic_ckpt_path: str | tuple[str, ...] | None = tuple(
+        f"ckpts/offline/gen9randombattle-ens{k}/ckpt_best" for k in range(4)
+    )
+    # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
+    # members disagree (off the human data distribution) shaping goes
+    # quiet. 0 disables; irrelevant for single-member critics.
+    potential_uncertainty_scale: float = 5.0
 
 
 def get_learner_config():
@@ -237,6 +238,7 @@ def create_train_state(
         actor_input=ex_player_actor_inp,
         actor_output=ex_player_actor_out,
     )
+    initial_player_params = player_params_init_fn(rng)
     player_optimizer = optax.chain(
         optax.clip_by_global_norm(config.player_clip_gradient),
         optax.adamw(
@@ -251,7 +253,6 @@ def create_train_state(
         player_optimizer = optax.MultiSteps(
             player_optimizer, config.gradient_accumulation_steps
         )
-    initial_player_params = player_params_init_fn(rng)
 
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
@@ -580,7 +581,7 @@ def load_train_state(
         print("No checkpoint found. Defaulting to scratch.")
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 3. Load Params Only
+    # 3. Load Params Only (RL checkpoints across architecture changes)
     if mode == "params":
         return load_from_params(
             latest_ckpt, learner_config, player_state, builder_state

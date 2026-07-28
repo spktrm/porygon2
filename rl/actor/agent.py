@@ -1,7 +1,8 @@
 import functools
 from _thread import LockType
+from collections.abc import Callable
 from contextlib import nullcontext
-from typing import Callable, overload
+from typing import overload
 
 import jax
 import jax.numpy as jnp

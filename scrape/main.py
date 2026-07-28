@@ -6,7 +6,6 @@ import re
 import sys
 import time
 from collections import deque
-from typing import Optional, Set, Tuple
 from urllib.parse import urljoin
 
 import aiohttp
@@ -21,7 +20,7 @@ STRICT_PREFIX = "https://www.smogon.com/forums/threads"
 
 async def get_soup(
     session: aiohttp.ClientSession, url: str
-) -> Optional[Tuple[str, BeautifulSoup]]:
+) -> tuple[str, BeautifulSoup] | None:
     """Fetches a URL and returns the URL and its BeautifulSoup object."""
     try:
         async with session.get(url) as response:
@@ -38,9 +37,9 @@ async def main(args: argparse.Namespace):
     output_path = os.path.join(script_dir, args.output)
 
     # The user input is the root, but we filter all queue additions by STRICT_PREFIX
-    visited_pages: Set[str] = set()
+    visited_pages: set[str] = set()
     to_visit = deque([(args.url, 0)])
-    pokepaste_links: Set[str] = set()
+    pokepaste_links: set[str] = set()
 
     total_pages_scanned = 0
     start_time = time.time()

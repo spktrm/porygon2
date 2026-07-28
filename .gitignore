@@ -19,6 +19,8 @@ rl/environment/ex*
 
 # replays ignores
 replays/data/**
+# offline dataset shards (built by service/src/scripts/offline.ts)
+replays/shards/**
 
 # ml ignores
 ml/wandb/
