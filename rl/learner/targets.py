@@ -43,8 +43,14 @@ def compute_player_targets(
     state_potential: jax.Array,
     potential_advantage_coef: float,
     config: Porygon2LearnerConfig,
-) -> PlayerTargets:
+) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes v-trace returns and advantages over stacked reward channels.
+
+    Also returns a logs dict of per-channel advantage diagnostics: the win
+    and potential channel stds, their correlation (high correlation means
+    the potential channel is a rescaled copy of the outcome signal and adds
+    no credit-assignment information), and the potential channel's share of
+    the combined advantage magnitude.
 
     Channels: [0:n_bins] categorical win reward, [n_bins] learned potential
     (``state_potential``, the frozen offline critic's Φ(s) in [-1, 1];
@@ -90,13 +96,23 @@ def compute_player_targets(
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
     td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
+    # Per-channel λ: the win channel keeps the long player_lambda horizon;
+    # the potential channel uses its own short player_potential_lambda so
+    # its advantage stays near the one-step PBRS signal γΦ(s')−Φ(s)
+    # instead of telescoping into a copy of the outcome signal.
+    lambda_ = jnp.concatenate(
+        [
+            jnp.full((n_bins,), config.player_lambda),
+            jnp.array([config.player_potential_lambda]),
+        ]
+    ).astype(isr.dtype)
+
+    errors = vtrace(td_errors, discount_t, c_t * lambda_)
 
     targets_tm1 = (errors + v_tm1) * mask_expanded
     q_bootstrap = jnp.concatenate(
         [
-            config.player_lambda * targets_tm1[1:]
-            + (1 - config.player_lambda) * v_tm1[1:],
+            lambda_ * targets_tm1[1:] + (1 - lambda_) * v_tm1[1:],
             v_t[-1:],
         ],
         axis=0,
@@ -105,9 +121,10 @@ def compute_player_targets(
 
     pg_advantages = rho_t * (q_estimate - v_tm1)
 
+    win_advantages = pg_advantages[..., :n_bins] @ cat_vf_support
+    potential_advantages = pg_advantages[..., n_bins]
     combined_advantage = (
-        pg_advantages[..., :n_bins] @ cat_vf_support
-        + potential_advantage_coef * pg_advantages[..., n_bins]
+        win_advantages + potential_advantage_coef * potential_advantages
     )
 
     win_returns = targets_tm1[..., :n_bins]
@@ -124,11 +141,30 @@ def compute_player_targets(
         & (num_actions > 1)
     )
 
-    return PlayerTargets(
-        win_returns=win_returns,
-        advantages=combined_advantage,
-        policy_mask=policy_mask,
-        value_mask=value_mask,
+    win_adv_mean = win_advantages.mean(where=policy_mask)
+    pot_adv_mean = potential_advantages.mean(where=policy_mask)
+    win_adv_std = win_advantages.std(where=policy_mask)
+    pot_adv_std = potential_advantages.std(where=policy_mask)
+    adv_cov = (
+        (win_advantages - win_adv_mean) * (potential_advantages - pot_adv_mean)
+    ).mean(where=policy_mask)
+    scaled_pot_adv_std = potential_advantage_coef * pot_adv_std
+    channel_logs = {
+        "player_win_adv_std": win_adv_std,
+        "player_potential_adv_std": pot_adv_std,
+        "player_potential_win_adv_corr": adv_cov / (win_adv_std * pot_adv_std + 1e-8),
+        "player_potential_adv_share": scaled_pot_adv_std
+        / (win_adv_std + scaled_pot_adv_std + 1e-8),
+    }
+
+    return (
+        PlayerTargets(
+            win_returns=win_returns,
+            advantages=combined_advantage,
+            policy_mask=policy_mask,
+            value_mask=value_mask,
+        ),
+        channel_logs,
     )
 
 
