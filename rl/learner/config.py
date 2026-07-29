@@ -176,6 +176,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # members disagree (off the human data distribution) shaping goes
     # quiet. 0 disables; irrelevant for single-member critics.
     potential_uncertainty_scale: float = 5.0
+    # What Φ reads off the critic's 13-bin margin distribution (training
+    # stays distributional either way): "win" = P(win) − P(loss) — pure
+    # outcome belief, flat across decided positions, never prefers a wider
+    # win over a likelier one; "margin" = expected margin — also grades
+    # decisiveness, denser shaping inside decided positions but can
+    # transiently reward margin-seeking over win-optimal lines.
+    potential_readout: str = "win"
 
 
 def get_learner_config():

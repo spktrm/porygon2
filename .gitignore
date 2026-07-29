@@ -42,3 +42,4 @@ viz/*.json
 .claude/
 
 attn_weights/
+viz/
