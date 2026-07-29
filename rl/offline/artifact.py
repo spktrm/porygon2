@@ -48,6 +48,7 @@ def make_potential_apply(
     generation: int,
     uncertainty_scale: float = 0.0,
     readout: str = "margin",
+    with_aux: bool = False,
 ) -> Callable[[Params, PlayerActorInput], jax.Array]:
     """Builds the frozen-critic potential: (stacked params, (T, B, ...)
     actor input) -> Φ in [-1, 1] with shape (T, B), float32, stop-gradient.
@@ -72,7 +73,12 @@ def make_potential_apply(
     data distribution, exactly where the critic is extrapolating — it goes
     quiet. Each Φ_k is mirror-antisymmetric and std is mirror-invariant,
     so the gated Φ stays exactly zero-sum. A confidence-scaled potential
-    is still a state potential, so PBRS invariance is untouched."""
+    is still a state potential, so PBRS invariance is untouched.
+
+    With ``with_aux=True`` the function returns ``(phi, aux)`` where aux
+    holds per-step (T, B) diagnostics: the ungated ensemble mean
+    (``phi_raw``), member disagreement (``ensemble_std``), and the
+    confidence gate (``gate``). The gated phi is unchanged either way."""
     if readout not in ("margin", "win"):
         raise ValueError(f"unknown potential readout: {readout!r}")
     model = Porygon2OfflineCritic(get_player_model_config(generation, train=False))
@@ -88,8 +94,18 @@ def make_potential_apply(
         else:
             phi = value_head.expectation.astype(jnp.float32)  # (K, T, B)
         mean = phi.mean(axis=0)
-        if uncertainty_scale > 0.0:
-            mean = mean * jnp.exp(-uncertainty_scale * phi.std(axis=0))
-        return jax.lax.stop_gradient(mean)
+        std = phi.std(axis=0)
+        gate = (
+            jnp.exp(-uncertainty_scale * std)
+            if uncertainty_scale > 0.0
+            else jnp.ones_like(std)
+        )
+        gated = jax.lax.stop_gradient(mean * gate)
+        if not with_aux:
+            return gated
+        aux = jax.lax.stop_gradient(
+            {"phi_raw": mean, "ensemble_std": std, "gate": gate}
+        )
+        return gated, aux
 
     return potential

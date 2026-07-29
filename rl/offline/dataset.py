@@ -191,7 +191,7 @@ def record_to_examples(
 
     With a config, its forfeit policy applies (drop_clamped_forfeits /
     concession_censor_decay); without one, every decided game is kept with
-    its exact one-hot label — the raw view (used by the visualizer)."""
+    its exact one-hot label — the raw view (used by the visualiser)."""
     batch = EnvironmentBatch.FromString(payload)
     examples = [trajectory_to_example(t, config) for t in batch.trajectories]
     return [e for e in examples if e is not None]

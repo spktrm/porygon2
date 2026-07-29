@@ -24,7 +24,7 @@ Usage:
     python -m rl.offline.causality <replay> [--ckpt ...] \
         [--fractions 0.25,0.5,0.75] [--turns 12,30]
 
-<replay> accepts the same forms as rl.offline.visualize (path / id / URL).
+<replay> accepts the same forms as rl.offline.visualise (path / id / URL).
 """
 
 import argparse
