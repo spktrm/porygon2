@@ -1,4 +1,3 @@
-import functools
 import logging
 import os
 import queue
@@ -58,9 +57,6 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    potential_params: Params | None = None,
-    *,
-    potential_apply_fn=None,
 ):
     """Train for a single step."""
 
@@ -76,15 +72,16 @@ def train_step(
         history=player_history,
     )
 
-    # Learned state potential: the frozen offline critic's Φ(s). The params
-    # live outside the train state (never donated, never in the optimizer),
-    # so the critic cannot drift during RL training.
-    if potential_apply_fn is not None:
-        state_potential = potential_apply_fn(potential_params, player_actor_input)
-    else:
+    # Learned state potential: the frozen offline critic's Φ(s), computed
+    # ONCE per trajectory at buffer insert (Learner.enqueue_traj) and
+    # carried in the batch — the critic is frozen, so evaluating its
+    # ensemble here would redo identical work on every replay reuse.
+    if isinstance(batch.state_potential, tuple):
         state_potential = jnp.zeros(
             player_transitions.env_output.done.shape, dtype=jnp.float32
         )
+    else:
+        state_potential = batch.state_potential.astype(jnp.float32)
 
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
@@ -573,6 +570,11 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, min_length=player_history_min_length
         ),
+        state_potential=(
+            ()
+            if isinstance(stacked_trajectory.state_potential, tuple)
+            else stacked_trajectory.state_potential[:num_valid]
+        ),
         rng_key=rng_key,
     )
 
@@ -630,28 +632,35 @@ class Learner:
         # Frozen offline critic supplying the learned state potential. Its
         # params are held here, outside the train states — they are never
         # donated and never touched by the optimizer, so the critic stays
-        # frozen for the lifetime of the run.
+        # frozen for the lifetime of the run. Φ is evaluated once per
+        # trajectory in enqueue_traj (the critic is frozen, so the values
+        # are immutable data) and carried through the replay buffer —
+        # train_step never runs the ensemble.
         self.potential_params: Params | None = None
-        potential_apply_fn = None
+        self._potential_apply = None
         if config.offline_critic_ckpt_path:
             from rl.offline.artifact import load_critic_params, make_potential_apply
 
             self.potential_params = jax.device_put(
                 load_critic_params(config.offline_critic_ckpt_path)
             )
-            potential_apply_fn = make_potential_apply(config.generation)
+            # Jitted once: actor trajectories arrive with fixed shapes
+            # (unroll_length time axis, fixed-capacity history buffers).
+            self._potential_apply = jax.jit(
+                make_potential_apply(
+                    config.generation,
+                    config.potential_uncertainty_scale,
+                    config.potential_readout,
+                )
+            )
             logging.info(
                 "Loaded offline critic potential from %s",
                 config.offline_critic_ckpt_path,
             )
 
-        train_step_fn = functools.partial(
-            train_step, potential_apply_fn=potential_apply_fn
-        )
-
         # JIT Compile
         if debug:
-            self._train_step_jit = train_step_fn
+            self._train_step_jit = train_step
         else:
             # Donation requires that no pytree leaf appears twice across the
             # donated states (params/target_params are deep-copied at
@@ -659,13 +668,39 @@ class Learner:
             # the call is dispatched — all periodic readers run on this
             # thread after the rebind in _train_step.
             self._train_step_jit = jax.jit(
-                train_step_fn,
+                train_step,
                 static_argnames=["config"],
                 donate_argnames=["player_state", "builder_state"],
             )
 
+    def _compute_state_potential(self, traj: Trajectory) -> np.ndarray:
+        """Frozen-critic Φ(s) for one trajectory, shape (T,).
+
+        Runs the offline critic ensemble exactly once per trajectory —
+        here, at insert — instead of inside every train step: with
+        player_replay_ratio reuses per trajectory the ensemble cost drops
+        by that factor, learner step latency no longer includes the
+        ensemble forward at all, and ensemble size stops affecting step
+        time. The stored value is the fully gated potential
+        (mean · exp(−uncertainty_scale · std)), so nothing about the
+        shaping signal changes."""
+        actor_input = PlayerActorInput(
+            env=traj.player_transitions.env_output,
+            packed_history=traj.player_packed_history,
+            history=traj.player_history,
+        )
+        # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
+        # the (T, B) convention make_potential_apply vmaps over.
+        batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
+        phi = self._potential_apply(self.potential_params, batched)
+        return np.asarray(jax.device_get(phi))[:, 0]
+
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
+        if self._potential_apply is not None:
+            # Computed before taking the store lock — GPU work must not
+            # block concurrent samplers/producers.
+            traj = traj.replace(state_potential=self._compute_state_potential(traj))
         add_cond = self.player_replay._add_cv
         with add_cond:
             add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
@@ -839,7 +874,6 @@ class Learner:
             self.builder_state,
             batch,
             self.config,
-            self.potential_params,
         )
 
         return logs

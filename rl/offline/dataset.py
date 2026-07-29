@@ -97,11 +97,30 @@ def _ensemble_bucket(shard_path: str, record_index: int, num_splits: int) -> int
     return int.from_bytes(digest[:4], "little") % num_splits
 
 
-def _final_margin(final: PlayerActorInput, win_reward: np.ndarray) -> int:
+def _final_margin(
+    final: PlayerActorInput, win_reward: np.ndarray
+) -> tuple[int, str, int]:
     """Final alive-mon differential from the terminal cache (every fainted
-    mon is revealed, so alive = 6 - faints exactly). The sign is clamped to
-    the recorded result: a mid-game forfeit can leave the winner behind on
-    mons, and the result is the ground truth."""
+    mon is revealed, so alive = 6 - faints exactly), plus how the game
+    ended. The sign is clamped to the recorded result: a mid-game forfeit
+    can leave the winner behind on mons, and the result is the ground truth.
+
+    Endings (measured on 50k rated gen9randombattle games, July 2026):
+    - "played_out" (~48%): the loser's six mons all fainted — exact margin.
+    - "conceded" (~41%): forfeit/timeout with the winner ahead on mons —
+      the margin is the count at concession, a compressed lower bound on
+      the played-out margin (concessions cluster at 1-3, played-out games
+      reach 4-6 far more often).
+    - "clamped" (~11%): forfeit/timeout with the winner NOT ahead (rage
+      quit / timer / disconnect) — the position contradicts the result, so
+      the ±1 margin is pure label noise.
+    - "tie": rare, margin 0.
+
+    Also returns the |margin| cap: the winner's alive-mon count at game
+    end. Mons never return (Revival Blessing aside), so no played-out
+    continuation of a conceded game could have exceeded that margin — the
+    censored label spreads only up to it, never to ±MAX_MARGIN.
+    """
     public = np.asarray(final.packed_history.public_cache)
     edges = np.asarray(final.packed_history.edge_cache)
     real_rows = np.nonzero(public.any(axis=1))[0]
@@ -125,23 +144,62 @@ def _final_margin(final: PlayerActorInput, win_reward: np.ndarray) -> int:
             opp_faints += fainted
     alive_diff = opp_faints - my_faints
     if win_reward[2] == 1:
-        return max(min(alive_diff, MAX_MARGIN), 1)
+        margin = max(min(alive_diff, MAX_MARGIN), 1)
+        cap = min(6 - my_faints, MAX_MARGIN)
+        if alive_diff <= 0:
+            return margin, "clamped", cap
+        return margin, ("played_out" if opp_faints == 6 else "conceded"), cap
     if win_reward[0] == 1:
-        return min(max(alive_diff, -MAX_MARGIN), -1)
-    return 0
+        margin = min(max(alive_diff, -MAX_MARGIN), -1)
+        cap = min(6 - opp_faints, MAX_MARGIN)
+        if alive_diff >= 0:
+            return margin, "clamped", cap
+        return margin, ("played_out" if my_faints == 6 else "conceded"), cap
+    return 0, "tie", 0
 
 
-def record_to_examples(payload: bytes) -> list[OfflineExample]:
+def _margin_label(
+    margin: int, ending: str, censor_decay: float, margin_cap: int
+) -> np.ndarray:
+    """One-hot margin label, except conceded games with censoring on: a
+    concession at |margin| mons down right-censors the played-out margin
+    (it would have been at least that), so the mass spreads geometrically
+    over the bins from the observed margin up to ``margin_cap`` — the
+    winner's alive count, the hardest possible played-out margin from that
+    position. The mode stays at the observed bin, and the two perspectives
+    of a game remain exact mirror flips of each other (the cap is
+    perspective-independent), so pair-aware batching is undisturbed."""
+    label = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
+    if ending == "conceded" and censor_decay > 0.0 and abs(margin) < margin_cap:
+        sign = 1 if margin > 0 else -1
+        weight = 1.0
+        for k in range(abs(margin), margin_cap + 1):
+            label[sign * k + MAX_MARGIN] = weight
+            weight *= censor_decay
+        label /= label.sum()
+    else:
+        label[margin + MAX_MARGIN] = 1.0
+    return label
+
+
+def record_to_examples(
+    payload: bytes, config: "Porygon2OfflineConfig | None" = None
+) -> list[OfflineExample]:
     """One shard record = one replay (EnvironmentBatch holding both
     perspectives). Grouping them keeps a game and its mirrored,
-    label-flipped twin on the same side of the train/eval split."""
+    label-flipped twin on the same side of the train/eval split.
+
+    With a config, its forfeit policy applies (drop_clamped_forfeits /
+    concession_censor_decay); without one, every decided game is kept with
+    its exact one-hot label — the raw view (used by the visualizer)."""
     batch = EnvironmentBatch.FromString(payload)
-    examples = [trajectory_to_example(t) for t in batch.trajectories]
+    examples = [trajectory_to_example(t, config) for t in batch.trajectories]
     return [e for e in examples if e is not None]
 
 
 def trajectory_to_example(
     trajectory: EnvironmentTrajectory,
+    config: "Porygon2OfflineConfig | None" = None,
 ) -> OfflineExample | None:
     if len(trajectory.states) < 2:
         return None
@@ -157,9 +215,14 @@ def trajectory_to_example(
     # e.g. a forfeited-by-disconnect fragment) carries no training signal.
     if not final.env.done or label.sum() == 0:
         return None
-    margin = _final_margin(final, label)
-    margin_onehot = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
-    margin_onehot[margin + MAX_MARGIN] = 1.0
+    margin, ending, margin_cap = _final_margin(final, label)
+    # A forfeit where the "winner" wasn't ahead contradicts the position at
+    # every step of the game — deep supervision would train the whole
+    # trajectory toward an outcome the states never indicated.
+    if config is not None and config.drop_clamped_forfeits and ending == "clamped":
+        return None
+    censor_decay = config.concession_censor_decay if config is not None else 0.0
+    margin_label = _margin_label(margin, ending, censor_decay, margin_cap)
     env = jax.tree.map(lambda *xs: np.stack(xs), *[s.env for s in steps])
     return OfflineExample(
         actor_input=PlayerActorInput(
@@ -167,7 +230,7 @@ def trajectory_to_example(
             packed_history=final.packed_history,
             history=final.history,
         ),
-        label=margin_onehot,
+        label=margin_label,
     )
 
 
@@ -216,6 +279,33 @@ def collate(
     )
 
 
+def collate_ensemble(
+    member_examples: Sequence[Sequence[OfflineExample]],
+    config: Porygon2OfflineConfig,
+) -> OfflineBatch:
+    """Collates K members' example lists into one batch with a leading
+    member axis: actor-input leaves (K, T, B, ...), labels (K, B, bins).
+
+    A single combined collate over all K·B examples guarantees every
+    member shares the same time/history buckets (so the member axis is
+    stackable); the batch axis is then regrouped member-major."""
+    num_members = len(member_examples)
+    batch_size = len(member_examples[0])
+    assert all(len(m) == batch_size for m in member_examples)
+    combined = collate([e for member in member_examples for e in member], config)
+
+    def regroup(x: np.ndarray, axis: int) -> np.ndarray:
+        x = np.asarray(x)
+        shape = x.shape
+        x = x.reshape(shape[:axis] + (num_members, batch_size) + shape[axis + 1 :])
+        return np.moveaxis(x, axis, 0)
+
+    return OfflineBatch(
+        actor_input=jax.tree.map(lambda x: regroup(x, 1), combined.actor_input),
+        labels=regroup(combined.labels, 0),
+    )
+
+
 class OfflineDataset:
     """Streaming dataset over replay shards with a shuffle buffer and a
     deterministic hash-based train/eval split."""
@@ -242,7 +332,7 @@ class OfflineDataset:
                     != self.config.ensemble_index
                 ):
                     continue
-                examples = record_to_examples(payload)
+                examples = record_to_examples(payload, self.config)
                 if pairs_only and len(examples) != 2:
                     continue
                 if examples:
@@ -285,6 +375,50 @@ class OfflineDataset:
                 records = [buffer.pop() for _ in range(games_per_batch)]
                 batch = [example for record in records for example in record]
                 yield collate(batch[: self.config.batch_size], self.config)
+
+    def train_batches_ensemble(self, seed: int = 0) -> Iterator[OfflineBatch]:
+        """Infinite iterator for simultaneous ensemble training: leaves
+        carry a leading (num_ensemble_splits,) member axis.
+
+        One shard pass feeds every member — each record is parsed once and
+        routed to its member by the same salted hash as --ensemble-index
+        runs, so member k trains on exactly the games it would see in a
+        separate run. Each member's stream is pair-aware like
+        train_batches; a batch is emitted only when every member's buffer
+        is filled, keeping per-member shuffle quality equal to a separate
+        run (total buffered records are K× a single run's)."""
+        config = self.config
+        num_members = config.num_ensemble_splits
+        rng = np.random.default_rng(seed)
+        games_per_batch = max(1, config.batch_size // 2)
+        fill = max(config.shuffle_buffer_size // 2, games_per_batch)
+        buffers: list[list[list[OfflineExample]]] = [[] for _ in range(num_members)]
+
+        def pop_member_batch(buffer: list[list[OfflineExample]]):
+            picks = rng.choice(len(buffer), size=games_per_batch, replace=False)
+            batch = [e for i in picks for e in buffer[i]][: config.batch_size]
+            for i in sorted(picks, reverse=True):
+                buffer.pop(i)
+            return batch
+
+        while True:
+            rng.shuffle(self.shards)
+            for shard in self.shards:
+                for index, payload in enumerate(iter_shard_payloads(shard)):
+                    if _is_holdout(shard, index, config.holdout_modulus):
+                        continue
+                    member = _ensemble_bucket(shard, index, num_members)
+                    examples = record_to_examples(payload, config)
+                    if len(examples) != 2:  # pairs only, as in train_batches
+                        continue
+                    buffers[member].append(examples)
+                    if all(len(b) >= fill for b in buffers):
+                        yield collate_ensemble(
+                            [pop_member_batch(b) for b in buffers], config
+                        )
+            # Flush what remains at epoch end so small datasets still train.
+            while all(len(b) >= games_per_batch for b in buffers):
+                yield collate_ensemble([pop_member_batch(b) for b in buffers], config)
 
     def eval_batches(self) -> Iterator[OfflineBatch]:
         """Single pass over the holdout split."""

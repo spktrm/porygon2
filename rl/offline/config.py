@@ -21,6 +21,25 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     holdout_modulus: int = 20
     shuffle_buffer_size: int = 256
 
+    # Forfeit handling (measured on 50k rated gen9randombattle games, July
+    # 2026: ~48% played out, ~41% conceded with the winner ahead, ~11%
+    # forfeited with the winner NOT ahead on mons).
+    #
+    # Drop games where the sign-clamp engages (forfeit/timeout with the
+    # winner not ahead): the recorded result contradicts the position, so
+    # every step's label is noise — and it's perspective-consistent,
+    # side-differenced noise, exactly the signal shape the antisymmetric
+    # probe is built to learn.
+    drop_clamped_forfeits: bool = True
+    # Concessions right-censor the margin (the loser quit at |m| down; the
+    # played-out margin would have been at least that). > 0 spreads label
+    # mass geometrically from the observed bin with this decay, up to the
+    # winner's alive-mon count at concession (mons never return, so no
+    # continuation could exceed it), countering the compression of
+    # conceded margins toward ±1..3. 0 keeps the exact one-hot at the
+    # concession margin.
+    concession_censor_decay: float = 0.5
+
     # Batch iteration params
     batch_size: int = 8
     min_history_length: int = 64
@@ -53,6 +72,16 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # split (shared holdout). -1 trains one model on everything.
     ensemble_index: int = -1
     num_ensemble_splits: int = 4
+    # Train all num_ensemble_splits members simultaneously in one process
+    # (--ensemble): stacked params/optimizer with a vmapped member step —
+    # pure parallelism, gradients are never mixed across members — and one
+    # shard pass routing each game to its member. Statistically equivalent
+    # to K separate --ensemble-index runs, substantially faster on one
+    # GPU, and shared-holdout evals log live gate metrics.
+    train_ensemble: bool = False
+    # Gate scale used only for eval-time gate logging in --ensemble runs;
+    # mirror of the learner's potential_uncertainty_scale.
+    eval_gate_scale: float = 5.0
 
     # Eval / checkpoint cadence
     log_interval_steps: int = 100
