@@ -120,6 +120,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_gamma: float = 1.0
     player_alpha: float = 1.0
     player_lambda: float = 0.99
+    # λ for the potential advantage channel ONLY (win channel keeps
+    # player_lambda). Kept low so the channel's advantage stays close to
+    # the one-step PBRS signal γΦ(s')−Φ(s): dense per-move credit from the
+    # frozen critic. At λ→1 the channel telescopes to Φ(s_T)−Φ(s_t) ≈
+    # outcome − baseline — a rescaled copy of the win channel that adds no
+    # action-level information (the observed no-op shaping regime,
+    # player_potential_win_adv_corr ≈ 0.6 with zero winrate effect).
+    player_potential_lambda: float = 0.2
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0
@@ -138,8 +146,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Potential-based shaping: weight of the learned-critic potential
     # advantage channel (requires offline_critic_ckpt_path). Anneal to zero
     # to keep the asymptotic objective unchanged.
+    # Initial scale calibrated against measured magnitudes (July 2026:
+    # potential_phi_step_delta_abs ≈ 0.06 vs player_win_adv_std ≈ 0.3):
+    # 3.0 puts the dense low-λ channel at roughly the ~0.4 gradient share
+    # the collapsed MC channel had at coef 1.0. Judge and retune via
+    # player_potential_adv_share.
     player_potential_advantage_coef_fn: Callable[[int], float] = (
-        lambda step: jnp.maximum(0.0, 1.0 - step / 200_000)
+        lambda step: 3.0 * jnp.maximum(0.0, 1.0 - step / 200_000)
     )
 
     # Loss coefficients
