@@ -154,6 +154,9 @@ app = modal.App("porygon2-phi-viz", image=image)
 jax_cache = modal.Volume.from_name("porygon2-jax-cache", create_if_missing=True)
 # Rendered pages, keyed by (checkpoint version, replay id).
 page_cache = modal.Dict.from_name("porygon2-phi-pages", create_if_missing=True)
+# Reserved key holding the landing page's recently-viewed list.
+RECENT_KEY = "__recent__"
+MAX_RECENT = 24
 
 LANDING = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Porygon2 — replay Φ visualizer</title>
@@ -165,6 +168,19 @@ LANDING = """<!DOCTYPE html>
          box-sizing: border-box; }}
  button {{ font-size: 16px; padding: 10px 18px; cursor: pointer; }}
  p {{ color: #555; }}
+ h2 {{ font-size: 13px; color: #888; margin: 32px 0 10px;
+      text-transform: uppercase; letter-spacing: 0.05em; }}
+ .grid {{ display: grid; gap: 10px;
+         grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }}
+ .card {{ border: 1px solid #e3e3e0; border-radius: 8px; padding: 10px 12px;
+         text-decoration: none; color: inherit; display: block; }}
+ .card:hover {{ border-color: #999; }}
+ .card .vs {{ font-weight: 600; font-size: 13px; margin-bottom: 4px;
+             overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; }}
+ .card .meta {{ font-size: 12px; color: #777; }}
+ .chip {{ display: inline-block; border-radius: 9px; padding: 0 7px;
+         font-weight: 700; color: #fff; font-size: 11px; }}
 </style></head><body>
 <h1>Replay Φ visualizer</h1>
 <p>Paste a <a href="https://replay.pokemonshowdown.com">Pokemon Showdown</a>
@@ -177,6 +193,7 @@ spread, and blunder/swing annotations.</p>
 <button type="submit">Go</button>
 </form>
 <p id="err" style="color:#b33"></p>
+__RECENT__
 <script>
 document.getElementById("f").addEventListener("submit", function (e) {{
   e.preventDefault();
@@ -233,6 +250,30 @@ class Visualizer:
         )
         print(f"loaded {len(ckpt_paths)} member(s): {self.model_version}")
 
+    def _bump_recent(self, replay_id: str, data: dict | None):
+        """Maintains the landing page's recently-viewed list (most recent
+        first, deduped, capped). Cosmetic: last-writer-wins under container
+        concurrency, and never fails a request."""
+        try:
+            recent = list(page_cache.get(RECENT_KEY) or [])
+            entry = next((r for r in recent if r["id"] == replay_id), None)
+            if data is not None:
+                entry = dict(
+                    id=replay_id,
+                    players=data["players"],
+                    rating=data["rating"],
+                    margin=data["actualMargin"],
+                    # First clause only ("played out", "conceded", ...).
+                    ending=data["endingLabel"].split(" — ")[0],
+                )
+            if entry is None:
+                return
+            recent = [r for r in recent if r["id"] != replay_id]
+            recent.insert(0, entry)
+            page_cache[RECENT_KEY] = recent[:MAX_RECENT]
+        except Exception as err:  # noqa: BLE001 — strictly cosmetic
+            print(f"recent-list update failed: {err}")
+
     def _render(self, replay_id: str) -> str:
         import tempfile
 
@@ -245,6 +286,7 @@ class Visualizer:
         key = f"{self.model_version}:{replay_id}"
         cached = page_cache.get(key)
         if cached is not None:
+            self._bump_recent(replay_id, None)
             return cached
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -258,10 +300,11 @@ class Visualizer:
                 raise ValueError("replay log too large")
             payload, stats = export_record(replay_json_path, tmpdir)
 
-        html, _ = render_page(
+        html, data = render_page(
             replay, stats, payload, self.runner, UNCERTAINTY_SCALE
         )
         page_cache[key] = html
+        self._bump_recent(replay_id, data)
         return html
 
     @modal.asgi_app()
@@ -275,7 +318,31 @@ class Visualizer:
 
         @api.get("/", response_class=HTMLResponse)
         def landing():
-            return LANDING
+            import html as html_lib
+
+            cards = ""
+            for r in page_cache.get(RECENT_KEY) or []:
+                margin = int(r.get("margin", 0))
+                chip_color = (
+                    "#2a78d6" if margin > 0
+                    else "#e34948" if margin < 0
+                    else "#898781"
+                )
+                meta = f'<span class="chip" style="background:{chip_color}">{margin:+d}</span> '
+                meta += html_lib.escape(str(r.get("ending", "")))
+                if r.get("rating"):
+                    meta += f" · {int(r['rating'])}"
+                cards += (
+                    f'<a class="card" href="/r/{r["id"]}">'
+                    f'<div class="vs">{html_lib.escape(" vs ".join(r.get("players", [])))}</div>'
+                    f'<div class="meta">{meta}</div></a>'
+                )
+            section = (
+                f'<h2>Recently viewed</h2><div class="grid">{cards}</div>'
+                if cards
+                else ""
+            )
+            return LANDING.replace("__RECENT__", section)
 
         @api.get("/r/{replay_id}", response_class=HTMLResponse)
         def replay(replay_id: str):
