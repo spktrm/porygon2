@@ -22,9 +22,23 @@ import { EnvironmentBatch } from "../../protos/service_pb";
 import { encodePerspective, ReplayFile } from "./offlineWorker";
 
 function main() {
+    // Own output goes through bound originals: the sim/state encoder spams
+    // console while replaying logs, so unless PORYGON_VERBOSE=1 the global
+    // console is silenced during encoding — stdout must stay parseable
+    // (rl/offline/visualise.py reads the final JSON stats line).
+    const stdoutLog = console.log.bind(console);
+    const stderrLog = console.error.bind(console);
+    if (process.env.PORYGON_VERBOSE !== "1") {
+        const noop = () => {};
+        console.log = noop;
+        console.warn = noop;
+        console.error = noop;
+        console.debug = noop;
+    }
+
     const [inPath, outPath] = process.argv.slice(2);
     if (!inPath || !outPath) {
-        console.error(
+        stderrLog(
             "usage: node dist/scripts/exportReplay.js <replay.json> <out.bin>",
         );
         process.exit(1);
@@ -47,7 +61,7 @@ function main() {
         }
     }
     if (perspectives.length === 0) {
-        console.error(
+        stderrLog(
             "replay has no decided outcome (no |win|/|tie| line) — nothing to encode",
         );
         process.exit(2);
@@ -58,7 +72,7 @@ function main() {
     const prefix = Buffer.alloc(4);
     prefix.writeUInt32LE(record.length, 0);
     fs.writeFileSync(outPath, Buffer.concat([prefix, Buffer.from(record)]));
-    console.log(JSON.stringify({ perspectives, states: stateCounts }));
+    stdoutLog(JSON.stringify({ perspectives, states: stateCounts }));
 }
 
 main();

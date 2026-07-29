@@ -645,19 +645,26 @@ class Learner:
         self._potential_stats_lock = threading.Lock()
         self._potential_stats: dict[str, tuple[float, int]] = {}
         if config.offline_critic_ckpt_path:
-            from rl.offline.artifact import load_critic_params, make_potential_apply
-
-            self.potential_params = jax.device_put(
-                load_critic_params(config.offline_critic_ckpt_path)
+            from rl.offline.artifact import (
+                has_rating_conditioning,
+                load_critic_params,
+                make_potential_apply,
             )
+
+            critic_params = load_critic_params(config.offline_critic_ckpt_path)
+            self.potential_params = jax.device_put(critic_params)
             # Jitted once: actor trajectories arrive with fixed shapes
             # (unroll_length time axis, fixed-capacity history buffers).
+            # Architecture flags come from the artifact itself, so old and
+            # Elo-conditioned critics both load.
             self._potential_apply = jax.jit(
                 make_potential_apply(
                     config.generation,
                     config.potential_uncertainty_scale,
                     config.potential_readout,
                     with_aux=True,
+                    rating_conditioning=has_rating_conditioning(critic_params),
+                    condition_rating=config.potential_condition_rating,
                 )
             )
             logging.info(

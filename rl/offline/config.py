@@ -40,6 +40,37 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # concession margin.
     concession_censor_decay: float = 0.5
 
+    # Auxiliary per-mon survival supervision. Target per (step, revealed
+    # live mon): y = survival_discount**(steps until its next faint), 0 if
+    # it never faints — a soft horizon carrying the timing information the
+    # final-margin label destroys (every step of a trajectory shares one
+    # margin label, so "faints next turn" and "faints in 20" are otherwise
+    # indistinguishable to the objective). Predicted as a categorical over
+    # NUM_SURVIVAL_BINS value bins, so the distribution separates "coin-flip
+    # dies now" from "certain death in a half-life" without any dies-in-x
+    # window; mons alive when a game ends without being played out are
+    # right-censored (loss constrains only the mass above what the replay
+    # witnessed). Heads are per-entity and side-agnostic — they enrich the
+    # encoder's features but never touch the antisymmetric margin readout,
+    # and they are discarded at RL consumption time (the learner's Φ path
+    # calls the outcome readout only).
+    #
+    # Half-life = ln(2)/ln(1/discount) request steps (~6.6 at 0.9) — the
+    # "imminent doom" scale the margin probe can't otherwise learn to see
+    # before the faint bit flips.
+    survival_discount: float = 0.9
+    # Weight on the survival loss next to the margin CE (both start near
+    # ln(num_bins), so 1.0 is balanced). 0 disables the aux entirely.
+    survival_loss_weight: float = 1.0
+
+    # Elo conditioning: with probability rating_dropout, a game's rating
+    # features are zeroed (per GAME, not per perspective — mirrored pairs
+    # must stay exact mirrors for pair-aware batching). Trains the
+    # "unknown" bucket that live self-play, pre-rating shards, and
+    # counterfactual Elo sweeps all rely on, and stops the model leaning on
+    # rating where the board already says everything.
+    rating_dropout: float = 0.25
+
     # Batch iteration params
     batch_size: int = 8
     min_history_length: int = 64

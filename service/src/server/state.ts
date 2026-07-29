@@ -4534,6 +4534,13 @@ export class StateHandler {
         const publicOrder = this.getPublicTeamOrder(playerIndex);
         infoBuffer.set(publicOrder, InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0);
 
+        // Perspective-relative pre-game ratings (0 = unknown). int16 holds
+        // ladder Elo comfortably.
+        infoBuffer[InfoFeature.INFO_FEATURE__MY_RATING] =
+            this.player.ratings[playerIndex];
+        infoBuffer[InfoFeature.INFO_FEATURE__OPP_RATING] =
+            this.player.ratings[1 - playerIndex];
+
         return new Uint8Array(infoBuffer.buffer);
     }
 

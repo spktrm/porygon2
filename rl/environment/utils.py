@@ -140,6 +140,12 @@ def process_state(
     state's histories per trajectory).
     """
     info = np.frombuffer(state.info, dtype=np.int16).astype(np.int32)
+    # Older exports predate trailing InfoFeature additions (e.g. the rating
+    # features); zero-pad so static feature indexing stays in bounds — zero
+    # is every such feature's "unknown" value.
+    num_info_features = len(InfoFeature.keys())
+    if info.shape[0] < num_info_features:
+        info = np.pad(info, (0, num_info_features - info.shape[0]))
 
     if with_history:
         history_length = state.history_length

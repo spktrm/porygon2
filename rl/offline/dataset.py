@@ -26,6 +26,7 @@ from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
     EntityPublicNodeFeature,
+    InfoFeature,
 )
 from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
 from rl.environment.utils import (
@@ -42,17 +43,35 @@ _LENGTH_STRUCT = struct.Struct("<I")
 MAX_MARGIN = 6
 NUM_MARGIN_BINS = 2 * MAX_MARGIN + 1
 
+# Aux survival target: y = discount**(steps to this mon's next faint), 0 if
+# it never faints, binned uniformly over [0, 1]. Bins live in y-space, not
+# turn-space — the only semantic hyperparameter is the discount itself.
+NUM_SURVIVAL_BINS = 16
+# Matches Porygon2OfflineConfig.survival_discount; used for the raw
+# (config-less) view so visualiser batches stay well-formed.
+DEFAULT_SURVIVAL_DISCOUNT = 0.9
+
+# History-pathway stable entity slots (both sides), as in the encoder.
+NUM_SLOTS = 12
+
 
 @chex.dataclass(frozen=True)
 class OfflineExample:
     actor_input: PlayerActorInput  # env leaves (T, ...), histories unbatched
     label: ArrayLike  # (NUM_MARGIN_BINS,) one-hot over final margin
+    # Allowed-bins mask per (step, slot): one-hot where the faint step was
+    # observed, an interval mask where right-censored. Loss is
+    # -log(predicted mass inside the mask) — exact rows reduce to CE.
+    survival_target: ArrayLike  # (T, NUM_SLOTS, NUM_SURVIVAL_BINS)
+    survival_mask: ArrayLike  # (T, NUM_SLOTS) — revealed & currently alive
 
 
 @chex.dataclass(frozen=True)
 class OfflineBatch:
     actor_input: PlayerActorInput  # leaves (T, B, ...)
     labels: ArrayLike  # (B, NUM_MARGIN_BINS)
+    survival_targets: ArrayLike  # (T, B, NUM_SLOTS, NUM_SURVIVAL_BINS)
+    survival_masks: ArrayLike  # (T, B, NUM_SLOTS)
 
 
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
@@ -182,6 +201,84 @@ def _margin_label(
     return label
 
 
+def _survival_targets(
+    env, ending: str, discount: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-slot discounted survival targets for the aux head.
+
+    Works in the history pathway's stable entity-slot indexing (revelation
+    order across both sides): the per-step public team rows are per-side and
+    re-sorted actives-first, so PUBLIC_ORDER (row i of the public team holds
+    the mon in slot public_order[i], -1 for unrevealed fillers) scatters the
+    per-step FAINTED bits back to slots — the same alignment the RL trunk
+    uses to gather history rows.
+
+    Target variable per (step t, slot): y = discount**(steps to the slot's
+    next faint), 0 if it never faints (handles Revival Blessing: distance is
+    to the NEXT faint). Encoded as an allowed-bins mask over
+    NUM_SURVIVAL_BINS uniform bins in [0, 1]:
+    - observed faint -> one-hot at bin(y);
+    - alive through a played-out ending -> exact y = 0 (the mon witnessed
+      the whole game and never fainted);
+    - alive when the game ended any other way (concession/timeout/tie on
+      timer) -> right-censored: the replay only witnessed "did not faint
+      before the end", so every bin with y <= discount**(T_last - t) is
+      allowed and the loss constrains nothing below that bound. At the
+      terminal step the bound is 1 (no information, zero loss) and it
+      tightens exponentially for earlier states — no dies-in-x window.
+
+    The loss mask is (revealed & not currently fainted): the head predicts
+    the future of live, visible mons only.
+    """
+    info = np.asarray(env.info)
+    public_team = np.asarray(env.public_team)
+    num_steps = info.shape[0]
+    order = info[
+        :,
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+        + 1,
+    ].astype(np.int64)
+    row_valid = (order >= 0) & (order < NUM_SLOTS)
+    row_fainted = (
+        public_team[:, :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED]
+        > 0
+    )
+    revealed = np.zeros((num_steps, NUM_SLOTS), dtype=bool)
+    fainted = np.zeros((num_steps, NUM_SLOTS), dtype=bool)
+    step_idx = np.arange(num_steps)
+    for i in range(NUM_SLOTS):  # one write per (step, row): no scatter races
+        rows = row_valid[:, i]
+        revealed[step_idx[rows], order[rows, i]] = True
+        fainted[step_idx[rows], order[rows, i]] = row_fainted[rows, i]
+
+    # Steps to next faint, per slot; inf = never faints in the replay.
+    dist = np.full((num_steps, NUM_SLOTS), np.inf)
+    run = np.full(NUM_SLOTS, np.inf)
+    for t in range(num_steps - 1, -1, -1):
+        run = np.where(fainted[t], 0.0, run + 1.0)
+        dist[t] = run
+
+    observed = np.isfinite(dist)
+    y = np.where(observed, discount ** np.where(observed, dist, 0.0), 0.0)
+    bin_idx = np.minimum(
+        (y * NUM_SURVIVAL_BINS).astype(np.int64), NUM_SURVIVAL_BINS - 1
+    )
+    target = np.eye(NUM_SURVIVAL_BINS, dtype=np.float32)[bin_idx]
+    if ending != "played_out":
+        bound = discount ** (num_steps - 1 - step_idx)  # (T,)
+        bound_bin = np.minimum(
+            (bound * NUM_SURVIVAL_BINS).astype(np.int64), NUM_SURVIVAL_BINS - 1
+        )
+        allowed = (
+            np.arange(NUM_SURVIVAL_BINS)[None, None, :] <= bound_bin[:, None, None]
+        ).astype(np.float32)
+        target = np.where(
+            observed[..., None], target, np.broadcast_to(allowed, target.shape)
+        )
+    mask = (revealed & ~fainted).astype(np.float32)
+    return target, mask
+
+
 def record_to_examples(
     payload: bytes, config: "Porygon2OfflineConfig | None" = None
 ) -> list[OfflineExample]:
@@ -224,6 +321,10 @@ def trajectory_to_example(
     censor_decay = config.concession_censor_decay if config is not None else 0.0
     margin_label = _margin_label(margin, ending, censor_decay, margin_cap)
     env = jax.tree.map(lambda *xs: np.stack(xs), *[s.env for s in steps])
+    survival_discount = (
+        config.survival_discount if config is not None else DEFAULT_SURVIVAL_DISCOUNT
+    )
+    survival_target, survival_mask = _survival_targets(env, ending, survival_discount)
     return OfflineExample(
         actor_input=PlayerActorInput(
             env=env,
@@ -231,7 +332,21 @@ def trajectory_to_example(
             history=final.history,
         ),
         label=margin_label,
+        survival_target=survival_target,
+        survival_mask=survival_mask,
     )
+
+
+def _drop_ratings(record: Sequence[OfflineExample], rng, dropout: float) -> None:
+    """With probability ``dropout``, zeroes the rating info features of
+    every perspective of one game in place (0 = the unknown bucket).
+    Applied per game so mirrored pairs stay exact mirrors."""
+    if dropout <= 0.0 or rng.random() >= dropout:
+        return
+    for example in record:
+        info = np.asarray(example.actor_input.env.info)
+        info[:, InfoFeature.INFO_FEATURE__MY_RATING] = 0
+        info[:, InfoFeature.INFO_FEATURE__OPP_RATING] = 0
 
 
 def _pad_env_to(env, length: int):
@@ -246,6 +361,16 @@ def _pad_env_to(env, length: int):
     last = last.replace(done=np.zeros_like(last.done))
     pad = jax.tree.map(lambda x: np.repeat(x, length - t, axis=0), last)
     return jax.tree.map(lambda a, b: np.concatenate([a, b], axis=0), env, pad)
+
+
+def _pad_time_zeros(x: np.ndarray, length: int) -> np.ndarray:
+    """Pads (or truncates) a time-major target array with zeros — padded
+    steps carry an all-zero loss mask, so they never contribute."""
+    x = np.asarray(x)
+    if x.shape[0] >= length:
+        return x[:length]
+    pad = np.zeros((length - x.shape[0],) + x.shape[1:], dtype=x.dtype)
+    return np.concatenate([x, pad], axis=0)
 
 
 def collate(
@@ -271,11 +396,19 @@ def collate(
     )
     history = clip_history(history, min_length=config.min_history_length)
     labels = np.stack([e.label for e in examples], axis=0)
+    survival_targets = np.stack(
+        [_pad_time_zeros(e.survival_target, bucket_t) for e in examples], axis=1
+    )
+    survival_masks = np.stack(
+        [_pad_time_zeros(e.survival_mask, bucket_t) for e in examples], axis=1
+    )
     return OfflineBatch(
         actor_input=PlayerActorInput(
             env=env, packed_history=packed_history, history=history
         ),
         labels=labels,
+        survival_targets=survival_targets,
+        survival_masks=survival_masks,
     )
 
 
@@ -303,6 +436,8 @@ def collate_ensemble(
     return OfflineBatch(
         actor_input=jax.tree.map(lambda x: regroup(x, 1), combined.actor_input),
         labels=regroup(combined.labels, 0),
+        survival_targets=regroup(combined.survival_targets, 1),
+        survival_masks=regroup(combined.survival_masks, 1),
     )
 
 
@@ -360,6 +495,7 @@ class OfflineDataset:
         while True:
             rng.shuffle(self.shards)
             for record in self._iter_records(holdout=False, pairs_only=True):
+                _drop_ratings(record, rng, self.config.rating_dropout)
                 buffer.append(record)
                 if len(buffer) < max(
                     self.config.shuffle_buffer_size // 2, games_per_batch
@@ -411,6 +547,7 @@ class OfflineDataset:
                     examples = record_to_examples(payload, config)
                     if len(examples) != 2:  # pairs only, as in train_batches
                         continue
+                    _drop_ratings(examples, rng, config.rating_dropout)
                     buffers[member].append(examples)
                     if all(len(b) >= fill for b in buffers):
                         yield collate_ensemble(

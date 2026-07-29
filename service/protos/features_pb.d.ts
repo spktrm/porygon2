@@ -222,6 +222,8 @@ export interface InfoFeatureMap {
   INFO_FEATURE__PUBLIC_ORDER_9: 24;
   INFO_FEATURE__PUBLIC_ORDER_10: 25;
   INFO_FEATURE__PUBLIC_ORDER_11: 26;
+  INFO_FEATURE__MY_RATING: 27;
+  INFO_FEATURE__OPP_RATING: 28;
 }
 
 export const InfoFeature: InfoFeatureMap;

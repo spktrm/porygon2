@@ -214,6 +214,12 @@ enum InfoFeature {
     INFO_FEATURE__PUBLIC_ORDER_9 = 24;
     INFO_FEATURE__PUBLIC_ORDER_10 = 25;
     INFO_FEATURE__PUBLIC_ORDER_11 = 26;
+    // Pre-game ladder ratings from the replay log's |player| lines,
+    // relative to the perspective (0 = unknown/unrated — always 0 in live
+    // self-play). MUST be start-of-game ratings: post-game ratings leak
+    // the result.
+    INFO_FEATURE__MY_RATING = 27;
+    INFO_FEATURE__OPP_RATING = 28;
 }
 
 

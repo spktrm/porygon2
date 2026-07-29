@@ -9,7 +9,11 @@
  *
  * Usage (from service/, after tsc):
  *   node dist/scripts/offline.js gen9randombattle \
- *     [--workers N] [--min-rating R] [--min-turns T] [--limit K] [--out DIR]
+ *     [--workers N] [--min-rating R] [--min-turns T] [--limit K] [--out DIR] \
+ *     [--verbose]
+ *
+ * Sim warnings and per-file errors are counted but silenced by default so
+ * the progress line stays readable; --verbose prints them all.
  */
 
 import * as fs from "fs";
@@ -29,6 +33,7 @@ interface Args {
     minTurns: number;
     limit: number;
     outDir: string;
+    verbose: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -37,7 +42,14 @@ function parseArgs(argv: string[]): Args {
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg.startsWith("--")) {
-            flags[arg.slice(2)] = argv[++i];
+            // Boolean flags: no value token follows (end of argv or
+            // another --flag).
+            const next = argv[i + 1];
+            if (next === undefined || next.startsWith("--")) {
+                flags[arg.slice(2)] = "true";
+            } else {
+                flags[arg.slice(2)] = argv[++i];
+            }
         } else {
             positional.push(arg);
         }
@@ -52,6 +64,7 @@ function parseArgs(argv: string[]): Args {
         minTurns: parseInt(flags["min-turns"] ?? "") || 5,
         limit: parseInt(flags["limit"] ?? "") || Infinity,
         outDir: flags["out"] ?? path.join(PROJECT_ROOT, "replays", "shards"),
+        verbose: flags["verbose"] === "true",
     };
 }
 
@@ -64,7 +77,17 @@ function emptyStats(): OfflineWorkerStats {
         skippedShort: 0,
         skippedFormat: 0,
         failed: 0,
+        warnings: 0,
     };
+}
+
+function formatEta(seconds: number): string {
+    if (!isFinite(seconds)) return "—";
+    const s = Math.round(seconds);
+    if (s < 90) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 90) return `${m}m${String(s % 60).padStart(2, "0")}s`;
+    return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
 }
 
 async function main() {
@@ -105,15 +128,19 @@ async function main() {
                 skippedShort: acc.skippedShort + s.skippedShort,
                 skippedFormat: acc.skippedFormat + s.skippedFormat,
                 failed: acc.failed + s.failed,
+                warnings: acc.warnings + s.warnings,
             }),
             emptyStats(),
         );
         const elapsed = (Date.now() - startTime) / 1000;
         const rate = total.processed / Math.max(elapsed, 1e-6);
+        const pct = ((100 * total.processed) / files.length).toFixed(0);
+        const eta = (files.length - total.processed) / Math.max(rate, 1e-6);
         process.stdout.write(
-            `\r${total.processed}/${files.length} replays | ` +
+            `\r${total.processed}/${files.length} (${pct}%) | ` +
                 `${total.trajectories} trajectories | ${total.states} states | ` +
-                `${total.failed} failed | ${rate.toFixed(1)} replays/s   `,
+                `${total.failed} failed | ${rate.toFixed(1)}/s | ` +
+                `ETA ${formatEta(eta)}   `,
         );
         return total;
     };
@@ -137,6 +164,7 @@ async function main() {
                     minRating: args.minRating,
                     minTurns: args.minTurns,
                     progressEvery: 25,
+                    verbose: args.verbose,
                 },
             });
             worker.on("message", (msg) => {
@@ -144,9 +172,13 @@ async function main() {
                     perWorker[workerIndex] = msg.stats;
                     logProgress();
                 } else if (msg.type === "error") {
-                    console.error(
-                        `\n[worker ${workerIndex}] ${msg.file}: ${msg.message}`,
-                    );
+                    // Counted in stats.failed either way; only verbose runs
+                    // spell each file out (they shred the progress line).
+                    if (args.verbose) {
+                        console.error(
+                            `\n[worker ${workerIndex}] ${msg.file}: ${msg.message}`,
+                        );
+                    }
                 } else if (msg.type === "fatal") {
                     console.error(
                         `\n[worker ${workerIndex}] fatal: ${msg.message}`,
@@ -177,6 +209,7 @@ async function main() {
         num_skipped_rating: total.skippedRating,
         num_skipped_short: total.skippedShort,
         num_skipped_format: total.skippedFormat,
+        num_sim_warnings: total.warnings,
         shards: numWorkers,
         created_at: new Date().toISOString(),
         record_format:
@@ -190,6 +223,12 @@ async function main() {
         JSON.stringify(manifest, null, 2),
     );
     console.log(`\nWrote manifest to ${path.join(shardDir, "manifest.json")}`);
+    if (!args.verbose && (total.warnings > 0 || total.failed > 0)) {
+        console.log(
+            `${total.warnings} sim warnings and ${total.failed} per-file ` +
+                `errors were suppressed — rerun with --verbose to see them.`,
+        );
+    }
 }
 
 main();
