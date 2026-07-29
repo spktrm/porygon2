@@ -1,9 +1,9 @@
-"""Serverless Φ replay visualizer on Modal.
+"""Serverless Φ replay visualiser on Modal.
 
 Anyone pastes a replay.pokemonshowdown.com URL or id; the app fetches the
 replay, encodes it through the real shard exporter (node subprocess), runs
-the offline critic ensemble on CPU, and serves the standalone visualization
-page (rl/offline/visualize.py's template — battle player + Φ chart + swing
+the offline critic ensemble on CPU, and serves the standalone visualisation
+page (rl/offline/visualise.py's template — battle player + Φ chart + swing
 annotations). Pages are cached by replay id (replays are immutable), so
 each replay is computed once, ever.
 
@@ -139,7 +139,7 @@ image = (
         ignore=["**/node_modules", "**/dist"],
     )
     # Compile the exporter at image-build time; dist/ is then newer than
-    # src/, so visualize.py's staleness check never re-runs tsc at request
+    # src/, so visualise.py's staleness check never re-runs tsc at request
     # time.
     .run_commands(
         f"cd {REPO_REMOTE}/service && npm ci && npx tsc",
@@ -159,7 +159,7 @@ RECENT_KEY = "__recent__"
 MAX_RECENT = 24
 
 LANDING = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Porygon2 — replay Φ visualizer</title>
+<html><head><meta charset="utf-8"><title>Porygon2 — replay Φ visualiser</title>
 <style>
  body {{ font-family: system-ui, sans-serif; max-width: 640px;
         margin: 12vh auto; padding: 0 20px; }}
@@ -182,7 +182,7 @@ LANDING = """<!DOCTYPE html>
  .chip {{ display: inline-block; border-radius: 9px; padding: 0 7px;
          font-weight: 700; color: #fff; font-size: 11px; }}
 </style></head><body>
-<h1>Replay Φ visualizer</h1>
+<h1>Replay Φ visualiser</h1>
 <p>Paste a <a href="https://replay.pokemonshowdown.com">Pokemon Showdown</a>
 replay link or id ({format_id} only). You get the battle side by side with
 the offline critic's evaluation — per-turn win/margin belief, ensemble

@@ -114,7 +114,7 @@ def train_step(
 
     # IMPACT-style targets: the fast target network supplies the v-trace
     # reference policy and value/kl bootstraps.
-    player_targets = compute_player_targets(
+    player_targets, channel_logs = compute_player_targets(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
@@ -122,6 +122,7 @@ def train_step(
         potential_advantage_coef=potential_advantage_coef,
         config=config,
     )
+    training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
     player_targets = promote_map(player_targets, float_dtype)
@@ -638,6 +639,11 @@ class Learner:
         # train_step never runs the ensemble.
         self.potential_params: Params | None = None
         self._potential_apply = None
+        # Insert-time Φ diagnostics, accumulated as (sum, count) per metric
+        # under a lock (enqueue_traj runs on many actor threads) and drained
+        # into the train-step logs by _handle_periodic_tasks.
+        self._potential_stats_lock = threading.Lock()
+        self._potential_stats: dict[str, tuple[float, int]] = {}
         if config.offline_critic_ckpt_path:
             from rl.offline.artifact import load_critic_params, make_potential_apply
 
@@ -651,6 +657,7 @@ class Learner:
                     config.generation,
                     config.potential_uncertainty_scale,
                     config.potential_readout,
+                    with_aux=True,
                 )
             )
             logging.info(
@@ -692,8 +699,54 @@ class Learner:
         # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
         # the (T, B) convention make_potential_apply vmaps over.
         batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
-        phi = self._potential_apply(self.potential_params, batched)
-        return np.asarray(jax.device_get(phi))[:, 0]
+        phi, aux = self._potential_apply(self.potential_params, batched)
+        phi = np.asarray(jax.device_get(phi))[:, 0]
+        aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
+        self._record_potential_stats(traj, phi, aux)
+        return phi
+
+    def _record_potential_stats(
+        self, traj: Trajectory, phi: np.ndarray, aux: dict[str, np.ndarray]
+    ) -> None:
+        """Accumulates insert-time Φ diagnostics over one trajectory's valid
+        steps: shaping loudness (|Φ| after gating), the ensemble confidence
+        gate and raw disagreement, the dense per-step signal a low-λ
+        potential channel would consume, and whether the critic's terminal
+        sign matches the actual outcome (skipping ties)."""
+        dones = np.asarray(traj.player_transitions.env_output.done)
+        valid = (np.cumsum(dones) - dones) == 0
+        if not valid.any():
+            return
+        stats = {
+            "phi_abs_mean": float(np.abs(phi[valid]).mean()),
+            "gate_mean": float(aux["gate"][valid].mean()),
+            "ensemble_std_mean": float(aux["ensemble_std"][valid].mean()),
+        }
+        step_pairs = valid[:-1] & valid[1:]
+        if step_pairs.any():
+            stats["phi_step_delta_abs"] = float(np.abs(np.diff(phi))[step_pairs].mean())
+        terminal_idx = np.nonzero(dones & valid)[0]
+        if terminal_idx.size:
+            t = int(terminal_idx[0])
+            outcome = float(
+                np.asarray(traj.player_transitions.env_output.win_reward)[t]
+                @ CAT_VF_SUPPORT
+            )
+            if outcome != 0.0:
+                stats["terminal_agreement"] = float((phi[t] > 0) == (outcome > 0))
+        with self._potential_stats_lock:
+            for key, value in stats.items():
+                total, count = self._potential_stats.get(key, (0.0, 0))
+                self._potential_stats[key] = (total + value, count + 1)
+
+    def _pop_potential_logs(self) -> dict[str, float]:
+        """Drains the insert-time Φ accumulator: means over every trajectory
+        recorded since the last drain, keyed potential_*."""
+        with self._potential_stats_lock:
+            stats, self._potential_stats = self._potential_stats, {}
+        return {
+            f"potential_{key}": total / count for key, (total, count) in stats.items()
+        }
 
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
@@ -893,6 +946,9 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
+
+        if self._potential_apply is not None:
+            logs.update(self._pop_potential_logs())
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.

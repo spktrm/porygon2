@@ -13,7 +13,7 @@ The replay is encoded through the SAME exporter path as training shards
 Φ is evaluated on here are exactly the states it would see in training.
 
 Usage:
-    python -m rl.offline.visualize <replay> [<replay> ...] \
+    python -m rl.offline.visualise <replay> [<replay> ...] \
         [--ckpt ckpts/offline/gen9randombattle/ckpt_00050000 [--ckpt ...]] \
         [--uncertainty-scale 2.0] [--output-dir viz] [--limit N]
 
@@ -98,9 +98,7 @@ def export_record(replay_json_path: str, tmpdir: str) -> tuple[bytes, dict]:
         print("compiling service/ (dist exporter missing or older than src) ...")
         # --noEmitOnError: a failed compile must not leave a half-updated
         # dist/ that a later run would mistake for current.
-        subprocess.run(
-            ["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True
-        )
+        subprocess.run(["npx", "tsc", "--noEmitOnError"], cwd=SERVICE_DIR, check=True)
     out_bin = os.path.join(tmpdir, "record.bin")
     result = subprocess.run(
         ["node", exporter, replay_json_path, out_bin],
@@ -125,12 +123,12 @@ def discover_ckpts(format_id: str) -> list[str]:
         for name in sorted(os.listdir(root)):
             if name == format_id or name.startswith(f"{format_id}-ens"):
                 ckpt_dir = os.path.join(root, name)
-                steps = sorted(
-                    d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_")
-                )
+                steps = sorted(d for d in os.listdir(ckpt_dir) if d.startswith("ckpt_"))
                 if steps:
                     candidates.append(os.path.join(ckpt_dir, steps[-1]))
-    ensembles = [c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))]
+    ensembles = [
+        c for c in candidates if "-ens" in os.path.basename(os.path.dirname(c))
+    ]
     if ensembles:
         return ensembles
     if not candidates:
@@ -153,9 +151,7 @@ class CriticRunner:
         model = get_offline_critic(self.config.generation)
         self.params = load_critic_params(ckpt_paths)  # leading ensemble axis K
         self.num_members = jax.tree.leaves(self.params)[0].shape[0]
-        self._apply_fn = jax.jit(
-            jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
-        )
+        self._apply_fn = jax.jit(jax.vmap(model.apply, in_axes=(None, 1), out_axes=1))
 
     def run(self, payload: bytes) -> tuple[dict, list]:
         """Runs every ensemble member over both perspectives. Returns
@@ -338,7 +334,7 @@ def write_index(output_dir: str, entries: list[tuple[str, dict]]) -> str:
         "table{border-collapse:collapse;}td,th{padding:6px 14px;"
         "border-bottom:1px solid #ddd;text-align:left;font-size:14px;}"
         "th{color:#666;}</style></head><body>"
-        f"<h1>Φ visualizations ({len(entries)} replays)</h1><table>"
+        f"<h1>Φ visualisations ({len(entries)} replays)</h1><table>"
         "<tr><th>replay</th><th>players</th><th>rating</th>"
         "<th>margin</th><th>ending</th></tr>"
         f"{rows}</table></body></html>"
@@ -354,8 +350,7 @@ def main():
     parser.add_argument(
         "replays",
         nargs="+",
-        help="replay JSON paths, replay ids, URLs, or directories of "
-        "replay JSONs",
+        help="replay JSON paths, replay ids, URLs, or directories of " "replay JSONs",
     )
     parser.add_argument(
         "--ckpt",
@@ -371,9 +366,7 @@ def main():
     parser.add_argument(
         "--output-dir", default="viz", help="directory for generated pages"
     )
-    parser.add_argument(
-        "--limit", type=int, default=None, help="max replays to render"
-    )
+    parser.add_argument("--limit", type=int, default=None, help="max replays to render")
     args = parser.parse_args()
 
     specs = expand_replay_specs(args.replays, args.limit)
