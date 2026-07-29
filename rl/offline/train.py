@@ -2,19 +2,24 @@
 
 Trains the player model's encoder + categorical value head to predict the
 final game outcome from replay states (Monte-Carlo regression over the
-public view), and saves artifacts in the RL checkpoint layout so the RL
-learner can consume them directly (see rl/offline/artifact.py).
+public view), plus a per-mon discounted-survival auxiliary head (censored
+likelihood; see rl/offline/dataset.py::_survival_targets) that shapes the
+encoder features toward seeing imminent faints before they land. Artifacts
+are saved in the RL checkpoint layout so the RL learner can consume them
+directly (see rl/offline/artifact.py); the aux head is unread at
+consumption time.
 
 Usage:
     python -m rl.offline.train [--dataset-dir replays/shards] [--debug] ...
 """
 
 import argparse
+import functools
 import itertools
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 import jax
 import jax.numpy as jnp
@@ -28,7 +33,13 @@ from rl.learner import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params, get_num_params
 from rl.offline.config import Porygon2OfflineConfig, get_offline_config
-from rl.offline.dataset import MAX_MARGIN, OfflineBatch, OfflineDataset, prefetch
+from rl.offline.dataset import (
+    MAX_MARGIN,
+    NUM_SURVIVAL_BINS,
+    OfflineBatch,
+    OfflineDataset,
+    prefetch,
+)
 from rl.offline.model import MARGIN_SUPPORT, Porygon2OfflineCritic
 
 
@@ -87,11 +98,66 @@ def _metrics_from_logits(
     )
 
 
+def _survival_loss(
+    logits: jax.Array,
+    targets: jax.Array,
+    masks: jax.Array,
+    value_mask: jax.Array,
+) -> dict[str, jax.Array]:
+    """Censored categorical NLL for the per-slot survival aux head.
+
+    ``targets`` are allowed-bins masks over the discounted-survival value
+    bins: -log(predicted mass inside the mask). One-hot rows (observed
+    faint step / played-out survivor) reduce to plain cross-entropy;
+    right-censored rows (mon alive when the game ended early) only pay for
+    mass the replay ruled out. Loss is masked to revealed, currently-alive
+    slots on valid trajectory steps.
+    """
+    log_probs = jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1)
+    # Finite floor instead of -inf: padded steps carry all-zero targets and
+    # a zero weight, and inf * 0 in the vjp would poison the whole batch.
+    nll = -jax.scipy.special.logsumexp(jnp.where(targets > 0, log_probs, -1e9), axis=-1)
+    weight = masks.astype(jnp.float32) * value_mask[..., None]
+    denom = weight.sum().clip(min=1.0)
+    # Aggregate loss has a high constant-predictor floor: most cells are
+    # far-future/never/censored, which a prior fits without reading the
+    # input. The signal this head exists for — imminent doom — lives in the
+    # exact-target rows in the top half of the bins (faints within one
+    # half-life), so track that slice separately; it, not the aggregate,
+    # is the "is the aux head learning" curve.
+    exact = targets.sum(axis=-1) == 1
+    imminent = exact & (targets[..., NUM_SURVIVAL_BINS // 2 :].sum(axis=-1) > 0)
+    imminent_weight = weight * imminent
+    return dict(
+        survival_loss=(nll * weight).sum() / denom,
+        survival_loss_imminent=(nll * imminent_weight).sum()
+        / imminent_weight.sum().clip(min=1.0),
+        num_survival_targets=weight.sum(),
+    )
+
+
+def _overlay_params(fresh, restored):
+    """Overlays restored params onto a fresh init, keeping fresh subtrees
+    the artifact doesn't have (e.g. the survival aux head when resuming a
+    checkpoint trained before it existed)."""
+    if not (isinstance(fresh, Mapping) and isinstance(restored, Mapping)):
+        return restored
+    merged = {}
+    for key in set(fresh) | set(restored):
+        if key not in restored:
+            merged[key] = fresh[key]
+        elif key not in fresh:
+            merged[key] = restored[key]
+        else:
+            merged[key] = _overlay_params(fresh[key], restored[key])
+    return merged
+
+
 def make_train_step(config: Porygon2OfflineConfig):
     @jax.jit
     def train_step(state: train_state.TrainState, batch: OfflineBatch):
         def loss_fn(params):
-            value_head = state.apply_fn(params, batch.actor_input)
+            value_head, survival_logits = state.apply_fn(params, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -99,7 +165,18 @@ def make_train_step(config: Porygon2OfflineConfig):
                 mask,
                 label_smoothing=config.label_smoothing,
             )
-            return metrics["loss"], metrics
+            metrics.update(
+                _survival_loss(
+                    survival_logits,
+                    batch.survival_targets,
+                    batch.survival_masks,
+                    mask,
+                )
+            )
+            total = (
+                metrics["loss"] + config.survival_loss_weight * metrics["survival_loss"]
+            )
+            return total, metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         metrics["gradient_norm"] = optax.global_norm(grads)
@@ -111,9 +188,15 @@ def make_train_step(config: Porygon2OfflineConfig):
 def make_eval_step():
     @jax.jit
     def eval_step(state: train_state.TrainState, batch: OfflineBatch):
-        value_head = state.apply_fn(state.params, batch.actor_input)
+        value_head, survival_logits = state.apply_fn(state.params, batch.actor_input)
         mask = _value_mask(batch.actor_input.env.done)
-        return _metrics_from_logits(value_head.logits, batch.labels, mask)
+        metrics = _metrics_from_logits(value_head.logits, batch.labels, mask)
+        metrics.update(
+            _survival_loss(
+                survival_logits, batch.survival_targets, batch.survival_masks, mask
+            )
+        )
+        return metrics
 
     return eval_step
 
@@ -133,6 +216,8 @@ def evaluate(
             "accuracy_last_step",
             "margin_mae",
             "margin_std",
+            "survival_loss",
+            "survival_loss_imminent",
         )
     }
 
@@ -171,6 +256,10 @@ def save_artifact(
                 format_id=config.format_id,
                 public_view_only=True,
                 step=step,
+                survival_discount=config.survival_discount,
+                survival_loss_weight=config.survival_loss_weight,
+                rating_conditioned=True,
+                rating_dropout=config.rating_dropout,
             ),
             f,
             indent=2,
@@ -194,6 +283,9 @@ _CLI_FIELDS: dict[str, type] = dict(
     learning_rate=float,
     lr_final_fraction=float,
     label_smoothing=float,
+    survival_discount=float,
+    survival_loss_weight=float,
+    rating_dropout=float,
     clip_gradient=float,
     log_interval_steps=int,
     eval_interval_steps=int,
@@ -274,7 +366,15 @@ def evaluate_ensemble(
     weights = np.array([g["num_valid_steps"] for g in gate_rows])
     logs: dict[str, float] = {}
     member_losses = None
-    for key in ("loss", "accuracy", "accuracy_last_step", "margin_mae"):
+    keys = (
+        "loss",
+        "accuracy",
+        "accuracy_last_step",
+        "margin_mae",
+        "survival_loss",
+        "survival_loss_imminent",
+    )
+    for key in keys:
         values = np.average(
             np.stack([m[key] for m in member_rows]), axis=0, weights=weights
         )  # (K,)
@@ -308,12 +408,22 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
     model = Porygon2OfflineCritic(model_config)
     # Same axis convention as the RL learner: leaves (T, B, ...), batch
     # mapped on axis 1. The member axis is vmapped outside of this.
-    apply_fn = jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
+    # Training applies with_aux (margin head + survival aux) — init must
+    # too, so the aux params exist; consumers still call __call__.
+    apply_fn = jax.vmap(
+        functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux),
+        in_axes=(None, 1),
+        out_axes=1,
+    )
 
     print(f"Initializing {num_members} members (traces the full encoder)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     member_keys = jax.random.split(jax.random.key(seed), num_members)
-    params = jax.vmap(lambda key: model.init(key, ex_actor_input))(member_keys)
+    params = jax.vmap(
+        lambda key: model.init(
+            key, ex_actor_input, method=Porygon2OfflineCritic.with_aux
+        )
+    )(member_keys)
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.clip_gradient),
@@ -333,7 +443,7 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
 
     def member_train_step(params, opt_state, batch: OfflineBatch):
         def loss_fn(p):
-            value_head = apply_fn(p, batch.actor_input)
+            value_head, survival_logits = apply_fn(p, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -341,7 +451,18 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
                 mask,
                 label_smoothing=config.label_smoothing,
             )
-            return metrics["loss"], metrics
+            metrics.update(
+                _survival_loss(
+                    survival_logits,
+                    batch.survival_targets,
+                    batch.survival_masks,
+                    mask,
+                )
+            )
+            total = (
+                metrics["loss"] + config.survival_loss_weight * metrics["survival_loss"]
+            )
+            return total, metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         metrics["gradient_norm"] = optax.global_norm(grads)
@@ -355,13 +476,22 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
         # Holdout batches carry no member axis: every member scores the
         # same states, so member metrics are directly comparable and the
         # gate can be measured live.
-        logits = jax.vmap(lambda p: apply_fn(p, batch.actor_input).logits)(params)
+        value_heads, survival_logits = jax.vmap(
+            lambda p: apply_fn(p, batch.actor_input)
+        )(params)
+        logits = value_heads.logits  # (K, T, B, bins)
         mask = _value_mask(batch.actor_input.env.done)
         per_member = jax.vmap(
-            lambda member_logits: _metrics_from_logits(
-                member_logits, batch.labels, mask
+            lambda member_logits, member_survival: dict(
+                **_metrics_from_logits(member_logits, batch.labels, mask),
+                **_survival_loss(
+                    member_survival,
+                    batch.survival_targets,
+                    batch.survival_masks,
+                    mask,
+                ),
             )
-        )(logits)
+        )(logits, survival_logits)
         support = jnp.asarray(MARGIN_SUPPORT, dtype=jnp.float32)
         phi = jax.nn.softmax(logits.astype(jnp.float32), axis=-1) @ support
         std = phi.std(axis=0)
@@ -421,6 +551,7 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
             losses = " ".join(f"{v:.3f}" for v in m["loss"])
             print(
                 f"step {step} | loss [{losses}] | "
+                f"surv {m['survival_loss'].mean():.3f} | "
                 f"acc {m['accuracy'].mean():.3f} | "
                 f"last-step acc {m['accuracy_last_step'].mean():.3f} | "
                 f"grad norm {m['gradient_norm'].mean():.2e}"
@@ -474,9 +605,14 @@ def main():
 
     print("Initializing model (traces the full encoder — takes a minute)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
-    params = model.init(jax.random.key(seed), ex_actor_input)
+    params = model.init(
+        jax.random.key(seed), ex_actor_input, method=Porygon2OfflineCritic.with_aux
+    )
     if config.resume_from is not None:
-        params = checkpoint_lib.load_component(config.resume_from, "player", "params")
+        restored = checkpoint_lib.load_component(config.resume_from, "player", "params")
+        # Overlay, don't replace: pre-aux artifacts lack the survival head,
+        # which keeps its fresh init.
+        params = _overlay_params(params, restored)
         print(f"Resumed params from {config.resume_from}")
 
     optimizer = optax.chain(
@@ -495,8 +631,14 @@ def main():
     )
     state = train_state.TrainState.create(
         # Same axis convention as the RL learner: leaves are (T, B, ...),
-        # batch mapped on axis 1.
-        apply_fn=jax.vmap(model.apply, in_axes=(None, 1), out_axes=1),
+        # batch mapped on axis 1. Training applies with_aux; the saved
+        # artifact is still consumed through __call__, which never reads
+        # the aux head.
+        apply_fn=jax.vmap(
+            functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux),
+            in_axes=(None, 1),
+            out_axes=1,
+        ),
         params=params,
         tx=optimizer,
     )
@@ -551,6 +693,8 @@ def main():
             wandb_run.log(logs, step=step)
             print(
                 f"step {step} | loss {logs['loss']:.4f} | "
+                f"surv {logs['survival_loss']:.4f} | "
+                f"surv-imm {logs['survival_loss_imminent']:.4f} | "
                 f"acc {logs['accuracy']:.3f} | "
                 f"last-step acc {logs['accuracy_last_step']:.3f} | "
                 f"margin mae {logs['margin_mae']:.2f} | "
@@ -567,6 +711,7 @@ def main():
                 wandb_run.log(eval_metrics, step=step)
                 print(
                     f"step {step} | eval loss {eval_metrics['eval_loss']:.4f} "
+                    f"| eval surv {eval_metrics['eval_survival_loss']:.4f} "
                     f"| eval acc {eval_metrics['eval_accuracy']:.3f} "
                     f"| eval last-step acc "
                     f"{eval_metrics['eval_accuracy_last_step']:.3f}"

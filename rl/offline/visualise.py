@@ -6,7 +6,10 @@ side by side with the inferred score — per-turn Φ (expected final alive-mon
 margin in [-1, 1]) with per-ensemble-member traces, mean ± std band, the
 optional uncertainty-gated Φ, a mirror-antisymmetry check from the opposite
 perspective, and the full 13-bin margin distribution at the selected turn.
-Clicking the chart seeks the replay; the chart cursor follows playback.
+Checkpoints trained with the survival aux head additionally get a per-mon
+faint-risk heatmap (E[discount^steps-to-faint] per revealed mon per turn) —
+the timing signal the margin probe alone can't show. Clicking any chart
+seeks the replay; the chart cursors follow playback.
 
 The replay is encoded through the SAME exporter path as training shards
 (service/src/scripts/exportReplay.ts -> encodePerspective), so the states
@@ -29,6 +32,7 @@ service/ (npx tsc is run automatically if the exporter is missing/stale).
 """
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -39,16 +43,25 @@ import urllib.request
 import jax
 import numpy as np
 
+from rl.environment.data import ITOS
+from rl.environment.protos.features_pb2 import (
+    EntityEdgeFeature,
+    EntityPublicNodeFeature,
+    EntityRevealedNodeFeature,
+    InfoFeature,
+)
 from rl.offline.artifact import load_critic_params
 from rl.offline.config import get_offline_config
 from rl.offline.dataset import (
     MAX_MARGIN,
+    NUM_SLOTS,
+    NUM_SURVIVAL_BINS,
     _final_margin,
     collate,
     iter_shard_payloads,
     record_to_examples,
 )
-from rl.offline.model import get_offline_critic
+from rl.offline.model import Porygon2OfflineCritic, get_offline_critic
 
 REPLAY_URL = "https://replay.pokemonshowdown.com/{replay_id}.json"
 USER_AGENT = "porygon2-replay-downloader (https://github.com/spktrm/porygon2)"
@@ -138,25 +151,57 @@ def discover_ckpts(format_id: str) -> list[str]:
     return candidates
 
 
+def _format_generation(format_id: str) -> int:
+    """gen{N}{tier} -> N. The model config and embedding tables are per
+    generation; the tier only routes shards and artifacts."""
+    match = re.match(r"gen(\d+)", format_id)
+    if not match:
+        raise ValueError(f"cannot parse a generation from format {format_id!r}")
+    return int(match.group(1))
+
+
 class CriticRunner:
     """Loads offline critic checkpoint(s) and compiles the apply once, then
     scores any number of exported records. Used here for one record, and by
     the causality check (rl/offline/causality.py) which scores many
     truncated variants of one replay — checkpoint loading and jit
-    compilation must not repeat per variant."""
+    compilation must not repeat per variant.
 
-    def __init__(self, ckpt_paths: list[str]):
-        self.config = get_offline_config()
+    ``format_id`` selects the generation-specific model config/embeddings;
+    the checkpoints must be for the same format."""
+
+    def __init__(self, ckpt_paths: list[str], format_id: str = "gen9randombattle"):
+        self.format_id = format_id
+        self.config = get_offline_config().replace(
+            generation=_format_generation(format_id)
+        )
         self.ckpt_paths = list(ckpt_paths)
-        model = get_offline_critic(self.config.generation)
         self.params = load_critic_params(ckpt_paths)  # leading ensemble axis K
         self.num_members = jax.tree.leaves(self.params)[0].shape[0]
-        self._apply_fn = jax.jit(jax.vmap(model.apply, in_axes=(None, 1), out_axes=1))
+        # Feature detection from the params themselves, so checkpoints from
+        # any era of the architecture load: the survival aux head and Elo
+        # conditioning each leave their own subtree. (Mixed ensembles can't
+        # reach here — load_critic_params' stacking rejects mismatched
+        # trees.)
+        subtrees = self.params.get("params", {})
+        self.has_survival = "survival_head" in subtrees
+        self.rating_conditioned = "rating_embed" in subtrees
+        model = get_offline_critic(
+            self.config.generation, rating_conditioning=self.rating_conditioned
+        )
+        apply = (
+            functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux)
+            if self.has_survival
+            else model.apply
+        )
+        self._apply_fn = jax.jit(jax.vmap(apply, in_axes=(None, 1), out_axes=1))
 
     def run(self, payload: bytes) -> tuple[dict, list]:
         """Runs every ensemble member over both perspectives. Returns
         (per-trajectory outputs, examples). Outputs: phi (K, T, B), probs
-        (K, T, B, 13), valid-step mask (T, B)."""
+        (K, T, B, 13), valid-step mask (T, B); with the survival aux head,
+        also per-mon faint risk E[y] in [0, 1] as survival (K, T, B, 12)
+        plus its (T, B, 12) revealed-and-alive mask (else None)."""
         # No config: raw view — keep clamped-forfeit games and exact one-hot
         # labels so every replay stays inspectable regardless of the
         # training forfeit policy.
@@ -172,16 +217,33 @@ class CriticRunner:
             )
         batch = collate(examples, self.config)
 
-        phis, probs = [], []
+        # Risk readout: expected y = E[discount^(steps to next faint)] off
+        # the aux head's bins — 0 = safe/never, 1 = faints immediately.
+        bin_centers = (np.arange(NUM_SURVIVAL_BINS) + 0.5) / NUM_SURVIVAL_BINS
+        phis, probs, risks = [], [], []
         for k in range(self.num_members):
             member_params = jax.tree.map(lambda x: x[k], self.params)  # noqa: B023
             out = jax.device_get(self._apply_fn(member_params, batch.actor_input))
+            if self.has_survival:
+                out, survival_logits = out
+                survival_logits = np.asarray(survival_logits, dtype=np.float32)
+                survival_probs = np.exp(
+                    survival_logits - survival_logits.max(axis=-1, keepdims=True)
+                )
+                survival_probs /= survival_probs.sum(axis=-1, keepdims=True)
+                risks.append(survival_probs @ bin_centers)  # (T, B, 12)
             phis.append(np.asarray(out.expectation, dtype=np.float32))
             probs.append(np.exp(np.asarray(out.log_probs, dtype=np.float32)))
 
         done = np.asarray(batch.actor_input.env.done).astype(np.int32)
         mask = (np.cumsum(done, axis=0) - done) == 0  # (T, B)
-        return {"phi": np.stack(phis), "probs": np.stack(probs), "mask": mask}, examples
+        return {
+            "phi": np.stack(phis),
+            "probs": np.stack(probs),
+            "mask": mask,
+            "survival": np.stack(risks) if risks else None,
+            "survival_mask": (np.asarray(batch.survival_masks) if risks else None),
+        }, examples
 
 
 def expand_replay_specs(specs: list[str], limit: int | None) -> list[str]:
@@ -200,6 +262,64 @@ def expand_replay_specs(specs: list[str], limit: int | None) -> list[str]:
         else:
             expanded.append(spec)
     return expanded[:limit] if limit else expanded
+
+
+def _slot_identities(packed_history) -> tuple[list[int], list[str | None]]:
+    """Per stable history slot, (relative side, species name) from the
+    terminal caches. Side: 1 = anchor's mon, 0 = opponent's, -1 = slot
+    never revealed (mirrors Encoder.history_slot_sides, in numpy). Species
+    is decoded from the slot's LAST cache row via the shared token table —
+    forme changes therefore show the final forme — as a Showdown id
+    ("greattusk"); None when unmapped."""
+    public = np.asarray(packed_history.public_cache)
+    edges = np.asarray(packed_history.edge_cache)
+    revealed = np.asarray(packed_history.revealed_cache)
+    sides = np.full(NUM_SLOTS, -1, dtype=np.int64)
+    names: list[str | None] = [None] * NUM_SLOTS
+    slots = edges[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX]
+    species_itos = ITOS["species"]
+    for row in np.nonzero(public.any(axis=1))[0]:
+        slot = int(slots[row])
+        if not 0 <= slot < NUM_SLOTS:
+            continue
+        sides[slot] = int(
+            public[row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE]
+        )
+        token = int(
+            revealed[
+                row,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES,
+            ]
+        )
+        name = species_itos.get(token, "")
+        # Special tokens (_UNSPECIFIED/_NULL/_PAD/_UNK) are not names.
+        if name and not name.startswith("_"):
+            names[slot] = name
+    return sides.tolist(), names
+
+
+def _active_slots(env, num_steps: int) -> np.ndarray:
+    """(num_steps, 12) 0/1: which stable slots are on the field at each
+    step — the per-step public team's ACTIVE bits scattered back to slots
+    via PUBLIC_ORDER, the same alignment the training targets use."""
+    info = np.asarray(env.info)[:num_steps]
+    public_team = np.asarray(env.public_team)[:num_steps]
+    order = info[
+        :,
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+        + 1,
+    ].astype(np.int64)
+    valid = (order >= 0) & (order < NUM_SLOTS)
+    row_active = (
+        public_team[:, :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE]
+        > 0
+    )
+    active = np.zeros((num_steps, NUM_SLOTS), dtype=int)
+    step_idx = np.arange(num_steps)
+    for i in range(NUM_SLOTS):
+        rows = valid[:, i]
+        active[step_idx[rows], order[rows, i]] = row_active[rows, i]
+    return active
 
 
 def build_payload(
@@ -231,6 +351,17 @@ def build_payload(
         m = min(n, n_other)
         mirror = (-phi_other.mean(axis=0)[:m]).tolist()
 
+    survival = survival_mask = slot_sides = slot_names = active = None
+    if outputs.get("survival") is not None:
+        # Ensemble-mean per-mon faint risk from the anchor's perspective,
+        # masked to revealed-and-alive (mask 0 renders as neutral cells).
+        survival = outputs["survival"][:, :n, anchor].mean(axis=0)  # (n, 12)
+        survival_mask = outputs["survival_mask"][:n, anchor]  # (n, 12)
+        slot_sides, slot_names = _slot_identities(
+            examples[anchor].actor_input.packed_history
+        )
+        active = _active_slots(examples[anchor].actor_input.env, n)
+
     member_probs = outputs["probs"][:, :n, anchor]  # (K, n, 13)
     probs = member_probs.mean(axis=0)  # (n, 13)
     # Win readout of the same head: P(win) − P(loss), the signed sign-mass
@@ -240,15 +371,13 @@ def build_payload(
         - member_probs[..., :MAX_MARGIN].sum(-1)
     ).mean(axis=0)
     final_reward = np.asarray(examples[anchor].actor_input.env.win_reward)[-1]
-    actual_margin, ending, margin_cap = _final_margin(
-        examples[anchor].actor_input, final_reward
-    )
-    signed_cap = margin_cap if actual_margin > 0 else -margin_cap
+    actual_margin, ending, _ = _final_margin(examples[anchor].actor_input, final_reward)
+    # Reader-facing labels — the page is a product surface, not a debug
+    # view; ending semantics (censoring etc.) live in dataset.py.
     ending_labels = {
-        "played_out": "played out — exact margin",
-        "conceded": f"conceded — played-out margin would be in "
-        f"[{min(actual_margin, signed_cap):+d}, {max(actual_margin, signed_cap):+d}]",
-        "clamped": "forfeit with winner not ahead — margin label is noise",
+        "played_out": "played to the end",
+        "conceded": "opponent forfeited",
+        "clamped": "ended by forfeit",
         "tie": "tie",
     }
 
@@ -266,6 +395,13 @@ def build_payload(
         "gated": np.round(gated, 4).tolist() if gated is not None else None,
         "mirror": [round(v, 4) for v in mirror] if mirror is not None else None,
         "probs": np.round(probs, 4).tolist(),
+        "survival": np.round(survival, 3).tolist() if survival is not None else None,
+        "survivalMask": (
+            survival_mask.astype(int).tolist() if survival_mask is not None else None
+        ),
+        "slotSides": slot_sides,
+        "slotNames": slot_names,
+        "active": active.tolist() if active is not None else None,
         "actualMargin": actual_margin,
         "endingLabel": ending_labels[ending],
         "maxMargin": MAX_MARGIN,
@@ -292,7 +428,7 @@ def render_page(
     # convention), so </script> in the log (and the embedded JSON) can't
     # terminate the enclosing script tag.
     html = (
-        HTML_TEMPLATE.replace("__PHI_TITLE__", f"Φ — {data['replayId']}")
+        HTML_TEMPLATE.replace("__PHI_TITLE__", f"Replay review — {data['replayId']}")
         .replace("__PHI_DATA__", json.dumps(data).replace("</", "<\\/"))
         .replace("__PHI_LOG__", replay["log"].replace("</", "<\\/"))
     )
@@ -329,14 +465,14 @@ def write_index(output_dir: str, entries: list[tuple[str, dict]]) -> str:
     )
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"<title>Φ index ({len(entries)} replays)</title>"
+        f"<title>Replay reviews ({len(entries)})</title>"
         "<style>body{font-family:system-ui,sans-serif;margin:24px;}"
         "table{border-collapse:collapse;}td,th{padding:6px 14px;"
         "border-bottom:1px solid #ddd;text-align:left;font-size:14px;}"
         "th{color:#666;}</style></head><body>"
-        f"<h1>Φ visualisations ({len(entries)} replays)</h1><table>"
+        f"<h1>Replay reviews ({len(entries)})</h1><table>"
         "<tr><th>replay</th><th>players</th><th>rating</th>"
-        "<th>margin</th><th>ending</th></tr>"
+        "<th>final lead</th><th>ending</th></tr>"
         f"{rows}</table></body></html>"
     )
     index_path = os.path.join(output_dir, "index.html")
@@ -377,21 +513,28 @@ def main():
     if not args.output:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    runner = None
+    runners: dict[str, CriticRunner] = {}
     entries: list[tuple[str, dict]] = []
     for spec in specs:
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 replay, replay_json_path = resolve_replay(spec, tmpdir)
                 payload, stats = export_record(replay_json_path, tmpdir)
-            if runner is None:
-                # Checkpoints load and jit-compile once for the whole batch.
-                ckpt_paths = args.ckpt or discover_ckpts(
-                    replay.get("formatid", "gen9randombattle")
-                )
-                print(f"checkpoints: {ckpt_paths}")
-                runner = CriticRunner(ckpt_paths)
-            entries.append(render_replay(replay, stats, payload, runner, args))
+            format_id = replay.get("formatid", "gen9randombattle")
+            if format_id not in runners:
+                if args.ckpt and runners:
+                    raise ValueError(
+                        f"--ckpt pins one format's checkpoints, but the batch "
+                        f"mixes {sorted(runners)} with {format_id}"
+                    )
+                # Checkpoints load and jit-compile once per format; a batch
+                # spanning formats gets one runner each.
+                ckpt_paths = args.ckpt or discover_ckpts(format_id)
+                print(f"{format_id} checkpoints: {ckpt_paths}")
+                runners[format_id] = CriticRunner(ckpt_paths, format_id)
+            entries.append(
+                render_replay(replay, stats, payload, runners[format_id], args)
+            )
         except (SystemExit, ValueError, OSError) as err:
             # One undecided/corrupt replay must not kill the batch.
             print(f"SKIPPED {spec}: {err}")
@@ -417,9 +560,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --muted: #898781;
     --grid: #e1e0d9;
     --baseline: #c3c2b7;
-    --series-1: #2a78d6;   /* mean Φ (margin readout) */
-    --series-2: #eb6834;   /* gated Φ */
-    --series-3: #1baf7a;   /* win readout P(w)−P(l) */
+    --series-1: #2a78d6;   /* win chance (headline series) */
+    --series-2: #eb6834;   /* uncertainty-gated forecast (details) */
+    --series-3: #1baf7a;   /* material forecast (details) */
     --pos-pole: #2a78d6;   /* diverging: anchor ahead */
     --neg-pole: #e34948;   /* diverging: opponent ahead */
     --mid: #f0efec;
@@ -491,6 +634,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .viz-root .key-turns .delta { font-variant-numeric: tabular-nums; }
   .viz-root .note { color: var(--muted); font-size: 11px; margin: 8px 0 0; }
+  /* Model internals (ensemble traces, mirror check, checkpoints) hide
+     behind the details toggle — the default page speaks player language. */
+  .viz-root:not(.show-adv) .adv { display: none; }
+  .viz-root .adv-toggle {
+    margin: 2px 0 10px; padding: 3px 10px; font-size: 11px;
+    color: var(--text-secondary); background: none; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 999px;
+  }
+  .viz-root .adv-toggle:hover { border-color: var(--muted); }
   #phi-tooltip {
     position: fixed; pointer-events: none; display: none; z-index: 10;
     background: var(--surface-1); color: var(--text-primary);
@@ -513,10 +665,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="viz-root">
     <h1 id="viz-title"></h1>
     <p class="sub" id="viz-sub"></p>
+    <button class="adv-toggle" id="adv-toggle">Show model details</button>
     <svg id="phi-chart" viewBox="0 0 640 300"></svg>
     <div class="legend" id="phi-legend"></div>
     <div class="chart-title" id="delta-title"></div>
     <svg id="delta-chart" viewBox="0 0 640 110"></svg>
+    <div class="chart-title" id="surv-title"></div>
+    <svg id="surv-chart" viewBox="0 0 640 0"></svg>
     <div class="chart-title" id="margin-title"></div>
     <svg id="margin-chart" viewBox="0 0 640 130"></svg>
     <div class="chart-title" id="key-title"></div>
@@ -661,6 +816,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   "use strict";
   var D = window.PHI_DATA;
   var SVG = "http://www.w3.org/2000/svg";
+  var root = document.querySelector(".viz-root");
   var N = D.numSteps;                 // steps: turns 1..N-1 plus terminal
   var K = D.members.length;
   var anchorName = D.players[D.anchorPlayer] || "p1";
@@ -669,14 +825,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   document.getElementById("viz-title").textContent =
     D.players.join(" vs ") + " — " + D.format +
     (D.rating ? " (rating " + D.rating + ")" : "");
+  var winnerName =
+    D.actualMargin > 0 ? anchorName : D.actualMargin < 0 ? oppName : null;
+  var resultText = winnerName
+    ? "<b>" + esc(winnerName) + "</b> won by " + Math.abs(D.actualMargin) +
+      " Pokémon (" + esc(D.endingLabel) + ")"
+    : "the game ended in a tie";
   document.getElementById("viz-sub").innerHTML =
-    "Φ = expected final alive-mon margin / " + D.maxMargin +
-    ", from <b>" + esc(anchorName) + "</b>'s perspective · " +
-    "actual margin " + fmtSigned(D.actualMargin) +
-    " (" + esc(D.endingLabel) + ") · " +
-    K + " ensemble member" + (K > 1 ? "s" : "") +
+    resultText + " · charts read from <b>" + esc(anchorName) +
+    "</b>'s side — up is good for them · ←/→ step turns" +
+    '<span class="adv"><br />' + K + " ensemble member" + (K > 1 ? "s" : "") +
     (D.uncertaintyScale > 0 ? " · gate scale " + D.uncertaintyScale : "") +
-    "<br /><code>" + D.ckpts.map(esc).join("</code>, <code>") + "</code>";
+    " · <code>" + D.ckpts.map(esc).join("</code>, <code>") + "</code></span>";
 
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) {
@@ -684,6 +844,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     });
   }
   function fmtSigned(v) { return (v > 0 ? "+" : "") + v; }
+  // Advantage formatting: internal values live in [-1, 1] (P(win) −
+  // P(loss) from the anchor's side). Shown 0-centred, chess.com style:
+  // +100% = anchor certain to win, 0 = even, −100% = opponent certain.
+  function pct(v) {
+    return (v < 0 ? "−" : v > 0 ? "+" : "") +
+      Math.abs(v * 100).toFixed(0) + "%";
+  }
   function el(name, attrs, parent) {
     var node = document.createElementNS(SVG, name);
     for (var key in attrs) node.setAttribute(key, attrs[key]);
@@ -694,7 +861,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   // --- Φ timeline -------------------------------------------------------
   var W = 640, H = 300;
-  var PAD = { l: 40, r: 14, t: 18, b: 30 };
+  // r fits the right-hand mons axis; shared across lanes so columns align.
+  var PAD = { l: 40, r: 40, t: 18, b: 30 };
   var chart = document.getElementById("phi-chart");
   var xOf = function (i) {
     return PAD.l + (N === 1 ? 0 : (i / (N - 1)) * (W - PAD.l - PAD.r));
@@ -710,17 +878,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     return d;
   }
 
-  // Grid + axes.
+  // Grid + axes. Two y scales share the [-1, 1] plot space: advantage
+  // (±100%, left, blue) and the material forecast (±maxMargin mons,
+  // right, green). Inline fill styles: presentation attributes lose to
+  // the .tick-label class rule.
   [-1, -0.5, 0, 0.5, 1].forEach(function (v) {
     el("line", {
       x1: PAD.l, x2: W - PAD.r, y1: yOf(v), y2: yOf(v),
       stroke: v === 0 ? "var(--baseline)" : "var(--grid)",
       "stroke-width": v === 0 ? 1.5 : 1,
     }, chart);
-    var label = el("text", {
+    var left = el("text", {
       x: PAD.l - 6, y: yOf(v) + 3, "text-anchor": "end", "class": "tick-label",
+      style: "fill: var(--series-1)",
     }, chart);
-    label.textContent = v;
+    left.textContent = (v > 0 ? "+" : "") + (v * 100) + "%";
+    var right = el("text", {
+      x: W - PAD.r + 6, y: yOf(v) + 3, "text-anchor": "start",
+      "class": "tick-label", style: "fill: var(--series-3)",
+    }, chart);
+    right.textContent = (v > 0 ? "+" : "") + (v * D.maxMargin);
   });
   var xTickStep = Math.max(1, Math.round((N - 1) / 8 / 5) * 5) || 1;
   for (var t = xTickStep; t < N - 1; t += xTickStep) {
@@ -738,13 +915,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }, chart);
   xAxisLabel.textContent = "turn";
   var topSide = el("text", { x: PAD.l + 6, y: PAD.t + 12, "class": "side-label" }, chart);
-  topSide.textContent = anchorName + " ahead";
+  topSide.textContent = anchorName + " winning";
   var bottomSide = el("text", {
     x: PAD.l + 6, y: H - PAD.b - 6, "class": "side-label",
   }, chart);
-  bottomSide.textContent = oppName + " ahead";
+  bottomSide.textContent = oppName + " winning";
 
-  // ±std band.
+  // Deep model internals carry class "adv" (hidden until the details
+  // toggle); the ensemble spread stays default-visible — disagreement is
+  // honest information for any reader.
+  // ±std band around the material forecast.
   if (K > 1) {
     var band = "";
     for (var i = 0; i < N; i++) {
@@ -755,7 +935,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       band += "L" + xOf(j).toFixed(1) + " " +
         yOf(Math.max(-1, D.mean[j] - D.std[j])).toFixed(1);
     }
-    el("path", { d: band + "Z", fill: "var(--series-1)", opacity: 0.12 }, chart);
+    el("path", { d: band + "Z", fill: "var(--series-3)", opacity: 0.12 }, chart);
   }
   // Ensemble members: hairlines, identity carried by the legend not hue.
   D.members.forEach(function (member) {
@@ -769,27 +949,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     el("path", {
       d: linePath(D.mirror), fill: "none", stroke: "var(--text-secondary)",
       "stroke-width": 1.5, "stroke-dasharray": "2 4", opacity: 0.8,
+      "class": "adv",
     }, chart);
   }
   if (D.gated) {
     el("path", {
       d: linePath(D.gated), fill: "none", stroke: "var(--series-2)",
-      "stroke-width": 2, "stroke-dasharray": "6 4",
+      "stroke-width": 2, "stroke-dasharray": "6 4", "class": "adv",
     }, chart);
   }
-  // Win readout of the same head: saturates once the game is decided,
-  // where the margin readout keeps grading decisiveness.
+  // Material forecast (expected final mons ahead): keeps grading decided
+  // positions where the advantage line saturates.
   el("path", {
-    d: linePath(D.winMean), fill: "none", stroke: "var(--series-3)",
+    d: linePath(D.mean), fill: "none", stroke: "var(--series-3)",
     "stroke-width": 2, "stroke-linejoin": "round",
   }, chart);
+  // The headline series: win chance, chess.com-eval style.
   el("path", {
-    d: linePath(D.mean), fill: "none", stroke: "var(--series-1)",
-    "stroke-width": 2, "stroke-linejoin": "round",
+    d: linePath(D.winMean), fill: "none", stroke: "var(--series-1)",
+    "stroke-width": 2.5, "stroke-linejoin": "round",
   }, chart);
-  // Actual final margin, at the terminal step.
+  // Final result at the terminal step (win/loss/tie pole).
   el("circle", {
-    cx: xOf(N - 1), cy: yOf(D.actualMargin / D.maxMargin), r: 4.5,
+    cx: xOf(N - 1),
+    cy: yOf(D.actualMargin > 0 ? 1 : D.actualMargin < 0 ? -1 : 0),
+    r: 4.5,
     fill: "var(--series-1)", stroke: "var(--surface-1)", "stroke-width": 2,
   }, chart);
 
@@ -806,19 +990,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     "stroke-width": 1.5, visibility: "hidden",
   }, chart);
 
-  // Legend.
+  // Legend. Fourth field marks details-only entries.
   var legendItems = [
-    ["Mean Φ (margin)", "var(--series-1)", "solid"],
-    ["Win readout P(w)−P(l)", "var(--series-3)", "solid"],
-    K > 1 ? ["± std (" + K + " members)", "var(--muted)", "band"] : null,
-    D.gated ? ["Gated Φ", "var(--series-2)", "dashed"] : null,
-    D.mirror ? ["−Φ mirror check", "var(--text-secondary)", "dotted"] : null,
-    ["Actual margin " + fmtSigned(D.actualMargin), "var(--series-1)", "dot"],
+    ["Advantage (left axis)", "var(--series-1)", "solid", false],
+    ["Mons ahead (right axis)", "var(--series-3)", "solid", false],
+    K > 1 ? ["Model spread", "var(--series-3)", "band", false] : null,
+    ["Final result", "var(--series-1)", "dot", false],
+    D.gated ? ["Gated forecast", "var(--series-2)", "dashed", true] : null,
+    D.mirror ? ["Mirror check", "var(--text-secondary)", "dotted", true] : null,
   ].filter(Boolean);
   var legendEl = document.getElementById("phi-legend");
   legendItems.forEach(function (item) {
     var div = document.createElement("div");
-    div.className = "item";
+    div.className = "item" + (item[3] ? " adv" : "");
     var swatchSvg =
       '<svg width="18" height="10" viewBox="0 0 18 10">' +
       (item[2] === "band"
@@ -834,20 +1018,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     legendEl.appendChild(div);
   });
 
-  // --- Per-turn Φ swing lane ---------------------------------------------
-  // Δ_j = Φ(step j+1) − Φ(step j) covers exactly the events of turn j+1
-  // (states sit at |turn| boundaries). This is the PBRS signal itself; it
-  // includes chance — a big blue bar can be a crit, not a good decision.
+  // --- Momentum lane ------------------------------------------------------
+  // Δ_j = win-chance(step j+1) − win-chance(step j) covers exactly the
+  // events of turn j+1 (states sit at |turn| boundaries). Win-chance (not
+  // material) deltas: decided-game conversion turns stay quiet, like a
+  // chess eval graph. Includes chance — a big bar can be a crit.
   var deltaChart = document.getElementById("delta-chart");
   var deltas = [];
-  for (var di = 0; di + 1 < N; di++) deltas.push(D.mean[di + 1] - D.mean[di]);
+  for (var di = 0; di + 1 < N; di++) {
+    deltas.push(D.winMean[di + 1] - D.winMean[di]);
+  }
   if (deltas.length) {
     var DH = 110;
     var DPAD = { t: 16, b: 18 };
     document.getElementById("delta-title").innerHTML =
-      "Per-turn Φ swing — <b>" + esc(anchorName) +
-      "</b> gained (blue) / lost (red) ground · includes luck, not just " +
-      "skill · click a bar to watch that turn";
+      "Momentum — <b>" + esc(anchorName) +
+      "</b> gained (blue) or lost (red) ground each turn · includes " +
+      "luck as well as skill · click a bar to watch that turn";
     var maxAbs = Math.max(1e-6, Math.max.apply(null, deltas.map(Math.abs)));
     var zeroY = DPAD.t + (DH - DPAD.t - DPAD.b) / 2;
     var scaleY = (DH - DPAD.t - DPAD.b) / 2 / maxAbs;
@@ -897,10 +1084,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       var d = deltas[j];
       tooltip.innerHTML =
         "<b>turn " + (j + 1) + "</b><br />" +
-        '<span class="k">ΔΦ</span> ' + (d >= 0 ? "+" : "") + d.toFixed(3) +
-        " (≈ " + fmtSigned(+(d * D.maxMargin).toFixed(1)) + " mons)<br />" +
-        '<span class="k">Φ</span> ' + D.mean[j].toFixed(2) +
-        " → " + D.mean[j + 1].toFixed(2);
+        '<span class="k">swing</span> ' + (d >= 0 ? "+" : "−") +
+        Math.abs(d * 100).toFixed(0) + "%<br />" +
+        '<span class="k">advantage</span> ' + pct(D.winMean[j]) +
+        " → " + pct(D.winMean[j + 1]);
       tooltip.style.display = "block";
       tooltip.style.left = (evt.clientX + 14) + "px";
       tooltip.style.top = (evt.clientY - 10) + "px";
@@ -913,6 +1100,180 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     deltaChart.addEventListener("click", function (evt) {
       // Seek to the start of the swing's turn so playing shows its events.
       if (window.battle) window.battle.seekTurn(deltaAt(evt.clientX) + 1);
+    });
+  }
+
+  // --- Per-mon faint risk heatmap (survival aux head) --------------------
+  // Present only for checkpoints trained with the aux head. Cell value is
+  // E[y] = E[discount^(steps to next faint)]: 1 = faints now, 0 = safe or
+  // never. Rows are stable revelation-order slots, anchor's mons first;
+  // neutral cells are fainted or not-yet-revealed mons (loss-masked in
+  // training, so the head's output there is meaningless).
+  var survChart = document.getElementById("surv-chart");
+  var survPlayLine = null;
+  var survXOf = null;
+  var survRowOrder = [];
+  var SPAD = { t: 6, b: 18 };
+  var SRH = 13;
+  // Species names need a wider label gutter than the shared PAD.l, so the
+  // heatmap has its own x mapping — cells, cursor, hover and click all use
+  // it, keeping the lane internally consistent (columns sit slightly left
+  // of the charts above; the synced cursor is remapped, not shared).
+  var SXL = 96;
+  if (D.survival) {
+    for (var sm = 0; sm < D.slotSides.length; sm++) {
+      if (D.slotSides[sm] === 1) survRowOrder.push(sm);
+    }
+    var survMyRows = survRowOrder.length;
+    for (var so = 0; so < D.slotSides.length; so++) {
+      if (D.slotSides[so] === 0) survRowOrder.push(so);
+    }
+    var survRows = survRowOrder.length;
+    // Rows are laid out under per-side group headers — random battles
+    // often have the SAME species on both teams, so ownership must be
+    // structural, not just label colour.
+    var SGH = 15;
+    var survRowY = function (r) {
+      return SPAD.t + SGH + r * SRH + (r >= survMyRows ? SGH : 0);
+    };
+    var SVH = survRowY(survRows - 1) + SRH + SPAD.b;
+    survChart.setAttribute("viewBox", "0 0 " + W + " " + SVH);
+    survXOf = function (i) {
+      return SXL + (N === 1 ? 0 : (i / (N - 1)) * (W - SXL - PAD.r));
+    };
+    // Cell edges sit at midpoints between steps, clamped to the lane —
+    // centered cells overflowed half a cell into the label gutter on
+    // short games and covered the species names.
+    var survLeft = function (i) {
+      return i === 0 ? SXL : (survXOf(i - 1) + survXOf(i)) / 2;
+    };
+    var survRight = function (i) {
+      return i === N - 1 ? W - PAD.r : (survXOf(i) + survXOf(i + 1)) / 2;
+    };
+    document.getElementById("surv-title").innerHTML =
+      "Faint watch — how much danger each Pokémon is in · " +
+      "outlined = on the field · grey = fainted or not yet seen";
+    var survName = function (slot) {
+      var name = D.slotNames && D.slotNames[slot];
+      if (!name) return "#" + (slot + 1);
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    };
+    var survRowLabel = function (r) {
+      var slot = survRowOrder[r];
+      return survName(slot) +
+        " (" + (D.slotSides[slot] === 1 ? anchorName : oppName) + ")";
+    };
+    if (survMyRows > 0) {
+      var myHeader = el("text", {
+        x: SXL, y: survRowY(0) - 4, "class": "side-label",
+        style: "fill: var(--pos-pole)",
+      }, survChart);
+      myHeader.textContent = anchorName + "'s team";
+    }
+    if (survRows > survMyRows) {
+      var oppHeader = el("text", {
+        x: SXL, y: survRowY(survMyRows) - 4, "class": "side-label",
+        style: "fill: var(--neg-pole)",
+      }, survChart);
+      oppHeader.textContent = oppName + "'s team";
+    }
+    survRowOrder.forEach(function (slot, r) {
+      var rowY = survRowY(r);
+      var rowLabel = el("text", {
+        x: SXL - 6, y: rowY + SRH - 3, "text-anchor": "end",
+        "class": "tick-label",
+        style: "fill: " +
+          (D.slotSides[slot] === 1 ? "var(--pos-pole)" : "var(--neg-pole)"),
+      }, survChart);
+      var labelText = survName(slot);
+      rowLabel.textContent =
+        labelText.length > 13 ? labelText.slice(0, 12) + "…" : labelText;
+      var firstSeen = -1;
+      for (var f = 0; f < N; f++) {
+        if (D.survivalMask[f][slot] > 0) { firstSeen = f; break; }
+      }
+      for (var i = 0; i < N; i++) {
+        var on = D.survivalMask[i][slot] > 0;
+        // Not yet revealed: leave blank — grey blocks tiling the lane
+        // before each mon's first appearance read as clutter.
+        if (!on && (firstSeen < 0 || i < firstSeen)) continue;
+        var left = survLeft(i);
+        el("rect", {
+          x: left + 0.5, y: rowY + 1,
+          width: Math.max(1, survRight(i) - left - 1), height: SRH - 2,
+          rx: 1.5,
+          fill: on
+            ? "color-mix(in oklab, var(--neg-pole) " +
+              Math.round(D.survival[i][slot] * 100) + "%, var(--surface-1))"
+            : "var(--mid)",
+          opacity: on ? 1 : 0.25,
+        }, survChart);
+      }
+      // On-field indicator: one soft ring per continuous stint on the
+      // field — a hard box on every active cell tiled the lane with
+      // black/white rectangles and read as noise.
+      if (D.active) {
+        var runStart = -1;
+        for (var t = 0; t <= N; t++) {
+          var act = t < N && D.active[t][slot] > 0;
+          if (act && runStart < 0) runStart = t;
+          if (!act && runStart >= 0) {
+            el("rect", {
+              x: survLeft(runStart) + 0.5, y: rowY + 0.5,
+              width: Math.max(2, survRight(t - 1) - survLeft(runStart) - 1),
+              height: SRH - 1, rx: 3, fill: "none",
+              stroke:
+                "color-mix(in oklab, var(--text-primary) 45%, transparent)",
+              "stroke-width": 1,
+            }, survChart);
+            runStart = -1;
+          }
+        }
+      }
+    });
+    survPlayLine = el("line", {
+      y1: SPAD.t, y2: SVH - SPAD.b, stroke: "var(--series-1)",
+      "stroke-width": 1.5, opacity: 0.9, visibility: "hidden",
+    }, survChart);
+
+    var survAt = function (evt) {
+      var rect = survChart.getBoundingClientRect();
+      var fracX = (evt.clientX - rect.left) / rect.width * W;
+      var i = Math.round((fracX - SXL) / (W - SXL - PAD.r) * (N - 1));
+      var fracY = (evt.clientY - rect.top) / rect.height * SVH;
+      var yRel = fracY - SPAD.t - SGH;
+      if (yRel >= survMyRows * SRH) yRel -= SGH;
+      var r = Math.floor(yRel / SRH);
+      return {
+        step: Math.max(0, Math.min(N - 1, i)),
+        row: Math.max(0, Math.min(survRows - 1, r)),
+      };
+    };
+    survChart.style.cursor = "pointer";
+    survChart.addEventListener("mousemove", function (evt) {
+      var at = survAt(evt);
+      var slot = survRowOrder[at.row];
+      var on = D.survivalMask[at.step][slot] > 0;
+      var isAct = D.active && D.active[at.step][slot] > 0;
+      tooltip.innerHTML =
+        "<b>" + esc(stepLabel(at.step)) + " · " + esc(survRowLabel(at.row)) +
+        "</b>" + (isAct ? " · on the field" : "") + "<br />" +
+        (on
+          ? '<span class="k">danger</span> ' +
+            (D.survival[at.step][slot] * 100).toFixed(0) + "%"
+          : '<span class="k">fainted or not yet seen</span>');
+      tooltip.style.display = "block";
+      tooltip.style.left = (evt.clientX + 14) + "px";
+      tooltip.style.top = (evt.clientY - 10) + "px";
+    });
+    survChart.addEventListener("mouseleave", function () {
+      tooltip.style.display = "none";
+    });
+    survChart.addEventListener("click", function (evt) {
+      var at = survAt(evt);
+      if (window.battle) {
+        window.battle.seekTurn(at.step === N - 1 ? Infinity : at.step + 1);
+      }
     });
   }
 
@@ -930,11 +1291,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }, marginChart);
   for (var b = 0; b < bins; b++) {
     var m = b - D.maxMargin;
-    var pct = Math.round((Math.abs(m) / D.maxMargin) * 65) + 35;
+    // NOT named pct: a `var` here shares the IIFE's function scope and
+    // would clobber the pct() formatter (it did — broke every tooltip).
+    var mixPct = Math.round((Math.abs(m) / D.maxMargin) * 65) + 35;
     var fill = m === 0
       ? "var(--mid)"
       : "color-mix(in oklab, var(--" + (m > 0 ? "pos" : "neg") +
-        "-pole) " + pct + "%, var(--surface-1))";
+        "-pole) " + mixPct + "%, var(--surface-1))";
     barNodes.push(el("rect", {
       x: MPAD.l + b * slotW + 1, width: slotW - 2,
       y: MH - MPAD.b, height: 0, rx: 3, fill: fill,
@@ -966,10 +1329,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     var probs = D.probs[step];
     var top = Math.max.apply(null, probs);
     var phi = D.mean[step];
+    var lead = phi * D.maxMargin;
     marginTitle.innerHTML =
-      "Predicted final margin — <b>" + esc(stepLabel(step)) +
-      "</b> · Φ = " + phi.toFixed(3) +
-      " (≈ " + fmtSigned(+(phi * D.maxMargin).toFixed(1)) + " mons)";
+      "Predicted final score — <b>" + esc(stepLabel(step)) + "</b> · " +
+      (Math.abs(lead) < 0.25
+        ? "too close to call"
+        : "<b>" + esc(lead > 0 ? anchorName : oppName) +
+          "</b> to finish ~" + Math.abs(lead).toFixed(1) + " Pokémon ahead");
     for (var b = 0; b < bins; b++) {
       var h = (probs[b] / Math.max(top, 1e-6)) * (MH - MPAD.t - MPAD.b);
       barNodes[b].setAttribute("y", MH - MPAD.b - h);
@@ -989,14 +1355,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     expectLine.setAttribute("x2", ex);
   }
 
-  // --- Key turns: chess.com-style swing annotations ----------------------
-  // ΔΦ over turn s's events = mean[s] − mean[s−1] (state s−1 is the start
-  // of turn s). Attribution caveat: a Pokemon turn contains BOTH players'
-  // moves plus the dice — Φ sees what happened, not who to credit.
+  // --- Key moments: chess.com-style swing annotations ---------------------
+  // Swing over turn s's events = win-chance[s] − win-chance[s−1] (state
+  // s−1 is the start of turn s). Attribution caveat: a Pokemon turn
+  // contains BOTH players' moves plus the dice — the model sees what
+  // happened, not who to credit. Thresholds in advantage units of
+  // [-1, 1]: 0.30 = a 30-point swing on the 0-centred ±100% scale.
   var SWING_MAJOR = 0.30, SWING_MINOR = 0.15;
   var swings = [];
   for (var s = 1; s < N; s++) {
-    var d = D.mean[s] - D.mean[s - 1];
+    var d = D.winMean[s] - D.winMean[s - 1];
     var tier = Math.abs(d) >= SWING_MAJOR ? 2 : Math.abs(d) >= SWING_MINOR ? 1 : 0;
     if (tier) swings.push({ step: s, delta: d, tier: tier });
   }
@@ -1012,12 +1380,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   swings.forEach(function (sw) {
     el("circle", {
-      cx: xOf(sw.step), cy: yOf(D.mean[sw.step]), r: sw.tier === 2 ? 5 : 3.5,
+      cx: xOf(sw.step), cy: yOf(D.winMean[sw.step]), r: sw.tier === 2 ? 5 : 3.5,
       fill: swingColor(sw), stroke: "var(--surface-1)", "stroke-width": 1.5,
     }, chart);
     var glyph = el("text", {
       x: xOf(sw.step),
-      y: yOf(D.mean[sw.step]) + (sw.delta > 0 ? -9 : 16),
+      y: yOf(D.winMean[sw.step]) + (sw.delta > 0 ? -9 : 16),
       "text-anchor": "middle", "font-size": "11", "font-weight": "700",
       fill: swingColor(sw),
     }, chart);
@@ -1029,25 +1397,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); })
     .slice(0, 8);
   if (keyTurns.length) {
-    document.getElementById("key-title").textContent = "Key turns";
+    document.getElementById("key-title").textContent = "Key moments";
     document.getElementById("key-note").textContent =
-      "Swings measure what happened during a turn — both players' moves " +
-      "and the dice. A blunder, an opponent's best move, and a crit look " +
-      "the same to Φ; watch the turn to judge which it was.";
+      "A swing counts everything that happened that turn — both players' " +
+      "moves and the luck. A blunder, a great play, and a critical hit " +
+      "can look the same here; click a moment and watch the turn to judge.";
     var keyEl = document.getElementById("key-turns");
     keyTurns.forEach(function (sw) {
       var row = document.createElement("div");
       row.className = "row";
       var toward = sw.delta > 0 ? anchorName : oppName;
       var disagree = K > 1 && D.std[sw.step] > 0.12
-        ? ' <span style="color:var(--muted)">· members disagree</span>'
+        ? ' <span class="adv" style="color:var(--muted)">· models disagree</span>'
         : "";
       row.innerHTML =
         '<span class="badge" style="background:' + swingColor(sw) + '">' +
         swingGlyph(sw) + "</span><b>" + esc(swingLabel(sw)) + "</b>" +
-        '<span class="delta">ΔΦ ' + (sw.delta > 0 ? "+" : "") +
-        sw.delta.toFixed(2) + "</span><span>swing toward " + esc(toward) +
-        "</span>" + disagree;
+        '<span class="delta">' + (sw.delta > 0 ? "+" : "−") +
+        Math.abs(sw.delta * 100).toFixed(0) + "% swing</span>" +
+        "<span>toward " + esc(toward) + "</span>" + disagree;
       row.addEventListener("click", function () {
         var battle = window.battle;
         if (battle) battle.seekTurn(Math.min(sw.step, N - 1));
@@ -1074,24 +1442,36 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     hoverLine.setAttribute("x2", x);
     hoverLine.setAttribute("visibility", "visible");
     hoverDot.setAttribute("cx", x);
-    hoverDot.setAttribute("cy", yOf(D.mean[step]));
+    hoverDot.setAttribute("cy", yOf(D.winMean[step]));
     hoverDot.setAttribute("visibility", "visible");
+    var lead = D.mean[step] * D.maxMargin;
     var rows =
       "<b>" + esc(stepLabel(step)) + "</b><br />" +
-      '<span class="k">mean Φ</span> ' + D.mean[step].toFixed(3);
-    if (K > 1) rows += ' <span class="k">±</span> ' + D.std[step].toFixed(3);
-    rows += '<br /><span class="k">win Φ</span> ' + D.winMean[step].toFixed(3);
+      '<span class="k">advantage</span> ' + pct(D.winMean[step]) +
+      '<br /><span class="k">forecast</span> ' +
+      (Math.abs(lead) < 0.25
+        ? "even"
+        : esc(lead > 0 ? anchorName : oppName) + " +" +
+          Math.abs(lead).toFixed(1) + " mons");
     if (step > 0) {
-      var turnDelta = D.mean[step] - D.mean[step - 1];
-      rows += '<br /><span class="k">ΔΦ turn ' + step + "</span> " +
-        (turnDelta > 0 ? "+" : "") + turnDelta.toFixed(3);
+      var turnDelta = D.winMean[step] - D.winMean[step - 1];
+      rows += '<br /><span class="k">swing turn ' + step + "</span> " +
+        (turnDelta >= 0 ? "+" : "−") +
+        Math.abs(turnDelta * 100).toFixed(0) + "%";
     }
-    if (D.gated) {
-      rows += '<br /><span class="k">gated Φ</span> ' + D.gated[step].toFixed(3);
-    }
-    if (D.mirror && step < D.mirror.length) {
-      rows += '<br /><span class="k">mirror Δ</span> ' +
-        Math.abs(D.mean[step] - D.mirror[step]).toFixed(4);
+    if (root.classList.contains("show-adv")) {
+      if (K > 1) {
+        rows += '<br /><span class="k">± spread</span> ' +
+          D.std[step].toFixed(3);
+      }
+      if (D.gated) {
+        rows += '<br /><span class="k">gated Φ</span> ' +
+          D.gated[step].toFixed(3);
+      }
+      if (D.mirror && step < D.mirror.length) {
+        rows += '<br /><span class="k">mirror Δ</span> ' +
+          Math.abs(D.mean[step] - D.mirror[step]).toFixed(4);
+      }
     }
     tooltip.innerHTML = rows;
     tooltip.style.display = "block";
@@ -1138,7 +1518,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     playLine.setAttribute("x1", x);
     playLine.setAttribute("x2", x);
     playLine.setAttribute("visibility", "visible");
+    if (survPlayLine) {
+      var sx = survXOf(playStep);
+      survPlayLine.setAttribute("x1", sx);
+      survPlayLine.setAttribute("x2", sx);
+      survPlayLine.setAttribute("visibility", "visible");
+    }
   }, 250);
+
+  var advBtn = document.getElementById("adv-toggle");
+  advBtn.addEventListener("click", function () {
+    var on = root.classList.toggle("show-adv");
+    advBtn.textContent = on ? "Hide model details" : "Show model details";
+  });
+
+  // Arrow keys step the replay turn by turn (same as the player's
+  // last/next buttons); the playback-sync loop moves every chart cursor.
+  document.addEventListener("keydown", function (evt) {
+    var battle = window.battle;
+    if (!battle) return;
+    if (evt.key === "ArrowLeft") {
+      battle.seekBy(-1);
+      evt.preventDefault();
+    } else if (evt.key === "ArrowRight") {
+      battle.seekBy(1);
+      evt.preventDefault();
+    }
+  });
 
   renderMargin(0);
 })();

@@ -4,8 +4,10 @@ Anyone pastes a replay.pokemonshowdown.com URL or id; the app fetches the
 replay, encodes it through the real shard exporter (node subprocess), runs
 the offline critic ensemble on CPU, and serves the standalone visualisation
 page (rl/offline/visualise.py's template — battle player + Φ chart + swing
-annotations). Pages are cached by replay id (replays are immutable), so
-each replay is computed once, ever.
+annotations, plus the per-mon faint-risk heatmap when the baked-in
+checkpoints were trained with the survival aux head; CriticRunner detects
+that from the params, so no flag is needed here). Pages are cached by
+replay id (replays are immutable), so each replay is computed once, ever.
 
 Deploy:
     pip install modal && modal setup     # once
@@ -29,20 +31,62 @@ Cost/latency profile:
 The image bakes in: this repo (exporter compiled via tsc at build time),
 the offline checkpoints under ckpts/offline/, node, and the python deps.
 Redeploy after training a new critic to pick up new checkpoints — the
-cache key includes the checkpoint names, so stale pages self-invalidate.
+cache key is a hash of the renderer source + checkpoint bytes, so any
+redeploy that could change a page's content invalidates it (names alone
+wouldn't: retrains overwrite ckpt_best in place).
 """
 
+import glob
+import os
 import re
 
 import modal
 
 REPO_REMOTE = "/root/porygon2"
-FORMAT_ID = "gen9randombattle"
 UNCERTAINTY_SCALE = 0.0  # gate display in the page; 0 = raw ensemble mean
 SCALEDOWN_WINDOW = 300  # seconds a container stays warm after last request
 MAX_LOG_BYTES = 2_000_000  # refuse absurd inputs before spending compute
 
 REPLAY_ID_RE = re.compile(r"[a-z0-9]+-[0-9]+(-[a-z0-9]+)?")
+
+# Served formats are whatever the deploying checkout has critics for:
+# every ckpts/offline/{format_id}[-ens{k}]/ckpt_best dir gets baked in
+# (best artifacts only — not periodic saves; discover_ckpts picks the
+# latest ckpt_* per member dir, and with ckpt_best as the sole entry
+# that's what it finds). Train a critic for a new format
+# (rl/offline/train.py --generation N --smogon-format X) and redeploy.
+
+
+def _discover_ckpt_dirs() -> list[str]:
+    """Repo-relative ckpt_best dirs. Module-level code runs BOTH at deploy
+    time (CWD = the checkout) and inside the container (repo baked at
+    REPO_REMOTE, CWD elsewhere) — resolve against whichever root exists so
+    both contexts derive the same list."""
+    for root in (".", REPO_REMOTE):
+        dirs = sorted(
+            os.path.relpath(path, root)
+            for path in glob.glob(
+                os.path.join(root, "ckpts", "offline", "*", "ckpt_best")
+            )
+        )
+        if dirs:
+            return dirs
+    return []
+
+
+CKPT_DIRS = _discover_ckpt_dirs()
+if not CKPT_DIRS:
+    raise RuntimeError(
+        "no ckpts/offline/*/ckpt_best found — train an offline critic "
+        "before deploying (rl/offline/train.py)"
+    )
+SUPPORTED_FORMATS = sorted(
+    {os.path.basename(os.path.dirname(d)).split("-ens")[0] for d in CKPT_DIRS}
+)
+# Embedding tables are per generation; bake one set per served generation.
+SERVED_GENERATIONS = sorted(
+    {int(re.match(r"gen(\d+)", f).group(1)) for f in SUPPORTED_FORMATS}
+)
 
 # Keep these in sync with requirements.txt — protobuf in particular must be
 # able to load the generated rl/environment/protos/*_pb2.py modules.
@@ -107,22 +151,17 @@ image = (
 )
 
 # The pretrained-embedding tables (rl/environment/data.py,
-# add_pretrained_embedding) — the only .npy files the critic reads.
+# add_pretrained_embedding) — the only .npy files the critic reads; one
+# set per served generation.
 EMBEDDING_NPYS = ["species", "abilities", "items", "moves", "learnset"]
-for _name in EMBEDDING_NPYS:
-    image = image.add_local_file(
-        f"data/data/gen9/{_name}.npy",
-        remote_path=f"{REPO_REMOTE}/data/data/gen9/{_name}.npy",
-        copy=True,
-    )
+for _gen in SERVED_GENERATIONS:
+    for _name in EMBEDDING_NPYS:
+        image = image.add_local_file(
+            f"data/data/gen{_gen}/{_name}.npy",
+            remote_path=f"{REPO_REMOTE}/data/data/gen{_gen}/{_name}.npy",
+            copy=True,
+        )
 
-# Only the best artifact of each ensemble member — not every periodic
-# save. discover_ckpts picks the latest ckpt_* per member dir, and with
-# ckpt_best as the sole entry that's what it finds. Adjust if you deploy
-# a single non-ensemble critic (e.g. ["ckpts/offline/gen9randombattle/ckpt_best"]).
-CKPT_DIRS = [
-    f"ckpts/offline/{FORMAT_ID}-ens{k}/ckpt_best" for k in range(4)
-]
 for _ckpt in CKPT_DIRS:
     image = image.add_local_dir(
         _ckpt, remote_path=f"{REPO_REMOTE}/{_ckpt}", copy=True
@@ -159,7 +198,7 @@ RECENT_KEY = "__recent__"
 MAX_RECENT = 24
 
 LANDING = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Porygon2 — replay Φ visualiser</title>
+<html><head><meta charset="utf-8"><title>Game review for Pokémon Showdown</title>
 <style>
  body {{ font-family: system-ui, sans-serif; max-width: 640px;
         margin: 12vh auto; padding: 0 20px; }}
@@ -182,13 +221,13 @@ LANDING = """<!DOCTYPE html>
  .chip {{ display: inline-block; border-radius: 9px; padding: 0 7px;
          font-weight: 700; color: #fff; font-size: 11px; }}
 </style></head><body>
-<h1>Replay Φ visualiser</h1>
-<p>Paste a <a href="https://replay.pokemonshowdown.com">Pokemon Showdown</a>
-replay link or id ({format_id} only). You get the battle side by side with
-the offline critic's evaluation — per-turn win/margin belief, ensemble
-spread, and blunder/swing annotations.</p>
+<h1>Game review for Pokémon Showdown</h1>
+<p>Paste a <a href="https://replay.pokemonshowdown.com">replay</a> link and
+watch your battle next to a turn-by-turn review: win chances as the game
+swings, the key moments that decided it, the predicted final score, and
+which Pokémon were in danger. Works with {formats} replays.</p>
 <form id="f">
-<input id="q" placeholder="https://replay.pokemonshowdown.com/{format_id}-2654504071"
+<input id="q" placeholder="https://replay.pokemonshowdown.com/{example_format}-2654504071"
  autofocus />
 <button type="submit">Go</button>
 </form>
@@ -203,7 +242,9 @@ document.getElementById("f").addEventListener("submit", function (e) {{
   if (/^[a-z0-9]+-[0-9]+(-[a-z0-9]+)?$/.test(v)) location.href = "/r/" + v;
   else document.getElementById("err").textContent = "That doesn't look like a replay id.";
 }});
-</script></body></html>""".format(format_id=FORMAT_ID)
+</script></body></html>""".format(
+    formats=", ".join(SUPPORTED_FORMATS), example_format=SUPPORTED_FORMATS[0]
+)
 
 
 @app.cls(
@@ -229,26 +270,58 @@ class Visualizer:
         from rl.environment.data import ONEHOT_ENCODERS
         from rl.model.modules import ZeroEmbedding
 
-        zeroed = [
-            name
-            for name, enc in ONEHOT_ENCODERS[9].items()
-            if isinstance(enc, ZeroEmbedding)
-        ]
+        zeroed = []
+        for gen in SERVED_GENERATIONS:
+            if gen not in ONEHOT_ENCODERS:
+                raise RuntimeError(
+                    f"generation {gen} has a checkpoint but no model/"
+                    "embedding support (rl/environment/data.py "
+                    "VALID_GENERATIONS)"
+                )
+            zeroed += [
+                f"gen{gen}/{name}"
+                for name, enc in ONEHOT_ENCODERS[gen].items()
+                if isinstance(enc, ZeroEmbedding)
+            ]
         if zeroed:
             raise RuntimeError(
                 f"pretrained embeddings missing from the image: {zeroed} — "
-                "deploy from a checkout with data/data/gen9/*.npy present"
+                "deploy from a checkout with data/data/gen*/{*}.npy present"
             )
 
-        from rl.offline.visualise import CriticRunner, discover_ckpts
+        import hashlib
 
-        ckpt_paths = discover_ckpts(FORMAT_ID)
-        self.runner = CriticRunner(ckpt_paths)
-        # Cache pages per model so redeploying a new critic invalidates.
-        self.model_version = "|".join(
-            "/".join(p.split("/")[-2:]) for p in ckpt_paths
-        )
-        print(f"loaded {len(ckpt_paths)} member(s): {self.model_version}")
+        from rl.offline import visualise
+
+        # One runner (checkpoint ensemble + jit) per served format.
+        self.runners = {
+            fmt: visualise.CriticRunner(visualise.discover_ckpts(fmt), fmt)
+            for fmt in SUPPORTED_FORMATS
+        }
+        # Cache pages per (renderer, model) CONTENT, not names: retrains
+        # overwrite ckpt_best in place and template changes ship under the
+        # same paths, so name-based keys never invalidate. Hashing the
+        # renderer source + checkpoint bytes makes any redeploy that could
+        # change a page's pixels a cache miss; unchanged redeploys keep
+        # serving cached pages. (Hashing the params files costs a few
+        # seconds once per container start — noise next to jax warmup.)
+        digest = hashlib.sha256()
+        with open(visualise.__file__, "rb") as f:
+            digest.update(f.read())
+        for fmt in SUPPORTED_FORMATS:
+            for path in self.runners[fmt].ckpt_paths:
+                for root, _, files in sorted(os.walk(path)):
+                    for name in sorted(files):
+                        digest.update(name.encode())
+                        with open(os.path.join(root, name), "rb") as f:
+                            digest.update(f.read())
+        self.model_version = digest.hexdigest()[:16]
+        for fmt, runner in self.runners.items():
+            print(
+                f"{fmt}: {len(runner.ckpt_paths)} member(s) — "
+                + "|".join("/".join(p.split("/")[-2:]) for p in runner.ckpt_paths)
+            )
+        print(f"page version {self.model_version}")
 
     def _bump_recent(self, replay_id: str, data: dict | None):
         """Maintains the landing page's recently-viewed list (most recent
@@ -291,17 +364,18 @@ class Visualizer:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             replay, replay_json_path = resolve_replay(replay_id, tmpdir)
-            if replay.get("formatid") != FORMAT_ID:
+            runner = self.runners.get(replay.get("formatid"))
+            if runner is None:
                 raise ValueError(
-                    f"this deployment only scores {FORMAT_ID} replays "
-                    f"(got {replay.get('formatid')!r})"
+                    f"this deployment scores {', '.join(sorted(self.runners))} "
+                    f"replays (got {replay.get('formatid')!r})"
                 )
             if len(replay.get("log", "")) > MAX_LOG_BYTES:
                 raise ValueError("replay log too large")
             payload, stats = export_record(replay_json_path, tmpdir)
 
         html, data = render_page(
-            replay, stats, payload, self.runner, UNCERTAINTY_SCALE
+            replay, stats, payload, runner, UNCERTAINTY_SCALE
         )
         page_cache[key] = html
         self._bump_recent(replay_id, data)
@@ -342,14 +416,25 @@ class Visualizer:
                 if cards
                 else ""
             )
-            return LANDING.replace("__RECENT__", section)
+            return HTMLResponse(
+                LANDING.replace("__RECENT__", section),
+                # No validators are emitted, so without this browsers
+                # heuristically cache — and keep showing pre-redeploy pages.
+                headers={"Cache-Control": "no-store"},
+            )
 
         @api.get("/r/{replay_id}", response_class=HTMLResponse)
         def replay(replay_id: str):
             if not REPLAY_ID_RE.fullmatch(replay_id):
                 return HTMLResponse("invalid replay id", status_code=400)
             try:
-                return self._render(replay_id)
+                # Server-side page cache is the real cache; the URL's
+                # content changes across redeploys, so the browser must
+                # always revalidate here.
+                return HTMLResponse(
+                    self._render(replay_id),
+                    headers={"Cache-Control": "no-store"},
+                )
             except urllib.error.HTTPError as err:
                 return HTMLResponse(
                     f"could not fetch that replay from showdown ({err.code})",

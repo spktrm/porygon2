@@ -167,6 +167,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
     finishedEarly: boolean;
     playerIndex: number | undefined;
+    // Pre-game ladder ratings [p1, p2], parsed from |player| lines by the
+    // offline exporter; [0, 0] (unknown) in live self-play.
+    ratings: [number, number] = [0, 0];
     requestCount: number;
     rqid: number;
     choices: string[];

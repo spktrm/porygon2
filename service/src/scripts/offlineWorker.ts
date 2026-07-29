@@ -44,6 +44,7 @@ interface OfflineWorkerData {
     minRating: number;
     minTurns: number;
     progressEvery: number;
+    verbose: boolean;
 }
 
 export interface OfflineWorkerStats {
@@ -54,6 +55,9 @@ export interface OfflineWorkerStats {
     skippedShort: number;
     skippedFormat: number;
     failed: number;
+    // console.log/warn/error calls swallowed from the sim/state encoder
+    // while verbose was off — replay logs routinely trip protocol warnings.
+    warnings: number;
 }
 
 // The player stream is only consumed by BattlePlayer.start(), which the
@@ -85,6 +89,17 @@ export function encodePerspective(
         {},
     );
     player.playerIndex = playerIndex;
+
+    // Pre-game ladder ratings from the |player| lines
+    // (|player|p1|name|avatar|rating). MUST come from the log, not replay
+    // metadata: anything recorded at upload time can be post-game, and
+    // post-game ratings leak the result. Unrated games leave 0 (unknown).
+    for (const line of lines) {
+        const match = /^\|player\|p([12])\|[^|]*\|[^|]*\|(\d+)/.exec(line);
+        if (match) {
+            player.ratings[Number(match[1]) - 1] = Number(match[2]);
+        }
+    }
 
     const states: EnvironmentState[] = [];
     for (const line of lines) {
@@ -124,8 +139,15 @@ export function encodePerspective(
 }
 
 async function run() {
-    const { files, shardPath, formatId, minRating, minTurns, progressEvery } =
-        workerData as OfflineWorkerData;
+    const {
+        files,
+        shardPath,
+        formatId,
+        minRating,
+        minTurns,
+        progressEvery,
+        verbose,
+    } = workerData as OfflineWorkerData;
 
     const stats: OfflineWorkerStats = {
         processed: 0,
@@ -135,7 +157,22 @@ async function run() {
         skippedShort: 0,
         skippedFormat: 0,
         failed: 0,
+        warnings: 0,
     };
+
+    if (!verbose) {
+        // The sim/state encoder warns liberally while replaying spectator
+        // logs (unknown idents, stream errors, ...). Swallow-and-count so
+        // the orchestrator's progress line stays intact; --verbose lets
+        // everything through. Worker-scoped: never affects the live server.
+        const swallow = () => {
+            stats.warnings += 1;
+        };
+        console.log = swallow;
+        console.warn = swallow;
+        console.error = swallow;
+        console.debug = swallow;
+    }
 
     const out = fs.createWriteStream(shardPath);
     const lengthPrefix = Buffer.alloc(4);

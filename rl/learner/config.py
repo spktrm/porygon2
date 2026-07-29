@@ -196,6 +196,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # decisiveness, denser shaping inside decided positions but can
     # transiently reward margin-seeking over win-optimal lines.
     potential_readout: str = "win"
+    # With an Elo-conditioned critic (auto-detected from the artifact),
+    # condition Φ at this rating: shaping then reflects how games between
+    # players of that strength resolve, not ladder-average conversion.
+    # 0 = leave the inputs alone (self-play carries no ratings, so the
+    # critic uses its unknown-rating bucket). Ignored for pre-rating
+    # artifacts. Conditioning far above the data's rating support makes
+    # ensemble members disagree, which the uncertainty gate then quiets.
+    potential_condition_rating: int = 1800
 
 
 def get_learner_config():

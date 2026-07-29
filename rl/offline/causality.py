@@ -95,12 +95,11 @@ def main():
         # fewer than two states and the exporter drops the trajectory.
         turns = sorted({min(max(k, 2), num_turns - 1) for k in turns})
 
-        ckpt_paths = args.ckpt or discover_ckpts(
-            replay.get("formatid", "gen9randombattle")
-        )
+        format_id = replay.get("formatid", "gen9randombattle")
+        ckpt_paths = args.ckpt or discover_ckpts(format_id)
         print(f"replay: {replay.get('id')} ({num_turns} turns)")
         print(f"checkpoints: {ckpt_paths}")
-        runner = CriticRunner(ckpt_paths)
+        runner = CriticRunner(ckpt_paths, format_id)
 
         full_payload, full_stats = export_record(replay_json_path, tmpdir)
         phi_full = perspective_phi(runner, full_payload, full_stats)  # (K, n)

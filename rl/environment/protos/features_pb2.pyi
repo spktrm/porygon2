@@ -208,6 +208,8 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__PUBLIC_ORDER_9: _ClassVar[InfoFeature]
     INFO_FEATURE__PUBLIC_ORDER_10: _ClassVar[InfoFeature]
     INFO_FEATURE__PUBLIC_ORDER_11: _ClassVar[InfoFeature]
+    INFO_FEATURE__MY_RATING: _ClassVar[InfoFeature]
+    INFO_FEATURE__OPP_RATING: _ClassVar[InfoFeature]
 
 class ActionType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -420,6 +422,8 @@ INFO_FEATURE__PUBLIC_ORDER_8: InfoFeature
 INFO_FEATURE__PUBLIC_ORDER_9: InfoFeature
 INFO_FEATURE__PUBLIC_ORDER_10: InfoFeature
 INFO_FEATURE__PUBLIC_ORDER_11: InfoFeature
+INFO_FEATURE__MY_RATING: InfoFeature
+INFO_FEATURE__OPP_RATING: InfoFeature
 ACTION_TYPE___UNSPECIFIED: ActionType
 ACTION_TYPE__MOVE: ActionType
 ACTION_TYPE__SWITCH: ActionType
