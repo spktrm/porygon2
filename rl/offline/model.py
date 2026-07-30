@@ -244,10 +244,21 @@ class Porygon2OfflineCritic(nn.Module):
             NUM_RATING_BUCKETS, self.cfg.encoder.entity_size, name="rating_embed"
         )
 
-    def _history_tokens(self, actor_input: PlayerActorInput):
-        slot_states, field_state, node_states = self.encoder.encode_history(
-            actor_input.env, actor_input.packed_history, actor_input.history
+    def _token_valid(self, actor_input: PlayerActorInput) -> jax.Array:
+        # Slots never occupied in this game are masked out of the
+        # relational rounds; the field token is always live.
+        slot_sides = self.encoder.history_slot_sides(actor_input.packed_history)
+        return jnp.concatenate(
+            ((slot_sides == 0) | (slot_sides == 1), jnp.ones(1, dtype=jnp.bool_))
         )
+
+    def _tokens_from_states(
+        self,
+        node_states: jax.Array,
+        slot_states: jax.Array,
+        field_state: jax.Array,
+        token_valid: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
         # Photos attend to diaries, trunk-style: each slot's current
         # snapshot makes a zero-init-gated cross-read of the recurrent
         # states, so at init the tokens ARE the raw snapshots (hand-rule
@@ -259,16 +270,41 @@ class Porygon2OfflineCritic(nn.Module):
         )
         # Relational stage: gated self-attention over [12 slots | field],
         # so cross-side matchup structure exists in the tokens BEFORE the
-        # side-pooled readout separates the sides. Slots never occupied in
-        # this game are masked out; the field token is always live.
-        slot_sides = self.encoder.history_slot_sides(actor_input.packed_history)
-        token_valid = jnp.concatenate(
-            ((slot_sides == 0) | (slot_sides == 1), jnp.ones(1, dtype=jnp.bool_))
-        )
+        # side-pooled readout separates the sides.
         mixed = jax.vmap(self.relational_rounds, in_axes=(0, None))(
             jnp.concatenate((tokens, field_state[:, None, :]), axis=-2), token_valid
         )
         return mixed[:, :-1, :], mixed[:, -1, :]
+
+    def _history_tokens(self, actor_input: PlayerActorInput):
+        slot_states, field_state, node_states = self.encoder.encode_history(
+            actor_input.env, actor_input.packed_history, actor_input.history
+        )
+        return self._tokens_from_states(
+            node_states, slot_states, field_state, self._token_valid(actor_input)
+        )
+
+    def _history_tokens_with_announced(self, actor_input: PlayerActorInput):
+        """Realised AND announced token banks, per request. The announced
+        bank (Φ_ann) runs the SAME modules end to end — cross-read,
+        relational rounds, side-pooling, antisymmetric readout — over the
+        announced recurrent state (pre-turn state + outcome-masked turn
+        messages) and pre-turn node snapshots, so mirror antisymmetry of
+        Φ_ann follows automatically and no new parameters exist."""
+        states, announced = self.encoder.encode_history_with_announced(
+            actor_input.env, actor_input.packed_history, actor_input.history
+        )
+        slot_states, field_state, node_states = states
+        ann_slot_states, ann_field_state, pre_node_states = announced
+        token_valid = self._token_valid(actor_input)
+        return (
+            self._tokens_from_states(
+                node_states, slot_states, field_state, token_valid
+            ),
+            self._tokens_from_states(
+                pre_node_states, ann_slot_states, ann_field_state, token_valid
+            ),
+        )
 
     def _outcome(
         self, actor_input: PlayerActorInput, tokens: jax.Array, field_state: jax.Array
@@ -332,6 +368,49 @@ class Porygon2OfflineCritic(nn.Module):
                 unseen=self.unseen_head(tokens),
                 revealed_set=self.set_head(tokens),
             ),
+        )
+
+    def announced(
+        self, actor_input: PlayerActorInput
+    ) -> tuple[CategoricalValueHeadOutput, CategoricalValueHeadOutput]:
+        """Consumption entry point for the skill/luck decomposition and
+        dice-excised shaping: (Φ, Φ_ann) per step, both through the SAME
+        antisymmetric readout. Φ_ann(t) is the margin belief given the
+        pre-turn state plus both players' announced choices for the turn
+        leading into state t, chance unresolved — so per turn:
+        decision = Φ_ann(t+1) − Φ(t), dice = Φ(t+1) − Φ_ann(t+1).
+        Adds no parameters: any artifact computes it, but only artifacts
+        trained at announced points (manifest announced_states) produce
+        calibrated values."""
+        (tokens, field_state), (ann_tokens, ann_field_state) = (
+            self._history_tokens_with_announced(actor_input)
+        )
+        return (
+            self._outcome(actor_input, tokens, field_state),
+            self._outcome(actor_input, ann_tokens, ann_field_state),
+        )
+
+    def with_aux_and_announced(self, actor_input: PlayerActorInput) -> tuple[
+        CategoricalValueHeadOutput,
+        OfflineAuxOutput,
+        CategoricalValueHeadOutput,
+    ]:
+        """Training entry point with announced states: with_aux plus the
+        Φ_ann margin head. Announced states are extra supervision points
+        for the same trajectory margin label (deep supervision through the
+        shared readout); aux heads stay realised-state-only."""
+        (tokens, field_state), (ann_tokens, ann_field_state) = (
+            self._history_tokens_with_announced(actor_input)
+        )
+        return (
+            self._outcome(actor_input, tokens, field_state),
+            OfflineAuxOutput(
+                survival=self.survival_head(tokens),
+                next_action=self.next_action_head(tokens),
+                unseen=self.unseen_head(tokens),
+                revealed_set=self.set_head(tokens),
+            ),
+            self._outcome(actor_input, ann_tokens, ann_field_state),
         )
 
 

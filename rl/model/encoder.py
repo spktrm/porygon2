@@ -66,6 +66,7 @@ from rl.model.history_encoder import (
     HistoryAttentionPool,
     NodeHistoryRead,
     PerSlotHistoryEncoder,
+    mask_outcome_features,
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
@@ -1306,26 +1307,14 @@ class Encoder(nn.Module):
         # final round drives the acting policy and value estimate.
         return action_embeddings, value_embeddings
 
-    def encode_history(
+    def _run_history_encoder(
         self,
-        env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        """Recurrent history pathway over the shared trajectory history.
-
-        Consumes ONLY the public event stream — packed public entity/edge
-        caches, the field history, and INFO_FEATURE__REQUEST_COUNT — no
-        private observation fields, movesets, or action masks. This makes
-        it safe to train against replay exports (which contain exactly the
-        same inputs) and reuse live without any distribution projection;
-        the offline outcome critic (rl/offline/model.py) builds on it.
-
-        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) GRU slot states,
-        (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
-        snapshot per slot — the entity's current state unmixed by GRU
-        gating, which outcome readouts need verbatim).
-        """
+    ):
+        """Shared front half of the history pathway: embeds the packed
+        caches and field rows once and runs the recurrent scan. Returns
+        (scan output, edge_slot_ids, node_sides, per-step field vectors)."""
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = jax.vmap(self._embed_public_entity)(
@@ -1364,11 +1353,77 @@ class Encoder(nn.Module):
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
         )
+        return history_output, edge_slot_ids, node_sides, step_field_vec
+
+    def encode_history(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Recurrent history pathway over the shared trajectory history.
+
+        Consumes ONLY the public event stream — packed public entity/edge
+        caches, the field history, and INFO_FEATURE__REQUEST_COUNT — no
+        private observation fields, movesets, or action masks. This makes
+        it safe to train against replay exports (which contain exactly the
+        same inputs) and reuse live without any distribution projection;
+        the offline outcome critic (rl/offline/model.py) builds on it.
+
+        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) GRU slot states,
+        (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
+        snapshot per slot — the entity's current state unmixed by GRU
+        gating, which outcome readouts need verbatim).
+        """
+        history_output, *_ = self._run_history_encoder(
+            packed_history_step, history_step
+        )
 
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         return self.history_encoder.state_at_requests(history_output, request_count)
+
+    def encode_history_with_announced(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ) -> tuple[
+        tuple[jax.Array, jax.Array, jax.Array],
+        tuple[jax.Array, jax.Array, jax.Array],
+    ]:
+        """encode_history plus, per request, the ANNOUNCED state: the
+        previous request's recurrent state advanced one extra step with
+        outcome-masked messages of the request's own turn (both players'
+        revealed choices, chance unresolved). The scan and both embedding
+        caches run once; only the masked edge cache is embedded extra.
+
+        Returns ((slot states, field state, node snapshots) as
+        encode_history, (announced slot states, announced field state,
+        pre-turn node snapshots)), each per request.
+        """
+        history_output, edge_slot_ids, node_sides, step_field_vec = (
+            self._run_history_encoder(packed_history_step, history_step)
+        )
+        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+        states = self.history_encoder.state_at_requests(history_output, request_count)
+
+        masked_cache, row_is_announcement = mask_outcome_features(
+            packed_history_step.edge_cache
+        )
+        announced_edge_embedding_cache, _ = jax.vmap(self._embed_edge)(masked_cache)
+        announced = self.history_encoder.announced_states_at_requests(
+            history_output=history_output,
+            history_field=history_step.field,
+            announced_edge_embedding_cache=announced_edge_embedding_cache,
+            edge_slot_ids=edge_slot_ids,
+            node_sides=node_sides,
+            row_is_announcement=row_is_announcement,
+            field_step_embeddings=step_field_vec,
+            request_counts=request_count,
+        )
+        return states, announced
 
     def read_history_into_nodes(
         self,
