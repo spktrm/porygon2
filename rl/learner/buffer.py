@@ -136,6 +136,11 @@ class PlayerTrajectoryStore:
         self._add_cv = threading.Condition(lock)
         self._sample_cv = threading.Condition(lock)
 
+        # Cumulative insert/sample counters; the replay controller diffs
+        # them per tick to log the realised replay ratio (samples/insert).
+        self.total_adds = 0
+        self.total_samples = 0
+
         self._progress = tqdm(desc="player_producer", smoothing=0.1)
 
         # Tracking
@@ -254,20 +259,31 @@ class PlayerTrajectoryStore:
             self._trajectories[replace_index] = traj
             self._reuses[replace_index] = 0
 
+        self.total_adds += 1
         self._progress.update(1)
 
     def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
-        """Samples n trajectories uniformly from those with fewer than max_reuses."""
+        """Samples n trajectories uniformly from those with fewer than max_reuses.
+
+        Each returned trajectory carries its pre-increment reuse count
+        (0 = first visit) for the fresh-vs-replayed staleness diagnostics.
+        """
         valid_indices = (self._reuses < self._max_reuses) & self._valid
         available_indices = np.where(valid_indices)[0]
 
         sample_indices = np.random.choice(available_indices, size=n, replace=False)
+        sampled = [
+            self._trajectories[i].replace(
+                reuse_count=np.array([self._reuses[i]], dtype=np.int32)
+            )
+            for i in sample_indices
+        ]
         if increment:
-            unique_indices, counts = np.unique(sample_indices, return_counts=True)
-            for idx, count in zip(unique_indices, counts):
-                self._reuses[idx] += count
+            # replace=False above guarantees unique indices.
+            self._reuses[sample_indices] += 1
+        self.total_samples += n
 
-        return [self._trajectories[i] for i in sample_indices]
+        return sampled
 
     def __len__(self):
         return len(self._trajectories)
