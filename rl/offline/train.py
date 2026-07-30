@@ -287,9 +287,7 @@ def _announced_metrics(
         f"announced_{key}": ann[key]
         for key in ("loss", "accuracy", "accuracy_last_step", "margin_std")
     }
-    target_log_probs = jax.lax.stop_gradient(
-        value_head.log_probs.astype(jnp.float32)
-    )
+    target_log_probs = jax.lax.stop_gradient(value_head.log_probs.astype(jnp.float32))
     ann_log_probs = jax.nn.log_softmax(
         announced_head.logits.astype(jnp.float32), axis=-1
     )
@@ -673,9 +671,9 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
     print(f"Initializing {num_members} members (traces the full encoder)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     member_keys = jax.random.split(jax.random.key(seed), num_members)
-    params = jax.vmap(
-        lambda key: model.init(key, ex_actor_input, method=train_method)
-    )(member_keys)
+    params = jax.vmap(lambda key: model.init(key, ex_actor_input, method=train_method))(
+        member_keys
+    )
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.clip_gradient),

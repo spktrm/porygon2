@@ -378,10 +378,7 @@ def _turn_announcement_fired(
     """
     from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
     from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
-    from rl.model.history_encoder import (
-        _OUTCOME_MAJOR_ARGS,
-        _RELEVANT_ENTITY_FEATURES,
-    )
+    from rl.model.history_encoder import _OUTCOME_MAJOR_ARGS, _RELEVANT_ENTITY_FEATURES
 
     num_steps, num_examples = request_counts.shape
     fired = np.zeros((num_steps - 1, num_examples), dtype=bool)
@@ -399,9 +396,10 @@ def _turn_announcement_fired(
             major != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
         ) & ~np.isin(major, _OUTCOME_MAJOR_ARGS)
         step_announced = (
-            np.take(row_is_announcement, np.clip(relevant, 0, major.size - 1))
-            & edge_ok
-        ).any(axis=1)  # (H,)
+            np.take(row_is_announcement, np.clip(relevant, 0, major.size - 1)) & edge_ok
+        ).any(
+            axis=1
+        )  # (H,)
         # match[t-1, h]: history step h belongs to the turn entering state t.
         match = rc[None, :] == request_counts[1:, b][:, None]
         fired[:, b] = (match & (step_announced & valid)[None, :]).any(axis=1)
@@ -457,7 +455,8 @@ def martingale_audit(args, config):
         probs = np.exp(np.asarray(head.log_probs, dtype=np.float32))  # (T, B, 13)
         return {
             "margin": np.asarray(head.expectation, dtype=np.float32),
-            "win": probs[..., MAX_MARGIN + 1 :].sum(-1) - probs[..., :MAX_MARGIN].sum(-1),
+            "win": probs[..., MAX_MARGIN + 1 :].sum(-1)
+            - probs[..., :MAX_MARGIN].sum(-1),
         }
 
     rows: dict[str, dict[str, list]] = {

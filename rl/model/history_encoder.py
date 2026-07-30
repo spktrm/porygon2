@@ -514,15 +514,19 @@ class PerSlotHistoryEncoder(nn.Module):
 
         seg = jnp.where(edge_ok, slot_ids, NUM_PUBLIC_SLOTS)
         step_slot_messages = jax.vmap(
-            lambda m, s: jax.ops.segment_sum(
-                m, s, num_segments=NUM_PUBLIC_SLOTS + 1
-            )[:-1]
-        )(edge_messages, seg)  # (H, 12, D)
+            lambda m, s: jax.ops.segment_sum(m, s, num_segments=NUM_PUBLIC_SLOTS + 1)[
+                :-1
+            ]
+        )(
+            edge_messages, seg
+        )  # (H, 12, D)
         step_counts = jax.vmap(
             lambda ok, s: jax.ops.segment_sum(
                 ok.astype(jnp.int32), s, num_segments=NUM_PUBLIC_SLOTS + 1
             )[:-1]
-        )(edge_ok, seg)  # (H, 12)
+        )(
+            edge_ok, seg
+        )  # (H, 12)
 
         h0_slots, h0_field = self.initial_state()
         step_indices = jnp.arange(history_output.step_valid.shape[0])
@@ -560,7 +564,7 @@ class PerSlotHistoryEncoder(nn.Module):
             counts = jnp.einsum("h,hs->s", turn, step_counts.astype(msg_dtype))
             return slots, field, nodes, field_vec, slot_messages, counts
 
-        (pre_slots, pre_field, pre_nodes, pre_field_vec, slot_messages, counts) = (
+        pre_slots, pre_field, pre_nodes, pre_field_vec, slot_messages, counts = (
             jax.vmap(gather_one)(request_counts)
         )
 
