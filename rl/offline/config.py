@@ -63,6 +63,29 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # ln(num_bins), so 1.0 is balanced). 0 disables the aux entirely.
     survival_loss_weight: float = 1.0
 
+    # Anticipation aux heads (see rl/offline/dataset.py::_action_targets):
+    # all self-supervised from the replay's own event stream — the labels
+    # are "what happened next", no reveal ontology or human annotation.
+    #
+    # Next-action head: per-slot categorical over the move vocab (+ "never
+    # acts again") for the mon's next executed move. Scoring well before a
+    # move is revealed requires a set posterior over the unseen slots.
+    # CE starts near ln(vocab) ≈ 7 vs the margin CE's ln(13) ≈ 2.6, so the
+    # default weight keeps its gradient from dominating at init.
+    action_loss_weight: float = 0.25
+    # Unseen-move hazard: discounted time until the mon next uses a move
+    # unrevealed as of the current step — the latent-threat clock. Discount
+    # 0.95 puts the half-life at ~13.5 request steps, the anticipation
+    # scale, vs the survival head's ~6.6 reactive scale. Same bins,
+    # censoring, and loss machinery as the survival head.
+    unseen_discount: float = 0.95
+    unseen_loss_weight: float = 1.0
+    # Eventually-revealed set head: positive-unlabelled multi-label over
+    # the move vocab (positives = moves revealed later than the current
+    # step; negatives only for mons whose full move count was eventually
+    # observed). Forces explicit set posteriors into the slot tokens.
+    set_loss_weight: float = 0.5
+
     # Elo conditioning: with probability rating_dropout, a game's rating
     # features are zeroed (per GAME, not per perspective — mirrored pairs
     # must stay exact mirrors for pair-aware batching). Trains the

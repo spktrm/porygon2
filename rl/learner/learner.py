@@ -837,7 +837,11 @@ class Learner:
         phi = np.asarray(jax.device_get(phi))[:, 0]
         aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
         self._record_potential_stats(traj, phi, aux)
-        return phi
+        # Stored bf16, upcast to f32 at use (compute_player_targets). The
+        # quantisation (~2^-9 absolute on Φ ∈ [-1, 1]) lands on the PBRS
+        # deltas γΦ(s')−Φ(s); insert-time stats above use the full-precision
+        # values, so potential_phi_step_delta_abs bounds the relative noise.
+        return phi.astype(jnp.bfloat16)
 
     def _record_potential_stats(
         self, traj: Trajectory, phi: np.ndarray, aux: dict[str, np.ndarray]

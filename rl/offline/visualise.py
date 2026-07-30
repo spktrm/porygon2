@@ -225,8 +225,8 @@ class CriticRunner:
             member_params = jax.tree.map(lambda x: x[k], self.params)  # noqa: B023
             out = jax.device_get(self._apply_fn(member_params, batch.actor_input))
             if self.has_survival:
-                out, survival_logits = out
-                survival_logits = np.asarray(survival_logits, dtype=np.float32)
+                out, aux = out
+                survival_logits = np.asarray(aux.survival, dtype=np.float32)
                 survival_probs = np.exp(
                     survival_logits - survival_logits.max(axis=-1, keepdims=True)
                 )
