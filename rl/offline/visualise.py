@@ -172,10 +172,9 @@ def _manifest_announced(ckpt_path: str) -> bool:
 
 def _win_readout(member_probs: np.ndarray) -> np.ndarray:
     """P(win) − P(loss) off (..., 13) margin-bin probabilities."""
-    return (
-        member_probs[..., MAX_MARGIN + 1 :].sum(-1)
-        - member_probs[..., :MAX_MARGIN].sum(-1)
-    )
+    return member_probs[..., MAX_MARGIN + 1 :].sum(-1) - member_probs[
+        ..., :MAX_MARGIN
+    ].sum(-1)
 
 
 def _format_generation(format_id: str) -> int:
@@ -227,9 +226,7 @@ class CriticRunner:
             method = Porygon2OfflineCritic.with_aux
         else:
             method = None
-        apply = (
-            functools.partial(model.apply, method=method) if method else model.apply
-        )
+        apply = functools.partial(model.apply, method=method) if method else model.apply
         self._apply_fn = jax.jit(jax.vmap(apply, in_axes=(None, 1), out_axes=1))
 
     def run(self, payload: bytes) -> tuple[dict, list]:
