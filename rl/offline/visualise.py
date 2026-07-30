@@ -1355,23 +1355,100 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     expectLine.setAttribute("x2", ex);
   }
 
+  // --- Chance-event tags --------------------------------------------------
+  // A state-value model cannot split a swing into skill vs luck (it only
+  // sees states), but the protocol log explicitly marks DISCRETE chance
+  // events — the one luck signal a public replay carries. Parse them per
+  // turn so key moments stop crediting players for crits and full paras.
+  // Damage-roll and speed-tie luck are not recorded and stay invisible.
+  // Display-side attribution only; never a training signal.
+  var chanceEvents = {};
+  (function () {
+    var logText = (
+      document.querySelector("script.battle-log-data").textContent || ""
+    ).replace(/\\\//g, "/");
+    var turn = 0;
+    var sawDamage = false; // within the current move block (secondary procs)
+    var add = function (label) {
+      if (!turn) return;
+      var list = (chanceEvents[turn] = chanceEvents[turn] || []);
+      if (list.indexOf(label) < 0) list.push(label);
+    };
+    logText.split("\n").forEach(function (line) {
+      if (!line.startsWith("|")) return;
+      var parts = line.split("|"); // ["", cmd, ...args]
+      var cmd = parts[1];
+      if (cmd === "turn") {
+        turn = parseInt(parts[2], 10) || 0;
+      } else if (cmd === "move") {
+        sawDamage = false;
+      } else if (cmd === "-damage") {
+        if (line.indexOf("[from] confusion") >= 0) add("confusion self-hit");
+        else sawDamage = true;
+      } else if (cmd === "-crit") {
+        add("critical hit");
+      } else if (cmd === "-miss") {
+        add("miss");
+      } else if (cmd === "-ohko") {
+        add("OHKO");
+      } else if (cmd === "cant") {
+        if (parts[3] === "par") add("full paralysis");
+        else if (parts[3] === "slp") add("stayed asleep");
+        else if (parts[3] === "frz") add("frozen solid");
+        else if (parts[3] === "flinch") add("flinch");
+      } else if (cmd === "-status") {
+        // Status from a damaging move's secondary (30% para etc.) or a
+        // contact ability is chance; a status MOVE (Thunder Wave) is not.
+        if (line.indexOf("[from] ability:") >= 0) add("ability proc");
+        else if (sawDamage) add("secondary effect");
+      }
+    });
+  })();
+
+  // A faint the model already priced (high danger at the turn's start) is
+  // anticipated doom resolving, not someone's blunder.
+  function faintSeenComing(step) {
+    if (!D.survival || step < 1) return false;
+    for (var slot = 0; slot < D.slotSides.length; slot++) {
+      if (
+        D.survivalMask[step - 1][slot] > 0 &&
+        D.survivalMask[step][slot] === 0 &&
+        D.survival[step - 1][slot] >= 0.6
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // --- Key moments: chess.com-style swing annotations ---------------------
   // Swing over turn s's events = win-chance[s] − win-chance[s−1] (state
-  // s−1 is the start of turn s). Attribution caveat: a Pokemon turn
-  // contains BOTH players' moves plus the dice — the model sees what
-  // happened, not who to credit. Thresholds in advantage units of
-  // [-1, 1]: 0.30 = a 30-point swing on the 0-centred ±100% scale.
+  // s−1 is the start of turn s). Attribution: a Pokemon turn contains
+  // BOTH players' moves plus the dice — logged chance events and
+  // model-anticipated faints soften the glyph; the rest is left to the
+  // viewer. Thresholds in advantage units of [-1, 1]: 0.30 = a 30-point
+  // swing on the 0-centred ±100% scale.
   var SWING_MAJOR = 0.30, SWING_MINOR = 0.15;
   var swings = [];
   for (var s = 1; s < N; s++) {
     var d = D.winMean[s] - D.winMean[s - 1];
     var tier = Math.abs(d) >= SWING_MAJOR ? 2 : Math.abs(d) >= SWING_MINOR ? 1 : 0;
-    if (tier) swings.push({ step: s, delta: d, tier: tier });
+    if (tier) {
+      swings.push({
+        step: s,
+        delta: d,
+        tier: tier,
+        luck: chanceEvents[s] || [],
+        expected: faintSeenComing(s),
+      });
+    }
   }
   function swingColor(sw) {
     return sw.delta > 0 ? "var(--pos-pole)" : "var(--neg-pole)";
   }
   function swingGlyph(sw) {
+    if (sw.luck.length) return "🎲";
+    if (sw.expected) return "…";
     if (sw.delta > 0) return sw.tier === 2 ? "!!" : "!";
     return sw.tier === 2 ? "??" : "?";
   }
@@ -1399,14 +1476,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   if (keyTurns.length) {
     document.getElementById("key-title").textContent = "Key moments";
     document.getElementById("key-note").textContent =
-      "A swing counts everything that happened that turn — both players' " +
-      "moves and the luck. A blunder, a great play, and a critical hit " +
-      "can look the same here; click a moment and watch the turn to judge.";
+      "🎲 = the log records a chance event that turn (crit, miss, full " +
+      "paralysis, ...) — credit the dice, not the player. … = a faint " +
+      "the model already saw coming. Damage rolls and speed ties aren't " +
+      "recorded in replays, so some luck is untaggable. Everything else " +
+      "was both players' decisions — click a moment and judge.";
     var keyEl = document.getElementById("key-turns");
     keyTurns.forEach(function (sw) {
       var row = document.createElement("div");
       row.className = "row";
       var toward = sw.delta > 0 ? anchorName : oppName;
+      var cause = sw.luck.length
+        ? ' <span style="color:var(--muted)">· ' +
+          sw.luck.map(esc).join(", ") + "</span>"
+        : sw.expected
+          ? ' <span style="color:var(--muted)">· loss was already likely</span>'
+          : "";
       var disagree = K > 1 && D.std[sw.step] > 0.12
         ? ' <span class="adv" style="color:var(--muted)">· models disagree</span>'
         : "";
@@ -1415,7 +1500,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         swingGlyph(sw) + "</span><b>" + esc(swingLabel(sw)) + "</b>" +
         '<span class="delta">' + (sw.delta > 0 ? "+" : "−") +
         Math.abs(sw.delta * 100).toFixed(0) + "% swing</span>" +
-        "<span>toward " + esc(toward) + "</span>" + disagree;
+        "<span>toward " + esc(toward) + "</span>" + cause + disagree;
       row.addEventListener("click", function () {
         var battle = window.battle;
         if (battle) battle.seekTurn(Math.min(sw.step, N - 1));
