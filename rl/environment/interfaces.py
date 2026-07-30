@@ -208,6 +208,13 @@ class Trajectory:
     # trajectory. () when no offline critic is configured.
     state_potential: ArrayLike = ()
 
+    # How many times this trajectory had been sampled BEFORE this one, shape
+    # (1,) per trajectory — (1, B) once batched. Attached at sample time by
+    # PlayerTrajectoryStore (0 = first visit) and consumed by the
+    # fresh-vs-replayed value-error plasticity diagnostic. () outside the
+    # learner's sampling path.
+    reuse_count: ArrayLike = ()
+
 
 @dataclass
 class Batch(Trajectory):

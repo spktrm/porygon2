@@ -68,13 +68,20 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # inherently anti-windup. Buffer capacity independently bounds sample
     # age (state-distribution staleness), which no ratio control fixes.
     player_replay_ctrl_enabled: bool = True
-    # Setpoint: the actor-KL level the buffer-capacity plateau diagnosis
-    # identified as the healthy/stale boundary.
+    # Ceiling: the actor-KL level the buffer-capacity plateau diagnosis
+    # identified as the healthy/stale boundary. This is a pathology
+    # threshold, NOT a desirable operating point — hence the asymmetric
+    # bounds below: the controller throttles the cap below the nominal
+    # player_replay_ratio when KL exceeds this, and recovers back to
+    # nominal when it drops, but never raises reuse above nominal chasing
+    # the ceiling (staler data per learner step is never a win under a
+    # strength-per-step objective).
     player_replay_kl_target: float = 0.045
     player_replay_ratio_min: int = 1
-    # Upper bound: what the actor fleet can sustain before the learner
-    # starves waiting on inserts.
-    player_replay_ratio_max: int = 16
+    # Upper bound of the controlled cap. Kept at the nominal ratio so the
+    # controller is purely protective; raise above player_replay_ratio
+    # only if learner throughput (not strength-per-step) is the priority.
+    player_replay_ratio_max: int = 8
     # Velocity-form PI gains on log(cap) per controller tick, applied to the
     # normalised error (kl_target − kl)/kl_target. At ki=0.02 and one tick
     # per player_replay_ctrl_interval steps, a sustained 2× KL overshoot
@@ -113,6 +120,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
     plasticity_recovery_winrate: float = 0.6
     plasticity_cooldown_frames: int = int(1e6)
+    # Plasticity instrumentation: every N learner steps, run an
+    # encoder-only forward on the current batch and log trunk
+    # representation health — dormant-unit fraction (ReDo criterion) and
+    # srank@0.99 — alongside the per-step fresh-vs-replayed value-error
+    # gap. Together these say whether a plateau is actually plasticity
+    # loss (dormant/rank degrading, memorisation gap opening) before a
+    # league-stagnation trigger fires a perturbation. 0 disables the
+    # probe (the value-error gap is always on).
+    plasticity_probe_interval: int = 1000
 
     # Player magnet regularization (MMD-style). The policy is pulled toward a
     # fixed hierarchical magnet over legal actions (uniform over valid
