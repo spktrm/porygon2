@@ -41,7 +41,7 @@ def compute_player_targets(
     value_log_probs: jax.Array,
     isr: jax.Array,
     state_potential: jax.Array,
-    potential_advantage_coef: float,
+    potential_target_adv_share: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes v-trace returns and advantages over stacked reward channels.
@@ -54,8 +54,9 @@ def compute_player_targets(
 
     Channels: [0:n_bins] categorical win reward, [n_bins] learned potential
     (``state_potential``, the frozen offline critic's Φ(s) in [-1, 1];
-    terminal-only reward, mixed into advantages via
-    ``potential_advantage_coef``).
+    terminal-only reward). The potential channel's coefficient is solved
+    per batch so its share of the combined advantage magnitude equals
+    ``potential_target_adv_share``.
 
     IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
     and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
@@ -123,9 +124,6 @@ def compute_player_targets(
 
     win_advantages = pg_advantages[..., :n_bins] @ cat_vf_support
     potential_advantages = pg_advantages[..., n_bins]
-    combined_advantage = (
-        win_advantages + potential_advantage_coef * potential_advantages
-    )
 
     win_returns = targets_tm1[..., :n_bins]
 
@@ -148,13 +146,44 @@ def compute_player_targets(
     adv_cov = (
         (win_advantages - win_adv_mean) * (potential_advantages - pot_adv_mean)
     ).mean(where=policy_mask)
+
+    # Solve the channel coefficient from the target share s of combined
+    # advantage magnitude: coef·σ_pot = s/(1−s)·σ_win. The stds don't
+    # depend on the coef, so this is a direct solve, not a feedback loop.
+    share = jnp.clip(potential_target_adv_share, 0.0, 0.99).astype(isr.dtype)
+    potential_advantage_coef = jnp.minimum(
+        share / (1.0 - share) * win_adv_std / (pot_adv_std + 1e-8),
+        config.player_potential_coef_max,
+    )
+    combined_advantage = (
+        win_advantages + potential_advantage_coef * potential_advantages
+    )
+
+    # Off-policyness of the replayed batch: normalised effective sample
+    # size of the raw importance ratios (1 = fully on-policy; low means the
+    # truncated estimator is living off a few samples) and the fraction of
+    # steps where the v-trace ρ/c truncation at 1 is active. Both feed the
+    # replay-ratio controller diagnostics alongside the actor KL.
+    isr_mean = isr.mean(where=policy_mask)
+    isr_sq_mean = jnp.square(isr).mean(where=policy_mask)
+
     scaled_pot_adv_std = potential_advantage_coef * pot_adv_std
     channel_logs = {
+        "player_isr_ess": isr_mean * isr_mean / (isr_sq_mean + 1e-8),
+        "player_rho_clip_frac": (isr > 1.0).mean(where=policy_mask),
         "player_win_adv_std": win_adv_std,
         "player_potential_adv_std": pot_adv_std,
+        "player_potential_adv_coef": potential_advantage_coef,
         "player_potential_win_adv_corr": adv_cov / (win_adv_std * pot_adv_std + 1e-8),
         "player_potential_adv_share": scaled_pot_adv_std
         / (win_adv_std + scaled_pot_adv_std + 1e-8),
+        # Fraction of steps where the potential channel flips the advantage
+        # sign: shaping can only change which actions get pushed up vs down
+        # where this is nonzero, so ~0 means the channel decorates
+        # already-correct advantages and cannot move the policy.
+        "player_potential_adv_sign_flip": (
+            jnp.sign(combined_advantage) != jnp.sign(win_advantages)
+        ).mean(where=policy_mask),
     }
 
     return (
