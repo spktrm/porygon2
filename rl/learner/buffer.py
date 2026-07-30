@@ -176,6 +176,19 @@ class PlayerTrajectoryStore:
             self._reuses >= self._max_reuses
         )
 
+    @property
+    def max_reuses(self) -> int:
+        return self._max_reuses
+
+    def set_max_reuses(self, max_reuses: int):
+        """Thread-safe update of the per-trajectory reuse cap (the replay
+        ratio knob). Wakes both waiters: raising the cap can unblock
+        samplers, lowering it can unblock adders."""
+        with self._add_cv:
+            self._max_reuses = int(max_reuses)
+            self._add_cv.notify_all()
+            self._sample_cv.notify_all()
+
     def reset_usage_counts(self):
         # Called from the learner thread; takes the store lock so it can't
         # interleave with _update_usage_counts running inside add().

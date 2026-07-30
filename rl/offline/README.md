@@ -125,8 +125,8 @@ redo identical work replay_ratio × ensemble-size times, and caching
 decouples learner step time from ensemble size entirely. Because the critic operates
 on the history pathway only, no input projection is needed and none
 exists. Φ feeds the potential advantage channel in
-`compute_player_targets`, gated by `player_potential_advantage_coef_fn`
-(default 0 — set an annealed schedule to use it). The hand-crafted
+`compute_player_targets`, gated by `player_potential_target_adv_share_fn`
+(a target-share schedule; the coefficient is solved per batch). The hand-crafted
 `statePotential.ts` heuristic has been removed;
 `INFO_FEATURE__STATE_POTENTIAL` stays zero for proto layout
 compatibility.

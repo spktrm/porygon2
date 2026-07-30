@@ -99,7 +99,7 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    potential_advantage_coef = config.player_potential_advantage_coef_fn(
+    potential_target_adv_share = config.player_potential_target_adv_share_fn(
         player_state.step_count
     )
 
@@ -119,12 +119,18 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         state_potential=state_potential,
-        potential_advantage_coef=potential_advantage_coef,
+        potential_target_adv_share=potential_target_adv_share,
         config=config,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+    # Fraction of steps where the IMPACT clipped-target correction is
+    # saturated at its cap — a second staleness signal alongside the actor
+    # KL and ESS diagnostics.
+    training_logs["player_impact_clip_frac"] = (
+        (actor_target_clipped_ratio >= 2.0).astype(jnp.float32).mean(where=policy_mask)
+    )
     player_targets = promote_map(player_targets, float_dtype)
 
     if config.player_advantage_ema_enabled:
@@ -296,7 +302,7 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_advantage_mixing_alpha=potential_advantage_coef,
+            player_potential_target_adv_share=potential_target_adv_share,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -618,6 +624,17 @@ class Learner:
             need_tracking=is_not_randoms,
         )
 
+        # Replay-ratio PI controller state (see config for the design).
+        # Owned by the wandb log worker thread, which already device-syncs
+        # every step's logs — the controller reads the actor KL there and
+        # drives player_replay.set_max_reuses, so the train loop never pays
+        # for it. Velocity form on log(cap): only the previous error and the
+        # clamped control value are state.
+        self._replay_ctrl_log_cap = float(np.log(self.config.player_replay_ratio))
+        self._replay_ctrl_prev_err = 0.0
+        self._replay_ctrl_kl_sum = 0.0
+        self._replay_ctrl_kl_count = 0
+
         # Threading
         self.device_q: queue.Queue[Batch] = queue.Queue(maxsize=1)
         # Log dicts still hold device arrays when enqueued; the log worker
@@ -830,15 +847,62 @@ class Learner:
         """Background thread: drains log dicts, paying the device->host
         transfer and wandb serialization here so the train loop never has to
         synchronize with the GPU per step. A single consumer preserves wandb's
-        step ordering."""
+        step ordering. Also hosts the replay-ratio controller, which needs
+        exactly the host-side per-step logs this thread already produces."""
         while True:
             logs = self._log_q.get()
             if logs is None:
                 break
             try:
-                self.wandb_run.log(jax.device_get(logs))
+                host_logs = jax.device_get(logs)
+                self._update_replay_controller(host_logs)
+                self.wandb_run.log(host_logs)
             except Exception:
                 logger.exception("wandb logging failed")
+
+    def _update_replay_controller(self, host_logs: dict) -> None:
+        """Velocity-form PI loop holding the replayed-batch actor KL at
+        player_replay_kl_target by adjusting the store's reuse cap.
+
+        The KL is averaged over player_replay_ctrl_interval steps per tick
+        (the per-batch measurement is noisy; the window is the smoother).
+        Working on log(cap) makes the control multiplicative, and clamping
+        log(cap) itself gives anti-windup for free: the integral action
+        cannot accumulate past the bounds. Adds the current cap to
+        host_logs so every wandb step carries it."""
+        config = self.config
+        if not config.player_replay_ctrl_enabled:
+            return
+        kl = host_logs.get("player_learner_actor_forward_kl")
+        if kl is not None and np.isfinite(kl):
+            self._replay_ctrl_kl_sum += float(kl)
+            self._replay_ctrl_kl_count += 1
+
+        if self._replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
+            kl_mean = self._replay_ctrl_kl_sum / self._replay_ctrl_kl_count
+            self._replay_ctrl_kl_sum = 0.0
+            self._replay_ctrl_kl_count = 0
+
+            err = (config.player_replay_kl_target - kl_mean) / (
+                config.player_replay_kl_target
+            )
+            self._replay_ctrl_log_cap += (
+                config.player_replay_ctrl_kp * (err - self._replay_ctrl_prev_err)
+                + config.player_replay_ctrl_ki * err
+            )
+            self._replay_ctrl_prev_err = err
+            self._replay_ctrl_log_cap = float(
+                np.clip(
+                    self._replay_ctrl_log_cap,
+                    np.log(config.player_replay_ratio_min),
+                    np.log(config.player_replay_ratio_max),
+                )
+            )
+            cap = int(round(np.exp(self._replay_ctrl_log_cap)))
+            if cap != self.player_replay.max_reuses:
+                self.player_replay.set_max_reuses(cap)
+
+        host_logs["player_replay_max_reuses"] = float(self.player_replay.max_reuses)
 
     def train(self):
         """
