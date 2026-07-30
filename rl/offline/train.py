@@ -2,12 +2,17 @@
 
 Trains the player model's encoder + categorical value head to predict the
 final game outcome from replay states (Monte-Carlo regression over the
-public view), plus a per-mon discounted-survival auxiliary head (censored
-likelihood; see rl/offline/dataset.py::_survival_targets) that shapes the
-encoder features toward seeing imminent faints before they land. Artifacts
-are saved in the RL checkpoint layout so the RL learner can consume them
-directly (see rl/offline/artifact.py); the aux head is unread at
-consumption time.
+public view), plus per-mon auxiliary heads that shape the encoder features
+(all censored-likelihood, self-supervised from the replay stream; see
+rl/offline/dataset.py):
+- survival: discounted time-to-next-faint (imminent doom);
+- next-action: the mon's next executed move (builds set posteriors);
+- unseen-move hazard: discounted time until a not-yet-revealed move is
+  used (latent-threat anticipation);
+- revealed-set: the mon's eventually-revealed move set.
+Artifacts are saved in the RL checkpoint layout so the RL learner can
+consume them directly (see rl/offline/artifact.py); the aux heads are
+unread at consumption time.
 
 Usage:
     python -m rl.offline.train [--dataset-dir replays/shards] [--debug] ...
@@ -136,6 +141,133 @@ def _survival_loss(
     )
 
 
+def _next_action_loss(
+    logits: jax.Array,
+    targets: jax.Array,
+    is_reveal: jax.Array,
+    value_mask: jax.Array,
+) -> dict[str, jax.Array]:
+    """CE for the per-slot next-action head.
+
+    ``targets`` (T, B, slots) hold the next executed move id,
+    ACTION_NONE_CLASS, or -1 for no supervision. The ``unrevealed`` slice
+    (labels that are a move's FIRST use — the model must name a move it
+    has never seen) is the anticipation learning curve: it only improves
+    if set posteriors are forming.
+    """
+    log_probs = jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1)
+    nll = -jnp.take_along_axis(log_probs, jnp.clip(targets, 0)[..., None], axis=-1)[
+        ..., 0
+    ]
+    weight = (targets >= 0).astype(jnp.float32) * value_mask[..., None]
+    denom = weight.sum().clip(min=1.0)
+    correct = (logits.argmax(axis=-1) == targets).astype(jnp.float32)
+    reveal_weight = weight * is_reveal
+    reveal_denom = reveal_weight.sum().clip(min=1.0)
+    return dict(
+        action_loss=(nll * weight).sum() / denom,
+        action_accuracy=(correct * weight).sum() / denom,
+        action_loss_unrevealed=(nll * reveal_weight).sum() / reveal_denom,
+        action_accuracy_unrevealed=(correct * reveal_weight).sum() / reveal_denom,
+        num_action_targets=weight.sum(),
+    )
+
+
+def _set_prediction_loss(
+    logits: jax.Array,
+    eventual: jax.Array,
+    reveal_steps: jax.Array,
+    fully_observed: jax.Array,
+    masks: jax.Array,
+    value_mask: jax.Array,
+) -> dict[str, jax.Array]:
+    """Positive-unlabelled BCE for the eventually-revealed set head.
+
+    ``logits`` (T, B, slots, vocab); ``eventual`` (B, slots, 4) move ids
+    revealed by game end (-1 pad); ``reveal_steps`` (B, slots, 4) the step
+    each was first revealed at. Positives at step t are entries with
+    reveal_step > t (certain set members the model cannot yet see);
+    negatives exist only where ``fully_observed`` (every non-set move is
+    then a certain non-member). Positive and negative terms are each
+    per-element means so the ~vocab-sized negative set cannot drown the
+    ≤4 positives.
+    """
+    logits = logits.astype(jnp.float32)
+    num_steps, vocab = logits.shape[0], logits.shape[-1]
+    row_weight = masks * value_mask[..., None]  # (T, B, slots)
+    ev_idx = jnp.broadcast_to(
+        jnp.clip(eventual, 0)[None], (num_steps,) + eventual.shape
+    )
+    gathered = jnp.take_along_axis(logits, ev_idx, axis=-1)  # (T, B, slots, 4)
+    ev_valid = (eventual >= 0)[None]
+    future = ev_valid & (
+        reveal_steps[None] > jnp.arange(num_steps)[:, None, None, None]
+    )
+    pos_weight = future.astype(jnp.float32) * row_weight[..., None]
+    pos_denom = pos_weight.sum().clip(min=1.0)
+    pos_loss = -(jax.nn.log_sigmoid(gathered) * pos_weight).sum() / pos_denom
+    # Negative mass over the whole vocab minus the eventual entries,
+    # computed as (full sum − corrections) so no (T, B, slots, vocab)
+    # target tensor is ever materialised.
+    log_one_minus = jax.nn.log_sigmoid(-logits)
+    negative_sum = log_one_minus.sum(axis=-1) - (
+        jnp.take_along_axis(log_one_minus, ev_idx, axis=-1) * ev_valid
+    ).sum(axis=-1)
+    num_negatives = (vocab - ev_valid.sum(axis=-1)).clip(min=1)
+    neg_weight = row_weight * fully_observed[None]
+    neg_denom = neg_weight.sum().clip(min=1.0)
+    neg_loss = -((negative_sum / num_negatives) * neg_weight).sum() / neg_denom
+    # Calibration curve: mean predicted probability on future reveals —
+    # the direct "are set posteriors forming" signal.
+    pos_prob = (jnp.exp(jax.nn.log_sigmoid(gathered)) * pos_weight).sum() / pos_denom
+    return dict(
+        set_loss=pos_loss + neg_loss,
+        set_pos_prob=pos_prob,
+        num_set_positives=pos_weight.sum(),
+    )
+
+
+def _aux_metrics(batch: OfflineBatch, aux, mask: jax.Array) -> dict[str, jax.Array]:
+    """All aux-head losses/metrics for one (T, B, ...) batch."""
+    metrics = _survival_loss(
+        aux.survival, batch.survival_targets, batch.survival_masks, mask
+    )
+    unseen = _survival_loss(aux.unseen, batch.unseen_targets, batch.unseen_masks, mask)
+    metrics.update(
+        unseen_loss=unseen["survival_loss"],
+        unseen_loss_imminent=unseen["survival_loss_imminent"],
+        num_unseen_targets=unseen["num_survival_targets"],
+    )
+    metrics.update(
+        _next_action_loss(
+            aux.next_action, batch.action_targets, batch.action_is_reveal, mask
+        )
+    )
+    metrics.update(
+        _set_prediction_loss(
+            aux.revealed_set,
+            batch.set_eventual,
+            batch.set_reveal_steps,
+            batch.set_fully_observed,
+            batch.set_masks,
+            mask,
+        )
+    )
+    return metrics
+
+
+def _total_loss(
+    config: Porygon2OfflineConfig, metrics: dict[str, jax.Array]
+) -> jax.Array:
+    return (
+        metrics["loss"]
+        + config.survival_loss_weight * metrics["survival_loss"]
+        + config.unseen_loss_weight * metrics["unseen_loss"]
+        + config.action_loss_weight * metrics["action_loss"]
+        + config.set_loss_weight * metrics["set_loss"]
+    )
+
+
 def _overlay_params(fresh, restored):
     """Overlays restored params onto a fresh init, keeping fresh subtrees
     the artifact doesn't have (e.g. the survival aux head when resuming a
@@ -157,7 +289,7 @@ def make_train_step(config: Porygon2OfflineConfig):
     @jax.jit
     def train_step(state: train_state.TrainState, batch: OfflineBatch):
         def loss_fn(params):
-            value_head, survival_logits = state.apply_fn(params, batch.actor_input)
+            value_head, aux = state.apply_fn(params, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -165,18 +297,8 @@ def make_train_step(config: Porygon2OfflineConfig):
                 mask,
                 label_smoothing=config.label_smoothing,
             )
-            metrics.update(
-                _survival_loss(
-                    survival_logits,
-                    batch.survival_targets,
-                    batch.survival_masks,
-                    mask,
-                )
-            )
-            total = (
-                metrics["loss"] + config.survival_loss_weight * metrics["survival_loss"]
-            )
-            return total, metrics
+            metrics.update(_aux_metrics(batch, aux, mask))
+            return _total_loss(config, metrics), metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         metrics["gradient_norm"] = optax.global_norm(grads)
@@ -188,14 +310,10 @@ def make_train_step(config: Porygon2OfflineConfig):
 def make_eval_step():
     @jax.jit
     def eval_step(state: train_state.TrainState, batch: OfflineBatch):
-        value_head, survival_logits = state.apply_fn(state.params, batch.actor_input)
+        value_head, aux = state.apply_fn(state.params, batch.actor_input)
         mask = _value_mask(batch.actor_input.env.done)
         metrics = _metrics_from_logits(value_head.logits, batch.labels, mask)
-        metrics.update(
-            _survival_loss(
-                survival_logits, batch.survival_targets, batch.survival_masks, mask
-            )
-        )
+        metrics.update(_aux_metrics(batch, aux, mask))
         return metrics
 
     return eval_step
@@ -218,6 +336,14 @@ def evaluate(
             "margin_std",
             "survival_loss",
             "survival_loss_imminent",
+            "unseen_loss",
+            "unseen_loss_imminent",
+            "action_loss",
+            "action_accuracy",
+            "action_loss_unrevealed",
+            "action_accuracy_unrevealed",
+            "set_loss",
+            "set_pos_prob",
         )
     }
 
@@ -258,6 +384,12 @@ def save_artifact(
                 step=step,
                 survival_discount=config.survival_discount,
                 survival_loss_weight=config.survival_loss_weight,
+                unseen_discount=config.unseen_discount,
+                unseen_loss_weight=config.unseen_loss_weight,
+                action_loss_weight=config.action_loss_weight,
+                set_loss_weight=config.set_loss_weight,
+                relational_rounds=True,
+                interaction_readout=True,
                 rating_conditioned=True,
                 rating_dropout=config.rating_dropout,
             ),
@@ -285,6 +417,10 @@ _CLI_FIELDS: dict[str, type] = dict(
     label_smoothing=float,
     survival_discount=float,
     survival_loss_weight=float,
+    unseen_discount=float,
+    unseen_loss_weight=float,
+    action_loss_weight=float,
+    set_loss_weight=float,
     rating_dropout=float,
     clip_gradient=float,
     log_interval_steps=int,
@@ -373,6 +509,14 @@ def evaluate_ensemble(
         "margin_mae",
         "survival_loss",
         "survival_loss_imminent",
+        "unseen_loss",
+        "unseen_loss_imminent",
+        "action_loss",
+        "action_accuracy",
+        "action_loss_unrevealed",
+        "action_accuracy_unrevealed",
+        "set_loss",
+        "set_pos_prob",
     )
     for key in keys:
         values = np.average(
@@ -443,7 +587,7 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
 
     def member_train_step(params, opt_state, batch: OfflineBatch):
         def loss_fn(p):
-            value_head, survival_logits = apply_fn(p, batch.actor_input)
+            value_head, aux = apply_fn(p, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -451,18 +595,8 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
                 mask,
                 label_smoothing=config.label_smoothing,
             )
-            metrics.update(
-                _survival_loss(
-                    survival_logits,
-                    batch.survival_targets,
-                    batch.survival_masks,
-                    mask,
-                )
-            )
-            total = (
-                metrics["loss"] + config.survival_loss_weight * metrics["survival_loss"]
-            )
-            return total, metrics
+            metrics.update(_aux_metrics(batch, aux, mask))
+            return _total_loss(config, metrics), metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         metrics["gradient_norm"] = optax.global_norm(grads)
@@ -476,22 +610,15 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
         # Holdout batches carry no member axis: every member scores the
         # same states, so member metrics are directly comparable and the
         # gate can be measured live.
-        value_heads, survival_logits = jax.vmap(
-            lambda p: apply_fn(p, batch.actor_input)
-        )(params)
+        value_heads, aux = jax.vmap(lambda p: apply_fn(p, batch.actor_input))(params)
         logits = value_heads.logits  # (K, T, B, bins)
         mask = _value_mask(batch.actor_input.env.done)
         per_member = jax.vmap(
-            lambda member_logits, member_survival: dict(
+            lambda member_logits, member_aux: dict(
                 **_metrics_from_logits(member_logits, batch.labels, mask),
-                **_survival_loss(
-                    member_survival,
-                    batch.survival_targets,
-                    batch.survival_masks,
-                    mask,
-                ),
+                **_aux_metrics(batch, member_aux, mask),
             )
-        )(logits, survival_logits)
+        )(logits, aux)
         support = jnp.asarray(MARGIN_SUPPORT, dtype=jnp.float32)
         phi = jax.nn.softmax(logits.astype(jnp.float32), axis=-1) @ support
         std = phi.std(axis=0)
@@ -552,6 +679,9 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
             print(
                 f"step {step} | loss [{losses}] | "
                 f"surv {m['survival_loss'].mean():.3f} | "
+                f"unseen-imm {m['unseen_loss_imminent'].mean():.3f} | "
+                f"act-acc {m['action_accuracy'].mean():.3f} | "
+                f"set-p {m['set_pos_prob'].mean():.3f} | "
                 f"acc {m['accuracy'].mean():.3f} | "
                 f"last-step acc {m['accuracy_last_step'].mean():.3f} | "
                 f"grad norm {m['gradient_norm'].mean():.2e}"
@@ -693,11 +823,13 @@ def main():
             wandb_run.log(logs, step=step)
             print(
                 f"step {step} | loss {logs['loss']:.4f} | "
-                f"surv {logs['survival_loss']:.4f} | "
                 f"surv-imm {logs['survival_loss_imminent']:.4f} | "
+                f"unseen-imm {logs['unseen_loss_imminent']:.4f} | "
+                f"act-acc {logs['action_accuracy']:.3f} | "
+                f"act-unrev {logs['action_loss_unrevealed']:.3f} | "
+                f"set-p {logs['set_pos_prob']:.3f} | "
                 f"acc {logs['accuracy']:.3f} | "
                 f"last-step acc {logs['accuracy_last_step']:.3f} | "
-                f"margin mae {logs['margin_mae']:.2f} | "
                 f"margin std {logs['margin_std']:.2e} | "
                 f"grad norm {logs['gradient_norm']:.2e}"
             )

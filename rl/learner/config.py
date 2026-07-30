@@ -58,6 +58,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
         player_replay_ratio * batch_size / player_replay_buffer_capacity
     )
 
+    # Dynamic replay-ratio control: a PI loop (PID-Lagrangian style — the
+    # reuse cap plays the dual variable of a staleness constraint) holds the
+    # measured learner-vs-behaviour KL on replayed batches at a setpoint by
+    # adjusting the store's per-trajectory reuse cap between the bounds
+    # below. player_replay_ratio above is only the initial cap. The
+    # controller runs off the critical path in the wandb log worker and
+    # works in velocity form on log(cap) — clamping the output is then
+    # inherently anti-windup. Buffer capacity independently bounds sample
+    # age (state-distribution staleness), which no ratio control fixes.
+    player_replay_ctrl_enabled: bool = True
+    # Ceiling: the actor-KL level the buffer-capacity plateau diagnosis
+    # identified as the healthy/stale boundary. This is a pathology
+    # threshold, NOT a desirable operating point — hence the asymmetric
+    # bounds below: the controller throttles the cap below the nominal
+    # player_replay_ratio when KL exceeds this, and recovers back to
+    # nominal when it drops, but never raises reuse above nominal chasing
+    # the ceiling (staler data per learner step is never a win under a
+    # strength-per-step objective).
+    player_replay_kl_target: float = 0.045
+    player_replay_ratio_min: int = 1
+    # Upper bound of the controlled cap. Kept at the nominal ratio so the
+    # controller is purely protective; raise above player_replay_ratio
+    # only if learner throughput (not strength-per-step) is the priority.
+    player_replay_ratio_max: int = 8
+    # Velocity-form PI gains on log(cap) per controller tick, applied to the
+    # normalised error (kl_target − kl)/kl_target. At ki=0.02 and one tick
+    # per player_replay_ctrl_interval steps, a sustained 2× KL overshoot
+    # halves the cap in ~35 ticks.
+    player_replay_ctrl_kp: float = 0.1
+    player_replay_ctrl_ki: float = 0.02
+    player_replay_ctrl_interval: int = 100
+
     # Self-play evaluation params
     save_interval_steps: int = 20_000
     cloud_save_interval_steps: int = 100_000
@@ -88,6 +120,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
     plasticity_recovery_winrate: float = 0.6
     plasticity_cooldown_frames: int = int(1e6)
+    # Plasticity instrumentation: every N learner steps, run an
+    # encoder-only forward on the current batch and log trunk
+    # representation health — dormant-unit fraction (ReDo criterion) and
+    # srank@0.99 — alongside the per-step fresh-vs-replayed value-error
+    # gap. Together these say whether a plateau is actually plasticity
+    # loss (dormant/rank degrading, memorisation gap opening) before a
+    # league-stagnation trigger fires a perturbation. 0 disables the
+    # probe (the value-error gap is always on).
+    plasticity_probe_interval: int = 1000
 
     # Player magnet regularization (MMD-style). The policy is pulled toward a
     # fixed hierarchical magnet over legal actions (uniform over valid
@@ -141,19 +182,26 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Advantage EMA normalization. When disabled, raw advantages are used;
     # the EMA statistics keep updating either way so re-enabling is smooth.
-    player_advantage_ema_enabled: bool = False
+    player_advantage_ema_enabled: bool = True
 
-    # Potential-based shaping: weight of the learned-critic potential
-    # advantage channel (requires offline_critic_ckpt_path). Anneal to zero
-    # to keep the asymptotic objective unchanged.
-    # Initial scale calibrated against measured magnitudes (July 2026:
-    # potential_phi_step_delta_abs ≈ 0.06 vs player_win_adv_std ≈ 0.3):
-    # 3.0 puts the dense low-λ channel at roughly the ~0.4 gradient share
-    # the collapsed MC channel had at coef 1.0. Judge and retune via
-    # player_potential_adv_share.
-    player_potential_advantage_coef_fn: Callable[[int], float] = (
-        lambda step: 3.0 * jnp.maximum(0.0, 1.0 - step / 200_000)
+    # Potential-based shaping (requires offline_critic_ckpt_path): target
+    # share of the combined advantage magnitude held by the potential
+    # channel. The channel coefficient is solved per batch from measured
+    # channel stds (coef = s/(1−s) · σ_win/σ_pot, capped below), so
+    # dominance stays pinned at the target while either channel's scale
+    # drifts over a long hold — a fixed coef cannot guarantee that.
+    # Schedule: hold dominant (0.8) for 500k steps so early learning
+    # follows the human-replay critic's value landscape, then anneal to
+    # zero over 100k steps so the asymptotic objective is pure win/loss.
+    # Judge via player_potential_adv_share (realised share, should track
+    # the target) and player_potential_adv_coef (the solved coef).
+    player_potential_target_adv_share_fn: Callable[[int], float] = (
+        lambda step: 0.8 * jnp.clip((600_000 - step) / 100_000, 0.0, 1.0)
     )
+    # Cap on the solved coefficient: keeps a near-silent potential channel
+    # (tiny σ_pot from heavy uncertainty gating or a flat Φ) from being
+    # amplified into pure noise to hit the share target.
+    player_potential_coef_max: float = 30.0
 
     # Loss coefficients
     ## Player
@@ -179,7 +227,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # learner startup and held OUTSIDE the train state: its params never
     # enter the optimizer or the RL network, so the RL model trains fully
     # from scratch with no frozen or warm-started subtrees. The potential
-    # advantage channel is gated by player_potential_advantage_coef_fn.
+    # advantage channel is gated by player_potential_target_adv_share_fn.
     # A tuple of paths loads an ensemble (members trained with
     # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
     offline_critic_ckpt_path: str | tuple[str, ...] | None = tuple(

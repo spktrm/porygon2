@@ -225,8 +225,8 @@ class CriticRunner:
             member_params = jax.tree.map(lambda x: x[k], self.params)  # noqa: B023
             out = jax.device_get(self._apply_fn(member_params, batch.actor_input))
             if self.has_survival:
-                out, survival_logits = out
-                survival_logits = np.asarray(survival_logits, dtype=np.float32)
+                out, aux = out
+                survival_logits = np.asarray(aux.survival, dtype=np.float32)
                 survival_probs = np.exp(
                     survival_logits - survival_logits.max(axis=-1, keepdims=True)
                 )
@@ -683,6 +683,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script type="text/plain" class="battle-log-data">__PHI_LOG__</script>
 <script>window.PHI_DATA = __PHI_DATA__;</script>
 <script>
+// Perspective flip (?side=opp), applied to PHI_DATA in place BEFORE any
+// renderer reads it. The outcome probe is mirror-antisymmetric by
+// construction and the two exported perspectives are exact mirrors, so
+// negating the Φ-derived series and reversing the margin bins IS the other
+// player's model output — no second inference pass, and the served HTML
+// (and the modal page cache) stays identical for both views. Per-slot data
+// (survival risk, active, names) is keyed by shared revelation-order
+// slots, so only the side labels flip; the ensemble spread (std) is
+// negation-invariant.
+(function () {
+  window.PHI_FLIPPED = /[?&]side=opp\b/.test(location.search);
+  window.PHI_TOGGLE_SIDE = function () {
+    var q = new URLSearchParams(location.search);
+    if (window.PHI_FLIPPED) q.delete("side");
+    else q.set("side", "opp");
+    var s = q.toString();
+    location.href = location.pathname + (s ? "?" + s : "") + location.hash;
+  };
+  if (!window.PHI_FLIPPED) return;
+  var D = window.PHI_DATA;
+  function neg(a) { return a.map(function (v) { return v === 0 ? 0 : -v; }); }
+  D.anchorPlayer = 1 - D.anchorPlayer;
+  D.actualMargin = -D.actualMargin;
+  D.mean = neg(D.mean);
+  D.winMean = neg(D.winMean);
+  D.members = D.members.map(neg);
+  if (D.gated) D.gated = neg(D.gated);
+  if (D.mirror) D.mirror = neg(D.mirror);
+  D.probs = D.probs.map(function (row) { return row.slice().reverse(); });
+  if (D.slotSides) {
+    D.slotSides = D.slotSides.map(function (s) { return s < 0 ? s : 1 - s; });
+  }
+})();
+</script>
+<script>
 /* Battle player bootstrap — the load list comes from Showdown's MIT
    replay-embed.js, but scripts are injected with async=false so they
    execute in order: the embed's own injector runs them in arbitrary
@@ -768,6 +803,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     });
     window.battle = battle;
     battle.setMute(muted);
+    // Match the battle camera to the flipped analysis perspective.
+    if (window.PHI_FLIPPED) battle.switchViewpoint();
 
     var controls = document.querySelector(".replay-controls");
     function render() {
@@ -797,7 +834,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         case "rewind": battle.seekBy(-1); break;
         case "ff": battle.seekBy(1); break;
         case "ffend": battle.seekTurn(Infinity); break;
-        case "switch": battle.switchViewpoint(); break;
+        // Full perspective flip: reloads with ?side=opp toggled so the
+        // battle viewpoint AND every chart/label flip together (the
+        // bootstrap script transforms PHI_DATA, initBattle re-switches
+        // the viewpoint) — a battle-only switch with unflipped charts
+        // would silently misread.
+        case "switch": window.PHI_TOGGLE_SIDE(); return;
         case "sound":
           muted = !muted;
           battle.setMute(muted);
@@ -833,10 +875,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     : "the game ended in a tie";
   document.getElementById("viz-sub").innerHTML =
     resultText + " · charts read from <b>" + esc(anchorName) +
-    "</b>'s side — up is good for them · ←/→ step turns" +
+    "</b>'s side — up is good for them · ←/→ step turns · " +
+    '<a href="#" id="side-toggle">view from ' + esc(oppName) +
+    "'s side</a>" +
     '<span class="adv"><br />' + K + " ensemble member" + (K > 1 ? "s" : "") +
     (D.uncertaintyScale > 0 ? " · gate scale " + D.uncertaintyScale : "") +
     " · <code>" + D.ckpts.map(esc).join("</code>, <code>") + "</code></span>";
+  document.getElementById("side-toggle").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.PHI_TOGGLE_SIDE();
+  });
 
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) {

@@ -9,7 +9,7 @@ optimizer, never donated, stop-gradient at use), evaluates Φ(s) once per
 trajectory at replay-buffer insert (the critic is frozen, so Φ is
 immutable data cached across replay reuse), and feeds it into
 compute_player_targets' potential advantage channel, gated by
-``player_potential_advantage_coef_fn``. The RL model itself trains fully
+``player_potential_target_adv_share_fn``. The RL model itself trains fully
 from scratch — no frozen or warm-started subtrees.
 
 The critic is public-only by construction: it operates exclusively on the

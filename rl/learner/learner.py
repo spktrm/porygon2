@@ -99,7 +99,7 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    potential_advantage_coef = config.player_potential_advantage_coef_fn(
+    potential_target_adv_share = config.player_potential_target_adv_share_fn(
         player_state.step_count
     )
 
@@ -119,12 +119,42 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         state_potential=state_potential,
-        potential_advantage_coef=potential_advantage_coef,
+        potential_target_adv_share=potential_target_adv_share,
         config=config,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+    # Fraction of steps where the IMPACT clipped-target correction is
+    # saturated at its cap — a second staleness signal alongside the actor
+    # KL and ESS diagnostics.
+    training_logs["player_impact_clip_frac"] = (
+        (actor_target_clipped_ratio >= 2.0).astype(jnp.float32).mean(where=policy_mask)
+    )
+
+    # Fresh-vs-replayed value error: the memorisation gap. A network with
+    # healthy plasticity fits fresh and replayed trajectories about equally;
+    # replayed error falling while fresh error rises means the buffer is
+    # being memorised — the plasticity signature that should gate any
+    # shrink-and-perturb, unlike league stagnation which has many causes.
+    # Per-group means are NaN in batches with no fresh (or no replayed)
+    # member; wandb line plots skip them.
+    if not isinstance(batch.reuse_count, tuple):
+        target_value = jnp.exp(player_target_pred.value_head.log_probs) @ cat_vf_support
+        return_value = player_targets.win_returns @ cat_vf_support
+        value_sq_err = jnp.square(target_value - return_value)
+        vm = value_mask.astype(value_sq_err.dtype)
+        per_traj_err = (value_sq_err * vm).sum(axis=0) / (vm.sum(axis=0) + 1e-8)
+        fresh = batch.reuse_count[0] == 0
+        fresh_err = per_traj_err.mean(where=fresh)
+        replay_err = per_traj_err.mean(where=~fresh)
+        training_logs.update(
+            {
+                "plasticity_fresh_value_err": fresh_err,
+                "plasticity_replay_value_err": replay_err,
+                "plasticity_value_err_reuse_gap": fresh_err - replay_err,
+            }
+        )
     player_targets = promote_map(player_targets, float_dtype)
 
     if config.player_advantage_ema_enabled:
@@ -296,7 +326,7 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_advantage_mixing_alpha=potential_advantage_coef,
+            player_potential_target_adv_share=potential_target_adv_share,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -576,8 +606,39 @@ def _stack_and_pad_batch(
             if isinstance(stacked_trajectory.state_potential, tuple)
             else stacked_trajectory.state_potential[:num_valid]
         ),
+        reuse_count=(
+            ()
+            if isinstance(stacked_trajectory.reuse_count, tuple)
+            else stacked_trajectory.reuse_count
+        ),
         rng_key=rng_key,
     )
+
+
+def _embedding_stats(emb: jax.Array, valid: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Representation-health stats over one batch of trunk embeddings.
+
+    Returns the dormant-unit fraction (ReDo criterion: units whose mean
+    |activation| over valid steps is ≤ 0.025× the layer mean) and the
+    srank@0.99 fraction (smallest number of singular values holding 99% of
+    the spectrum mass, over the feature dim). emb is (T, B, ..., d), valid
+    is (T, B); padded rows are zeroed, which leaves the Gram spectrum
+    unchanged versus dropping them.
+    """
+    d = emb.shape[-1]
+    lead = valid.reshape(valid.shape + (1,) * (emb.ndim - valid.ndim - 1))
+    mask = jnp.broadcast_to(lead, emb.shape[:-1]).reshape(-1).astype(jnp.float32)
+    flat = emb.reshape(-1, d).astype(jnp.float32) * mask[:, None]
+    denom = mask.sum() + 1e-8
+
+    unit_score = jnp.abs(flat).sum(axis=0) / denom
+    dormant_frac = (unit_score <= 0.025 * unit_score.mean()).mean()
+
+    gram = flat.T @ flat / denom
+    singular_values = jnp.sqrt(jnp.maximum(jnp.linalg.eigvalsh(gram), 0.0))
+    singular_values = jnp.sort(singular_values)[::-1]
+    srank = (jnp.cumsum(singular_values) < 0.99 * singular_values.sum()).sum() + 1
+    return dormant_frac, srank / d
 
 
 class Learner:
@@ -589,6 +650,7 @@ class Learner:
         wandb_run: wandb.wandb_run.Run,
         league: League,
         gpu_lock: LockType | None = None,
+        player_network=None,
         debug: bool = False,
     ):
         self.player_state = player_state
@@ -617,6 +679,32 @@ class Learner:
             max_reuses=self.config.player_replay_ratio,
             need_tracking=is_not_randoms,
         )
+
+        # Plasticity probe: jitted encoder-only forward measuring trunk
+        # representation health (dormant units, spectral rank) on the
+        # current train batch every plasticity_probe_interval steps.
+        # Requires the network module, which only main.py holds — probe is
+        # silently disabled when it isn't passed in.
+        self._plasticity_probe_jit = None
+        if player_network is not None and config.plasticity_probe_interval > 0:
+            self._plasticity_probe_jit = self._make_plasticity_probe(player_network)
+
+        # Replay-ratio PI controller state (see config for the design).
+        # Owned by the wandb log worker thread, which already device-syncs
+        # every step's logs — the controller reads the actor KL there and
+        # drives player_replay.set_max_reuses, so the train loop never pays
+        # for it. Velocity form on log(cap): only the previous error and the
+        # clamped control value are state.
+        self._replay_ctrl_log_cap = float(np.log(self.config.player_replay_ratio))
+        self._replay_ctrl_prev_err = 0.0
+        self._replay_ctrl_kl_sum = 0.0
+        self._replay_ctrl_kl_count = 0
+        # Store-counter snapshots for the realised replay ratio
+        # (Δsamples/Δinserts per tick) — what the gate actually lets
+        # through, versus the cap, which is only what it permits.
+        self._replay_ctrl_prev_adds = 0
+        self._replay_ctrl_prev_samples = 0
+        self._replay_realised_ratio = float("nan")
 
         # Threading
         self.device_q: queue.Queue[Batch] = queue.Queue(maxsize=1)
@@ -687,6 +775,45 @@ class Learner:
                 donate_argnames=["player_state", "builder_state"],
             )
 
+    def _make_plasticity_probe(self, network):
+        """Builds the jitted plasticity probe: an encoder-only forward on
+        the current batch, returning dormant-unit fraction and srank@0.99
+        for both trunk embedding streams. These measure plasticity loss
+        directly (dead units, representation rank collapse), so a plateau
+        can be attributed — or not — to plasticity before shrink-and-
+        perturb fires on league stagnation alone."""
+
+        def encoder_only(module, actor_input: PlayerActorInput):
+            return module.encoder(
+                actor_input.env, actor_input.packed_history, actor_input.history
+            )
+
+        encode = jax.vmap(
+            lambda params, actor_input: network.apply(
+                params, actor_input, method=encoder_only
+            ),
+            in_axes=(None, 1),
+            out_axes=1,
+        )
+
+        def probe(params, batch: Batch) -> dict[str, jax.Array]:
+            actor_input = PlayerActorInput(
+                env=batch.player_transitions.env_output,
+                packed_history=batch.player_packed_history,
+                history=batch.player_history,
+            )
+            action_emb, value_emb = encode(params, actor_input)
+            dones = batch.player_transitions.env_output.done
+            valid = (jnp.cumsum(dones, axis=0) - dones) == 0
+            logs = {}
+            for name, emb in (("action", action_emb), ("value", value_emb)):
+                dormant_frac, srank_frac = _embedding_stats(emb, valid)
+                logs[f"plasticity_{name}_emb_dormant_frac"] = dormant_frac
+                logs[f"plasticity_{name}_emb_srank_frac"] = srank_frac
+            return logs
+
+        return jax.jit(probe)
+
     def _compute_state_potential(self, traj: Trajectory) -> np.ndarray:
         """Frozen-critic Φ(s) for one trajectory, shape (T,).
 
@@ -710,7 +837,11 @@ class Learner:
         phi = np.asarray(jax.device_get(phi))[:, 0]
         aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
         self._record_potential_stats(traj, phi, aux)
-        return phi
+        # Stored bf16, upcast to f32 at use (compute_player_targets). The
+        # quantisation (~2^-9 absolute on Φ ∈ [-1, 1]) lands on the PBRS
+        # deltas γΦ(s')−Φ(s); insert-time stats above use the full-precision
+        # values, so potential_phi_step_delta_abs bounds the relative noise.
+        return phi.astype(jnp.bfloat16)
 
     def _record_potential_stats(
         self, traj: Trajectory, phi: np.ndarray, aux: dict[str, np.ndarray]
@@ -830,15 +961,72 @@ class Learner:
         """Background thread: drains log dicts, paying the device->host
         transfer and wandb serialization here so the train loop never has to
         synchronize with the GPU per step. A single consumer preserves wandb's
-        step ordering."""
+        step ordering. Also hosts the replay-ratio controller, which needs
+        exactly the host-side per-step logs this thread already produces."""
         while True:
             logs = self._log_q.get()
             if logs is None:
                 break
             try:
-                self.wandb_run.log(jax.device_get(logs))
+                host_logs = jax.device_get(logs)
+                self._update_replay_controller(host_logs)
+                self.wandb_run.log(host_logs)
             except Exception:
                 logger.exception("wandb logging failed")
+
+    def _update_replay_controller(self, host_logs: dict) -> None:
+        """Velocity-form PI loop holding the replayed-batch actor KL at
+        player_replay_kl_target by adjusting the store's reuse cap.
+
+        The KL is averaged over player_replay_ctrl_interval steps per tick
+        (the per-batch measurement is noisy; the window is the smoother).
+        Working on log(cap) makes the control multiplicative, and clamping
+        log(cap) itself gives anti-windup for free: the integral action
+        cannot accumulate past the bounds. Adds the current cap to
+        host_logs so every wandb step carries it."""
+        config = self.config
+        if not config.player_replay_ctrl_enabled:
+            return
+        kl = host_logs.get("player_learner_actor_forward_kl")
+        if kl is not None and np.isfinite(kl):
+            self._replay_ctrl_kl_sum += float(kl)
+            self._replay_ctrl_kl_count += 1
+
+        if self._replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
+            kl_mean = self._replay_ctrl_kl_sum / self._replay_ctrl_kl_count
+            self._replay_ctrl_kl_sum = 0.0
+            self._replay_ctrl_kl_count = 0
+
+            err = (config.player_replay_kl_target - kl_mean) / (
+                config.player_replay_kl_target
+            )
+            self._replay_ctrl_log_cap += (
+                config.player_replay_ctrl_kp * (err - self._replay_ctrl_prev_err)
+                + config.player_replay_ctrl_ki * err
+            )
+            self._replay_ctrl_prev_err = err
+            self._replay_ctrl_log_cap = float(
+                np.clip(
+                    self._replay_ctrl_log_cap,
+                    np.log(config.player_replay_ratio_min),
+                    np.log(config.player_replay_ratio_max),
+                )
+            )
+            cap = int(round(np.exp(self._replay_ctrl_log_cap)))
+            if cap != self.player_replay.max_reuses:
+                self.player_replay.set_max_reuses(cap)
+
+            adds = self.player_replay.total_adds
+            samples = self.player_replay.total_samples
+            delta_adds = adds - self._replay_ctrl_prev_adds
+            delta_samples = samples - self._replay_ctrl_prev_samples
+            self._replay_ctrl_prev_adds = adds
+            self._replay_ctrl_prev_samples = samples
+            if delta_adds > 0:
+                self._replay_realised_ratio = delta_samples / delta_adds
+
+        host_logs["player_replay_max_reuses"] = float(self.player_replay.max_reuses)
+        host_logs["player_replay_realised_ratio"] = self._replay_realised_ratio
 
     def train(self):
         """
@@ -871,6 +1059,18 @@ class Learner:
                         continue  # Skip this step if update failed
 
                 host_step += 1
+                # Representation-health probe on the batch just trained on.
+                # batch is not donated by the train step, so reusing it here
+                # is safe; results are device arrays synced by the log
+                # worker like every other metric.
+                if (
+                    self._plasticity_probe_jit is not None
+                    and host_step % self.config.plasticity_probe_interval == 0
+                ):
+                    with self.gpu_lock:
+                        logs.update(
+                            self._plasticity_probe_jit(self.player_state.params, batch)
+                        )
                 self._handle_periodic_tasks(host_step, logs)
 
         except KeyboardInterrupt:

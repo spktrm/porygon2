@@ -247,6 +247,7 @@ def main(args: argparse.Namespace):
         league=league,
         wandb_run=wandb_run,
         gpu_lock=gpu_lock,
+        player_network=learner_player_network,
         debug=debug,
     )
 
