@@ -8,8 +8,13 @@ optional uncertainty-gated Φ, a mirror-antisymmetry check from the opposite
 perspective, and the full 13-bin margin distribution at the selected turn.
 Checkpoints trained with the survival aux head additionally get a per-mon
 faint-risk heatmap (E[discount^steps-to-faint] per revealed mon per turn) —
-the timing signal the margin probe alone can't show. Clicking any chart
-seeks the replay; the chart cursors follow playback.
+the timing signal the margin probe alone can't show. Checkpoints trained
+with announced states (manifest announced_states) additionally decompose
+each turn's swing into a decision term (Φ_ann(t+1) − Φ(t): what the
+revealed choices were worth) and a dice term (Φ(t+1) − Φ_ann(t+1): what
+chance was worth, damage rolls included) in the momentum lane and key
+moments; the 🎲 log-event tags become labels on the quantified dice term.
+Clicking any chart seeks the replay; the chart cursors follow playback.
 
 The replay is encoded through the SAME exporter path as training shards
 (service/src/scripts/exportReplay.ts -> encodePerspective), so the states
@@ -151,6 +156,28 @@ def discover_ckpts(format_id: str) -> list[str]:
     return candidates
 
 
+def _manifest_announced(ckpt_path: str) -> bool:
+    """True when the artifact's manifest marks announced-state training.
+    Φ_ann adds no parameters, so — unlike the survival head or rating
+    embedding — the capability cannot be read off the param tree: any
+    checkpoint can COMPUTE Φ_ann, but only checkpoints trained at announced
+    evaluation points produce calibrated values. Missing manifest (or flag)
+    means a pre-Φ_ann artifact: fall back to the glyph-only key moments."""
+    try:
+        with open(os.path.join(ckpt_path, "manifest.json")) as f:
+            return bool(json.load(f).get("announced_states", False))
+    except (OSError, ValueError):
+        return False
+
+
+def _win_readout(member_probs: np.ndarray) -> np.ndarray:
+    """P(win) − P(loss) off (..., 13) margin-bin probabilities."""
+    return (
+        member_probs[..., MAX_MARGIN + 1 :].sum(-1)
+        - member_probs[..., :MAX_MARGIN].sum(-1)
+    )
+
+
 def _format_generation(format_id: str) -> int:
     """gen{N}{tier} -> N. The model config and embedding tables are per
     generation; the tier only routes shards and artifacts."""
@@ -186,13 +213,22 @@ class CriticRunner:
         subtrees = self.params.get("params", {})
         self.has_survival = "survival_head" in subtrees
         self.rating_conditioned = "rating_embed" in subtrees
+        # Announced capability comes from the manifests (Φ_ann adds no
+        # params — see _manifest_announced); every member must have it.
+        self.has_announced = all(_manifest_announced(p) for p in self.ckpt_paths)
         model = get_offline_critic(
             self.config.generation, rating_conditioning=self.rating_conditioned
         )
+        if self.has_announced and self.has_survival:
+            method = Porygon2OfflineCritic.with_aux_and_announced
+        elif self.has_announced:
+            method = Porygon2OfflineCritic.announced
+        elif self.has_survival:
+            method = Porygon2OfflineCritic.with_aux
+        else:
+            method = None
         apply = (
-            functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux)
-            if self.has_survival
-            else model.apply
+            functools.partial(model.apply, method=method) if method else model.apply
         )
         self._apply_fn = jax.jit(jax.vmap(apply, in_axes=(None, 1), out_axes=1))
 
@@ -220,18 +256,28 @@ class CriticRunner:
         # Risk readout: expected y = E[discount^(steps to next faint)] off
         # the aux head's bins — 0 = safe/never, 1 = faints immediately.
         bin_centers = (np.arange(NUM_SURVIVAL_BINS) + 0.5) / NUM_SURVIVAL_BINS
-        phis, probs, risks = [], [], []
+        phis, probs, risks, ann_probs = [], [], [], []
         for k in range(self.num_members):
             member_params = jax.tree.map(lambda x: x[k], self.params)  # noqa: B023
             out = jax.device_get(self._apply_fn(member_params, batch.actor_input))
-            if self.has_survival:
+            announced = None
+            if self.has_announced and self.has_survival:
+                out, aux, announced = out
+            elif self.has_announced:
+                out, announced = out
+            elif self.has_survival:
                 out, aux = out
+            if self.has_survival:
                 survival_logits = np.asarray(aux.survival, dtype=np.float32)
                 survival_probs = np.exp(
                     survival_logits - survival_logits.max(axis=-1, keepdims=True)
                 )
                 survival_probs /= survival_probs.sum(axis=-1, keepdims=True)
                 risks.append(survival_probs @ bin_centers)  # (T, B, 12)
+            if announced is not None:
+                ann_probs.append(
+                    np.exp(np.asarray(announced.log_probs, dtype=np.float32))
+                )
             phis.append(np.asarray(out.expectation, dtype=np.float32))
             probs.append(np.exp(np.asarray(out.log_probs, dtype=np.float32)))
 
@@ -243,6 +289,7 @@ class CriticRunner:
             "mask": mask,
             "survival": np.stack(risks) if risks else None,
             "survival_mask": (np.asarray(batch.survival_masks) if risks else None),
+            "ann_probs": np.stack(ann_probs) if ann_probs else None,
         }, examples
 
 
@@ -366,10 +413,21 @@ def build_payload(
     probs = member_probs.mean(axis=0)  # (n, 13)
     # Win readout of the same head: P(win) − P(loss), the signed sign-mass
     # of the margin bins — what potential_readout="win" feeds the learner.
-    win_phi = (
-        member_probs[..., MAX_MARGIN + 1 :].sum(-1)
-        - member_probs[..., :MAX_MARGIN].sum(-1)
-    ).mean(axis=0)
+    win_phi = _win_readout(member_probs).mean(axis=0)
+
+    # Announced-state (Φ_ann) win readout for the decision/dice
+    # decomposition, plus its own mirror check: Φ_ann is antisymmetric by
+    # construction too, so −Φ_ann from the opposite perspective must
+    # overlap just as tightly as the realised mirror.
+    ann_win = ann_mirror = None
+    if outputs.get("ann_probs") is not None:
+        ann_win = _win_readout(outputs["ann_probs"][:, :n, anchor]).mean(axis=0)
+        if len(perspectives) == 2:
+            other = 1 - anchor
+            m = min(n, int(outputs["mask"][:, other].sum()))
+            ann_mirror = (
+                -_win_readout(outputs["ann_probs"][:, :m, other]).mean(axis=0)
+            ).tolist()
     final_reward = np.asarray(examples[anchor].actor_input.env.win_reward)[-1]
     actual_margin, ending, _ = _final_margin(examples[anchor].actor_input, final_reward)
     # Reader-facing labels — the page is a product surface, not a debug
@@ -394,6 +452,10 @@ def build_payload(
         "std": np.round(std, 4).tolist(),
         "gated": np.round(gated, 4).tolist() if gated is not None else None,
         "mirror": [round(v, 4) for v in mirror] if mirror is not None else None,
+        "annWin": np.round(ann_win, 4).tolist() if ann_win is not None else None,
+        "annMirror": (
+            [round(v, 4) for v in ann_mirror] if ann_mirror is not None else None
+        ),
         "probs": np.round(probs, 4).tolist(),
         "survival": np.round(survival, 3).tolist() if survival is not None else None,
         "survivalMask": (
@@ -711,6 +773,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   D.members = D.members.map(neg);
   if (D.gated) D.gated = neg(D.gated);
   if (D.mirror) D.mirror = neg(D.mirror);
+  if (D.annWin) D.annWin = neg(D.annWin);
+  if (D.annMirror) D.annMirror = neg(D.annMirror);
   D.probs = D.probs.map(function (row) { return row.slice().reverse(); });
   if (D.slotSides) {
     D.slotSides = D.slotSides.map(function (s) { return s < 0 ? s : 1 - s; });
@@ -899,6 +963,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     return (v < 0 ? "−" : v > 0 ? "+" : "") +
       Math.abs(v * 100).toFixed(0) + "%";
   }
+  function fmtDelta(v) {
+    return (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(0) + "%";
+  }
   function el(name, attrs, parent) {
     var node = document.createElementNS(SVG, name);
     for (var key in attrs) node.setAttribute(key, attrs[key]);
@@ -1070,20 +1137,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   // Δ_j = win-chance(step j+1) − win-chance(step j) covers exactly the
   // events of turn j+1 (states sit at |turn| boundaries). Win-chance (not
   // material) deltas: decided-game conversion turns stay quiet, like a
-  // chess eval graph. Includes chance — a big bar can be a crit.
+  // chess eval graph.
+  // With an announced-state checkpoint (D.annWin) each turn's swing splits
+  // exactly: decision = annWin[j+1] − winMean[j] (what the revealed
+  // choices were worth) and dice = winMean[j+1] − annWin[j+1] (what chance
+  // was worth, damage rolls included); decision + dice = Δ. Without it,
+  // one bar per turn that includes chance — a big bar can be a crit.
   var deltaChart = document.getElementById("delta-chart");
-  var deltas = [];
+  var deltas = [], decisions = null, dices = null;
   for (var di = 0; di + 1 < N; di++) {
     deltas.push(D.winMean[di + 1] - D.winMean[di]);
+  }
+  if (D.annWin) {
+    decisions = []; dices = [];
+    for (var ai = 0; ai + 1 < N; ai++) {
+      decisions.push(D.annWin[ai + 1] - D.winMean[ai]);
+      dices.push(D.winMean[ai + 1] - D.annWin[ai + 1]);
+    }
   }
   if (deltas.length) {
     var DH = 110;
     var DPAD = { t: 16, b: 18 };
-    document.getElementById("delta-title").innerHTML =
-      "Momentum — <b>" + esc(anchorName) +
-      "</b> gained (blue) or lost (red) ground each turn · includes " +
-      "luck as well as skill · click a bar to watch that turn";
-    var maxAbs = Math.max(1e-6, Math.max.apply(null, deltas.map(Math.abs)));
+    document.getElementById("delta-title").innerHTML = decisions
+      ? "Momentum — what the moves changed (solid) vs what the dice " +
+        "changed (faded) each turn, from <b>" + esc(anchorName) +
+        "</b>'s side · click a bar to watch that turn"
+      : "Momentum — <b>" + esc(anchorName) +
+        "</b> gained (blue) or lost (red) ground each turn · includes " +
+        "luck as well as skill · click a bar to watch that turn";
+    var absCandidates = deltas.map(Math.abs);
+    if (decisions) {
+      absCandidates = absCandidates.concat(
+        decisions.map(Math.abs), dices.map(Math.abs)
+      );
+    }
+    var maxAbs = Math.max(1e-6, Math.max.apply(null, absCandidates));
     var zeroY = DPAD.t + (DH - DPAD.t - DPAD.b) / 2;
     var scaleY = (DH - DPAD.t - DPAD.b) / 2 / maxAbs;
     el("line", {
@@ -1092,17 +1180,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }, deltaChart);
     var bestJ = deltas.indexOf(Math.max.apply(null, deltas));
     var worstJ = deltas.indexOf(Math.min.apply(null, deltas));
+    // deltaBars[j] is the turn's group of bars: [full] without the
+    // decomposition, [decision, dice] with it (side-by-side half bars,
+    // shared blue/red gain-loss colouring, dice faded).
     var deltaBars = deltas.map(function (d, j) {
       var mid = (xOf(j) + xOf(j + 1)) / 2;
       var barW = Math.max(1.5, xOf(1) - xOf(0) - 2);
-      var h = Math.max(Math.abs(d) * scaleY, 0.5);
-      return el("rect", {
-        x: mid - barW / 2,
-        y: d >= 0 ? zeroY - h : zeroY,
-        width: barW, height: h, rx: 1.5,
-        fill: d >= 0 ? "var(--pos-pole)" : "var(--neg-pole)",
-        opacity: 0.85,
-      }, deltaChart);
+      function bar(value, x, w, opacity) {
+        var h = Math.max(Math.abs(value) * scaleY, 0.5);
+        var node = el("rect", {
+          x: x,
+          y: value >= 0 ? zeroY - h : zeroY,
+          width: w, height: h, rx: 1.5,
+          fill: value >= 0 ? "var(--pos-pole)" : "var(--neg-pole)",
+          opacity: opacity,
+        }, deltaChart);
+        node.__baseOpacity = opacity;
+        return node;
+      }
+      if (decisions) {
+        var halfW = Math.max(1, barW / 2 - 0.5);
+        return [
+          bar(decisions[j], mid - barW / 2, halfW, 0.9),
+          bar(dices[j], mid + 0.5, halfW, 0.4),
+        ];
+      }
+      return [bar(d, mid - barW / 2, barW, 0.85)];
     });
     [[bestJ, "▲", -4], [worstJ, "▼", 12]].forEach(function (mark) {
       var j = mark[0];
@@ -1121,27 +1224,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       return Math.max(0, Math.min(deltas.length - 1, j));
     }
     var deltaHover = null;
+    function restoreBars(j) {
+      deltaBars[j].forEach(function (node) {
+        node.setAttribute("opacity", node.__baseOpacity);
+      });
+    }
     deltaChart.style.cursor = "pointer";
     deltaChart.addEventListener("mousemove", function (evt) {
       var j = deltaAt(evt.clientX);
-      if (deltaHover !== null && deltaHover !== j) {
-        deltaBars[deltaHover].setAttribute("opacity", 0.85);
-      }
+      if (deltaHover !== null && deltaHover !== j) restoreBars(deltaHover);
       deltaHover = j;
-      deltaBars[j].setAttribute("opacity", 1);
+      deltaBars[j].forEach(function (node) {
+        node.setAttribute("opacity", 1);
+      });
       var d = deltas[j];
-      tooltip.innerHTML =
+      var rows =
         "<b>turn " + (j + 1) + "</b><br />" +
-        '<span class="k">swing</span> ' + (d >= 0 ? "+" : "−") +
-        Math.abs(d * 100).toFixed(0) + "%<br />" +
-        '<span class="k">advantage</span> ' + pct(D.winMean[j]) +
+        '<span class="k">swing</span> ' + fmtDelta(d);
+      if (decisions) {
+        var tags = chanceEvents[j + 1];
+        rows +=
+          '<br /><span class="k">moves</span> ' + fmtDelta(decisions[j]) +
+          '<br /><span class="k">dice</span> ' + fmtDelta(dices[j]) +
+          (tags && tags.length
+            ? ' <span class="k">(' + tags.map(esc).join(", ") + ")</span>"
+            : "");
+      }
+      rows += '<br /><span class="k">advantage</span> ' + pct(D.winMean[j]) +
         " → " + pct(D.winMean[j + 1]);
+      tooltip.innerHTML = rows;
       tooltip.style.display = "block";
       tooltip.style.left = (evt.clientX + 14) + "px";
       tooltip.style.top = (evt.clientY - 10) + "px";
     });
     deltaChart.addEventListener("mouseleave", function () {
-      if (deltaHover !== null) deltaBars[deltaHover].setAttribute("opacity", 0.85);
+      if (deltaHover !== null) restoreBars(deltaHover);
       deltaHover = null;
       tooltip.style.display = "none";
     });
@@ -1404,11 +1521,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
 
   // --- Chance-event tags --------------------------------------------------
-  // A state-value model cannot split a swing into skill vs luck (it only
-  // sees states), but the protocol log explicitly marks DISCRETE chance
-  // events — the one luck signal a public replay carries. Parse them per
-  // turn so key moments stop crediting players for crits and full paras.
-  // Damage-roll and speed-tie luck are not recorded and stay invisible.
+  // The protocol log explicitly marks DISCRETE chance events (crits,
+  // misses, full paras, ...). With an announced-state checkpoint the dice
+  // term is QUANTIFIED (D.annWin) and these tags become its human-readable
+  // labels — including damage-roll luck the tags can't see; without one
+  // they remain the only luck signal (glyph fallback below).
   // Display-side attribution only; never a training signal.
   var chanceEvents = {};
   (function () {
@@ -1488,6 +1605,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tier: tier,
         luck: chanceEvents[s] || [],
         expected: faintSeenComing(s),
+        // Quantified decomposition (announced-state checkpoints only).
+        decision: decisions ? decisions[s - 1] : null,
+        dice: dices ? dices[s - 1] : null,
       });
     }
   }
@@ -1495,6 +1615,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     return sw.delta > 0 ? "var(--pos-pole)" : "var(--neg-pole)";
   }
   function swingGlyph(sw) {
+    if (sw.dice !== null) {
+      // Quantified: the dice glyph goes by the measured dice share, not
+      // by whether the log happened to tag an event (damage rolls are
+      // untagged but fully measured).
+      if (Math.abs(sw.dice) > Math.abs(sw.decision)) return "🎲";
+      if (sw.delta > 0) return sw.tier === 2 ? "!!" : "!";
+      return sw.tier === 2 ? "??" : "?";
+    }
+    // Fallback for pre-Φ_ann checkpoints: log-event tags and anticipated
+    // faints are the only luck signals.
     if (sw.luck.length) return "🎲";
     if (sw.expected) return "…";
     if (sw.delta > 0) return sw.tier === 2 ? "!!" : "!";
@@ -1523,23 +1653,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .slice(0, 8);
   if (keyTurns.length) {
     document.getElementById("key-title").textContent = "Key moments";
-    document.getElementById("key-note").textContent =
-      "🎲 = the log records a chance event that turn (crit, miss, full " +
-      "paralysis, ...) — credit the dice, not the player. … = a faint " +
-      "the model already saw coming. Damage rolls and speed ties aren't " +
-      "recorded in replays, so some luck is untaggable. Everything else " +
-      "was both players' decisions — click a moment and judge.";
+    document.getElementById("key-note").textContent = decisions
+      ? "Each swing splits into what the moves changed (both players' " +
+        "choices as revealed — not a pure skill grade) and what the dice " +
+        "changed, damage rolls included. 🎲 = the dice term dominated; " +
+        "the labels name chance events the log records. Click a moment " +
+        "and judge."
+      : "🎲 = the log records a chance event that turn (crit, miss, full " +
+        "paralysis, ...) — credit the dice, not the player. … = a faint " +
+        "the model already saw coming. Damage rolls and speed ties aren't " +
+        "recorded in replays, so some luck is untaggable. Everything else " +
+        "was both players' decisions — click a moment and judge.";
     var keyEl = document.getElementById("key-turns");
     keyTurns.forEach(function (sw) {
       var row = document.createElement("div");
       row.className = "row";
       var toward = sw.delta > 0 ? anchorName : oppName;
-      var cause = sw.luck.length
-        ? ' <span style="color:var(--muted)">· ' +
-          sw.luck.map(esc).join(", ") + "</span>"
-        : sw.expected
-          ? ' <span style="color:var(--muted)">· loss was already likely</span>'
-          : "";
+      var cause;
+      if (sw.dice !== null) {
+        cause =
+          ' <span style="color:var(--muted)">· moves ' +
+          fmtDelta(sw.decision) + " · dice " + fmtDelta(sw.dice) +
+          (sw.luck.length ? " (" + sw.luck.map(esc).join(", ") + ")" : "") +
+          "</span>";
+      } else {
+        cause = sw.luck.length
+          ? ' <span style="color:var(--muted)">· ' +
+            sw.luck.map(esc).join(", ") + "</span>"
+          : sw.expected
+            ? ' <span style="color:var(--muted)">· loss was already likely</span>'
+            : "";
+      }
       var disagree = K > 1 && D.std[sw.step] > 0.12
         ? ' <span class="adv" style="color:var(--muted)">· models disagree</span>'
         : "";
@@ -1604,6 +1748,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (D.mirror && step < D.mirror.length) {
         rows += '<br /><span class="k">mirror Δ</span> ' +
           Math.abs(D.mean[step] - D.mirror[step]).toFixed(4);
+      }
+      if (D.annWin && D.annMirror && step < D.annMirror.length) {
+        rows += '<br /><span class="k">ann mirror Δ</span> ' +
+          Math.abs(D.annWin[step] - D.annMirror[step]).toFixed(4);
       }
     }
     tooltip.innerHTML = rows;
