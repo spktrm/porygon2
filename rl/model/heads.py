@@ -117,7 +117,21 @@ class PairPolicyHead(nn.Module):
         src = action_embeddings + MLP(**self.cfg.src_mlp.to_dict())(action_embeddings)
         tgt = action_embeddings + MLP(**self.cfg.tgt_mlp.to_dict())(action_embeddings)
         logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
-        return logits.squeeze(-1).reshape(-1)
+        flat_logits = logits.squeeze(-1).reshape(-1)
+        # Per-modality logit scale. The shared bilinear grid ties
+        # within-modality logit SPREAD across modalities (one set of
+        # src/tgt projections must express move-choice and switch-choice
+        # sharpness at once); the November per-modality heads had
+        # independent scales, and beat this head in competition. The
+        # downstream within-modality logsumexp removes any per-modality
+        # shift, so this parameter controls sharpness only — it cannot
+        # move the modality contest, which MacroHead owns. Init 1.0
+        # reproduces the unscaled head exactly, preserving
+        # calculate_hierarchical_prior as the init-policy anchor.
+        modality_scale = self.param(
+            "modality_scale", nn.initializers.ones, (NUM_MODALITY_FEATURES,)
+        ).astype(flat_logits.dtype)
+        return flat_logits * modality_scale[FLAT_MODALITY_MASK]
 
 
 class MacroHead(nn.Module):
