@@ -172,8 +172,10 @@ def run_eval_heuristic(
 
                 logs = {
                     "training_step": step_count,
-                    f"{prefix}-payoff-{session_id}": payoff,
-                    f"{prefix}-wr-{session_id}": payoff > 0,
+                    f"{prefix}-payoff-{session_id}": float(payoff),
+                    # float, not bool: the wandb UI renders boolean series
+                    # as NaN in line plots.
+                    f"{prefix}-wr-{session_id}": float(payoff > 0),
                     f"{prefix}-margin-{session_id}": margin,
                     f"games-{session_id}": games,
                 }
