@@ -61,10 +61,9 @@ def shrink_and_perturb_player_state(
     )
     return player_state.replace(
         params=new_params,
-        # Adam moments are stale for the perturbed weights; the entropy jump
-        # after perturbation also invalidates the alpha controller's moments.
+        # Adam moments (including b1's momentum buffer) are stale for the
+        # perturbed weights.
         opt_state=player_state.tx.init(new_params),
-        alpha_opt_state=player_state.alpha_tx.init(player_state.alpha_params),
     )
 
 
