@@ -415,7 +415,7 @@ def offline_sections():
     ]
 
 
-def save_view(entity, project, name, sections, update_url):
+def save_view(entity, project, name, sections, update_url, settings=None):
     if update_url:
         workspace = ws.Workspace.from_url(update_url)
         workspace.name = name
@@ -424,6 +424,8 @@ def save_view(entity, project, name, sections, update_url):
         workspace = ws.Workspace(
             entity=entity, project=project, name=name, sections=sections
         )
+    if settings is not None:
+        workspace.settings = settings
     workspace.save()
     print(f"{project} view: {workspace.url}")
 
@@ -436,7 +438,16 @@ def main():
     args = parser.parse_args()
 
     save_view(
-        args.entity, "pokemon-rl", "Signal health", rl_sections(), args.update_rl_url
+        args.entity,
+        "pokemon-rl",
+        "Signal health",
+        rl_sections(),
+        args.update_rl_url,
+        # Learner-step x-axis for every panel: all learner and eval log rows
+        # carry training_step (rl/learner/learner.py, rl/main.py), and it is
+        # comparable across runs unlike wandb's _step row counter. The
+        # offline project does not log this key, so it keeps the default.
+        settings=ws.WorkspaceSettings(x_axis="training_step"),
     )
     save_view(
         args.entity,

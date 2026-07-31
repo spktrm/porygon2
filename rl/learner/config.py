@@ -133,7 +133,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # `plasticity_overdue_trigger` consecutive overdue-only league additions,
     # player params are interpolated toward a fresh init draw.
     plasticity_enabled: bool = True
-    plasticity_overdue_trigger: int = 1
+    # Consecutive overdue-only adds before a perturbation. At 1 (the old
+    # value) a single stalled add window (~6k steps of not dominating the
+    # league) fired a 50% reset: the Aug 2026 run perturbed during a
+    # consolidation phase and dropped below its own 50k-step snapshot
+    # (winrate 0.485), paying a multi-10k-step recovery tax. Require a
+    # sustained stall instead.
+    plasticity_overdue_trigger: int = 3
     # Fraction of the old weights kept (lambda). Higher = milder perturbation.
     plasticity_default_shrink: float = 0.5
     # Per top-level module overrides; the encoder holds expensive
@@ -171,7 +177,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # exceeds its 0.045 ceiling) — momentum-free Adam was leaving all three
     # guardrails idle (actor-KL 0.013–0.044, grad norm 1–4 vs clip 10).
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 3e-5
+    # 1e-4 (up from 3e-5): with momentum on, actor-KL sat at 0.002–0.003
+    # against the 0.045 ceiling and kept drifting DOWN while eval strength
+    # plateaued — the signature of over-regularised learning under a
+    # strength-per-step objective. The replay-KL controller, SPO trust
+    # region and grad clip absorb the faster steps; judge by actor-KL
+    # settling well below 0.045 and the eval margin slope recovering.
+    player_learning_rate: float = 1e-4
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
