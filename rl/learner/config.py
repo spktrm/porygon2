@@ -252,6 +252,22 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # artifacts. Conditioning far above the data's rating support makes
     # ensemble members disagree, which the uncertainty gate then quiets.
     potential_condition_rating: int = 1800
+    # Dice-excised PBRS: the potential channel's next-step bootstrap uses
+    # Φ_ann(t+1) — the critic read at the announced state, where both
+    # players' choices for the turn are revealed but chance is unresolved —
+    # in place of the realised Φ(t+1). Φ_ann = E[Φ | announcement] (tower
+    # property ⇒ same expected shaping, verified conditionally unbiased by
+    # rl.offline.diagnose --martingale), so the channel stops paying the
+    # agent for crits, misses and damage rolls: measured on the July 2026
+    # critic, ~85% of the channel's per-turn variance was resolved chance.
+    # Expect potential_adv_coef to rise ~σ-ratio at unchanged adv_share
+    # (denser signal, same loudness). Requires every artifact in
+    # offline_critic_ckpt_path to be announced-trained (manifest
+    # announced_states — Φ_ann adds no params, so this is checked from the
+    # manifests at startup and fails loudly). A/B off vs on, judged by
+    # actor-KL (~0.045 reference) and strength-per-step; False is the
+    # realised-PBRS comparison arm.
+    potential_dice_excised: bool = True
 
 
 def get_learner_config():

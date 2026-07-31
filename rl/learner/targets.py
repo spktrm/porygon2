@@ -41,6 +41,7 @@ def compute_player_targets(
     value_log_probs: jax.Array,
     isr: jax.Array,
     state_potential: jax.Array,
+    announced_potential: jax.Array,
     potential_target_adv_share: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
@@ -57,6 +58,18 @@ def compute_player_targets(
     terminal-only reward). The potential channel's coefficient is solved
     per batch so its share of the combined advantage magnitude equals
     ``potential_target_adv_share``.
+
+    Dice excision (``config.potential_dice_excised``): every appearance of
+    the potential channel's NEXT-step value — in the TD errors and in the
+    bootstrap — is replaced by ``announced_potential`` at t+1 (Φ_ann: the
+    critic read with both players' turn choices revealed but chance
+    unresolved), while the subtracted current-step value and the terminal
+    reward stay realised. Each one-step term becomes γ·Φ_ann(t+1) − Φ(t):
+    same conditional expectation as realised PBRS (Φ_ann = E[Φ |
+    announcement], tower property), but the channel stops paying the agent
+    for crits, misses and damage rolls. With the flag off, this function is
+    bit-identical to the pre-excision code and ``announced_potential`` is
+    ignored.
 
     IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
     and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
@@ -95,6 +108,16 @@ def compute_player_targets(
     last_values = v_tm1[-1:]
 
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
+    if config.potential_dice_excised:
+        # Dice excision: the potential channel's next-step value is the
+        # ANNOUNCED Φ_ann(t+1), so its TD is γ·Φ_ann(t+1) − Φ(t). The final
+        # row's filler repeats the realised value like last_values; it only
+        # feeds masked/zero-discount positions.
+        announced_potential = announced_potential.astype(isr.dtype)
+        potential_next = jnp.concatenate(
+            [announced_potential[1:], state_potential[-1:]], axis=0
+        )
+        v_t = jnp.concatenate([v_t[..., :n_bins], potential_next[..., None]], axis=-1)
     td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
     # Per-channel λ: the win channel keeps the long player_lambda horizon;
@@ -118,6 +141,23 @@ def compute_player_targets(
         ],
         axis=0,
     )
+    if config.potential_dice_excised:
+        # The realised Φ(t+1) also enters the bootstrap — directly through
+        # the (1−λ)·v_tm1[1:] term and inside targets_tm1[1:]'s value base
+        # (λ·targets[1:] + (1−λ)·v[1:] = λ·errors[1:] + v[1:] within the
+        # mask). Substituting the announced next value in that identity
+        # excises both at once; the errors are already excised above.
+        potential_q_bootstrap = jnp.concatenate(
+            [
+                config.player_potential_lambda * errors[1:, ..., n_bins]
+                + potential_next[:-1],
+                potential_next[-1:],
+            ],
+            axis=0,
+        )
+        q_bootstrap = jnp.concatenate(
+            [q_bootstrap[..., :n_bins], potential_q_bootstrap[..., None]], axis=-1
+        )
     q_estimate = r_t + discount_t * q_bootstrap
 
     pg_advantages = rho_t * (q_estimate - v_tm1)

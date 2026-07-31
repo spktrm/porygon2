@@ -82,6 +82,13 @@ def train_step(
         )
     else:
         state_potential = batch.state_potential.astype(jnp.float32)
+    # Announced potential Φ_ann for dice-excised shaping; falls back to the
+    # realised series (making the excision a no-op) when absent, so the
+    # config flag alone decides the arm.
+    if isinstance(batch.state_potential_announced, tuple):
+        announced_potential = state_potential
+    else:
+        announced_potential = batch.state_potential_announced.astype(jnp.float32)
 
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
@@ -119,6 +126,7 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         state_potential=state_potential,
+        announced_potential=announced_potential,
         potential_target_adv_share=potential_target_adv_share,
         config=config,
     )
@@ -606,6 +614,11 @@ def _stack_and_pad_batch(
             if isinstance(stacked_trajectory.state_potential, tuple)
             else stacked_trajectory.state_potential[:num_valid]
         ),
+        state_potential_announced=(
+            ()
+            if isinstance(stacked_trajectory.state_potential_announced, tuple)
+            else stacked_trajectory.state_potential_announced[:num_valid]
+        ),
         reuse_count=(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
@@ -734,11 +747,24 @@ class Learner:
         self._potential_stats: dict[str, tuple[float, int]] = {}
         if config.offline_critic_ckpt_path:
             from rl.offline.artifact import (
+                has_announced_states,
                 has_rating_conditioning,
                 load_critic_params,
                 make_potential_apply,
             )
 
+            if config.potential_dice_excised and not has_announced_states(
+                config.offline_critic_ckpt_path
+            ):
+                # Φ_ann adds no params, so an un-announced artifact would
+                # silently produce untrained (off-distribution) announced
+                # values — refuse rather than shape on garbage.
+                raise ValueError(
+                    "potential_dice_excised requires every offline critic "
+                    "artifact to be announced-trained (manifest "
+                    "announced_states: true); got "
+                    f"{config.offline_critic_ckpt_path}"
+                )
             critic_params = load_critic_params(config.offline_critic_ckpt_path)
             self.potential_params = jax.device_put(critic_params)
             # Jitted once: actor trajectories arrive with fixed shapes
@@ -753,11 +779,15 @@ class Learner:
                     with_aux=True,
                     rating_conditioning=has_rating_conditioning(critic_params),
                     condition_rating=config.potential_condition_rating,
+                    announced=config.potential_dice_excised,
                 )
             )
             logging.info(
-                "Loaded offline critic potential from %s",
+                "Loaded offline critic potential from %s%s",
                 config.offline_critic_ckpt_path,
+                " (dice-excised: announced states enabled)"
+                if config.potential_dice_excised
+                else "",
             )
 
         # JIT Compile
@@ -814,8 +844,11 @@ class Learner:
 
         return jax.jit(probe)
 
-    def _compute_state_potential(self, traj: Trajectory) -> np.ndarray:
-        """Frozen-critic Φ(s) for one trajectory, shape (T,).
+    def _compute_state_potential(
+        self, traj: Trajectory
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """Frozen-critic Φ(s) for one trajectory, shape (T,) — plus
+        Φ_ann(s) when dice-excised shaping is on, else None.
 
         Runs the offline critic ensemble exactly once per trajectory —
         here, at insert — instead of inside every train step: with
@@ -833,24 +866,40 @@ class Learner:
         # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
         # the (T, B) convention make_potential_apply vmaps over.
         batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
-        phi, aux = self._potential_apply(self.potential_params, batched)
-        phi = np.asarray(jax.device_get(phi))[:, 0]
+        result, aux = self._potential_apply(self.potential_params, batched)
+        phi_ann = None
+        if self.config.potential_dice_excised:
+            phi, phi_ann = jax.device_get(result)
+            phi_ann = np.asarray(phi_ann)[:, 0]
+        else:
+            phi = jax.device_get(result)
+        phi = np.asarray(phi)[:, 0]
         aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
-        self._record_potential_stats(traj, phi, aux)
+        self._record_potential_stats(traj, phi, aux, phi_ann)
         # Stored bf16, upcast to f32 at use (compute_player_targets). The
         # quantisation (~2^-9 absolute on Φ ∈ [-1, 1]) lands on the PBRS
-        # deltas γΦ(s')−Φ(s); insert-time stats above use the full-precision
-        # values, so potential_phi_step_delta_abs bounds the relative noise.
-        return phi.astype(jnp.bfloat16)
+        # deltas γΦ_[ann](s')−Φ(s); insert-time stats above use the
+        # full-precision values, so potential_phi_step_delta_abs bounds the
+        # relative noise.
+        return phi.astype(jnp.bfloat16), (
+            phi_ann.astype(jnp.bfloat16) if phi_ann is not None else None
+        )
 
     def _record_potential_stats(
-        self, traj: Trajectory, phi: np.ndarray, aux: dict[str, np.ndarray]
+        self,
+        traj: Trajectory,
+        phi: np.ndarray,
+        aux: dict[str, np.ndarray],
+        phi_ann: np.ndarray | None = None,
     ) -> None:
         """Accumulates insert-time Φ diagnostics over one trajectory's valid
         steps: shaping loudness (|Φ| after gating), the ensemble confidence
         gate and raw disagreement, the dense per-step signal a low-λ
         potential channel would consume, and whether the critic's terminal
-        sign matches the actual outcome (skipping ties)."""
+        sign matches the actual outcome (skipping ties). With dice-excised
+        shaping, also the live decision/dice split of the per-step signal —
+        the same decomposition rl.offline.diagnose --martingale audits, now
+        measured on self-play states."""
         dones = np.asarray(traj.player_transitions.env_output.done)
         valid = (np.cumsum(dones) - dones) == 0
         if not valid.any():
@@ -863,6 +912,14 @@ class Learner:
         step_pairs = valid[:-1] & valid[1:]
         if step_pairs.any():
             stats["phi_step_delta_abs"] = float(np.abs(np.diff(phi))[step_pairs].mean())
+            if phi_ann is not None:
+                decision = np.abs(phi_ann[1:] - phi[:-1])[step_pairs]
+                dice = np.abs(phi[1:] - phi_ann[1:])[step_pairs]
+                stats["decision_step_delta_abs"] = float(decision.mean())
+                stats["dice_step_delta_abs"] = float(dice.mean())
+                stats["decision_share"] = float(
+                    decision.sum() / max(decision.sum() + dice.sum(), 1e-9)
+                )
         terminal_idx = np.nonzero(dones & valid)[0]
         if terminal_idx.size:
             t = int(terminal_idx[0])
@@ -891,7 +948,10 @@ class Learner:
         if self._potential_apply is not None:
             # Computed before taking the store lock — GPU work must not
             # block concurrent samplers/producers.
-            traj = traj.replace(state_potential=self._compute_state_potential(traj))
+            phi, phi_ann = self._compute_state_potential(traj)
+            traj = traj.replace(state_potential=phi)
+            if phi_ann is not None:
+                traj = traj.replace(state_potential_announced=phi_ann)
         add_cond = self.player_replay._add_cv
         with add_cond:
             add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
