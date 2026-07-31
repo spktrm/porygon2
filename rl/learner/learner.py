@@ -785,9 +785,11 @@ class Learner:
             logging.info(
                 "Loaded offline critic potential from %s%s",
                 config.offline_critic_ckpt_path,
-                " (dice-excised: announced states enabled)"
-                if config.potential_dice_excised
-                else "",
+                (
+                    " (dice-excised: announced states enabled)"
+                    if config.potential_dice_excised
+                    else ""
+                ),
             )
 
         # JIT Compile
