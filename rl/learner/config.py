@@ -35,7 +35,24 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
     num_player_actors: int = 12
     num_builder_actors: int = 4
-    num_eval_actors: int = 3
+    # One eval thread per entry; each plays the service baseline at that
+    # index (service/src/server/eval.ts: 0=random, 1=default,
+    # 2=simple_heuristic). The index travels explicitly in the env username
+    # suffix and the baseline name in the metric key, so eval coverage no
+    # longer depends implicitly on actor count. All threads point at the
+    # strongest baseline: Random/Default were saturated (93%/72% at 163k
+    # steps) while winrate-vs-simple-heuristic — the series runs are judged
+    # by — was starved at ~1 game per 80 learner steps.
+    eval_baselines: tuple[int, ...] = (2, 2, 2)
+    # Every Nth eval game per thread uses the live (main) params instead of
+    # the EMA target as a divergence sanity check. The target lags the live
+    # params by only ~1/player_ema_update_rate steps, so alternating every
+    # game (the old behaviour) logged two near-duplicate series at half the
+    # effective sample size each. 0 = EMA params only.
+    eval_main_params_every: int = 16
+    # Half-life, in games, of the bias-corrected smoothed winrate/margin
+    # series logged alongside the raw per-game values.
+    eval_smoothing_halflife: int = 200
     unroll_length: int = 128
 
     # Batch iteration params
@@ -97,7 +114,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e5)
     add_player_max_frames: int = int(3e6)
-    minimum_historical_player_steps: int = int(1e6)
+    # Learner steps before the first historical snapshot joins the league.
+    # Kept low enough that a short (~200k step) run still trains against a
+    # populated league rather than pure mirror self-play — mirror-only runs
+    # measured 93% vs Random but ~10% vs SimpleHeuristic at 163k steps,
+    # the signature of self-exploiting policies that don't transfer to
+    # stylistically alien opponents.
+    minimum_historical_player_steps: int = int(5e4)
     league_size: int = 16
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
@@ -142,8 +165,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # plays no regularization role. The coef sets the softness level.
     player_magnet_kl_coef: float = 0.01
 
-    # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
+    # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
+    # is already provided by the SPO trust region, the behaviour-KL penalty
+    # and the replay-KL controller (which throttles reuse if actor-KL
+    # exceeds its 0.045 ceiling) — momentum-free Adam was leaving all three
+    # guardrails idle (actor-KL 0.013–0.044, grad norm 1–4 vs clip 10).
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 10.0
@@ -200,8 +227,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     )
     # Cap on the solved coefficient: keeps a near-silent potential channel
     # (tiny σ_pot from heavy uncertainty gating or a flat Φ) from being
-    # amplified into pure noise to hit the share target.
-    player_potential_coef_max: float = 30.0
+    # amplified into pure noise to hit the share target. Must sit above the
+    # coefficients the solver actually needs, or the share mechanism is
+    # inert: at 30 the cap bound 100% of steps in the July 2026 run and
+    # realised adv_share ran ~0.55 against the 0.8 target, while the
+    # channel's quality signals stayed healthy (terminal_agreement 1.0,
+    # win_adv_corr ≈ 0). Judge via player_potential_adv_coef staying below
+    # the cap, with player_potential_adv_sign_flip and actor-KL as the
+    # noise guardrails.
+    player_potential_coef_max: float = 100.0
 
     # Loss coefficients
     ## Player
