@@ -172,9 +172,10 @@ def _manifest_announced(ckpt_path: str) -> bool:
 
 def _win_readout(member_probs: np.ndarray) -> np.ndarray:
     """P(win) − P(loss) off (..., 13) margin-bin probabilities."""
-    return member_probs[..., MAX_MARGIN + 1 :].sum(-1) - member_probs[
-        ..., :MAX_MARGIN
-    ].sum(-1)
+    return (
+        member_probs[..., MAX_MARGIN + 1 :].sum(-1)
+        - member_probs[..., :MAX_MARGIN].sum(-1)
+    )
 
 
 def _format_generation(format_id: str) -> int:
@@ -226,7 +227,9 @@ class CriticRunner:
             method = Porygon2OfflineCritic.with_aux
         else:
             method = None
-        apply = functools.partial(model.apply, method=method) if method else model.apply
+        apply = (
+            functools.partial(model.apply, method=method) if method else model.apply
+        )
         self._apply_fn = jax.jit(jax.vmap(apply, in_axes=(None, 1), out_axes=1))
 
     def run(self, payload: bytes) -> tuple[dict, list]:
@@ -833,6 +836,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         '<div style="padding:40px;font:12px system-ui;color:#555">' +
         "battle renderer unavailable (needs network access to " +
         "play.pokemonshowdown.com) — the Φ chart still works</div>";
+      // The replay's "Switch sides" button is the one perspective-flip
+      // entry point, but it never renders in this degraded mode — inject
+      // a fallback link so the charts stay flippable.
+      var sub = document.getElementById("viz-sub");
+      if (sub) {
+        sub.appendChild(document.createTextNode(" · "));
+        var link = document.createElement("a");
+        link.href = "#";
+        link.textContent = "switch sides";
+        link.addEventListener("click", function (e) {
+          e.preventDefault();
+          window.PHI_TOGGLE_SIDE();
+        });
+        sub.appendChild(link);
+      }
     };
     document.head.appendChild(script);
   });
@@ -934,18 +952,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     ? "<b>" + esc(winnerName) + "</b> won by " + Math.abs(D.actualMargin) +
       " Pokémon (" + esc(D.endingLabel) + ")"
     : "the game ended in a tie";
+  // Perspective flipping has ONE entry point: the replay's "Switch sides"
+  // button (it reloads with ?side=opp so the battle viewpoint and every
+  // chart/label flip together). The bootstrap injects a fallback link here
+  // only when the battle renderer fails to load and that button never
+  // renders.
   document.getElementById("viz-sub").innerHTML =
     resultText + " · charts read from <b>" + esc(anchorName) +
     "</b>'s side — up is good for them · ←/→ step turns · " +
-    '<a href="#" id="side-toggle">view from ' + esc(oppName) +
-    "'s side</a>" +
+    "flip with the replay's <i>Switch sides</i> button" +
     '<span class="adv"><br />' + K + " ensemble member" + (K > 1 ? "s" : "") +
     (D.uncertaintyScale > 0 ? " · gate scale " + D.uncertaintyScale : "") +
     " · <code>" + D.ckpts.map(esc).join("</code>, <code>") + "</code></span>";
-  document.getElementById("side-toggle").addEventListener("click", function (e) {
-    e.preventDefault();
-    window.PHI_TOGGLE_SIDE();
-  });
 
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) {
@@ -1106,6 +1124,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   var legendItems = [
     ["Advantage (left axis)", "var(--series-1)", "solid", false],
     ["Mons ahead (right axis)", "var(--series-3)", "solid", false],
+    K > 1 ? ["Individual models (×" + K + ")", "var(--muted)", "solid", false] : null,
     K > 1 ? ["Model spread", "var(--series-3)", "band", false] : null,
     ["Final result", "var(--series-1)", "dot", false],
     D.gated ? ["Gated forecast", "var(--series-2)", "dashed", true] : null,
