@@ -62,20 +62,23 @@ def rl_sections():
                     smooth=0,
                 ),
                 lp(
-                    "Raw winrate per actor (UI-smoothed)",
-                    [f"ema-wr-{SH}-{i}" for i in range(3)],
+                    # Payoff (-1/0/+1), not the wr keys: runs before Aug 2026
+                    # logged wr as booleans, which the wandb UI renders as
+                    # NaN. Smoothed payoff reads as 2*winrate - 1.
+                    "Raw payoff per actor (UI-smoothed)",
+                    [f"ema-payoff-{SH}-{i}" for i in range(3)],
                     x="training_step",
                     smooth=0.95,
                 ),
                 lp(
-                    "Legacy runs (pre-rework) winrate",
-                    [f"ema-wr-{LEGACY}", f"main-wr-{LEGACY}"],
+                    "Legacy runs (pre-rework) payoff",
+                    [f"ema-payoff-{LEGACY}", f"main-payoff-{LEGACY}"],
                     x="training_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Main-params sanity check",
-                    [f"main-wr-{SH}-{i}" for i in range(3)]
+                    [f"main-payoff-{SH}-{i}" for i in range(3)]
                     + [f"main-margin-{SH}-{i}" for i in range(3)],
                     x="training_step",
                     smooth=0.9,
@@ -180,6 +183,18 @@ def rl_sections():
                         "plasticity_value_emb_dormant_frac",
                         "plasticity_action_emb_srank_frac",
                         "plasticity_value_emb_srank_frac",
+                    ],
+                ),
+                lp(
+                    # Divergence between these (init 1.0) is the readout of
+                    # the per-modality logit-scale-separation hypothesis.
+                    "Per-modality micro-logit scales",
+                    [
+                        "pi_head_modality_scale_move",
+                        "pi_head_modality_scale_switch",
+                        "pi_head_modality_scale_wildcard",
+                        "pi_head_modality_scale_other",
+                        "pi_head_modality_scale_unspecified",
                     ],
                 ),
                 lp(

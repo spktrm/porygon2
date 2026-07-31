@@ -945,6 +945,26 @@ class Learner:
             f"potential_{key}": total / count for key, (total, count) in stats.items()
         }
 
+    # Index order matches ModalityEnum (proto/service.proto).
+    _MODALITY_NAMES = ("unspecified", "move", "switch", "wildcard", "other")
+
+    def _get_modality_scales(self) -> dict[str, jax.Array]:
+        """Per-modality micro-logit scales from the pi head (init 1.0).
+
+        Divergence between these is the direct readout of the
+        logit-scale-separation hypothesis: the shared bilinear grid ties
+        within-modality sharpness across modalities unless these learn
+        different values. Values may be device arrays; the log worker syncs.
+        """
+        pi_head = self.player_state.params.get("params", {}).get("pi_head", {})
+        scale = pi_head.get("modality_scale")
+        if scale is None:
+            return {}
+        return {
+            f"pi_head_modality_scale_{name}": scale[i]
+            for i, name in enumerate(self._MODALITY_NAMES)
+        }
+
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
         if self._potential_apply is not None:
@@ -1215,6 +1235,7 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
+            logs.update(self._get_modality_scales())
 
         if self._potential_apply is not None:
             logs.update(self._pop_potential_logs())

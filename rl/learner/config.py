@@ -113,7 +113,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_winrate_log_steps: int = 1_000
     main_player_update_steps: int = 10
     add_player_min_frames: int = int(2e5)
-    add_player_max_frames: int = int(3e6)
+    # Backstop ("overdue") add interval, ~35k learner steps at the current
+    # batch shape. The healthy path — "dominant" adds when main beats every
+    # member >0.7 — is ungated above min_frames, so this clock only paces
+    # snapshots while the agent is NOT visibly improving. At 3e6 (~11.5k
+    # steps) it filled the league with ~0.5-winrate near-copies of main
+    # (mirror play with extra staleness) and, because overdue adds are the
+    # plasticity trigger's input, made the stagnation clock hair-trigger.
+    add_player_max_frames: int = int(9e6)
     # Learner steps before the first historical snapshot joins the league.
     # Kept low enough that a short (~200k step) run still trains against a
     # populated league rather than pure mirror self-play — mirror-only runs
@@ -177,13 +184,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # exceeds its 0.045 ceiling) — momentum-free Adam was leaving all three
     # guardrails idle (actor-KL 0.013–0.044, grad norm 1–4 vs clip 10).
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    # 1e-4 (up from 3e-5): with momentum on, actor-KL sat at 0.002–0.003
-    # against the 0.045 ceiling and kept drifting DOWN while eval strength
-    # plateaued — the signature of over-regularised learning under a
-    # strength-per-step objective. The replay-KL controller, SPO trust
-    # region and grad clip absorb the faster steps; judge by actor-KL
-    # settling well below 0.045 and the eval margin slope recovering.
-    player_learning_rate: float = 1e-4
+    # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
+    # norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
+    # 0.82 at 3e-5), value CE degrading and eval regressing from ~40k —
+    # all while actor-KL sat quietly at 0.002, so KL headroom is NOT
+    # evidence the LR can rise (the trust region bounds per-update policy
+    # movement, not representation damage).
+    player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
